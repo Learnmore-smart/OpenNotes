@@ -1,4 +1,4 @@
-# Caelum
+# OpenNotes
 
 **The Modern Digital Ink Notetaker for Windows**
 
@@ -36,7 +36,7 @@ See the [LICENSE](LICENSE) file for the full MIT License details.
 
 ---
 
-# Caelum（Windows 笔记应用）
+# OpenNotes（Windows 笔记应用）
 
 Windows 笔记应用是一款专为 Windows 设计的轻量级 PDF 阅读与批注工具，基于 WPF 和 .NET 8 开发。它提供了流畅的读写体验，并针对手写笔输入进行了特别优化，尤其是华为设备。
 
