@@ -215,7 +215,7 @@ $existingRequiredFiles = New-Object System.Collections.ArrayList
 foreach ($relativeFile in $requiredFiles) {
     $fullPath = Join-Path $script:Root $relativeFile
     if (Test-Path -LiteralPath $fullPath -PathType Leaf) {
-        [void]$existingRequiredFiles.Add((Get-Item -LiteralPath $fullPath))
+        [void]$existingRequiredFiles.Add((Get-Item -LiteralPath $fullPath -Force))
         Write-Host "OK   $relativeFile" -ForegroundColor Green
     }
     else {
