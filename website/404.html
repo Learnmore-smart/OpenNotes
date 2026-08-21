@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#10161f">
+  <script>
+    (function () {
+      var base = document.createElement("base");
+      var segments = window.location.pathname.split("/").filter(Boolean);
+      var isFilePreview = window.location.protocol === "file:";
+      var isGitHubPages = window.location.hostname.endsWith(".github.io");
+
+      if (isFilePreview) {
+        base.setAttribute("href", "./");
+      } else if (isGitHubPages && segments.length > 0) {
+        base.setAttribute("href", "/" + segments[0] + "/");
+      } else {
+        var websiteIndex = segments.indexOf("website");
+        base.setAttribute("href", websiteIndex >= 0
+          ? "/" + segments.slice(0, websiteIndex + 1).join("/") + "/"
+          : "/");
+      }
+
+      document.head.appendChild(base);
+    }());
+  </script>
+  <title data-i18n="not-found.title">This page wandered off the margin.</title>
+  <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="theme.css">
+  <script src="content.js" defer></script>
+</head>
+<body>
+  <main class="not-found-page">
+    <a class="brand" href="./" data-i18n-aria-label="brand.aria">
+      <span class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 38 38" role="img">
+          <path d="M7 7.5h17.2a6.8 6.8 0 0 1 6.8 6.8v16.2H13.6A6.6 6.6 0 0 1 7 23.9V7.5Z" fill="none" stroke="currentColor" stroke-width="1.8"/>
+          <path d="M7.7 12.5h15.2c2.4 0 4.2 1.3 4.2 3.6v14.4" fill="none" stroke="currentColor" stroke-width="1.8"/>
+          <path d="M13 19.2h10.4M13 23.4h7.1" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="1.8"/>
+          <path d="M26.4 6.2 31.8 11.6" fill="none" stroke="var(--signal)" stroke-linecap="round" stroke-width="2"/>
+        </svg>
+      </span>
+      <span class="brand-word">OPEN<span>NOTES</span></span>
+    </a>
+    <div class="not-found-layout">
+      <p class="section-kicker" data-i18n="not-found.kicker">404 / page missing</p>
+      <h1 data-i18n="not-found.title">This page wandered off the margin.</h1>
+      <p class="hero-lede" data-i18n="not-found.body">The page you were looking for is not here. The document is still on the desk.</p>
+      <a class="button button-primary" href="./"><span data-i18n="not-found.back">Return to OpenNotes</span><span class="button-arrow" aria-hidden="true">↗</span></a>
+    </div>
+  </main>
+</body>
+</html>
