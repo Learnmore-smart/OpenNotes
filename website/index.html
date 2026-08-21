@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#10161f">
+  <meta name="description" content="OpenNotes is a paper-like PDF annotation workspace for Windows." data-i18n-content="meta.description">
+  <meta property="og:title" content="OpenNotes — PDF notes that keep your hand" data-i18n-content="meta.title">
+  <meta property="og:description" content="A quiet, pen-first workspace for reading, marking, and reshaping PDFs on Windows." data-i18n-content="meta.description">
+  <meta property="og:type" content="website">
+  <title data-i18n="meta.title">OpenNotes — PDF notes that keep your hand</title>
+  <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="theme.css?v=20260820.3">
+  <script src="content.js?v=20260820.3" defer></script>
+  <script src="demo.js?v=20260820.3" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main" data-i18n="accessibility.skip">Skip to content</a>
+
+  <div class="site-shell">
+    <header class="site-header">
+      <a class="brand" href="./" data-i18n-aria-label="brand.aria">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 38 38" role="img">
+            <path d="M7 7.5h17.2a6.8 6.8 0 0 1 6.8 6.8v16.2H13.6A6.6 6.6 0 0 1 7 23.9V7.5Z" fill="none" stroke="currentColor" stroke-width="1.8"/>
+            <path d="M7.7 12.5h15.2c2.4 0 4.2 1.3 4.2 3.6v14.4" fill="none" stroke="currentColor" stroke-width="1.8"/>
+            <path d="M13 19.2h10.4M13 23.4h7.1" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="1.8"/>
+            <path d="M26.4 6.2 31.8 11.6" fill="none" stroke="var(--signal)" stroke-linecap="round" stroke-width="2"/>
+          </svg>
+        </span>
+        <span class="brand-word">OPEN<span>NOTES</span></span>
+      </a>
+
+      <nav class="site-nav" data-i18n-aria-label="nav.primary" aria-label="Primary navigation">
+        <a href="#method"><span data-i18n="nav.method">The method</span></a>
+        <a href="#workspace"><span data-i18n="nav.workspace">Workspace</span></a>
+        <a href="#download"><span data-i18n="nav.download">Download</span></a>
+      </nav>
+
+      <div class="header-tools">
+        <div class="language-switcher" role="group" data-i18n-aria-label="language.label">
+          <button type="button" class="language-button is-active" data-locale="en" aria-pressed="true">EN</button>
+          <button type="button" class="language-button" data-locale="zh" aria-pressed="false">中</button>
+          <button type="button" class="language-button" data-locale="fr" aria-pressed="false">FR</button>
+        </div>
+        <button type="button" class="theme-toggle" data-demo-theme data-i18n-aria-label="theme.toggle" aria-label="Toggle light and dark theme" aria-pressed="false">
+          <span class="theme-toggle-icon" aria-hidden="true"></span><span class="theme-toggle-label" data-i18n="theme.label">Theme</span>
+        </button>
+      </div>
+    </header>
+
+    <main id="main">
+      <section class="hero" aria-labelledby="hero-title">
+        <div class="hero-copy">
+          <p class="eyebrow"><span class="eyebrow-mark" aria-hidden="true"></span><span data-i18n="hero.eyebrow">PDF annotation / Windows</span></p>
+          <h1 id="hero-title" data-i18n-html="hero.title">Make the <em>PDF</em> feel like paper again.</h1>
+          <p class="hero-lede" data-i18n="hero.lede">A quiet, pen-first workspace for reading, marking, and reshaping documents on Windows.</p>
+
+          <div class="hero-actions">
+            <a class="button button-primary" href="https://github.com/Learnmore-smart/Windows-Notes/releases/latest" target="_blank" rel="noreferrer">
+              <span data-i18n="hero.cta">Get OpenNotes</span><span class="button-arrow" aria-hidden="true">↗</span>
+            </a>
+            <a class="button button-quiet" href="#workspace">
+              <span data-i18n="hero.secondary">See the workspace</span><span class="button-arrow" aria-hidden="true">↓</span>
+            </a>
+          </div>
+
+          <p class="hero-meta"><span data-i18n="hero.meta">Windows 10 1809+ · .NET 8 · Open source</span><span class="meta-dot" aria-hidden="true"></span><span data-i18n="hero.meta2">Built for the page</span></p>
+        </div>
+
+        <div class="hero-visual" id="workspace">
+          <div class="visual-label visual-label-left" aria-hidden="true">OPEN / MARK / KEEP</div>
+          <div class="demo-window" data-demo-window>
+            <div class="demo-window-bar">
+              <div class="window-lights" aria-hidden="true"><span></span><span></span><span></span></div>
+              <div class="window-title"><span data-i18n="demo.app">OpenNotes</span><span class="window-title-divider">/</span><span data-i18n="demo.document">FIELD NOTES</span></div>
+              <span class="window-page" data-i18n="demo.page">PAGE 07</span>
+            </div>
+
+            <div class="demo-toolbar" role="toolbar" data-i18n-aria-label="demo.toolbar">
+              <button type="button" class="tool-button is-selected" data-demo-tool="pen" aria-pressed="true">
+                <span class="tool-glyph tool-glyph-pen" aria-hidden="true">╱</span><span data-i18n="demo.pen">Pen</span>
+              </button>
+              <button type="button" class="tool-button" data-demo-tool="highlighter" aria-pressed="false">
+                <span class="tool-glyph tool-glyph-highlight" aria-hidden="true"></span><span data-i18n="demo.highlighter">Highlighter</span>
+              </button>
+              <button type="button" class="tool-button" data-demo-tool="eraser" aria-pressed="false">
+                <span class="tool-glyph tool-glyph-eraser" aria-hidden="true"></span><span data-i18n="demo.eraser">Eraser</span>
+              </button>
+              <span class="toolbar-spacer"></span>
+              <button type="button" class="clear-button" data-demo-clear><span data-i18n="demo.clear">Clear marks</span></button>
+            </div>
+
+            <div class="demo-paper" data-demo-surface>
+              <div class="paper-grid" aria-hidden="true"></div>
+              <div class="paper-margin" aria-hidden="true"></div>
+              <div class="paper-heading" aria-hidden="true">
+                <span>FIELD NOTES</span><span>WEEK 32 / 04:38 PM</span>
+              </div>
+              <canvas class="demo-canvas" data-demo-canvas data-i18n-aria-label="demo.canvas" aria-label="Interactive annotation preview" tabindex="0"></canvas>
+              <div class="demo-text-box" data-demo-text data-i18n="demo.text" contenteditable="true" role="textbox" aria-multiline="true" data-i18n-aria-label="demo.textbox" aria-label="Resizable text note" spellcheck="false">A good page gives the idea somewhere to land.</div>
+              <button class="resize-handle" data-demo-resize="nw" data-i18n-aria-label="demo.resize.nw" type="button" aria-label="Resize note from top left" aria-keyshortcuts="ArrowUp ArrowDown ArrowLeft ArrowRight"><span aria-hidden="true"></span></button>
+              <button class="resize-handle" data-demo-resize="n" data-i18n-aria-label="demo.resize.n" type="button" aria-label="Resize note from top" aria-keyshortcuts="ArrowUp ArrowDown ArrowLeft ArrowRight"><span aria-hidden="true"></span></button>
+              <button class="resize-handle" data-demo-resize="ne" data-i18n-aria-label="demo.resize.ne" type="button" aria-label="Resize note from top right" aria-keyshortcuts="ArrowUp ArrowDown ArrowLeft ArrowRight"><span aria-hidden="true"></span></button>
+              <button class="resize-handle" data-demo-resize="e" data-i18n-aria-label="demo.resize.e" type="button" aria-label="Resize note from right" aria-keyshortcuts="ArrowUp ArrowDown ArrowLeft ArrowRight"><span aria-hidden="true"></span></button>
+              <button class="resize-handle" data-demo-resize="se" data-i18n-aria-label="demo.resize.se" type="button" aria-label="Resize note from bottom right" aria-keyshortcuts="ArrowUp ArrowDown ArrowLeft ArrowRight"><span aria-hidden="true"></span></button>
+              <button class="resize-handle" data-demo-resize="s" data-i18n-aria-label="demo.resize.s" type="button" aria-label="Resize note from bottom" aria-keyshortcuts="ArrowUp ArrowDown ArrowLeft ArrowRight"><span aria-hidden="true"></span></button>
+              <button class="resize-handle" data-demo-resize="sw" data-i18n-aria-label="demo.resize.sw" type="button" aria-label="Resize note from bottom left" aria-keyshortcuts="ArrowUp ArrowDown ArrowLeft ArrowRight"><span aria-hidden="true"></span></button>
+              <button class="resize-handle" data-demo-resize="w" data-i18n-aria-label="demo.resize.w" type="button" aria-label="Resize note from left" aria-keyshortcuts="ArrowUp ArrowDown ArrowLeft ArrowRight"><span aria-hidden="true"></span></button>
+              <p class="paper-footer" aria-hidden="true"><span>OPENNOTES / 004</span><span>✳</span></p>
+            </div>
+
+            <div class="demo-statusbar">
+              <span class="status-pip" aria-hidden="true"></span>
+              <span data-demo-status data-i18n="demo.ready" role="status" aria-live="polite" aria-atomic="true">Pen ready — draw anywhere on the page</span>
+              <span class="status-hint" data-i18n="demo.hint">Pointer input stays in your browser</span>
+            </div>
+          </div>
+          <div class="visual-label visual-label-right" aria-hidden="true">LIVE SURFACE / 01</div>
+        </div>
+      </section>
+
+      <section class="manifesto section-rule" aria-labelledby="manifesto-title">
+        <div class="manifesto-stamp" aria-hidden="true"><span>OPEN</span><span>THE</span><span>PAGE</span></div>
+        <div>
+          <p class="section-kicker" data-i18n="manifesto.kicker">A workspace, not a toolbox.</p>
+          <h2 id="manifesto-title" data-i18n="manifesto.title">Open the document. Let the page stay in charge.</h2>
+        </div>
+        <div class="manifesto-copy">
+          <p data-i18n="manifesto.body">OpenNotes keeps the interface quiet and puts the document in the light. Read in one window, write with the pen you already know, and keep every mark close to the source.</p>
+          <p class="pull-quote" data-i18n="manifesto.quote">The page is the product.</p>
+        </div>
+      </section>
+
+      <section class="features section-rule" id="method" aria-labelledby="features-title">
+        <div class="section-heading">
+          <div>
+            <p class="section-kicker" data-i18n="features.kicker">The OpenNotes rhythm</p>
+            <h2 id="features-title" data-i18n="features.title">Read, mark, return.</h2>
+          </div>
+          <p class="section-aside" data-i18n="features.aside">Three small promises for a long document.</p>
+        </div>
+
+        <div class="feature-grid">
+          <article class="feature-card">
+            <span class="feature-index" aria-hidden="true">01</span>
+            <div class="feature-icon feature-icon-ink" aria-hidden="true"><span></span><span></span><span></span></div>
+            <h3 data-i18n="feature.ink.title">Ink that gets out of the way</h3>
+            <p data-i18n="feature.ink.body">Windows Ink support, a direct pen surface, and the tools you need to underline the thought before it disappears.</p>
+            <span class="feature-caption" data-i18n="feature.ink.caption">PEN / HIGHLIGHT / SHAPE</span>
+          </article>
+
+          <article class="feature-card">
+            <span class="feature-index" aria-hidden="true">02</span>
+            <div class="feature-icon feature-icon-pages" aria-hidden="true"><span></span><span></span><span></span></div>
+            <h3 data-i18n="feature.pages.title">The whole PDF, in view</h3>
+            <p data-i18n="feature.pages.body">Tabs, recent files, thumbnails, bookmarks, and search keep the document’s shape in your head while you work.</p>
+            <span class="feature-caption" data-i18n="feature.pages.caption">OPEN / FIND / RETURN</span>
+          </article>
+
+          <article class="feature-card">
+            <span class="feature-index" aria-hidden="true">03</span>
+            <div class="feature-icon feature-icon-file" aria-hidden="true"><span></span><span></span><span></span></div>
+            <h3 data-i18n="feature.file.title">A file you can take with you</h3>
+            <p data-i18n="feature.file.body">Annotate the PDF you already have, save it atomically, and keep your notes useful outside the app.</p>
+            <span class="feature-caption" data-i18n="feature.file.caption">PDF / LOCAL / YOURS</span>
+          </article>
+        </div>
+      </section>
+
+      <section class="inside section-rule" aria-labelledby="inside-title">
+        <div class="notebook-visual" aria-hidden="true">
+          <div class="notebook-shadow"></div>
+          <div class="notebook-sheet notebook-sheet-back"></div>
+          <div class="notebook-sheet notebook-sheet-mid"></div>
+          <div class="notebook-sheet notebook-sheet-front">
+            <span class="sheet-rail"></span>
+            <span class="sheet-label">OPENNOTES<br><strong>FIELD GUIDE</strong></span>
+            <span class="sheet-line sheet-line-one"></span>
+            <span class="sheet-line sheet-line-two"></span>
+            <span class="sheet-line sheet-line-three"></span>
+            <span class="sheet-scribble">↗</span>
+            <span class="sheet-tag">PDF / 04</span>
+          </div>
+          <span class="notebook-note notebook-note-blue">DIRECT<br>MANIPULATION</span>
+          <span class="notebook-note notebook-note-red">NO<br>NOISE</span>
+        </div>
+
+        <div class="inside-copy">
+          <p class="section-kicker" data-i18n="inside.kicker">At a glance</p>
+          <h2 id="inside-title" data-i18n="inside.title">A calm surface for serious pages.</h2>
+          <p class="inside-lede" data-i18n="inside.lede">A modern Windows reading room for the moments when a document is more than a document: a class, a plan, a proof, a margin full of next steps.</p>
+
+          <ul class="promise-list">
+            <li><span class="promise-marker" aria-hidden="true">↗</span><span data-i18n="inside.ink">Pen, highlighter, shapes, eraser, and selection tools.</span></li>
+            <li><span class="promise-marker" aria-hidden="true">↗</span><span data-i18n="inside.navigate">Thumbnails, bookmarks, search, and page-level focus.</span></li>
+            <li><span class="promise-marker" aria-hidden="true">↗</span><span data-i18n="inside.huawei">Comfortable stylus input, including basic Huawei M-Pencil support.</span></li>
+          </ul>
+
+          <div class="inside-specs">
+            <span><strong>v4.0.0</strong><small data-i18n="inside.version">Current release</small></span>
+            <span><strong>WIN</strong><small data-i18n="inside.platform">Windows 10 / 11</small></span>
+            <span><strong>PDF</strong><small data-i18n="inside.format">Native document</small></span>
+          </div>
+        </div>
+      </section>
+
+      <section class="artwork section-rule" aria-labelledby="artwork-title">
+        <div class="section-heading">
+          <div>
+            <p class="section-kicker" data-i18n="artwork.kicker">Leave room for your images</p>
+            <h2 id="artwork-title" data-i18n="artwork.title">The page can show its own evidence.</h2>
+          </div>
+          <p class="section-aside" data-i18n="artwork.aside">Replace any filename below with your approved screenshot or mark. The page keeps a quiet fallback until then.</p>
+        </div>
+
+        <div class="artwork-grid">
+          <figure class="art-slot" data-art-slot data-artwork="hero-editor.webp">
+            <div class="art-slot-visual"><div class="art-slot-placeholder"><span class="art-slot-file">hero-editor.webp</span><span class="art-slot-size">1600 × 1000</span><span class="art-slot-use" data-i18n="artwork.hero">Desktop editor overview</span></div></div>
+            <figcaption><span data-i18n="artwork.caption.hero">The editor, open and ready</span><span class="art-slot-status" data-art-status></span></figcaption>
+          </figure>
+
+          <figure class="art-slot" data-art-slot data-artwork="annotation-ink.webp">
+            <div class="art-slot-visual"><div class="art-slot-placeholder"><span class="art-slot-file">annotation-ink.webp</span><span class="art-slot-size">1200 × 800</span><span class="art-slot-use" data-i18n="artwork.ink">Ink tools detail</span></div></div>
+            <figcaption><span data-i18n="artwork.caption.ink">Ink close to the thought</span><span class="art-slot-status" data-art-status></span></figcaption>
+          </figure>
+
+          <figure class="art-slot" data-art-slot data-artwork="textbox-resize.webp">
+            <div class="art-slot-visual"><div class="art-slot-placeholder"><span class="art-slot-file">textbox-resize.webp</span><span class="art-slot-size">1200 × 800</span><span class="art-slot-use" data-i18n="artwork.textbox">Resizable text box</span></div></div>
+            <figcaption><span data-i18n="artwork.caption.textbox">Shape the note to the page</span><span class="art-slot-status" data-art-status></span></figcaption>
+          </figure>
+
+          <figure class="art-slot" data-art-slot data-artwork="dark-theme.webp">
+            <div class="art-slot-visual"><div class="art-slot-placeholder"><span class="art-slot-file">dark-theme.webp</span><span class="art-slot-size">1200 × 800</span><span class="art-slot-use" data-i18n="artwork.dark">Dark paper and chrome</span></div></div>
+            <figcaption><span data-i18n="artwork.caption.dark">A quieter evening surface</span><span class="art-slot-status" data-art-status></span></figcaption>
+          </figure>
+
+          <figure class="art-slot" data-art-slot data-artwork="page-templates.webp">
+            <div class="art-slot-visual"><div class="art-slot-placeholder"><span class="art-slot-file">page-templates.webp</span><span class="art-slot-size">1200 × 800</span><span class="art-slot-use" data-i18n="artwork.templates">Page templates</span></div></div>
+            <figcaption><span data-i18n="artwork.caption.templates">Begin with a page that fits</span><span class="art-slot-status" data-art-status></span></figcaption>
+          </figure>
+
+          <figure class="art-slot art-slot-mark" data-art-slot data-artwork="opennotes-mark.svg">
+            <div class="art-slot-visual"><div class="art-slot-placeholder"><span class="art-slot-file">opennotes-mark.svg</span><span class="art-slot-size">512 × 512</span><span class="art-slot-use" data-i18n="artwork.mark">Product mark</span></div></div>
+            <figcaption><span data-i18n="artwork.caption.mark">The OpenNotes mark</span><span class="art-slot-status" data-art-status></span></figcaption>
+          </figure>
+        </div>
+      </section>
+
+      <section class="principles section-rule" aria-labelledby="principles-title">
+        <div class="principles-intro">
+          <p class="section-kicker" data-i18n="principles.kicker">Design notes</p>
+          <h2 id="principles-title" data-i18n="principles.title">Less chrome. More contact.</h2>
+        </div>
+        <div class="principle-list">
+          <div class="principle-row"><span class="principle-number">A</span><h3 data-i18n="principle.one.title">Paper logic</h3><p data-i18n="principle.one.body">Pages, margins, tabs, and marks are the structure — not a dashboard around it.</p></div>
+          <div class="principle-row"><span class="principle-number">B</span><h3 data-i18n="principle.two.title">Direct hands</h3><p data-i18n="principle.two.body">A click, a stroke, a drag. The gesture starts where your thought starts.</p></div>
+          <div class="principle-row"><span class="principle-number">C</span><h3 data-i18n="principle.three.title">Honest files</h3><p data-i18n="principle.three.body">Your PDF stays the center of gravity, ready to travel with the notes around it.</p></div>
+        </div>
+      </section>
+
+      <section class="download-band" id="download" aria-labelledby="download-title">
+        <div class="download-copy">
+          <p class="section-kicker" data-i18n="download.kicker">For the desk you already have</p>
+          <h2 id="download-title" data-i18n="download.title">Make room for the page.</h2>
+          <p data-i18n="download.body">OpenNotes is a focused, open-source PDF annotation workspace for Windows. Bring a document in and start where the idea is.</p>
+          <div class="download-actions">
+            <a class="button button-light" href="https://github.com/Learnmore-smart/Windows-Notes/releases/latest" target="_blank" rel="noreferrer"><span data-i18n="download.cta">Download latest release</span><span class="button-arrow" aria-hidden="true">↗</span></a>
+            <a class="text-link" href="https://github.com/Learnmore-smart/Windows-Notes" target="_blank" rel="noreferrer"><span data-i18n="download.github">Read the repository</span><span aria-hidden="true">↗</span></a>
+          </div>
+        </div>
+        <div class="download-sticker" aria-hidden="true">
+          <span>OPEN</span><span>NOTES</span><small>WINDOWS / PDF / INK</small>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div class="footer-brand"><span class="footer-dot" aria-hidden="true"></span><span>OPENNOTES</span><span class="footer-slash">/</span><span data-i18n="footer.legacy">formerly Caelum</span></div>
+      <div class="footer-links">
+        <a href="https://github.com/Learnmore-smart/Windows-Notes" target="_blank" rel="noreferrer" data-i18n="footer.github">GitHub</a>
+        <a href="https://github.com/Learnmore-smart/Windows-Notes/issues" target="_blank" rel="noreferrer" data-i18n="footer.issues">Issues</a>
+        <a href="https://github.com/Learnmore-smart/Windows-Notes/blob/main/LICENSE" target="_blank" rel="noreferrer" data-i18n="footer.license">MIT License</a>
+      </div>
+      <p class="footer-copy" data-i18n="footer.copy">Made for people who still think in the margins.</p>
+    </footer>
+  </div>
+</body>
+</html>
