@@ -1,10 +1,12 @@
 # OpenNotes
 
-**The Modern Digital Ink Notetaker for Windows**
+**A paper-like PDF annotation workspace for Windows**
 
 ![Home Page](public/home-page.png)
 
-Caelum is a lightweight PDF annotation tool designed for Windows, built with WPF and .NET 8. It provides a smooth reading and writing experience with specialized support for stylus input, particularly for Huawei devices.
+OpenNotes is a lightweight PDF annotation tool designed for Windows, built with WPF and .NET 8. It provides a smooth reading and writing experience with specialized support for stylus input, particularly for Huawei devices.
+
+Explore the interactive project page: [learnmore-smart.github.io/OpenNotes](https://learnmore-smart.github.io/OpenNotes/).
 
 ## Features
 
@@ -38,7 +40,9 @@ See the [LICENSE](LICENSE) file for the full MIT License details.
 
 # OpenNotes（Windows 笔记应用）
 
-Windows 笔记应用是一款专为 Windows 设计的轻量级 PDF 阅读与批注工具，基于 WPF 和 .NET 8 开发。它提供了流畅的读写体验，并针对手写笔输入进行了特别优化，尤其是华为设备。
+OpenNotes 是一款专为 Windows 设计的轻量级 PDF 阅读与批注工具，基于 WPF 和 .NET 8 开发。它提供了流畅的读写体验，并针对手写笔输入进行了特别优化，尤其是华为设备。
+
+欢迎访问交互式项目页面：[learnmore-smart.github.io/OpenNotes](https://learnmore-smart.github.io/OpenNotes/)。
 
 ## 功能特点
 
