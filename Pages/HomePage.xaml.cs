@@ -16,6 +16,8 @@ namespace Caelum.Pages
 {
     public sealed partial class HomePage : Page
     {
+        private readonly List<ContextMenu> _openContextMenus = new List<ContextMenu>();
+
         private enum HomeSortMode
         {
             Date,
@@ -32,6 +34,7 @@ namespace Caelum.Pages
         private Point _dragStartPoint;
         private HomeTile _dragCandidateTile;
         private string[] _dragCandidatePaths = Array.Empty<string>();
+        private bool _languageChangedSubscribed;
 
         public bool IsSelectionMode { get; private set; }
 
@@ -41,6 +44,7 @@ namespace Caelum.Pages
             DataContext = this;
             ApplyLocalization();
             Loaded += HomePage_Loaded;
+            Unloaded += HomePage_Unloaded;
             DragOver += HomePage_DragOver;
             Drop += HomePage_Drop;
             DragLeave += HomePage_DragLeave;
@@ -75,7 +79,28 @@ namespace Caelum.Pages
 
         private async void HomePage_Loaded(object sender, RoutedEventArgs e)
         {
+            if (!_languageChangedSubscribed)
+            {
+                LocalizationService.LanguageChanged += HomePage_LanguageChanged;
+                _languageChangedSubscribed = true;
+            }
+
+            ApplyLocalization();
             await EnsureLibraryLoadedAsync();
+        }
+
+        private void HomePage_Unloaded(object sender, RoutedEventArgs e)
+        {
+            if (_languageChangedSubscribed)
+            {
+                LocalizationService.LanguageChanged -= HomePage_LanguageChanged;
+                _languageChangedSubscribed = false;
+            }
+        }
+
+        private void HomePage_LanguageChanged(object sender, EventArgs e)
+        {
+            ApplyLocalization();
         }
 
         private async Task EnsureLibraryLoadedAsync()
@@ -226,6 +251,8 @@ namespace Caelum.Pages
             createNotebookItem.Click += async (_, _) => await CreateEmptyNotebookAsync();
             menu.Items.Add(createNotebookItem);
 
+            PopupZOrderHelper.FixContextMenuTopmost(menu);
+            TrackOpenContextMenu(menu, "add");
             menu.IsOpen = true;
         }
 
@@ -328,6 +355,8 @@ namespace Caelum.Pages
             removeItem.Click += async (_, _) => await RemoveFileTileAsync(tile);
             menu.Items.Add(removeItem);
 
+            PopupZOrderHelper.FixContextMenuTopmost(menu);
+            TrackOpenContextMenu(menu, "file");
             menu.IsOpen = true;
         }
 
@@ -362,7 +391,74 @@ namespace Caelum.Pages
             };
             menu.Items.Add(removeItem);
 
+            PopupZOrderHelper.FixContextMenuTopmost(menu);
+            TrackOpenContextMenu(menu, "folder");
             menu.IsOpen = true;
+        }
+
+        private void TrackOpenContextMenu(ContextMenu menu, string kind)
+        {
+            if (menu == null)
+                return;
+
+            menu.Tag = kind;
+            _openContextMenus.Add(menu);
+            menu.Closed += (_, __) => _openContextMenus.Remove(menu);
+        }
+
+        private void RefreshOpenContextMenus()
+        {
+            foreach (var menu in _openContextMenus.ToList())
+            {
+                var items = menu.Items.OfType<MenuItem>().ToList();
+                var kind = menu.Tag as string;
+                if (kind == "add")
+                {
+                    SetMenuItemText(items, 0, LocalizationService.Get("Home.Menu.OpenFile"));
+                    SetMenuItemText(items, 1, LocalizationService.Get("Home.Menu.CreateFolder"));
+                    SetMenuItemText(items, 2, LocalizationService.Get("Home.Menu.CreateNotebook"));
+                }
+                else if (kind == "folder")
+                {
+                    SetMenuItemText(items, 0, LocalizationService.Get("Home.Context.Open"));
+                    SetMenuItemText(items, 1, LocalizationService.Get("Home.Context.Rename"));
+                    SetMenuItemText(items, 2, LocalizationService.Get("Home.Context.RemoveFolder"));
+                }
+                else if (kind == "file")
+                {
+                    SetMenuItemText(items, 0, LocalizationService.Get("Home.Context.Open"));
+                    SetMenuItemText(items, 1, LocalizationService.Get("Home.Context.Rename"));
+                    SetMenuItemText(items, 2, LocalizationService.Get("Home.Context.Select"));
+                    int offset = items.Count == 8 ? 1 : 0;
+                    if (offset == 1)
+                        SetMenuItemText(items, 3, LocalizationService.Get("Home.Context.MoveToLibrary"));
+                    SetMenuItemText(items, 3 + offset, LocalizationService.Get("Home.Context.CopyPath"));
+                    SetMenuItemText(items, 4 + offset, LocalizationService.Get("Home.Context.OpenFolder"));
+                    SetMenuItemText(items, 5 + offset, LocalizationService.Get("Home.Context.Export"));
+                    SetMenuItemText(items, 6 + offset, LocalizationService.Get("Home.Context.Remove"));
+                }
+                else if (kind == "move-root")
+                {
+                    SetMenuItemText(items, 0, LocalizationService.Get("Home.LibraryRoot"));
+                }
+            }
+        }
+
+        private static void SetMenuItemText(IReadOnlyList<MenuItem> items, int index, string text)
+        {
+            if (items == null || index < 0 || index >= items.Count)
+                return;
+
+            if (items[index].Header is StackPanel panel)
+            {
+                var label = panel.Children.OfType<TextBlock>().LastOrDefault();
+                if (label != null)
+                    label.Text = text;
+            }
+            else
+            {
+                items[index].Header = text;
+            }
         }
 
         private MenuItem CreateMenuItem(string text, string icon, System.Windows.Media.Brush foreground = null)
@@ -1006,7 +1102,9 @@ namespace Caelum.Pages
         {
             var invalidChars = Path.GetInvalidFileNameChars();
             var sanitized = new string((name ?? string.Empty).Where(ch => !invalidChars.Contains(ch)).ToArray()).Trim();
-            return string.IsNullOrWhiteSpace(sanitized) ? "Notebook" : sanitized;
+            return string.IsNullOrWhiteSpace(sanitized)
+                ? LocalizationService.Get("Home.NewNotebookName")
+                : sanitized;
         }
 
         private static string GetDefaultNotebookDirectory()
@@ -1017,7 +1115,7 @@ namespace Caelum.Pages
 
             var desktopPath = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
             return string.IsNullOrWhiteSpace(desktopPath)
-                ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Caelum", "Notebooks")
+                ? Path.Combine(ProductInfo.GetDataDirectory(), "Notebooks")
                 : desktopPath;
         }
 

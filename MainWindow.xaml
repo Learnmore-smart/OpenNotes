@@ -2,10 +2,10 @@
     x:Class="Caelum.MainWindow"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    Title="Caelum"
+        Title="OpenNotes"
     Height="720" Width="1280"
     WindowStartupLocation="CenterScreen"
-    Background="White"
+    Background="{DynamicResource ThemeWindowBackgroundBrush}"
     AllowDrop="True"
     WindowStyle="None"
     ResizeMode="CanResize">
@@ -28,9 +28,9 @@
                         <Border x:Name="Root" Background="{TemplateBinding Background}" CornerRadius="16" Padding="{TemplateBinding Padding}">
                             <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
                         </Border>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="Root" Property="Background" Value="#FFFFFF"/>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Root" Property="Background" Value="{DynamicResource ThemeControlHoverBrush}"/>
                                 <Setter TargetName="Root" Property="CornerRadius" Value="16"/>
                             </Trigger>
                             <Trigger Property="IsEnabled" Value="False">
@@ -56,7 +56,7 @@
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="Root" Property="Background" Value="#18000000"/>
+                                <Setter TargetName="Root" Property="Background" Value="{DynamicResource ThemeControlHoverBrush}"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -73,8 +73,8 @@
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="Root" Property="Background" Value="#E81123"/>
-                                <Setter Property="Foreground" Value="White"/>
+                                <Setter TargetName="Root" Property="Background" Value="{DynamicResource ThemeControlPressedBrush}"/>
+                                <Setter Property="Foreground" Value="{DynamicResource ThemeForegroundBrush}"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -94,9 +94,9 @@
                         <Border x:Name="Root" Background="{TemplateBinding Background}" CornerRadius="6" Padding="{TemplateBinding Padding}">
                             <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
                         </Border>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="Root" Property="Background" Value="#12000000"/>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Root" Property="Background" Value="{DynamicResource ThemeControlHoverBrush}"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -106,7 +106,7 @@
 
         <Style x:Key="SelectToolbarButtonStyle" TargetType="Button">
             <Setter Property="Background" Value="Transparent"/>
-            <Setter Property="Foreground" Value="#555555"/>
+            <Setter Property="Foreground" Value="{DynamicResource ThemeSubtleForegroundBrush}"/>
             <Setter Property="BorderThickness" Value="0"/>
             <Setter Property="Height" Value="28"/>
             <Setter Property="Cursor" Value="Hand"/>
@@ -123,32 +123,32 @@
                                     <Condition Property="Tag" Value="False"/>
                                     <Condition Property="IsMouseOver" Value="True"/>
                                 </MultiTrigger.Conditions>
-                                <Setter TargetName="Root" Property="Background" Value="#12000000"/>
+                                <Setter TargetName="Root" Property="Background" Value="{DynamicResource ThemeControlHoverBrush}"/>
                             </MultiTrigger>
                             <MultiTrigger>
                                 <MultiTrigger.Conditions>
                                     <Condition Property="Tag" Value="True"/>
                                     <Condition Property="IsMouseOver" Value="True"/>
                                 </MultiTrigger.Conditions>
-                                <Setter TargetName="Root" Property="Background" Value="#BFDBFE"/>
+                                <Setter TargetName="Root" Property="Background" Value="{DynamicResource ThemeSelectionBrush}"/>
                             </MultiTrigger>
                             <MultiTrigger>
                                 <MultiTrigger.Conditions>
                                     <Condition Property="Tag" Value="False"/>
                                     <Condition Property="IsPressed" Value="True"/>
                                 </MultiTrigger.Conditions>
-                                <Setter TargetName="Root" Property="Background" Value="#1A000000"/>
+                                <Setter TargetName="Root" Property="Background" Value="{DynamicResource ThemeControlPressedBrush}"/>
                             </MultiTrigger>
                             <MultiTrigger>
                                 <MultiTrigger.Conditions>
                                     <Condition Property="Tag" Value="True"/>
                                     <Condition Property="IsPressed" Value="True"/>
                                 </MultiTrigger.Conditions>
-                                <Setter TargetName="Root" Property="Background" Value="#93C5FD"/>
+                                <Setter TargetName="Root" Property="Background" Value="{DynamicResource ThemeAccentPressedBrush}"/>
                             </MultiTrigger>
                             <Trigger Property="Tag" Value="True">
-                                <Setter TargetName="Root" Property="Background" Value="#DBEAFE"/>
-                                <Setter Property="Foreground" Value="#1D4ED8"/>
+                                <Setter TargetName="Root" Property="Background" Value="{DynamicResource ThemeSelectionBrush}"/>
+                                <Setter Property="Foreground" Value="{DynamicResource ThemeSelectionForegroundBrush}"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -157,40 +157,46 @@
         </Style>
     </Window.Resources>
 
-    <Grid Background="White" AllowDrop="True">
+    <Grid Background="{DynamicResource ThemeDeskBrush}" AllowDrop="True">
         <Grid.RowDefinitions>
             <RowDefinition Height="40"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
 
-        <Border x:Name="TitleBarBorder" Grid.Row="0" Background="#F5F6F8">
+        <Border x:Name="TitleBarBorder" Grid.Row="0" Background="{DynamicResource ThemePaperAltBrush}">
             <Grid>
+                <Border x:Name="BrandMarginRail"
+                        Width="3"
+                        Margin="8,8,0,8"
+                        HorizontalAlignment="Left"
+                        Background="{DynamicResource ThemeMarginBrush}"
+                        CornerRadius="2"/>
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                     <Image Source="{Binding Icon, RelativeSource={RelativeSource AncestorType=Window}}" Width="20" Height="20" Margin="14,0,4,0" RenderOptions.BitmapScalingMode="HighQuality"/>
-                    <TextBlock Text="Caelum" FontSize="13" Foreground="#444444" Margin="6,0,12,0" VerticalAlignment="Center" FontWeight="SemiBold"/>
+                    <TextBlock x:Name="ProductNameTextBlock" Text="OpenNotes" FontSize="13" Foreground="{DynamicResource ThemeForegroundBrush}" Margin="6,0,12,0" VerticalAlignment="Center" FontWeight="SemiBold"/>
                     <Button x:Name="NavBackButton" Click="NavBack_Click" Style="{StaticResource NavButtonStyle}" IsEnabled="False" WindowChrome.IsHitTestVisibleInChrome="True">
-                        <TextBlock Text="&#xE72B;" FontFamily="Segoe MDL2 Assets" FontSize="12" Foreground="#555555"/>
+                        <TextBlock Text="&#xE72B;" FontFamily="Segoe MDL2 Assets" FontSize="12" Foreground="{DynamicResource ThemeSubtleForegroundBrush}"/>
                     </Button>
                     <Button x:Name="NavForwardButton" Click="NavForward_Click" Style="{StaticResource NavButtonStyle}" IsEnabled="False" Margin="2,0,0,0" WindowChrome.IsHitTestVisibleInChrome="True">
-                        <TextBlock Text="&#xE72A;" FontFamily="Segoe MDL2 Assets" FontSize="12" Foreground="#555555"/>
+                        <TextBlock Text="&#xE72A;" FontFamily="Segoe MDL2 Assets" FontSize="12" Foreground="{DynamicResource ThemeSubtleForegroundBrush}"/>
                     </Button>
                     <Button x:Name="NavHomeButton" Click="NavHome_Click" Style="{StaticResource NavButtonStyle}" Margin="2,0,0,0" WindowChrome.IsHitTestVisibleInChrome="True">
-                        <TextBlock Text="&#xE80F;" FontFamily="Segoe MDL2 Assets" FontSize="14" Foreground="#555555"/>
+                        <TextBlock Text="&#xE80F;" FontFamily="Segoe MDL2 Assets" FontSize="14" Foreground="{DynamicResource ThemeSubtleForegroundBrush}"/>
                     </Button>
                 </StackPanel>
 
                 <Grid>
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,0,140,0">
-                        <Border Background="#10000000" CornerRadius="6" Margin="0,0,8,0" Height="28" VerticalAlignment="Center" WindowChrome.IsHitTestVisibleInChrome="True">
+                        <Border Background="{DynamicResource ThemePaperBrush}" BorderBrush="{DynamicResource ThemeBorderBrush}" BorderThickness="1" CornerRadius="8" Margin="0,0,8,0" Height="28" VerticalAlignment="Center" WindowChrome.IsHitTestVisibleInChrome="True">
                             <Grid>
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="Auto"/>
                                     <ColumnDefinition Width="120"/>
                                 </Grid.ColumnDefinitions>
-                                <TextBlock Text="&#xE721;" FontFamily="Segoe MDL2 Assets" FontSize="12" Foreground="#555555" VerticalAlignment="Center" Margin="8,0,4,0"/>
-                                <TextBox x:Name="SearchBox" Grid.Column="1" Background="Transparent" BorderThickness="0" VerticalAlignment="Center" Foreground="#333" FontSize="12" TextChanged="SearchBox_TextChanged" />
-                                <TextBlock x:Name="SearchPlaceholder" Grid.Column="1" Text="" Foreground="#888" FontSize="12" VerticalAlignment="Center" IsHitTestVisible="False" Margin="2,0,0,0">
+                                <TextBlock Text="&#xE721;" FontFamily="Segoe MDL2 Assets" FontSize="12" Foreground="{DynamicResource ThemeSubtleForegroundBrush}" VerticalAlignment="Center" Margin="8,0,4,0"/>
+                                <TextBox x:Name="SearchBox" Grid.Column="1" Background="Transparent" BorderThickness="0" VerticalAlignment="Center" Foreground="{DynamicResource ThemeForegroundBrush}" FontSize="12" TextChanged="SearchBox_TextChanged" />
+                                <TextBlock x:Name="SearchPlaceholder" Grid.Column="1" Text="" Foreground="{DynamicResource ThemeSubtleForegroundBrush}" FontSize="12" VerticalAlignment="Center" IsHitTestVisible="False" Margin="2,0,0,0">
                                     <TextBlock.Style>
                                         <Style TargetType="TextBlock">
                                             <Setter Property="Visibility" Value="Collapsed"/>
@@ -207,24 +213,24 @@
                         <Button x:Name="SelectButton" Click="SelectButton_Click" Style="{StaticResource SelectToolbarButtonStyle}" Margin="0,0,2,0" Tag="False" WindowChrome.IsHitTestVisibleInChrome="True">
                             <StackPanel Orientation="Horizontal">
                                 <TextBlock x:Name="SelectButtonIcon" Text="&#xE762;" FontFamily="Segoe MDL2 Assets" FontSize="13" Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" VerticalAlignment="Center"/>
-                                <TextBlock x:Name="SelectButtonLabel" Text="Select" FontSize="12" Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" Margin="5,0,0,0" VerticalAlignment="Center"/>
+                                <TextBlock x:Name="SelectButtonLabel" FontSize="12" Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" Margin="5,0,0,0" VerticalAlignment="Center"/>
                             </StackPanel>
                         </Button>
                         <Button x:Name="SortButton" Click="SortButton_Click" Style="{StaticResource NavButtonStyle}" Margin="0,0,2,0" WindowChrome.IsHitTestVisibleInChrome="True">
-                            <TextBlock Text="&#xE8CB;" FontFamily="Segoe MDL2 Assets" FontSize="14" Foreground="#555555"/>
+                            <TextBlock Text="&#xE8CB;" FontFamily="Segoe MDL2 Assets" FontSize="14" Foreground="{DynamicResource ThemeSubtleForegroundBrush}"/>
                             <Button.ContextMenu>
-                                <ContextMenu>
-                                    <MenuItem x:Name="SortByNameMenuItem" Header="Sort by name" Click="SortByName_Click"/>
-                                    <MenuItem x:Name="SortByDateMenuItem" Header="Sort by date" Click="SortByDate_Click"/>
+                                <ContextMenu x:Name="SortContextMenu">
+                                    <MenuItem x:Name="SortByNameMenuItem" Click="SortByName_Click"/>
+                                    <MenuItem x:Name="SortByDateMenuItem" Click="SortByDate_Click"/>
                                 </ContextMenu>
                             </Button.ContextMenu>
                         </Button>
                         <Button x:Name="MoreButton" Click="MoreButton_Click" Style="{StaticResource NavButtonStyle}" Margin="0,0,8,0" WindowChrome.IsHitTestVisibleInChrome="True">
-                            <TextBlock Text="&#xE712;" FontFamily="Segoe MDL2 Assets" FontSize="14" Foreground="#555555"/>
+                            <TextBlock Text="&#xE712;" FontFamily="Segoe MDL2 Assets" FontSize="14" Foreground="{DynamicResource ThemeSubtleForegroundBrush}"/>
                             <Button.ContextMenu>
-                                <ContextMenu>
-                                    <MenuItem x:Name="SettingsMenuItem" Header="Settings" Click="Settings_Click"/>
-                                    <MenuItem x:Name="AboutMenuItem" Header="About" Click="About_Click"/>
+                                <ContextMenu x:Name="MoreContextMenu">
+                                    <MenuItem x:Name="SettingsMenuItem" Click="Settings_Click"/>
+                                    <MenuItem x:Name="AboutMenuItem" Click="About_Click"/>
                                 </ContextMenu>
                             </Button.ContextMenu>
                         </Button>
@@ -232,20 +238,20 @@
 
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                         <Button x:Name="MinimizeButton" Click="MinimizeButton_Click" Style="{StaticResource TitleBarButtonStyle}" WindowChrome.IsHitTestVisibleInChrome="True">
-                            <TextBlock Text="&#xE921;" FontFamily="Segoe MDL2 Assets" FontSize="10" Foreground="#555555"/>
+                            <TextBlock Text="&#xE921;" FontFamily="Segoe MDL2 Assets" FontSize="10" Foreground="{DynamicResource ThemeSubtleForegroundBrush}"/>
                         </Button>
                         <Button x:Name="MaximizeButton" Click="MaximizeButton_Click" Style="{StaticResource TitleBarButtonStyle}" WindowChrome.IsHitTestVisibleInChrome="True">
-                            <TextBlock x:Name="MaximizeIcon" Text="&#xE922;" FontFamily="Segoe MDL2 Assets" FontSize="10" Foreground="#555555"/>
+                            <TextBlock x:Name="MaximizeIcon" Text="&#xE922;" FontFamily="Segoe MDL2 Assets" FontSize="10" Foreground="{DynamicResource ThemeSubtleForegroundBrush}"/>
                         </Button>
                         <Button x:Name="CloseButton" Click="CloseButton_Click" Style="{StaticResource CloseButtonStyle}" WindowChrome.IsHitTestVisibleInChrome="True">
-                            <TextBlock Text="&#xE8BB;" FontFamily="Segoe MDL2 Assets" FontSize="10" Foreground="#555555"/>
+                            <TextBlock Text="&#xE8BB;" FontFamily="Segoe MDL2 Assets" FontSize="10" Foreground="{DynamicResource ThemeSubtleForegroundBrush}"/>
                         </Button>
                     </StackPanel>
                 </Grid>
             </Grid>
         </Border>
 
-        <Border Grid.Row="1" Background="#F7F8FA" Padding="8,4,8,4">
+        <Border Grid.Row="1" Background="{DynamicResource ThemePaperBrush}" BorderBrush="{DynamicResource ThemeBorderBrush}" BorderThickness="0,0,0,1" Padding="8,4,8,4">
             <ScrollViewer Height="32" HorizontalScrollBarVisibility="Hidden" VerticalScrollBarVisibility="Disabled">
                 <StackPanel Orientation="Horizontal">
                     <StackPanel x:Name="TabBar" Orientation="Horizontal"/>
@@ -253,7 +259,7 @@
                             VerticalAlignment="Center"
                             Width="32" Height="32" Margin="6,0,0,0"
                             ToolTip="">
-                        <TextBlock Text="&#xE710;" FontFamily="Segoe MDL2 Assets" FontSize="14" Foreground="#555"/>
+                        <TextBlock Text="&#xE710;" FontFamily="Segoe MDL2 Assets" FontSize="14" Foreground="{DynamicResource ThemeSubtleForegroundBrush}"/>
                     </Button>
                 </StackPanel>
             </ScrollViewer>
@@ -263,16 +269,13 @@
 
         <Border x:Name="ToastBorder" Grid.Row="2" HorizontalAlignment="Center" VerticalAlignment="Bottom"
                 Margin="0,0,0,80" Visibility="Collapsed" Opacity="0" IsHitTestVisible="False"
-                CornerRadius="10" Padding="20,10">
-            <Border.Background>
-                <SolidColorBrush Color="#1A1A1A" Opacity="0.88"/>
-            </Border.Background>
+                CornerRadius="10" Padding="20,10" Background="{DynamicResource ThemeForegroundBrush}">
             <Border.Effect>
                 <DropShadowEffect BlurRadius="16" ShadowDepth="4" Opacity="0.18" Color="#000"/>
             </Border.Effect>
             <StackPanel Orientation="Horizontal">
                 <TextBlock x:Name="ToastIcon" Text="&#xE73E;" FontFamily="Segoe MDL2 Assets" FontSize="14" Foreground="#4ADE80" VerticalAlignment="Center" Margin="0,0,10,0"/>
-                <TextBlock x:Name="ToastText" Text="" FontSize="13" Foreground="White" VerticalAlignment="Center"/>
+                <TextBlock x:Name="ToastText" Text="" FontSize="13" Foreground="{DynamicResource ThemeWindowBackgroundBrush}" VerticalAlignment="Center"/>
             </StackPanel>
         </Border>
     </Grid>

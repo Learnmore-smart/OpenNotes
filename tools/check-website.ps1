@@ -208,6 +208,14 @@ $requiredFiles = @(
     (Join-Path $WebsiteDirectory 'content.js'),
     (Join-Path $WebsiteDirectory 'demo.js'),
     (Join-Path $WebsiteDirectory '.nojekyll'),
+    (Join-Path $WebsiteDirectory 'assets\favicon.svg'),
+    (Join-Path $WebsiteDirectory 'assets\favicon.ico'),
+    (Join-Path $WebsiteDirectory 'assets\favicon-96x96.png'),
+    (Join-Path $WebsiteDirectory 'assets\apple-touch-icon.png'),
+    (Join-Path $WebsiteDirectory 'assets\web-app-manifest-192x192.png'),
+    (Join-Path $WebsiteDirectory 'assets\web-app-manifest-512x512.png'),
+    (Join-Path $WebsiteDirectory 'assets\site.webmanifest'),
+    (Join-Path $WebsiteDirectory 'assets\opennotes-logo.png'),
     (Join-Path $WebsiteDirectory 'assets\placeholders\README.md')
 )
 
@@ -215,7 +223,7 @@ $existingRequiredFiles = New-Object System.Collections.ArrayList
 foreach ($relativeFile in $requiredFiles) {
     $fullPath = Join-Path $script:Root $relativeFile
     if (Test-Path -LiteralPath $fullPath -PathType Leaf) {
-        [void]$existingRequiredFiles.Add((Get-Item -LiteralPath $fullPath))
+        [void]$existingRequiredFiles.Add((Get-Item -LiteralPath $fullPath -Force))
         Write-Host "OK   $relativeFile" -ForegroundColor Green
     }
     else {
@@ -333,12 +341,15 @@ Write-Host "Resource references checked: $($script:ResourceReferences.Count)"
 Write-Section 'Key website copy'
 $indexPath = Join-Path $script:WebsiteRoot 'index.html'
 $contentPath = Join-Path $script:WebsiteRoot 'content.js'
+$notFoundPath = Join-Path $script:WebsiteRoot '404.html'
 $indexContent = if (Test-Path -LiteralPath $indexPath -PathType Leaf) { Get-Content -Raw -Encoding UTF8 -LiteralPath $indexPath } else { '' }
 $contentScript = if (Test-Path -LiteralPath $contentPath -PathType Leaf) { Get-Content -Raw -Encoding UTF8 -LiteralPath $contentPath } else { '' }
+$notFoundContent = if (Test-Path -LiteralPath $notFoundPath -PathType Leaf) { Get-Content -Raw -Encoding UTF8 -LiteralPath $notFoundPath } else { '' }
 $siteCopy = "$indexContent`n$contentScript"
 
 $copyChecks = @(
     [pscustomobject]@{ Name = 'OpenNotes brand'; Pattern = '(?i)OpenNotes' },
+    [pscustomobject]@{ Name = 'live-folio hero thesis'; Pattern = '(?i)Open a PDF\.\s*Leave a trace\.' },
     [pscustomobject]@{ Name = 'PDF product positioning'; Pattern = '(?i)PDF' },
     [pscustomobject]@{ Name = 'Windows product positioning'; Pattern = '(?i)Windows' },
     [pscustomobject]@{ Name = 'annotation/notebook feature copy'; Pattern = '(?i)(?:annotat|notebook|handwriting|library)' }
@@ -356,6 +367,36 @@ foreach ($copyCheck in $copyChecks) {
 
 if ($indexContent -notmatch '(?i)data-i18n') {
     Add-Issue 'website/index.html has no data-i18n markers for localized page copy'
+}
+
+foreach ($requiredSection in @('method', 'workspace', 'evidence', 'download')) {
+    if ($indexContent -notmatch ('id="' + [regex]::Escape($requiredSection) + '"')) {
+        Add-Issue "website/index.html is missing the redesigned '$requiredSection' section"
+    }
+}
+
+if ($indexContent -notmatch 'class="[^"]*live-folio[^"]*"') {
+    Add-Issue 'website/index.html must make the live folio the hero visual anchor'
+}
+
+if ($indexContent -notmatch '<img[^>]+class="brand-mark-image"[^>]+src="assets/favicon-96x96\.png"') {
+    Add-Issue 'website/index.html must use the supplied optimized OpenNotes favicon PNG as the header brand mark'
+}
+
+foreach ($document in @(
+        [pscustomobject]@{ Name = 'website/index.html'; Content = $indexContent },
+        [pscustomobject]@{ Name = 'website/404.html'; Content = $notFoundContent }
+    )) {
+    foreach ($requiredLink in @(
+            'rel="icon"[^>]+href="assets/favicon\.svg"',
+            'rel="icon"[^>]+href="assets/favicon\.ico"',
+            'rel="apple-touch-icon"[^>]+href="assets/apple-touch-icon\.png"',
+            'rel="manifest"[^>]+href="assets/site\.webmanifest"'
+        )) {
+        if ($document.Content -notmatch $requiredLink) {
+            Add-Issue "$($document.Name) is missing required OpenNotes brand metadata matching '$requiredLink'"
+        }
+    }
 }
 
 Write-Section 'Interactive annotation preview'
@@ -380,6 +421,44 @@ foreach ($requiredDemoToken in @('setPointerCapture', 'keyboardResize', 'syncRes
     if ($demoContent -notmatch [regex]::Escape($requiredDemoToken)) {
         Add-Issue "website/demo.js is missing interactive resize behavior token '$requiredDemoToken'"
     }
+}
+
+$dragGripCount = @([regex]::Matches($indexContent, 'data-demo-drag')).Count
+if ($dragGripCount -ne 1) {
+    Add-Issue "website/index.html must expose one text drag grip (found $dragGripCount)"
+}
+
+foreach ($requiredDragToken in @('beginTextDrag', 'continueTextDrag', 'clampTextPosition')) {
+    if ($demoContent -notmatch [regex]::Escape($requiredDragToken)) {
+        Add-Issue "website/demo.js is missing direct text movement token '$requiredDragToken'"
+    }
+}
+
+foreach ($requiredDragKey in @('demo.drag', 'demo.dragging', 'demo.dragged')) {
+    if ($contentScript -notmatch ('"' + [regex]::Escape($requiredDragKey) + '"\s*:')) {
+        Add-Issue "website/content.js is missing localized text movement key '$requiredDragKey'"
+    }
+}
+
+$undoButtonCount = @([regex]::Matches($indexContent, 'data-demo-undo')).Count
+if ($undoButtonCount -ne 1) {
+    Add-Issue "website/index.html must expose one undo control (found $undoButtonCount)"
+}
+
+foreach ($requiredUndoToken in @('undoStack', 'undoMarks', 'updateUndoControls')) {
+    if ($demoContent -notmatch [regex]::Escape($requiredUndoToken)) {
+        Add-Issue "website/demo.js is missing undo behavior token '$requiredUndoToken'"
+    }
+}
+
+foreach ($requiredUndoKey in @('demo.undo', 'demo.undone', 'demo.undoEmpty')) {
+    if ($contentScript -notmatch ('"' + [regex]::Escape($requiredUndoKey) + '"\s*:')) {
+        Add-Issue "website/content.js is missing localized undo key '$requiredUndoKey'"
+    }
+}
+
+if ($indexContent -match 'https://github\.com/Learnmore-smart/Windows-Notes') {
+    Add-Issue 'website/index.html still contains a legacy Windows-Notes GitHub URL; use Learnmore-smart/OpenNotes'
 }
 
 if ($contentScript -notmatch '(?i)\b(?:en|english)\b' -or

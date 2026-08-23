@@ -102,11 +102,15 @@ namespace Caelum.Pages
 
         public void ApplyLocalization()
         {
+            if (DragDropOverlayText != null)
+                DragDropOverlayText.Text = LocalizationService.Get("Home.OpenPdfTitle");
+
             foreach (var tile in HomeTiles)
                 tile.RefreshDisplay();
 
             UpdateHeaderText();
             RefreshSelectionState();
+            RefreshOpenContextMenus();
         }
 
         public void ToggleSelectionMode()
@@ -253,12 +257,12 @@ namespace Caelum.Pages
 
             if (contextMenu.Items.Count == 0 || (contextMenu.Items.Count == 1 && contextMenu.Items[0] is System.Windows.Controls.Separator))
             {
-                contextMenu.Items.Clear();
-                contextMenu.Items.Add(new System.Windows.Controls.MenuItem { Header = "No folders available", IsEnabled = false });
+                return;
             }
 
             contextMenu.PlacementTarget = sender as UIElement;
             contextMenu.Placement = System.Windows.Controls.Primitives.PlacementMode.Top;
+            TrackOpenContextMenu(contextMenu, IsInsideFolder ? "move-root" : "move");
             contextMenu.IsOpen = true;
         }
 

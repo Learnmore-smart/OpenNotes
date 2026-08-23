@@ -2,10 +2,10 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Documents;
@@ -26,7 +26,25 @@ namespace Caelum.Pages
 {
     public sealed partial class EditorPage : Page
     {
-        private enum ToolType { None, Pen, Highlighter, Eraser, Text, Select, TextHighlight }
+        private static readonly DependencyProperty TextAnnotationAutoWidthProperty =
+            DependencyProperty.RegisterAttached(
+                "TextAnnotationAutoWidth", typeof(bool), typeof(EditorPage), new PropertyMetadata(false));
+
+        private static readonly DependencyProperty TextAnnotationAutoHeightProperty =
+            DependencyProperty.RegisterAttached(
+                "TextAnnotationAutoHeight", typeof(bool), typeof(EditorPage), new PropertyMetadata(false));
+
+        private enum ToolType { None, Pen, Highlighter, HiddenInk, Eraser, Shape, Laser, Text, Select, TextHighlight, AreaHighlight, StickyNote }
+
+        /// <summary>
+        /// Task 25/27: what the Highlighter toolbar button applies. Freehand is
+        /// the classic ink highlighter; TextHighlight/Underline/StrikeOut/
+        /// Squiggly ride the PDF text-selection pipeline; AreaHighlight drags
+        /// a free-form rectangle. Session-only (not persisted).
+        /// </summary>
+        private enum HighlighterApplyMode { Freehand, TextHighlight, Underline, StrikeOut, Squiggly, AreaHighlight }
+
+        private HighlighterApplyMode _highlighterApplyMode = HighlighterApplyMode.Freehand;
 
         private ToolType _currentTool = ToolType.None;
         private ToolType _previousTool = ToolType.Pen;
@@ -36,13 +54,78 @@ namespace Caelum.Pages
         private double _penSize = 1.5;
         private double _highlighterSize = 8.0;
         private double _eraserSize = 20.0;
+        // Shape tool state — session-only by design (spec requires no persistence).
+        private Color _shapeColor = Colors.Black;
+        private double _shapeSize = 2.0;
+        private ShapeKind _shapeKind = ShapeKind.Line;
         private double _currentFontSize = 18.0;
+        private bool _textBold;
+        private bool _textItalic;
+        private string _textFontFamily = "Segoe UI";
+        private TextAlignment _textAlignment = TextAlignment.Left;
         private bool _isUpdatingToolState;
+        private AppSettings _applicationSettings;
+
+        // Task 23: pen preset slots — 3 toolbar circles between the
+        // Highlighter and Eraser buttons. Left-click applies the preset
+        // (tool + color + size); right-click captures the CURRENT
+        // Pen/Highlighter state into the slot. Persisted in
+        // AppSettings.PenPresets (defaults filled on first load).
+        private const int PenPresetSlotCount = 3;
+        private readonly Border[] _presetSlots = new Border[PenPresetSlotCount];
+        // Popup internals kept as fields so ApplyPenPreset can resync the
+        // size slider + preview line after changing _penSize/_highlighterSize
+        // outside the popup's own handlers.
+        private Slider _penPopupSizeSlider;
+        private Line _penPopupSizePreview;
+        private Slider _highlighterPopupSizeSlider;
+        private Line _highlighterPopupSizePreview;
+
+        // Task 16: fullscreen immersive mode. While active the floating
+        // toolbar is visually hidden (Opacity 0 + IsHitTestVisible false —
+        // the toolbar is an overlay, so this never reflows the pages) and
+        // all tool popups stay closed. Toggled with F11, ESC always leaves
+        // it first. The previous toolbar property values are recorded so
+        // repeated toggles leave no residue.
+        private bool _isImmersiveMode;
+        private double _preImmersiveToolbarOpacity = 1.0;
+        private bool _preImmersiveToolbarHitTestVisible = true;
+        private double _preImmersiveSidebarOpacity = 1.0;
+        private bool _preImmersiveSidebarHitTestVisible = true;
+        private double _preImmersiveSearchOpacity = 1.0;
+        private bool _preImmersiveSearchHitTestVisible = true;
+
+        // Task 22: on-screen ruler. ONE shared ruler overlaying the whole
+        // editor viewport (not per-page). Session visual only — never saved
+        // with the document and not persisted across sessions. It is an
+        // overlay toggle INDEPENDENT of the active tool (pick Pen + ruler
+        // ON and draw along the edge). Viewport-anchored: scrolling or
+        // zooming the document never moves it, like a real ruler lying on
+        // the screen. Pen/Highlighter strokes drawn near the ruler's edge
+        // are projected onto it (see PdfPageControl.SnapStrokeToRuler);
+        // the snapped strokes are ordinary strokes, so undo/save work
+        // naturally and the ruler itself never touches undo/dirty.
+        private bool _rulerVisible;
+        private Point _rulerCenter;   // viewport (root-grid) coordinates
+        private double _rulerAngle;   // degrees; always snapped to 15° steps
+        private Grid _rulerVisual;    // built in code on first show
+        private RotateTransform _rulerRotate;
+        private bool _isDraggingRuler;
+        private bool _isRotatingRuler;
+        private Point _rulerDragOffset;          // pointer - center at drag start
+        private double _rotateStartPointerAngle; // pointer angle around center at rotate start
+        private double _rotateStartRulerAngle;
+
+        private const double RulerLength = 360.0;
+        private const double RulerHeight = 56.0;
+        private const double RulerEndCapZone = 14.0;      // end zones rotate instead of move
+        private const double RulerRotationSnapDegrees = 15.0;
 
         private readonly PdfService _pdfService;
         private CancellationTokenSource _loadCts;
         private int _loadSessionId;
         private bool _isDirty;
+        private long _dirtyGeneration;
         private string _currentPdfPath;
         public string CurrentPdfPath => _currentPdfPath;
         private bool _promptSaveAsAfterLoad;
@@ -51,21 +134,46 @@ namespace Caelum.Pages
         private bool _isNotebookDraft;
 
         private TextBox _selectedTextBox;
+        // Text edit session tracking: text captured on GotFocus, compared on
+        // LostFocus; a difference pushes one TextEditSessionAction (single-step
+        // undo for the whole editing session of one text box).
+        private TextBox _textEditSessionTextBox;
+        private string _textEditSessionOriginalText;
         private Border _colorIndicator;
         private Border _inlineTextBoxToolbar;
+        private Button _textDeleteButton;
+        private Button _textDecreaseFontButton;
+        private Button _textIncreaseFontButton;
+        private TextBlock _textRecentLabel;
+        private Popup _textColorPopup;
         private PdfPageControl _toolbarHostPage;
         private static readonly double[] TextFontSizeSteps = { 12d, 14d, 16d, 18d, 20d, 24d, 28d, 32d, 40d, 48d, 60d, 72d };
 
         private Popup _penPopup;
         private Popup _highlighterPopup;
         private Popup _eraserPopup;
+        private Popup _shapePopup;
         private Popup _selectionPopup;
+        private Popup _stickyNotePopup;
+        private TextBox _stickyNoteEditor;
+        private Button _stickyNoteSaveButton;
+        private StickyNoteAnnotation _stickyNoteEditingModel;
+        private string _stickyNoteEditingOriginalText;
+        private ToggleButton _textBoldButton;
+        private ToggleButton _textItalicButton;
+        private ComboBox _textFontFamilyCombo;
+        private ComboBox _textAlignmentCombo;
         private PdfPageControl _activeSelectionPage;
         private bool _isDelegatingSelection;
         private PdfPageControl _selectionDelegateTarget;
 
         private Point _lastClickedPoint;
         private PdfPageControl _lastClickedPage;
+
+        // Task 19: AddImage raises ImagesChanged while annotations are being
+        // loaded from the PDF; suppress the dirty marking during that window
+        // (loading a document must leave it clean).
+        private bool _isLoadingAnnotations;
 
         private const double PdfTextSelectionDragThreshold = 4.0;
         private PdfPageControl _pdfTextSelectionPage;
@@ -82,8 +190,17 @@ namespace Caelum.Pages
         private bool _dragArmed;
         private Point _dragPressPointOnCanvas;
         private Grid _draggedContainer;
+        private PdfPageControl _draggedContainerPage;
         private double _dragStartX;
         private double _dragStartY;
+
+        private Grid _resizingTextContainer;
+        private PdfPageControl _resizingTextPage;
+        private TextResizeHandle _textResizeHandle;
+        private Point _textResizeStartPoint;
+        private TextBoxBounds _textResizeStartBounds;
+        private bool _textResizeStartAutoWidth;
+        private bool _textResizeStartAutoHeight;
 
         // Undo/Redo
         private interface IUndoAction
@@ -112,6 +229,149 @@ namespace Caelum.Pages
             }
         }
 
+        private sealed class HiddenInkAddedAction : IUndoAction
+        {
+            private readonly PdfPageControl _page;
+            private readonly HiddenInkAnnotation _annotation;
+
+            public HiddenInkAddedAction(PdfPageControl page, HiddenInkAnnotation annotation)
+            {
+                _page = page;
+                _annotation = annotation;
+            }
+
+            public bool LeavesDocumentDirty => true;
+
+            public Task UndoAsync()
+            {
+                _page.RemoveHiddenInkQuiet(_annotation);
+                return Task.CompletedTask;
+            }
+
+            public Task RedoAsync()
+            {
+                _page.AddHiddenInkQuiet(_annotation);
+                return Task.CompletedTask;
+            }
+        }
+
+        private sealed class HiddenInkRemovedAction : IUndoAction
+        {
+            private readonly PdfPageControl _page;
+            private readonly HiddenInkAnnotation _annotation;
+
+            public HiddenInkRemovedAction(PdfPageControl page, HiddenInkAnnotation annotation)
+            {
+                _page = page;
+                _annotation = annotation;
+            }
+
+            public bool LeavesDocumentDirty => true;
+
+            public Task UndoAsync()
+            {
+                _page.AddHiddenInkQuiet(_annotation);
+                return Task.CompletedTask;
+            }
+
+            public Task RedoAsync()
+            {
+                _page.RemoveHiddenInkQuiet(_annotation);
+                return Task.CompletedTask;
+            }
+        }
+
+        private sealed class HiddenInksRemovedAction : IUndoAction
+        {
+            private readonly PdfPageControl _page;
+            private readonly List<HiddenInkAnnotation> _annotations;
+
+            public HiddenInksRemovedAction(
+                PdfPageControl page,
+                IReadOnlyList<HiddenInkAnnotation> annotations)
+            {
+                _page = page;
+                _annotations = annotations == null
+                    ? new List<HiddenInkAnnotation>()
+                    : annotations.ToList();
+            }
+
+            public bool LeavesDocumentDirty => true;
+
+            public Task UndoAsync()
+            {
+                foreach (var annotation in _annotations)
+                    _page.AddHiddenInkQuiet(annotation);
+                return Task.CompletedTask;
+            }
+
+            public Task RedoAsync()
+            {
+                foreach (var annotation in _annotations)
+                    _page.RemoveHiddenInkQuiet(annotation);
+                return Task.CompletedTask;
+            }
+        }
+
+        private class StrokesErasedAction : IUndoAction
+        {
+            private readonly PdfPageControl _page;
+            private readonly List<System.Windows.Ink.Stroke> _removedOriginals;
+            private readonly List<System.Windows.Ink.Stroke> _addedFragments;
+            public StrokesErasedAction(PdfPageControl page, List<System.Windows.Ink.Stroke> removedOriginals, List<System.Windows.Ink.Stroke> addedFragments)
+            {
+                _page = page;
+                _removedOriginals = removedOriginals;
+                _addedFragments = addedFragments;
+            }
+            public bool LeavesDocumentDirty => true;
+            public Task UndoAsync()
+            {
+                foreach (var fragment in _addedFragments) _page.RemoveStrokeQuiet(fragment);
+                foreach (var original in _removedOriginals) _page.AddStrokeQuiet(original);
+                return Task.CompletedTask;
+            }
+
+            public Task RedoAsync()
+            {
+                foreach (var original in _removedOriginals) _page.RemoveStrokeQuiet(original);
+                foreach (var fragment in _addedFragments) _page.AddStrokeQuiet(fragment);
+                return Task.CompletedTask;
+            }
+        }
+
+        /// <summary>
+        /// A scribble shape recognition replaced the original freehand
+        /// stroke with an ideal shape stroke in place. Undo restores the
+        /// freehand original, redo re-applies the ideal shape.
+        /// </summary>
+        private class StrokeReplacedAction : IUndoAction
+        {
+            private readonly PdfPageControl _page;
+            private readonly System.Windows.Ink.Stroke _originalStroke;
+            private readonly System.Windows.Ink.Stroke _idealStroke;
+            public StrokeReplacedAction(PdfPageControl page, System.Windows.Ink.Stroke originalStroke, System.Windows.Ink.Stroke idealStroke)
+            {
+                _page = page;
+                _originalStroke = originalStroke;
+                _idealStroke = idealStroke;
+            }
+            public bool LeavesDocumentDirty => true;
+            public Task UndoAsync()
+            {
+                _page.RemoveStrokeQuiet(_idealStroke);
+                _page.AddStrokeQuiet(_originalStroke);
+                return Task.CompletedTask;
+            }
+
+            public Task RedoAsync()
+            {
+                _page.RemoveStrokeQuiet(_originalStroke);
+                _page.AddStrokeQuiet(_idealStroke);
+                return Task.CompletedTask;
+            }
+        }
+
         private class ItemsAddedAction : IUndoAction
         {
             private readonly PdfPageControl _page;
@@ -127,6 +387,11 @@ namespace Caelum.Pages
             public bool LeavesDocumentDirty => true;
             public Task UndoAsync()
             {
+                // The pasted items may currently be selected (paste
+                // auto-selects, Task 8.2); drop the selection before removing
+                // them so it cannot reference removed strokes/containers.
+                if (_page.HasSelection)
+                    _page.ClearSelection();
                 foreach (var stroke in _strokes) _page.RemoveStrokeQuiet(stroke);
                 foreach (var container in _containers) _page.RemoveTextContainerQuiet(container);
                 return Task.CompletedTask;
@@ -164,6 +429,273 @@ namespace Caelum.Pages
             {
                 foreach (var stroke in _strokes) _page.RemoveStrokeQuiet(stroke);
                 foreach (var container in _containers) _page.RemoveTextContainerQuiet(container);
+                return Task.CompletedTask;
+            }
+        }
+
+        private sealed class StickyNoteEditAction : IUndoAction
+        {
+            private readonly StickyNoteAnnotation _note;
+            private readonly string _before;
+            private readonly string _after;
+
+            public StickyNoteEditAction(StickyNoteAnnotation note, string before, string after)
+            {
+                _note = note;
+                _before = before;
+                _after = after;
+            }
+
+            public bool LeavesDocumentDirty => true;
+
+            public Task UndoAsync()
+            {
+                _note.Text = _before;
+                return Task.CompletedTask;
+            }
+
+            public Task RedoAsync()
+            {
+                _note.Text = _after;
+                return Task.CompletedTask;
+            }
+        }
+
+        private class TextBoxAddedAction : IUndoAction
+        {
+            private readonly PdfPageControl _page;
+            private readonly System.Windows.Controls.Grid _container;
+            public TextBoxAddedAction(PdfPageControl page, System.Windows.Controls.Grid container)
+            {
+                _page = page;
+                _container = container;
+            }
+            public bool LeavesDocumentDirty => true;
+            public Task UndoAsync()
+            {
+                _page.RemoveTextContainerQuiet(_container);
+                return Task.CompletedTask;
+            }
+
+            public Task RedoAsync()
+            {
+                _page.AddTextContainerQuiet(_container);
+                return Task.CompletedTask;
+            }
+        }
+
+        private class TextBoxDeletedAction : IUndoAction
+        {
+            private readonly PdfPageControl _page;
+            private readonly System.Windows.Controls.Grid _container;
+            public TextBoxDeletedAction(PdfPageControl page, System.Windows.Controls.Grid container)
+            {
+                _page = page;
+                _container = container;
+            }
+            public bool LeavesDocumentDirty => true;
+            public Task UndoAsync()
+            {
+                _page.AddTextContainerQuiet(_container);
+                return Task.CompletedTask;
+            }
+
+            public Task RedoAsync()
+            {
+                _page.RemoveTextContainerQuiet(_container);
+                return Task.CompletedTask;
+            }
+        }
+
+        private class TextEditSessionAction : IUndoAction
+        {
+            private readonly PdfPageControl _page;
+            private readonly TextBox _textBox;
+            private readonly string _beforeText;
+            private readonly string _afterText;
+            public TextEditSessionAction(PdfPageControl page, TextBox textBox, string beforeText, string afterText)
+            {
+                _page = page;
+                _textBox = textBox;
+                _beforeText = beforeText;
+                _afterText = afterText;
+            }
+            public bool LeavesDocumentDirty => true;
+            public Task UndoAsync()
+            {
+                // Programmatic Text assignment does not raise GotFocus/LostFocus,
+                // so this cannot re-enter the session tracking; the existing
+                // TextChanged handler still marks the document dirty.
+                _textBox.Text = _beforeText;
+                return Task.CompletedTask;
+            }
+
+            public Task RedoAsync()
+            {
+                _textBox.Text = _afterText;
+                return Task.CompletedTask;
+            }
+        }
+
+        private class TextStyleChangedAction : IUndoAction
+        {
+            private readonly PdfPageControl _page;
+            private readonly TextBox _textBox;
+            private readonly double _beforeFontSize;
+            private readonly Brush _beforeForeground;
+            private readonly double _afterFontSize;
+            private readonly Brush _afterForeground;
+            public TextStyleChangedAction(PdfPageControl page, TextBox textBox,
+                double beforeFontSize, Brush beforeForeground, double afterFontSize, Brush afterForeground)
+            {
+                _page = page;
+                _textBox = textBox;
+                _beforeFontSize = beforeFontSize;
+                _beforeForeground = beforeForeground;
+                _afterFontSize = afterFontSize;
+                _afterForeground = afterForeground;
+            }
+            public bool LeavesDocumentDirty => true;
+            public Task UndoAsync()
+            {
+                _textBox.FontSize = _beforeFontSize;
+                _textBox.Foreground = _beforeForeground;
+                return Task.CompletedTask;
+            }
+
+            public Task RedoAsync()
+            {
+                _textBox.FontSize = _afterFontSize;
+                _textBox.Foreground = _afterForeground;
+                return Task.CompletedTask;
+            }
+        }
+
+        private sealed class TextFormatChangedAction : IUndoAction
+        {
+            private readonly TextBox _textBox;
+            private readonly FontWeight _beforeWeight;
+            private readonly FontStyle _beforeStyle;
+            private readonly FontFamily _beforeFamily;
+            private readonly TextAlignment _beforeAlignment;
+            private readonly FontWeight _afterWeight;
+            private readonly FontStyle _afterStyle;
+            private readonly FontFamily _afterFamily;
+            private readonly TextAlignment _afterAlignment;
+
+            public TextFormatChangedAction(
+                TextBox textBox,
+                FontWeight beforeWeight,
+                FontStyle beforeStyle,
+                FontFamily beforeFamily,
+                TextAlignment beforeAlignment,
+                FontWeight afterWeight,
+                FontStyle afterStyle,
+                FontFamily afterFamily,
+                TextAlignment afterAlignment)
+            {
+                _textBox = textBox;
+                _beforeWeight = beforeWeight;
+                _beforeStyle = beforeStyle;
+                _beforeFamily = beforeFamily;
+                _beforeAlignment = beforeAlignment;
+                _afterWeight = afterWeight;
+                _afterStyle = afterStyle;
+                _afterFamily = afterFamily;
+                _afterAlignment = afterAlignment;
+            }
+
+            public bool LeavesDocumentDirty => true;
+
+            private void Apply(FontWeight weight, FontStyle style, FontFamily family, TextAlignment alignment)
+            {
+                _textBox.FontWeight = weight;
+                _textBox.FontStyle = style;
+                _textBox.FontFamily = family;
+                _textBox.TextAlignment = alignment;
+            }
+
+            public Task UndoAsync()
+            {
+                Apply(_beforeWeight, _beforeStyle, _beforeFamily, _beforeAlignment);
+                return Task.CompletedTask;
+            }
+
+            public Task RedoAsync()
+            {
+                Apply(_afterWeight, _afterStyle, _afterFamily, _afterAlignment);
+                return Task.CompletedTask;
+            }
+        }
+
+        private class TextBoxMovedAction : IUndoAction
+        {
+            private readonly PdfPageControl _page;
+            private readonly System.Windows.Controls.Grid _container;
+            private readonly System.Windows.Point _beforePosition;
+            private readonly System.Windows.Point _afterPosition;
+            public TextBoxMovedAction(PdfPageControl page, System.Windows.Controls.Grid container, System.Windows.Point beforePosition, System.Windows.Point afterPosition)
+            {
+                _page = page;
+                _container = container;
+                _beforePosition = beforePosition;
+                _afterPosition = afterPosition;
+            }
+            public bool LeavesDocumentDirty => true;
+            public Task UndoAsync()
+            {
+                Canvas.SetLeft(_container, _beforePosition.X);
+                Canvas.SetTop(_container, _beforePosition.Y);
+                return Task.CompletedTask;
+            }
+
+            public Task RedoAsync()
+            {
+                Canvas.SetLeft(_container, _afterPosition.X);
+                Canvas.SetTop(_container, _afterPosition.Y);
+                return Task.CompletedTask;
+            }
+        }
+
+        private sealed class TextBoxResizedAction : IUndoAction
+        {
+            private readonly Grid _container;
+            private readonly TextBoxBounds _beforeBounds;
+            private readonly TextBoxBounds _afterBounds;
+            private readonly bool _beforeAutoWidth;
+            private readonly bool _beforeAutoHeight;
+            private readonly bool _afterAutoWidth;
+            private readonly bool _afterAutoHeight;
+
+            public TextBoxResizedAction(
+                Grid container,
+                TextBoxBounds beforeBounds,
+                TextBoxBounds afterBounds,
+                bool beforeAutoWidth,
+                bool beforeAutoHeight,
+                bool afterAutoWidth,
+                bool afterAutoHeight)
+            {
+                _container = container;
+                _beforeBounds = beforeBounds;
+                _afterBounds = afterBounds;
+                _beforeAutoWidth = beforeAutoWidth;
+                _beforeAutoHeight = beforeAutoHeight;
+                _afterAutoWidth = afterAutoWidth;
+                _afterAutoHeight = afterAutoHeight;
+            }
+
+            public bool LeavesDocumentDirty => true;
+
+            public Task UndoAsync()
+            {
+                ApplyTextContainerBounds(_container, _beforeBounds, _beforeAutoWidth, _beforeAutoHeight);
+                return Task.CompletedTask;
+            }
+
+            public Task RedoAsync()
+            {
+                ApplyTextContainerBounds(_container, _afterBounds, _afterAutoWidth, _afterAutoHeight);
                 return Task.CompletedTask;
             }
         }
@@ -237,6 +769,7 @@ namespace Caelum.Pages
                 {
                     _sourcePage.RemoveTextContainerQuiet(container);
                     _targetPage.AddTextContainerQuiet(container);
+                    TransferImageData(_sourcePage, _targetPage, container);
                 }
 
                 _targetPage.MoveItemsDirectly(_strokes, _containers, _adjustX, _adjustY);
@@ -254,6 +787,7 @@ namespace Caelum.Pages
                 {
                     _targetPage.RemoveTextContainerQuiet(container);
                     _sourcePage.AddTextContainerQuiet(container);
+                    TransferImageData(_targetPage, _sourcePage, container);
                 }
 
                 _sourcePage.MoveItemsDirectly(_strokes, _containers, -_deltaX - _adjustX, -_deltaY - _adjustY);
@@ -272,10 +806,23 @@ namespace Caelum.Pages
                 {
                     _sourcePage.RemoveTextContainerQuiet(container);
                     _targetPage.AddTextContainerQuiet(container);
+                    TransferImageData(_sourcePage, _targetPage, container);
                 }
 
                 _targetPage.MoveItemsDirectly(_strokes, _containers, _deltaX + _adjustX, _deltaY + _adjustY);
                 return Task.CompletedTask;
+            }
+
+            /// <summary>
+            /// Task 19: the image payload dict is per-page-control, so moving a
+            /// container across pages must also hand the bytes to the receiving
+            /// page (a no-op for text containers — GetImageData returns null).
+            /// </summary>
+            private static void TransferImageData(PdfPageControl source, PdfPageControl target, System.Windows.Controls.Grid container)
+            {
+                var data = source.GetImageData(container);
+                if (data != null && target.GetImageData(container) == null)
+                    target.SetImageData(container, data);
             }
         }
 
@@ -316,19 +863,58 @@ namespace Caelum.Pages
             private readonly byte[] _afterBytes;
             private readonly int _undoFocusPageIndex;
             private readonly int _redoFocusPageIndex;
+            private readonly IReadOnlyList<PageBookmark> _beforeBookmarks;
+            private readonly IReadOnlyList<PageBookmark> _afterBookmarks;
 
-            public DocumentSnapshotAction(EditorPage owner, byte[] beforeBytes, byte[] afterBytes, int undoFocusPageIndex, int redoFocusPageIndex)
+            public DocumentSnapshotAction(
+                EditorPage owner,
+                byte[] beforeBytes,
+                byte[] afterBytes,
+                int undoFocusPageIndex,
+                int redoFocusPageIndex,
+                IEnumerable<PageBookmark> beforeBookmarks = null,
+                IEnumerable<PageBookmark> afterBookmarks = null)
             {
                 _owner = owner;
                 _beforeBytes = beforeBytes;
                 _afterBytes = afterBytes;
                 _undoFocusPageIndex = undoFocusPageIndex;
                 _redoFocusPageIndex = redoFocusPageIndex;
+                _beforeBookmarks = beforeBookmarks?.Select(CloneBookmark).ToList();
+                _afterBookmarks = afterBookmarks?.Select(CloneBookmark).ToList();
             }
 
             public bool LeavesDocumentDirty => false;
-            public Task UndoAsync() => _owner.ApplyDocumentSnapshotAsync(_beforeBytes, _undoFocusPageIndex);
-            public Task RedoAsync() => _owner.ApplyDocumentSnapshotAsync(_afterBytes, _redoFocusPageIndex);
+
+            public Task UndoAsync() => ApplyAsync(_beforeBytes, _undoFocusPageIndex, _beforeBookmarks);
+
+            public Task RedoAsync() => ApplyAsync(_afterBytes, _redoFocusPageIndex, _afterBookmarks);
+
+            private async Task ApplyAsync(byte[] bytes, int focusPageIndex, IReadOnlyList<PageBookmark> bookmarks)
+            {
+                await _owner.ApplyDocumentSnapshotAsync(bytes, focusPageIndex);
+                if (bookmarks == null || string.IsNullOrWhiteSpace(_owner._currentPdfPath))
+                    return;
+
+                try
+                {
+                    PageBookmarkService.Replace(_owner._currentPdfPath, bookmarks);
+                    _owner.RefreshBookmarks();
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[Bookmarks] Snapshot restore failed: {ex}");
+                }
+            }
+
+            private static PageBookmark CloneBookmark(PageBookmark bookmark)
+            {
+                return new PageBookmark
+                {
+                    PageIndex = bookmark?.PageIndex ?? -1,
+                    Label = bookmark?.Label ?? string.Empty
+                };
+            }
         }
 
         private sealed class PrintablePageImage
@@ -336,6 +922,14 @@ namespace Caelum.Pages
             public BitmapSource Bitmap { get; init; }
             public double Width { get; init; }
             public double Height { get; init; }
+        }
+
+        private sealed class PdfSearchResult
+        {
+            public int PageIndex { get; init; }
+            public int StartOffset { get; init; }
+            public int Length { get; init; }
+            public string DisplayText { get; init; }
         }
 
         private readonly List<IUndoAction> _undoStack = new List<IUndoAction>();
@@ -348,6 +942,7 @@ namespace Caelum.Pages
         private double _zoomLevel = 1.0;
         private double _lastRenderedDpiScale = 1.0;
         private CancellationTokenSource _reRenderCts;
+        private readonly System.Windows.Threading.DispatcherTimer _zoomRenderDebounceTimer;
 
         // Tracks which pages have been re-rendered at the current _lastRenderedDpiScale
         private readonly HashSet<int> _pagesRenderedAtScale = new HashSet<int>();
@@ -356,8 +951,21 @@ namespace Caelum.Pages
         private readonly List<double> _pageHeights = new List<double>();
         private readonly List<Button> _pageDeleteButtons = new List<Button>();
         private readonly List<Button> _pageInsertButtons = new List<Button>();
+        private readonly List<PdfSearchResult> _pdfSearchResults = new List<PdfSearchResult>();
+        private CancellationTokenSource _pdfSearchCts;
+        private CancellationTokenSource _thumbnailLoadCts;
+        private readonly HashSet<int> _thumbnailPagesLoading = new HashSet<int>();
+        private const int ThumbnailCacheCapacity = 24;
+        private readonly Dictionary<int, BitmapSource> _thumbnailCache = new Dictionary<int, BitmapSource>();
+        private readonly LinkedList<int> _thumbnailCacheLru = new LinkedList<int>();
+        private bool _isRefreshingThumbnails;
+        private Point _thumbnailDragStartPoint;
+        private int _thumbnailDragIndex = -1;
         private CancellationTokenSource _scrollReRenderCts;
+        private readonly System.Windows.Threading.DispatcherTimer _scrollRenderDebounceTimer;
         private const double PageSpacing = 28.0;
+        private bool _isHostActive = true;
+        private bool _resourcesReleased;
 
         // Smooth scrolling
         private double _targetVerticalOffset;
@@ -396,6 +1004,7 @@ namespace Caelum.Pages
 
         // Auto-save timer (every 60 seconds)
         private System.Windows.Threading.DispatcherTimer _autoSaveTimer;
+        private bool _languageChangedSubscribed;
 
         // Horizontal mouse wheel hook for precision touchpads
         private HwndSource _hwndSource;
@@ -408,47 +1017,97 @@ namespace Caelum.Pages
             InitializeComponent();
             InitializeTextBoxPopup();
             CreateToolPopups();
+            InitializePenPresetSlots();
+            ApplySettings(AppSettingsService.Load());
             ApplyLocalization();
 
             _pdfService = new PdfService();
             ActivateTool(ToolType.None);
 
-            FixPopupTopmost(_penPopup);
-            FixPopupTopmost(_highlighterPopup);
-            FixPopupTopmost(_eraserPopup);
-            FixPopupTopmost(_selectionPopup);
+            PopupZOrderHelper.FixPopupTopmost(_penPopup);
+            PopupZOrderHelper.FixPopupTopmost(_highlighterPopup);
+            PopupZOrderHelper.FixPopupTopmost(_eraserPopup);
+            PopupZOrderHelper.FixPopupTopmost(_shapePopup);
+            PopupZOrderHelper.FixPopupTopmost(_selectionPopup);
+            PopupZOrderHelper.FixContextMenuTopmost(PdfViewerContextMenu);
 
             KeyDown += EditorPage_KeyDown;
+
+            // Task 19: image file drag-drop. The Page root has AllowDrop=true
+            // (XAML) but no handlers; tunneling at the page level keeps the
+            // ScrollViewer children from eating the drag events.
+            PreviewDragOver += EditorPage_PreviewDragOver;
+            Drop += EditorPage_Drop;
 
             Loaded += EditorPage_Loaded;
             Unloaded += EditorPage_Unloaded;
 
             // Re-render newly-visible pages when scrolling after a zoom
+            _zoomRenderDebounceTimer = new System.Windows.Threading.DispatcherTimer
+            {
+                Interval = TimeSpan.FromMilliseconds(250)
+            };
+            _zoomRenderDebounceTimer.Tick += ZoomRenderDebounceTimer_Tick;
+            _scrollRenderDebounceTimer = new System.Windows.Threading.DispatcherTimer
+            {
+                Interval = TimeSpan.FromMilliseconds(100)
+            };
+            _scrollRenderDebounceTimer.Tick += ScrollRenderDebounceTimer_Tick;
             PdfScrollViewer.ScrollChanged += PdfScrollViewer_ScrollChanged;
 
-            // Start interval auto-save timer
-            _autoSaveTimer = new System.Windows.Threading.DispatcherTimer
-            {
-                Interval = TimeSpan.FromSeconds(60)
-            };
-            _autoSaveTimer.Tick += AutoSaveTimer_Tick;
-            _autoSaveTimer.Start();
+            EnsureAutoSaveTimer();
         }
 
         private void EditorPage_Loaded(object sender, RoutedEventArgs e)
         {
+            if (!_languageChangedSubscribed)
+            {
+                LocalizationService.LanguageChanged += EditorPage_LanguageChanged;
+                _languageChangedSubscribed = true;
+            }
+
+            ApplyLocalization();
             InitializePenService();
+            EnsureAutoSaveTimer();
             InstallHorizontalWheelHook();
+            InstallScrollbarTrackJump();
         }
 
         private void EditorPage_Unloaded(object sender, RoutedEventArgs e)
         {
+            if (_languageChangedSubscribed)
+            {
+                LocalizationService.LanguageChanged -= EditorPage_LanguageChanged;
+                _languageChangedSubscribed = false;
+            }
+
+            CancelTextResize(restoreBounds: false);
+            SetHostActive(false);
             _autoSaveTimer?.Stop();
-            _autoSaveTimer = null;
             _penService?.Dispose();
             _penService = null;
             RemoveHorizontalWheelHook();
             ClearPdfTextSelection();
+        }
+
+        private void EnsureAutoSaveTimer()
+        {
+            if (_resourcesReleased)
+                return;
+
+            if (_autoSaveTimer == null)
+            {
+                _autoSaveTimer = new System.Windows.Threading.DispatcherTimer();
+                _autoSaveTimer.Tick += AutoSaveTimer_Tick;
+            }
+
+            _autoSaveTimer.Interval = TimeSpan.FromSeconds(_applicationSettings?.AutoSaveIntervalSeconds ?? 60);
+            _autoSaveTimer.Start();
+        }
+
+        private void EditorPage_LanguageChanged(object sender, EventArgs e)
+        {
+            ApplyLocalization();
         }
 
         private void ClearPdfTextSelection(bool clearCopiedText = true)
@@ -580,6 +1239,52 @@ namespace Caelum.Pages
             return mergedRects;
         }
 
+        private static TextMarkupAnnotation BuildTextMarkupAnnotation(
+            IReadOnlyList<Rect> absoluteRects,
+            TextMarkupKind kind,
+            Color color)
+        {
+            var bounds = Rect.Empty;
+            foreach (var rect in absoluteRects ?? Array.Empty<Rect>())
+            {
+                if (rect.IsEmpty || rect.Width <= 0 || rect.Height <= 0)
+                    continue;
+                if (bounds.IsEmpty)
+                    bounds = rect;
+                else
+                    bounds.Union(rect);
+            }
+
+            var markup = new TextMarkupAnnotation
+            {
+                Kind = kind.ToString(),
+                X = bounds.IsEmpty ? 0 : bounds.X,
+                Y = bounds.IsEmpty ? 0 : bounds.Y,
+                R = color.R,
+                G = color.G,
+                B = color.B
+            };
+
+            if (bounds.IsEmpty)
+                return markup;
+
+            foreach (var rect in absoluteRects)
+            {
+                if (!rect.IsEmpty && rect.Width > 0 && rect.Height > 0)
+                {
+                    markup.Rects.Add(new[]
+                    {
+                        rect.X - bounds.X,
+                        rect.Y - bounds.Y,
+                        rect.Width,
+                        rect.Height
+                    });
+                }
+            }
+
+            return markup;
+        }
+
         private void UpdatePdfTextSelectionVisuals()
         {
             if (_pdfTextSelectionPage == null || _pdfTextSelectionInfo == null || _pdfTextSelectionInfo.Text == null)
@@ -701,8 +1406,29 @@ namespace Caelum.Pages
                 var rects = BuildPdfTextSelectionRects(_pdfTextSelectionInfo, start, end);
                 if (rects.Count > 0)
                 {
-                    _pdfTextSelectionPage.AddHighlightAnnotation(rects, _highlighterColor);
-                    MarkDirty();
+                    if (_highlighterApplyMode == HighlighterApplyMode.TextHighlight)
+                    {
+                        _pdfTextSelectionPage.AddHighlightAnnotation(rects, _highlighterColor);
+                        MarkDirty();
+                    }
+                    else
+                    {
+                        var markup = BuildTextMarkupAnnotation(
+                            rects,
+                            _highlighterApplyMode switch
+                            {
+                                HighlighterApplyMode.StrikeOut => TextMarkupKind.StrikeOut,
+                                HighlighterApplyMode.Squiggly => TextMarkupKind.Squiggly,
+                                _ => TextMarkupKind.Underline
+                            },
+                            _highlighterColor);
+                        var container = _pdfTextSelectionPage.AddTextMarkup(markup);
+                        if (container != null)
+                            PushUndoAction(new ItemsAddedAction(
+                                _pdfTextSelectionPage,
+                                new List<System.Windows.Ink.Stroke>(),
+                                new List<System.Windows.Controls.Grid> { container }));
+                    }
                 }
                 ClearPdfTextSelection();
                 return;
@@ -859,18 +1585,23 @@ namespace Caelum.Pages
                 if (!IsActiveEditorPage())
                     return;
 
-                string brandName = info.PenBrand == PenBrand.Generic ? "Stylus" : info.PenBrand.ToString();
-                string features = "";
-                if (info.SupportsPressure) features += " pressure";
-                if (info.SupportsXTilt || info.SupportsYTilt) features += " tilt";
-                if (info.SupportsBarrelButton) features += " barrel-button";
-                features = features.Trim();
-                if (!string.IsNullOrEmpty(features))
-                    features = $" ({features})";
+                string brandName = info.PenBrand == PenBrand.Generic
+                    ? LocalizationService.Get("Editor.Stylus")
+                    : info.PenBrand.ToString();
+                var featureLabels = new List<string>();
+                if (info.SupportsPressure)
+                    featureLabels.Add(LocalizationService.Get("Editor.PenFeaturePressure"));
+                if (info.SupportsXTilt || info.SupportsYTilt)
+                    featureLabels.Add(LocalizationService.Get("Editor.PenFeatureTilt"));
+                if (info.SupportsBarrelButton)
+                    featureLabels.Add(LocalizationService.Get("Editor.PenFeatureBarrel"));
+                string features = featureLabels.Count == 0
+                    ? string.Empty
+                    : $" ({string.Join(" · ", featureLabels)})";
 
                 Console.WriteLine($"[EditorPage] Pen detected: {brandName}{features}");
                 var mw = Window.GetWindow(this) as MainWindow;
-                mw?.ShowToast($"{brandName} pen detected{features}", "\uEDA4", 2500);
+                mw?.ShowToast(LocalizationService.Format("Editor.PenDetected", brandName, features), "\uEDA4", 2500);
             }));
         }
 
@@ -966,13 +1697,13 @@ namespace Caelum.Pages
                 {
                     CopySelection();
                     var mw = Window.GetWindow(this) as MainWindow;
-                    mw?.ShowToast("Copied", "\uE8C8", 1500);
+                    mw?.ShowToast(LocalizationService.Get("Editor.Copy"), "\uE8C8", 1500);
                     e.Handled = true;
                 }
                 else if (TryCopySelectedPdfTextToClipboard())
                 {
                     var mw = Window.GetWindow(this) as MainWindow;
-                    mw?.ShowToast("Text copied", "\uE8C8", 1500);
+                    mw?.ShowToast(LocalizationService.Get("Editor.TextCopied"), "\uE8C8", 1500);
                     e.Handled = true;
                 }
                 else if (_activeSelectionPage != null && _activeSelectionPage.HasSelection)
@@ -987,14 +1718,27 @@ namespace Caelum.Pages
                 {
                     CutSelection();
                     var mw = Window.GetWindow(this) as MainWindow;
-                    mw?.ShowToast("Cut", "\uE8C6", 1500); // ✂ icon roughly
+                    mw?.ShowToast(LocalizationService.Get("Editor.Cut"), "\uE8C6", 1500); // ✂ icon roughly
                     e.Handled = true;
                 }
             }
             else if (Keyboard.Modifiers == ModifierKeys.Control && e.Key == Key.V)
             {
-                PasteSelection();
+                // Task 19: a bitmap on the clipboard wins over annotation JSON.
+                if (!PasteClipboardImage())
+                    PasteSelection();
                 e.Handled = true;
+            }
+            else if (Keyboard.Modifiers == ModifierKeys.Control && e.Key == Key.D)
+            {
+                // TextBoxes don't consume Ctrl+D (unlike Ctrl+C), so guard
+                // explicitly: never duplicate while a text box is being edited.
+                if (!IsEditableTextInputFocused() &&
+                    _activeSelectionPage != null && _activeSelectionPage.HasSelection)
+                {
+                    DuplicateSelection();
+                    e.Handled = true;
+                }
             }
             else if (Keyboard.Modifiers == ModifierKeys.Control && (e.Key == Key.D0 || e.Key == Key.NumPad0))
             {
@@ -1082,6 +1826,74 @@ namespace Caelum.Pages
             _smoothScrollInitialized = true;
         }
 
+        // ─────────────────────────────────────────────────────────────
+        // Task 11: Scrollbar track click-to-jump — 点击滚动条轨道任意
+        // 位置，thumb 立即跳到点击点（点击点成为 thumb 中心）。无分页
+        // 步进、无动画；thumb 拖拽保持原生行为。
+        // 挂接方式：对 PdfScrollViewer 模板内的两个 ScrollBar 以
+        // PreviewMouseLeftButtonDown 拦截（隧道，先于任何 Track 默认
+        // 行为），不改 App.xaml 模板。
+        // ─────────────────────────────────────────────────────────────
+
+        private void InstallScrollbarTrackJump()
+        {
+            // Loaded 时模板已应用，模板命名部件可直接寻址；Loaded 可能
+            // 反复触发（进出视觉树），Remove+Add 同一 handler 幂等，也
+            // 覆盖模板被重新应用生成新 ScrollBar 实例的情况。
+            var verticalBar = PdfScrollViewer.Template?.FindName("PART_VerticalScrollBar", PdfScrollViewer) as ScrollBar;
+            var horizontalBar = PdfScrollViewer.Template?.FindName("PART_HorizontalScrollBar", PdfScrollViewer) as ScrollBar;
+
+            foreach (var bar in new[] { verticalBar, horizontalBar })
+            {
+                if (bar == null) continue;
+                var handler = new MouseButtonEventHandler(ScrollBarTrackJump_MouseLeftButtonDown);
+                bar.RemoveHandler(UIElement.PreviewMouseLeftButtonDownEvent, handler);
+                bar.AddHandler(UIElement.PreviewMouseLeftButtonDownEvent, handler, false);
+            }
+        }
+
+        private void ScrollBarTrackJump_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+        {
+            if (sender is not ScrollBar bar) return;
+
+            // PART_Track 是 WPF ScrollBar 模板契约部件（Sleek 模板已命名）
+            var track = bar.Template?.FindName("PART_Track", bar) as Track;
+            var thumb = track?.Thumb;
+            if (track == null || thumb == null) return;
+
+            // Thumb（含其模板子元素）上的点击走原生拖拽，不拦截
+            if (e.OriginalSource is DependencyObject source && IsDescendantOf(source, thumb))
+                return;
+
+            bool vertical = bar.Orientation == Orientation.Vertical;
+            double thumbLength = vertical ? thumb.ActualHeight : thumb.ActualWidth;
+            double trackLength = vertical ? track.ActualHeight : track.ActualWidth;
+            if (trackLength <= 0 || trackLength <= thumbLength) return; // 无可滚动空间
+
+            // 点击点相对 Track；垂直 Track IsDirectionReversed=True（值增大
+            // 方向朝上），先归一化为“值增大方向”的坐标
+            double clickPos = vertical ? e.GetPosition(track).Y : e.GetPosition(track).X;
+            if (vertical && track.IsDirectionReversed)
+                clickPos = trackLength - clickPos;
+
+            // 点击点成为 thumb 中心 → 换算成 thumb 中心可移动区间 [thumbLen/2,
+            // trackLen-thumbLen/2] 内的比例，clamp 到 [0,1]
+            double ratio = (clickPos - thumbLength / 2.0) / (trackLength - thumbLength);
+            ratio = Math.Max(0.0, Math.Min(1.0, ratio));
+
+            // 立即跳转（绕过滚轮平滑滚动动画），并同步平滑滚动状态机，
+            // 保证后续滚轮动画从新 offset 起算
+            CancelSmoothScroll();
+            if (vertical)
+                PdfScrollViewer.ScrollToVerticalOffset(ratio * PdfScrollViewer.ScrollableHeight);
+            else
+                PdfScrollViewer.ScrollToHorizontalOffset(ratio * PdfScrollViewer.ScrollableWidth);
+            SyncSmoothScrollState();
+
+            // 终止事件继续路由，杜绝 Track 默认分页步进（如有）
+            e.Handled = true;
+        }
+
         // 闁冲厜鍋撻柍鍏夊亾闁冲厜鍋?Zoom around a point (keeps that point stable on screen) 闁冲厜鍋撻柍鍏夊亾闁冲厜鍋?
         private void ZoomAroundPoint(double newZoom, Point viewportPoint)
         {
@@ -1100,18 +1912,26 @@ namespace Caelum.Pages
 
             ApplyCustomZoom(newZoom);
 
-            Dispatcher.BeginInvoke(new Action(() =>
-            {
-                CancelSmoothScroll();
-                double newOffsetX = Math.Max(0, contentX * _zoomLevel - viewportPoint.X);
-                double newOffsetY = Math.Max(0, contentY * _zoomLevel - viewportPoint.Y);
+            // Task 12.1: compute and apply the corrected scroll offsets in the
+            // SAME layout pass. The old Dispatcher.BeginInvoke(Render) gap let
+            // one frame render at the new zoom with the old offsets — a
+            // visible jump. Forcing layout here makes the new extent available
+            // (so ScrollTo* clamps against fresh ScrollableWidth/Height), and
+            // a second UpdateLayout commits both offsets before the next
+            // render. ScrollChanged fires synchronously during these layout
+            // passes, but its handler only debounces lazy re-renders and syncs
+            // animation targets — it never writes scroll offsets, so it cannot
+            // fight this correction.
+            PdfScrollViewer.UpdateLayout();
 
-                PdfScrollViewer.ScrollToHorizontalOffset(newOffsetX);
-                PdfScrollViewer.ScrollToVerticalOffset(newOffsetY);
-                _targetVerticalOffset = PdfScrollViewer.VerticalOffset;
-                _targetHorizontalOffset = PdfScrollViewer.HorizontalOffset;
-                _smoothScrollInitialized = true;
-            }), System.Windows.Threading.DispatcherPriority.Render);
+            double newOffsetX = Math.Max(0, contentX * _zoomLevel - viewportPoint.X);
+            double newOffsetY = Math.Max(0, contentY * _zoomLevel - viewportPoint.Y);
+
+            PdfScrollViewer.ScrollToHorizontalOffset(newOffsetX);
+            PdfScrollViewer.ScrollToVerticalOffset(newOffsetY);
+            PdfScrollViewer.UpdateLayout();
+
+            SyncSmoothScrollState();
         }
 
         // 闁冲厜鍋撻柍鍏夊亾闁冲厜鍋?Touch Manipulation (pinch-to-zoom + pan) 闁冲厜鍋撻柍鍏夊亾闁冲厜鍋?
@@ -1191,12 +2011,17 @@ namespace Caelum.Pages
                 }
                 e.Handled = true; // Consume so InkCanvas doesn't see a second-finger stroke start
             }
-            else if (_currentTool == ToolType.Pen ||
-                     _currentTool == ToolType.Highlighter ||
-                     _currentTool == ToolType.Eraser)
+            else if (_applicationSettings?.PenOnlyMode == true &&
+                     (_currentTool == ToolType.Pen ||
+                      _currentTool == ToolType.Highlighter ||
+                      _currentTool == ToolType.HiddenInk ||
+                      _currentTool == ToolType.Eraser ||
+                      _currentTool == ToolType.Shape ||
+                      _currentTool == ToolType.Laser))
             {
-                // Single finger touch while a drawing tool is active.
-                // Treat as scroll/pan gesture — do NOT let InkCanvas draw from finger input.
+                // Pen-only mode turns single-finger input into navigation
+                // while an immediate drawing tool is active. When the
+                // setting is off, the active page receives touch normally.
                 e.Handled = true;
             }
         }
@@ -1331,7 +2156,10 @@ namespace Caelum.Pages
                 }
             }
 
-            if (_currentTool == ToolType.None && isPenDevice)
+            // Task 11: 滚动条上的笔输入放行（轨道点击跳转 / thumb 原生拖拽），
+            // 不进入笔拖动滚动模式
+            if (_currentTool == ToolType.None && isPenDevice &&
+                !IsOriginalSourceOverScrollbar(e.OriginalSource as DependencyObject))
             {
                 _isPenScrolling = true;
                 _penScrollStartPoint = e.GetPosition(PdfScrollViewer);
@@ -1382,6 +2210,12 @@ namespace Caelum.Pages
                 return;
             }
 
+            // Task 11: 滚动条上的左键点击（轨道跳转 / thumb 原生拖拽）放行，
+            // 不进入 Select 工具的选择委托（页面 50px buffer 会覆盖滚动条区域）
+            if (e.ChangedButton == MouseButton.Left &&
+                IsOriginalSourceOverScrollbar(e.OriginalSource as DependencyObject))
+                return;
+
             if (e.ChangedButton == MouseButton.Left && _currentTool == ToolType.Select)
             {
                 Controls.PdfPageControl closestPage = null;
@@ -1416,6 +2250,18 @@ namespace Caelum.Pages
                 if (targetPage == null || !targetPage.IsSelectionMode) return;
 
                 var point = e.GetPosition(targetPage);
+
+                // Task 7.3: Ctrl+click multi-select is same-page scoped. When
+                // Ctrl+clicking a different page while another page holds the
+                // selection, clear that selection first — the toggle on the
+                // new page then selects the clicked item naturally.
+                if ((Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control &&
+                    _activeSelectionPage != null && _activeSelectionPage != targetPage &&
+                    _activeSelectionPage.HasSelection)
+                {
+                    _activeSelectionPage.ClearSelection();
+                }
+
                 targetPage.InvokeSelectionMouseDownCore(point);
 
                 _isDelegatingSelection = true;
@@ -1497,44 +2343,63 @@ namespace Caelum.Pages
             ScheduleReRenderForZoom();
         }
 
-        private async void ScheduleReRenderForZoom()
+        private void ScheduleReRenderForZoom()
         {
-            // Cancel any pending re-render
+            if (!_isHostActive || _resourcesReleased)
+                return;
+
             _reRenderCts?.Cancel();
+            SetBitmapScalingMode(GetVisiblePageControls(), BitmapScalingMode.LowQuality);
+            _zoomRenderDebounceTimer.Stop();
+            _zoomRenderDebounceTimer.Start();
+        }
+
+        private async void ZoomRenderDebounceTimer_Tick(object sender, EventArgs e)
+        {
+            _zoomRenderDebounceTimer.Stop();
+            _reRenderCts?.Cancel();
+            _reRenderCts?.Dispose();
             _reRenderCts = new CancellationTokenSource();
             var token = _reRenderCts.Token;
 
             try
             {
-                // Debounce: wait 250ms after last zoom change
-                await Task.Delay(250, token);
                 token.ThrowIfCancellationRequested();
+                if (!_isHostActive || _resourcesReleased)
+                    return;
 
                 // Only re-render if zoom changed significantly from last render
-                double neededScale = Math.Max(_zoomLevel, 1.0);
-                // Clamp max re-render to 3x to avoid huge memory usage
-                neededScale = Math.Min(neededScale, 3.0);
-
-                if (Math.Abs(neededScale - _lastRenderedDpiScale) < 0.15)
-                    return; // Not enough difference to warrant re-render
-
-                _lastRenderedDpiScale = neededScale;
-                _pagesRenderedAtScale.Clear();
+                var profile = PdfRenderPolicy.GetProfile(CurrentPerformanceMode);
+                double neededScale = Math.Min(Math.Max(_zoomLevel, 1.0), profile.MaxRenderScale);
 
                 // Only re-render pages currently visible in the viewport
                 var visiblePages = GetVisiblePageControls();
-                await ReRenderPagesAsync(visiblePages, neededScale, token);
+                if (Math.Abs(neededScale - _lastRenderedDpiScale) >= 0.15)
+                {
+                    _lastRenderedDpiScale = neededScale;
+                    _pagesRenderedAtScale.Clear();
+                    await ReRenderPagesAsync(visiblePages, neededScale, token);
+                }
+
+                TrimPageBitmapWorkingSet(visiblePages);
             }
             catch (OperationCanceledException) { }
+            finally
+            {
+                if (!token.IsCancellationRequested && _isHostActive && !_zoomRenderDebounceTimer.IsEnabled)
+                    SetBitmapScalingMode(GetVisiblePageControls(), BitmapScalingMode.HighQuality);
+            }
         }
 
         /// <summary>
         /// Called on scroll to lazily render pages that are entering the viewport and
         /// re-render visible pages at higher DPI after zooming.
         /// </summary>
-        private async void PdfScrollViewer_ScrollChanged(object sender, ScrollChangedEventArgs e)
+        private void PdfScrollViewer_ScrollChanged(object sender, ScrollChangedEventArgs e)
         {
             UpdatePageNumberIndicator();
+            UpdateThumbnailSelection();
+            UpdateBookmarkButton();
             UpdateSelectedTextBoxPopupVisibility(forceRefresh: e.VerticalChange != 0 || e.HorizontalChange != 0);
 
             if (!_isScrollAnimating)
@@ -1545,14 +2410,29 @@ namespace Caelum.Pages
 
             _smoothScrollInitialized = true;
 
+            if (!_isHostActive || _resourcesReleased)
+                return;
+
+            SetBitmapScalingMode(GetVisiblePageControls(), BitmapScalingMode.LowQuality);
+
             _scrollReRenderCts?.Cancel();
+            _scrollRenderDebounceTimer.Stop();
+            _scrollRenderDebounceTimer.Start();
+        }
+
+        private async void ScrollRenderDebounceTimer_Tick(object sender, EventArgs e)
+        {
+            _scrollRenderDebounceTimer.Stop();
+            _scrollReRenderCts?.Cancel();
+            _scrollReRenderCts?.Dispose();
             _scrollReRenderCts = new CancellationTokenSource();
             var token = _scrollReRenderCts.Token;
 
             try
             {
-                await Task.Delay(100, token);
                 token.ThrowIfCancellationRequested();
+                if (!_isHostActive || _resourcesReleased)
+                    return;
 
                 var visiblePages = GetVisiblePageControls();
                 var needsInitialRender = visiblePages
@@ -1575,9 +2455,20 @@ namespace Caelum.Pages
                         await ReRenderPagesAsync(needsZoomRender, _lastRenderedDpiScale, token);
                 }
 
+                // Task 12.3: pre-render unrendered pages adjacent (±1) to the
+                // visible range at idle priority so scrolling into them shows
+                // the bitmap instantly instead of swapping it in mid-scroll.
+                QueueAdjacentPagePrerender(visiblePages, token);
+                TrimPageBitmapWorkingSet(visiblePages);
+
                 UpdateSelectedTextBoxPopupVisibility(forceRefresh: true);
             }
             catch (OperationCanceledException) { }
+            finally
+            {
+                if (!token.IsCancellationRequested && _isHostActive && !_scrollRenderDebounceTimer.IsEnabled)
+                    SetBitmapScalingMode(GetVisiblePageControls(), BitmapScalingMode.HighQuality);
+            }
         }
 
         private struct ScrollAnchor
@@ -1615,9 +2506,16 @@ namespace Caelum.Pages
             foreach (var page in pages)
             {
                 token.ThrowIfCancellationRequested();
+                if (!_isHostActive || _resourcesReleased)
+                    return;
                 try
                 {
-                    var bitmapSource = await _pdfService.RenderPageBitmapSourceAsync(page.PageIndex, dpiScale, token);
+                    double renderScale = PdfRenderPolicy.CalculateRenderScale(
+                        CurrentPerformanceMode,
+                        page.Width,
+                        page.Height,
+                        dpiScale);
+                    var bitmapSource = await _pdfService.RenderPageBitmapSourceAsync(page.PageIndex, renderScale, token);
                     if (bitmapSource != null)
                     {
                         token.ThrowIfCancellationRequested();
@@ -1627,6 +2525,95 @@ namespace Caelum.Pages
                 }
                 catch (OperationCanceledException) { throw; }
                 catch { }
+            }
+        }
+
+        /// <summary>
+        /// Task 12.3: queues an initial render for unrendered pages within ±1 of
+        /// the visible range. RenderPageInitialAsync marks them in
+        /// _pagesInitiallyRendered, so a later scroll into them shows the bitmap
+        /// instantly (no mid-scroll swap). The candidate set is bounded by the
+        /// ±1 window regardless of document size, so no page-count guard is
+        /// needed even for very large documents.
+        /// </summary>
+        private void QueueAdjacentPagePrerender(List<PdfPageControl> visiblePages, CancellationToken token)
+        {
+            var profile = PdfRenderPolicy.GetProfile(CurrentPerformanceMode);
+            if (!_isHostActive || !profile.PrefetchAdjacentPages || visiblePages.Count == 0) return;
+
+            // GetVisiblePageControls returns pages in document order.
+            int first = visiblePages[0].PageIndex;
+            int last = visiblePages[visiblePages.Count - 1].PageIndex;
+
+            var candidates = new Queue<PdfPageControl>();
+            for (int i = Math.Max(0, first - 1); i <= Math.Min(_pageControls.Count - 1, last + 1); i++)
+            {
+                if (!_pagesInitiallyRendered.Contains(i))
+                    candidates.Enqueue(_pageControls[i]);
+            }
+
+            if (candidates.Count == 0) return;
+            ScheduleNextAdjacentPrerender(candidates, token);
+        }
+
+        /// <summary>
+        /// Renders one adjacent candidate at a time at ApplicationIdle priority
+        /// (never competes with input/render work), chaining the next page only
+        /// after the previous render completes. The whole chain stops as soon as
+        /// the scroll-generation token is cancelled (any new scroll event).
+        /// </summary>
+        private void ScheduleNextAdjacentPrerender(Queue<PdfPageControl> candidates, CancellationToken token)
+        {
+            if (!_isHostActive || candidates.Count == 0 || token.IsCancellationRequested) return;
+
+            Dispatcher.BeginInvoke(new Action(async () =>
+            {
+                if (!_isHostActive || token.IsCancellationRequested) return;
+
+                var page = candidates.Dequeue();
+                try
+                {
+                    await RenderPageInitialAsync(page, token);
+                }
+                catch (OperationCanceledException)
+                {
+                    return;
+                }
+
+                ScheduleNextAdjacentPrerender(candidates, token);
+            }), System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+        }
+
+        private string CurrentPerformanceMode
+            => PdfRenderPolicy.NormalizeMode(_applicationSettings?.PerformanceMode);
+
+        private static void SetBitmapScalingMode(IEnumerable<PdfPageControl> pages, BitmapScalingMode mode)
+        {
+            foreach (var page in pages)
+                page.SetBitmapScalingMode(mode);
+        }
+
+        private void TrimPageBitmapWorkingSet(List<PdfPageControl> visiblePages)
+        {
+            if (!_isHostActive || visiblePages.Count == 0)
+                return;
+
+            int first = visiblePages[0].PageIndex;
+            int last = visiblePages[visiblePages.Count - 1].PageIndex;
+            var retained = new HashSet<int>(PdfRenderPolicy.GetRetainedPageIndices(
+                first,
+                last,
+                _pageControls.Count,
+                CurrentPerformanceMode));
+
+            foreach (var page in _pageControls)
+            {
+                if (retained.Contains(page.PageIndex) || page.PageSource == null)
+                    continue;
+
+                page.PageSource = null;
+                _pagesInitiallyRendered.Remove(page.PageIndex);
+                _pagesRenderedAtScale.Remove(page.PageIndex);
             }
         }
 
@@ -1697,22 +2684,40 @@ namespace Caelum.Pages
         {
             if (_undoStack.Count == 0) return;
             var action = _undoStack[_undoStack.Count - 1];
-            _undoStack.RemoveAt(_undoStack.Count - 1);
-            await action.UndoAsync();
-            _redoStack.Add(action);
-            UpdateUndoRedoButtons();
-            ApplyDirtyStateForAction(action);
+            try
+            {
+                await action.UndoAsync();
+                _undoStack.RemoveAt(_undoStack.Count - 1);
+                _redoStack.Add(action);
+                UpdateUndoRedoButtons();
+                ApplyDirtyStateForAction(action);
+                UpdateSelectedTextBoxPopupVisibility(forceRefresh: true);
+            }
+            catch (Exception ex)
+            {
+                GetMainWindow()?.ShowToast(
+                    LocalizationService.Format("Editor.UndoFailed", ex.Message), "\uE783", 3500);
+            }
         }
 
         private async Task PerformRedoAsync()
         {
             if (_redoStack.Count == 0) return;
             var action = _redoStack[_redoStack.Count - 1];
-            _redoStack.RemoveAt(_redoStack.Count - 1);
-            await action.RedoAsync();
-            _undoStack.Add(action);
-            UpdateUndoRedoButtons();
-            ApplyDirtyStateForAction(action);
+            try
+            {
+                await action.RedoAsync();
+                _redoStack.RemoveAt(_redoStack.Count - 1);
+                _undoStack.Add(action);
+                UpdateUndoRedoButtons();
+                ApplyDirtyStateForAction(action);
+                UpdateSelectedTextBoxPopupVisibility(forceRefresh: true);
+            }
+            catch (Exception ex)
+            {
+                GetMainWindow()?.ShowToast(
+                    LocalizationService.Format("Editor.RedoFailed", ex.Message), "\uE783", 3500);
+            }
         }
 
         private void UpdateUndoRedoButtons()
@@ -1723,6 +2728,7 @@ namespace Caelum.Pages
 
         private void ApplyDirtyStateForAction(IUndoAction action)
         {
+            _dirtyGeneration++;
             _isDirty = action.LeavesDocumentDirty;
         }
 
@@ -1747,29 +2753,619 @@ namespace Caelum.Pages
         private void CreateToolPopups()
         {
             // Pen popup — with size preview section
-            Line penSizePreview = null;
             _penPopup = BuildToolPopup(
                 LocalizationService.Get("Editor.PopupSize"), 0.5, 8, _penSize, 0.25,
-                v => { _penSize = v; if (penSizePreview != null) penSizePreview.StrokeThickness = v; if (_currentTool == ToolType.Pen) ApplyToolToAllPages(); },
+                v => { _penSize = v; if (_penPopupSizePreview != null) _penPopupSizePreview.StrokeThickness = v; if (_currentTool == ToolType.Pen) ApplyToolToAllPages(); },
                 LocalizationService.Get("Editor.PopupColor"), _penColor,
-                c => { _penColor = c; if (penSizePreview != null) penSizePreview.Stroke = new SolidColorBrush(c); UpdateToolIconColors(); if (_currentTool == ToolType.Pen) ApplyToolToAllPages(); });
-            penSizePreview = AddSizePreviewSection(_penPopup, _penSize, _penColor, isHighlighter: false);
+                c => { _penColor = c; if (_penPopupSizePreview != null) _penPopupSizePreview.Stroke = new SolidColorBrush(c); UpdateToolIconColors(); if (_currentTool == ToolType.Pen) ApplyToolToAllPages(); SaveSetting(s => RecordRecentColor(s.RecentPenColors, c)); UpdatePresetSlotVisuals(); },
+                out _penPopupSizeSlider,
+                () => AppSettingsService.Load().RecentPenColors);
+            _penPopupSizePreview = AddSizePreviewSection(_penPopup, _penSize, _penColor, isHighlighter: false);
+            AddPenBehaviourToggles(_penPopup);
+            AddPenSmoothingSection(_penPopup);
 
             // Highlighter popup — with size preview section
-            Line hlSizePreview = null;
             _highlighterPopup = BuildToolPopup(
                 LocalizationService.Get("Editor.PopupSize"), 2, 48, _highlighterSize, 0.5,
-                v => { _highlighterSize = v; if (hlSizePreview != null) hlSizePreview.StrokeThickness = v; if (_currentTool == ToolType.Highlighter) ApplyToolToAllPages(); },
+                v => { _highlighterSize = v; if (_highlighterPopupSizePreview != null) _highlighterPopupSizePreview.StrokeThickness = v; if (_currentTool == ToolType.Highlighter) ApplyToolToAllPages(); },
                 LocalizationService.Get("Editor.PopupColor"), _highlighterColor,
-                c => { _highlighterColor = c; if (hlSizePreview != null) hlSizePreview.Stroke = new SolidColorBrush(Color.FromArgb(140, c.R, c.G, c.B)); UpdateToolIconColors(); if (_currentTool == ToolType.Highlighter) ApplyToolToAllPages(); });
-            hlSizePreview = AddSizePreviewSection(_highlighterPopup, _highlighterSize, _highlighterColor, isHighlighter: true);
+                c => { _highlighterColor = c; if (_highlighterPopupSizePreview != null) _highlighterPopupSizePreview.Stroke = new SolidColorBrush(Color.FromArgb(140, c.R, c.G, c.B)); UpdateToolIconColors(); if (_currentTool == ToolType.Highlighter) ApplyToolToAllPages(); SaveSetting(s => RecordRecentColor(s.RecentHighlighterColors, c)); UpdatePresetSlotVisuals(); },
+                out _highlighterPopupSizeSlider,
+                () => AppSettingsService.Load().RecentHighlighterColors);
+            _highlighterPopupSizePreview = AddSizePreviewSection(_highlighterPopup, _highlighterSize, _highlighterColor, isHighlighter: true);
+            AddHighlighterModeSection(_highlighterPopup);
 
             _eraserPopup = BuildToolPopup(
                 LocalizationService.Get("Editor.PopupEraserSize"), 4, 80, _eraserSize, 1,
                 v => { _eraserSize = v; ShowEraserSizePreview(v); ApplyToolToAllPages(); },
-                null, default, null);
+                null, default, null,
+                out _);
+            AddEraserModeSection(_eraserPopup);
+
+            // Shape popup — sub-type selector above the shared size slider
+            // and color palette (session-only state, no persistence).
+            _shapePopup = BuildToolPopup(
+                LocalizationService.Get("Editor.PopupSize"), 1, 20, _shapeSize, 0.5,
+                v => { _shapeSize = v; if (_currentTool == ToolType.Shape) ApplyToolToAllPages(); },
+                LocalizationService.Get("Editor.PopupColor"), _shapeColor,
+                c => { _shapeColor = c; if (_currentTool == ToolType.Shape) ApplyToolToAllPages(); },
+                out _);
+            AddShapeSubTypeSection(_shapePopup);
 
             CreateSelectionPopup();
+        }
+
+        /// <summary>
+        /// Prepends the mutually-exclusive shape sub-type selector (直线 /
+        /// 矩形 / 椭圆 / 箭头) to the shape popup. Selection is session-only
+        /// and re-applied to all pages immediately.
+        /// </summary>
+        private void AddShapeSubTypeSection(Popup popup)
+        {
+            if (popup?.Child is not Border border || border.Child is not StackPanel panel)
+                return;
+
+            var header = ThemeSubtleHeader(new TextBlock
+            {
+                Text = LocalizationService.Get("Editor.ShapeHeader"),
+                FontSize = 13,
+                FontWeight = FontWeights.SemiBold,
+                Foreground = new SolidColorBrush(Color.FromRgb(80, 80, 80)),
+                Margin = new Thickness(0, 0, 0, 10)
+            });
+
+            var row1 = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 8) };
+            var row2 = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 14) };
+            Border lineButton = null!;
+            Border rectButton = null!;
+            Border ellipseButton = null!;
+            Border arrowButton = null!;
+            lineButton = BuildModeToggleButton(LocalizationService.Get("Editor.ShapeLine"), new Thickness(0, 0, 8, 0), activated: () => SelectKind(ShapeKind.Line));
+            rectButton = BuildModeToggleButton(LocalizationService.Get("Editor.ShapeRectangle"), new Thickness(0), activated: () => SelectKind(ShapeKind.Rectangle));
+            ellipseButton = BuildModeToggleButton(LocalizationService.Get("Editor.ShapeEllipse"), new Thickness(0, 0, 8, 0), activated: () => SelectKind(ShapeKind.Ellipse));
+            arrowButton = BuildModeToggleButton(LocalizationService.Get("Editor.ShapeArrow"), new Thickness(0), activated: () => SelectKind(ShapeKind.Arrow));
+
+            void ApplyVisual()
+            {
+                StyleModeToggleButton(lineButton, _shapeKind == ShapeKind.Line);
+                StyleModeToggleButton(rectButton, _shapeKind == ShapeKind.Rectangle);
+                StyleModeToggleButton(ellipseButton, _shapeKind == ShapeKind.Ellipse);
+                StyleModeToggleButton(arrowButton, _shapeKind == ShapeKind.Arrow);
+            }
+
+            void SelectKind(ShapeKind kind)
+            {
+                if (_shapeKind == kind)
+                    return;
+                _shapeKind = kind;
+                ApplyVisual();
+                if (_currentTool == ToolType.Shape)
+                    ApplyToolToAllPages();
+            }
+
+            row1.Children.Add(lineButton);
+            row1.Children.Add(rectButton);
+            row2.Children.Add(ellipseButton);
+            row2.Children.Add(arrowButton);
+
+            // Sub-type section sits above the size slider.
+            panel.Children.Insert(0, row2);
+            panel.Children.Insert(0, row1);
+            panel.Children.Insert(0, header);
+            ApplyVisual();
+        }
+
+        /// <summary>
+        /// Prepends the pixel / whole-stroke eraser mode toggle section to
+        /// the eraser popup. The selection is persisted in AppSettings and
+        /// applied to all pages immediately.
+        /// </summary>
+        private void AddEraserModeSection(Popup popup)
+        {
+            if (popup?.Child is not Border border || border.Child is not StackPanel panel)
+                return;
+
+            var header = ThemeSubtleHeader(new TextBlock
+            {
+                Text = LocalizationService.Get("Editor.EraserModeHeader"),
+                FontSize = 13,
+                FontWeight = FontWeights.SemiBold,
+                Foreground = new SolidColorBrush(Color.FromRgb(80, 80, 80)),
+                Margin = new Thickness(0, 0, 0, 10)
+            });
+
+            var modeRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 14) };
+            Border pixelButton = null!;
+            Border wholeButton = null!;
+            pixelButton = BuildModeToggleButton(LocalizationService.Get("Editor.EraserPixel"), new Thickness(0, 0, 8, 0), activated: () => SelectMode(false));
+            wholeButton = BuildModeToggleButton(LocalizationService.Get("Editor.EraserStroke"), new Thickness(0), activated: () => SelectMode(true));
+
+            void ApplyModeVisual()
+            {
+                bool whole = AppSettingsService.Load().WholeStrokeEraser;
+                StyleModeToggleButton(pixelButton, active: !whole);
+                StyleModeToggleButton(wholeButton, active: whole);
+            }
+
+            void SelectMode(bool whole)
+            {
+                var settings = AppSettingsService.Load();
+                if (settings.WholeStrokeEraser == whole)
+                    return;
+                settings.WholeStrokeEraser = whole;
+                AppSettingsService.Save(settings);
+                ApplyToolToAllPages();
+                ApplyModeVisual();
+            }
+
+            modeRow.Children.Add(pixelButton);
+            modeRow.Children.Add(wholeButton);
+
+            // Mode section sits above the size slider.
+            panel.Children.Insert(0, modeRow);
+            panel.Children.Insert(0, header);
+            ApplyModeVisual();
+        }
+
+        private static Border BuildModeToggleButton(
+            string label,
+            Thickness margin,
+            double width = 116,
+            Action activated = null)
+        {
+            var button = new Border
+            {
+                Width = width,
+                Height = 32,
+                Margin = margin,
+                CornerRadius = new CornerRadius(8),
+                BorderThickness = new Thickness(1),
+                Cursor = Cursors.Hand,
+                Focusable = true,
+                Child = new TextBlock
+                {
+                    Text = label,
+                    FontSize = 13,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center
+                }
+            };
+
+            AutomationProperties.SetName(button, label);
+            KeyboardNavigation.SetIsTabStop(button, true);
+            if (activated != null)
+            {
+                button.MouseLeftButtonDown += (_, e) =>
+                {
+                    activated();
+                    e.Handled = true;
+                };
+                button.KeyDown += (_, e) =>
+                {
+                    if (e.Key != Key.Enter && e.Key != Key.Space)
+                        return;
+                    activated();
+                    e.Handled = true;
+                };
+            }
+
+            return button;
+        }
+
+        private static void StyleModeToggleButton(Border button, bool active)
+        {
+            button.SetResourceReference(Border.BorderBrushProperty,
+                active ? "ThemeAccentBrush" : "ThemeBorderBrush");
+            button.SetResourceReference(Border.BackgroundProperty,
+                active ? "ThemeSelectionBrush" : "ThemeSurfaceAltBrush");
+            if (button.Child is TextBlock text)
+            {
+                text.SetResourceReference(
+                    TextElement.ForegroundProperty,
+                    active ? "ThemeAccentBrush" : "ThemeForegroundBrush");
+            }
+        }
+
+        private static TextBlock ThemeSubtleHeader(TextBlock textBlock)
+        {
+            textBlock.SetResourceReference(
+                TextElement.ForegroundProperty,
+                "ThemeSubtleForegroundBrush");
+            return textBlock;
+        }
+
+        private static Border ThemeDivider(Border divider)
+        {
+            divider.SetResourceReference(Border.BackgroundProperty, "ThemeBorderBrush");
+            divider.Opacity = 0.45;
+            return divider;
+        }
+
+        /// <summary>
+        /// Task 25/27: prepends the highlighter apply-mode selector to the
+        /// highlighter popup. Freehand = classic ink highlighter (default);
+        /// 文本高亮/下划线/删除线/波浪线 ride the PDF text-selection pipeline;
+        /// 区域高亮 drags a free-form rectangle. Selection is session-only and
+        /// switches the active tool immediately.
+        /// </summary>
+        private void AddHighlighterModeSection(Popup popup)
+        {
+            if (popup?.Child is not Border border || border.Child is not StackPanel panel)
+                return;
+
+            var header = ThemeSubtleHeader(new TextBlock
+            {
+                Text = LocalizationService.Get("Editor.HighlighterModeHeader"),
+                FontSize = 13,
+                FontWeight = FontWeights.SemiBold,
+                Foreground = new SolidColorBrush(Color.FromRgb(80, 80, 80)),
+                Margin = new Thickness(0, 0, 0, 10)
+            });
+
+            var row1 = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 8) };
+            var row2 = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 14) };
+
+            var modes = new (HighlighterApplyMode Mode, string Label)[]
+            {
+                (HighlighterApplyMode.Freehand, LocalizationService.Get("Editor.HighlighterFreehand")),
+                (HighlighterApplyMode.TextHighlight, LocalizationService.Get("Editor.HighlighterText")),
+                (HighlighterApplyMode.Underline, LocalizationService.Get("Editor.HighlighterUnderline")),
+                (HighlighterApplyMode.StrikeOut, LocalizationService.Get("Editor.HighlighterStrikeOut")),
+                (HighlighterApplyMode.Squiggly, LocalizationService.Get("Editor.HighlighterSquiggly")),
+                (HighlighterApplyMode.AreaHighlight, LocalizationService.Get("Editor.HighlighterArea")),
+            };
+
+            var buttons = new Dictionary<HighlighterApplyMode, Border>();
+
+            void ApplyVisual()
+            {
+                foreach (var pair in buttons)
+                    StyleModeToggleButton(pair.Value, pair.Key == _highlighterApplyMode);
+            }
+
+            void SelectMode(HighlighterApplyMode mode)
+            {
+                if (_highlighterApplyMode == mode)
+                    return;
+                _highlighterApplyMode = mode;
+                ApplyVisual();
+
+                // Switch the live tool immediately so the user can start
+                // applying right away; the popup stays open for further
+                // color/size tweaks.
+                ActivateTool(ToolType.None);
+                ActivateHighlighterModeTool();
+            }
+
+            for (int i = 0; i < modes.Length; i++)
+            {
+                var mode = modes[i].Mode;
+                var button = BuildModeToggleButton(modes[i].Label,
+                    new Thickness(0, 0, i % 3 < 2 ? 6 : 0, 0), width: 82,
+                    activated: () => SelectMode(mode));
+                buttons[mode] = button;
+                (i < 3 ? row1 : row2).Children.Add(button);
+            }
+
+            panel.Children.Insert(0, row2);
+            panel.Children.Insert(0, row1);
+            panel.Children.Insert(0, header);
+            ApplyVisual();
+        }
+
+        /// <summary>
+        /// Task 25/27: activates the ToolType matching the current highlighter
+        /// apply mode (Highlighter / TextHighlight / AreaHighlight). Used by the
+        /// mode selector and the toolbar button click.
+        /// </summary>
+        private void ActivateHighlighterModeTool()
+        {
+            var tool = _highlighterApplyMode switch
+            {
+                HighlighterApplyMode.Freehand => ToolType.Highlighter,
+                HighlighterApplyMode.AreaHighlight => ToolType.AreaHighlight,
+                _ => ToolType.TextHighlight,
+            };
+            if (_currentTool != tool)
+                ActivateTool(tool);
+            else
+                ApplyToolToAllPages();
+        }
+
+        /// <summary>
+        /// Appends the pen behaviour toggles (pressure / ink simulation /
+        /// shape recognition) to the pen popup. Each toggle persists to
+        /// AppSettings and propagates via ApplyToolToAllPages.
+        /// </summary>
+        private void AddPenBehaviourToggles(Popup popup)
+        {
+            if (popup?.Child is not Border border || border.Child is not StackPanel panel)
+                return;
+
+            panel.Children.Add(ThemeDivider(new Border
+            {
+                Height = 1,
+                Background = new SolidColorBrush(Color.FromArgb(25, 0, 0, 0)),
+                Margin = new Thickness(-16, 14, -16, 10)
+            }));
+
+            var pressureRow = BuildSettingToggleRow(LocalizationService.Get("Editor.Pressure"), AppSettingsService.Load().EnablePressure, v =>
+            {
+                SaveSetting(s => s.EnablePressure = v);
+                ApplyToolToAllPages();
+            });
+
+            var inkSimRow = BuildSettingToggleRow(LocalizationService.Get("Editor.InkSimulation"), AppSettingsService.Load().InkSimulation, v =>
+            {
+                SaveSetting(s => s.InkSimulation = v);
+                ApplyToolToAllPages();
+            });
+
+            var shapeRecognitionRow = BuildSettingToggleRow(LocalizationService.Get("Editor.ShapeRecognition"), AppSettingsService.Load().ShapeRecognition, v =>
+            {
+                SaveSetting(s => s.ShapeRecognition = v);
+                ApplyToolToAllPages();
+            });
+
+            panel.Children.Add(pressureRow);
+            panel.Children.Add(inkSimRow);
+            panel.Children.Add(shapeRecognitionRow);
+        }
+
+        /// <summary>
+        /// Task 24: appends the stroke smoothing segmented selector
+        /// (关 Off / 低 Low / 中 Mid / 高 High) to the pen popup. The level
+        /// persists to AppSettings.StrokeSmoothing and propagates to every
+        /// page via ApplyToolToAllPages (PdfPageControl consumes it in the
+        /// StrokeCollected post-processing chain). Settings-page entry comes
+        /// with Task 38.
+        /// </summary>
+        private void AddPenSmoothingSection(Popup popup)
+        {
+            if (popup?.Child is not Border border || border.Child is not StackPanel panel)
+                return;
+
+            panel.Children.Add(ThemeDivider(new Border
+            {
+                Height = 1,
+                Background = new SolidColorBrush(Color.FromArgb(25, 0, 0, 0)),
+                Margin = new Thickness(-16, 14, -16, 10)
+            }));
+
+            panel.Children.Add(ThemeSubtleHeader(new TextBlock
+            {
+                Text = LocalizationService.Get("Editor.SmoothingHeader"),
+                FontSize = 13,
+                FontWeight = FontWeights.SemiBold,
+                Foreground = new SolidColorBrush(Color.FromRgb(80, 80, 80)),
+                Margin = new Thickness(0, 0, 0, 10)
+            }));
+
+            var labels = new[]
+            {
+                LocalizationService.Get("Editor.SmoothingOff"),
+                LocalizationService.Get("Editor.SmoothingLow"),
+                LocalizationService.Get("Editor.SmoothingMid"),
+                LocalizationService.Get("Editor.SmoothingHigh")
+            };
+            var buttons = new Border[labels.Length];
+            var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 6) };
+
+            void ApplyVisual()
+            {
+                int current = AppSettingsService.Load().StrokeSmoothing;
+                for (int i = 0; i < buttons.Length; i++)
+                    StyleModeToggleButton(buttons[i], active: i == current);
+            }
+
+            for (int i = 0; i < labels.Length; i++)
+            {
+                int level = i;
+                buttons[i] = BuildModeToggleButton(labels[i], new Thickness(0, 0, i < labels.Length - 1 ? 6 : 0, 0), width: 54, activated: () =>
+                {
+                    if (AppSettingsService.Load().StrokeSmoothing == level)
+                        return;
+                    SaveSetting(settings => settings.StrokeSmoothing = level);
+                    ApplyToolToAllPages();
+                    ApplyVisual();
+                });
+                row.Children.Add(buttons[i]);
+            }
+
+            panel.Children.Add(row);
+            ApplyVisual();
+        }
+
+        /// <summary>
+        /// Builds one clickable toggle row (indicator box + label) for
+        /// boolean settings in tool popups. Follows the popup look with the
+        /// #2563EB accent for the on state.
+        /// </summary>
+        private static Border BuildSettingToggleRow(string label, bool initialState, Action<bool> toggled)
+        {
+            var indicator = new Border
+            {
+                Width = 16,
+                Height = 16,
+                CornerRadius = new CornerRadius(4),
+                BorderThickness = new Thickness(1),
+                VerticalAlignment = VerticalAlignment.Center
+            };
+
+            var text = new TextBlock
+            {
+                Text = label,
+                FontSize = 13,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(10, 0, 0, 0)
+            };
+
+            var row = new Border
+            {
+                Height = 34,
+                Margin = new Thickness(0, 0, 0, 6),
+                Background = new SolidColorBrush(Color.FromArgb(6, 0, 0, 0)),
+                CornerRadius = new CornerRadius(8),
+                Padding = new Thickness(10, 0, 10, 0),
+                Cursor = Cursors.Hand,
+                Child = new StackPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    Children = { indicator, text }
+                }
+            };
+
+            row.Focusable = true;
+            AutomationProperties.SetName(row, label);
+            KeyboardNavigation.SetIsTabStop(row, true);
+
+            bool state = initialState;
+
+            void ApplyVisual()
+            {
+                row.SetResourceReference(Border.BackgroundProperty,
+                    state ? "ThemeSelectionBrush" : "ThemeSurfaceAltBrush");
+                indicator.SetResourceReference(Border.BorderBrushProperty,
+                    state ? "ThemeAccentBrush" : "ThemeBorderBrush");
+                if (state)
+                    indicator.SetResourceReference(Border.BackgroundProperty, "ThemeAccentBrush");
+                else
+                    indicator.Background = Brushes.Transparent;
+                text.SetResourceReference(
+                    TextElement.ForegroundProperty,
+                    state ? "ThemeAccentBrush" : "ThemeForegroundBrush");
+            }
+
+            ApplyVisual();
+
+            void Toggle()
+            {
+                state = !state;
+                ApplyVisual();
+                toggled?.Invoke(state);
+            }
+
+            row.MouseLeftButtonDown += (s, e) =>
+            {
+                Toggle();
+                e.Handled = true;
+            };
+            row.KeyDown += (s, e) =>
+            {
+                if (e.Key != Key.Enter && e.Key != Key.Space)
+                    return;
+                Toggle();
+                e.Handled = true;
+            };
+
+            return row;
+        }
+
+        private void SaveSetting(Action<AppSettings> mutate)
+        {
+            var settings = AppSettingsService.Load();
+            mutate(settings);
+            _applicationSettings = AppSettingsService.Save(settings);
+        }
+
+        // Task 14: recently used colors, newest first, max 8 per palette.
+        private const int MaxRecentColors = 8;
+
+        /// <summary>
+        /// Task 14: inserts (or moves) the color's "#RRGGBB" hex to the front
+        /// of the given recent-colors list, de-duplicating and trimming to
+        /// <see cref="MaxRecentColors"/>. Callers persist via SaveSetting
+        /// (the list belongs to a transient AppSettings clone from Load()).
+        /// </summary>
+        private void RecordRecentColor(List<string> list, Color c)
+        {
+            if (list == null)
+                return;
+
+            var hex = $"#{c.R:X2}{c.G:X2}{c.B:X2}";
+            list.RemoveAll(x => string.Equals(x, hex, StringComparison.OrdinalIgnoreCase));
+            list.Insert(0, hex);
+            if (list.Count > MaxRecentColors)
+                list.RemoveRange(MaxRecentColors, list.Count - MaxRecentColors);
+        }
+
+        /// <summary>
+        /// Task 14: repopulates a recent-colors swatch row from the settings
+        /// list. Hidden entirely when empty; each 16x16 rounded swatch applies
+        /// its color exactly like a palette cell of the owning popup.
+        /// </summary>
+        private void RefreshRecentColorsRow(StackPanel section, StackPanel row, Func<List<string>> getRecentColors, Action<Color> applyColor)
+        {
+            row.Children.Clear();
+
+            List<string> recent = null;
+            try { recent = getRecentColors?.Invoke(); }
+            catch { /* settings read failures leave the row hidden */ }
+
+            if (recent != null)
+            {
+                foreach (var hex in recent)
+                {
+                    if (row.Children.Count >= MaxRecentColors)
+                        break;
+                    if (!TryParseRecentColor(hex, out var color))
+                        continue;
+
+                    var swatch = new Border
+                    {
+                        Width = 16,
+                        Height = 16,
+                        CornerRadius = new CornerRadius(4),
+                        Background = new SolidColorBrush(color),
+                        BorderBrush = new SolidColorBrush(Color.FromArgb(30, 0, 0, 0)),
+                        BorderThickness = new Thickness(1),
+                        Cursor = Cursors.Hand,
+                        Margin = new Thickness(0, 0, 6, 0),
+                        ToolTip = hex,
+                        Tag = color
+                    };
+                    swatch.MouseLeftButtonDown += (s, e) =>
+                    {
+                        if (s is Border b && b.Tag is Color picked)
+                            applyColor?.Invoke(picked);
+                        e.Handled = true;
+                    };
+                    row.Children.Add(swatch);
+                }
+            }
+
+            section.Visibility = row.Children.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+        }
+
+        /// <summary>
+        /// Task 14: parses "#RRGGBB" (recorded format) and tolerates
+        /// "#AARRGGBB" for hand-edited settings.json files.
+        /// </summary>
+        private static bool TryParseRecentColor(string hex, out Color color)
+        {
+            color = default;
+            if (string.IsNullOrWhiteSpace(hex))
+                return false;
+
+            var digits = hex.Trim().TrimStart('#');
+            if (digits.Length != 6 && digits.Length != 8)
+                return false;
+
+            try
+            {
+                var r = byte.Parse(digits.Substring(digits.Length - 6, 2), System.Globalization.NumberStyles.HexNumber);
+                var g = byte.Parse(digits.Substring(digits.Length - 4, 2), System.Globalization.NumberStyles.HexNumber);
+                var b = byte.Parse(digits.Substring(digits.Length - 2, 2), System.Globalization.NumberStyles.HexNumber);
+                var a = digits.Length == 8
+                    ? byte.Parse(digits.Substring(0, 2), System.Globalization.NumberStyles.HexNumber)
+                    : (byte)255;
+                color = Color.FromArgb(a, r, g, b);
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         private Line AddSizePreviewSection(Popup popup, double initialSize, Color initialColor, bool isHighlighter)
@@ -1777,21 +3373,21 @@ namespace Caelum.Pages
             if (popup?.Child is not Border border || border.Child is not StackPanel panel)
                 return null;
 
-            panel.Children.Add(new Border
+            panel.Children.Add(ThemeDivider(new Border
             {
                 Height = 1,
                 Background = new SolidColorBrush(Color.FromArgb(25, 0, 0, 0)),
                 Margin = new Thickness(-16, 14, -16, 10)
-            });
+            }));
 
-            panel.Children.Add(new TextBlock
+            panel.Children.Add(ThemeSubtleHeader(new TextBlock
             {
                 Text = LocalizationService.Get("Editor.PopupPreview"),
                 FontSize = 13,
                 FontWeight = FontWeights.SemiBold,
                 Foreground = new SolidColorBrush(Color.FromRgb(80, 80, 80)),
                 Margin = new Thickness(0, 0, 0, 8)
-            });
+            }));
 
             var previewBorder = new Border
             {
@@ -1859,8 +3455,6 @@ namespace Caelum.Pages
             var settingsPanel = new StackPanel { Margin = new Thickness(14, 12, 14, 12) };
             var settingsBorder = new Border
             {
-                Background = new SolidColorBrush(Color.FromArgb(250, 255, 255, 255)),
-                BorderBrush = new SolidColorBrush(Color.FromArgb(30, 0, 0, 0)),
                 BorderThickness = new Thickness(1),
                 CornerRadius = new CornerRadius(12),
                 Child = settingsPanel,
@@ -1869,16 +3463,18 @@ namespace Caelum.Pages
                     BlurRadius = 20, ShadowDepth = 4, Opacity = 0.12, Color = Colors.Black
                 }
             };
+            settingsBorder.SetResourceReference(Border.BackgroundProperty, "ThemeSurfaceBrush");
+            settingsBorder.SetResourceReference(Border.BorderBrushProperty, "ThemeBorderBrush");
 
             // ── Shape section ──────────────────────────────────────────────────────
-            settingsPanel.Children.Add(new TextBlock
+            settingsPanel.Children.Add(ThemeSubtleHeader(new TextBlock
             {
                 Text = LocalizationService.Get("Editor.SelectShape"),
                 FontSize = 12,
                 FontWeight = FontWeights.SemiBold,
                 Foreground = new SolidColorBrush(Color.FromRgb(80, 80, 80)),
                 Margin = new Thickness(0, 0, 0, 8)
-            });
+            }));
 
             var shapePanel = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 12) };
 
@@ -1920,14 +3516,14 @@ namespace Caelum.Pages
             settingsPanel.Children.Add(shapePanel);
 
             // ── Filter section header
-            settingsPanel.Children.Add(new TextBlock
+            settingsPanel.Children.Add(ThemeSubtleHeader(new TextBlock
             {
                 Text = LocalizationService.Get("Editor.SelectFilter"),
                 FontSize = 12,
                 FontWeight = FontWeights.SemiBold,
                 Foreground = new SolidColorBrush(Color.FromRgb(80, 80, 80)),
                 Margin = new Thickness(0, 0, 0, 8)
-            });
+            }));
 
             // Filter radio buttons
             var filterPanel = new StackPanel { Orientation = Orientation.Horizontal };
@@ -1963,20 +3559,36 @@ namespace Caelum.Pages
             filterPanel.Children.Add(MakeFilterButton(LocalizationService.Get("Editor.SelectFilterText"), SelectionFilter.TextOnly));
 
             settingsPanel.Children.Add(filterPanel);
+
+            // Task 28: the current WPF build has no WinRT InkAnalyzer
+            // projection. Keep the action visible and fail safely without
+            // mutating the selected strokes; the spike conclusion is recorded
+            // in .ai/Task28-InkAnalysis.md.
+            var recognizeButton = new Button
+            {
+                Content = LocalizationService.Get("Editor.InkAnalysisUnavailable"),
+                Margin = new Thickness(0, 4, 0, 0),
+                Padding = new Thickness(10, 6, 10, 6),
+                Cursor = Cursors.Hand,
+                ToolTip = LocalizationService.Get("Editor.InkAnalysisTooltip")
+            };
+            recognizeButton.Click += (_, __) =>
+                GetMainWindow()?.ShowToast(LocalizationService.Get("Editor.InkAnalysisUnavailable"), "\uE783", 2600);
+            settingsPanel.Children.Add(recognizeButton);
             _selectionPopup.Child = settingsBorder;
         }
 
         private void UpdateFilterButtonStyle(Button btn, bool isActive)
         {
-            btn.Background = isActive
-                ? new SolidColorBrush(Color.FromArgb(34, 0, 120, 212))
-                : Brushes.Transparent;
-            btn.BorderBrush = isActive
-                ? new SolidColorBrush(Color.FromRgb(0, 120, 212))
-                : new SolidColorBrush(Color.FromArgb(40, 0, 0, 0));
-            btn.Foreground = isActive
-                ? new SolidColorBrush(Color.FromRgb(0, 90, 160))
-                : new SolidColorBrush(Color.FromRgb(60, 60, 60));
+            btn.SetResourceReference(
+                Button.BackgroundProperty,
+                isActive ? "ThemeSelectionBrush" : "ThemeSurfaceAltBrush");
+            btn.SetResourceReference(
+                Button.BorderBrushProperty,
+                isActive ? "ThemeAccentBrush" : "ThemeBorderBrush");
+            btn.SetResourceReference(
+                Control.ForegroundProperty,
+                isActive ? "ThemeSelectionForegroundBrush" : "ThemeForegroundBrush");
         }
 
         private void ScaleSelection(double factor)
@@ -2041,6 +3653,7 @@ namespace Caelum.Pages
                         A = stroke.DrawingAttributes.Color.A,
                         Size = stroke.DrawingAttributes.Width,
                         IsHighlighter = stroke.DrawingAttributes.IsHighlighter,
+                        FitToCurve = stroke.DrawingAttributes.FitToCurve,
                         Points = new List<double[]>()
                     };
 
@@ -2065,10 +3678,33 @@ namespace Caelum.Pages
                             R = ((SolidColorBrush)textBox.Foreground).Color.R,
                             G = ((SolidColorBrush)textBox.Foreground).Color.G,
                             B = ((SolidColorBrush)textBox.Foreground).Color.B,
-                            FontSize = textBox.FontSize
+                            FontSize = textBox.FontSize,
+                            Width = GetPersistedTextWidth(container),
+                            Height = GetPersistedTextHeight(container),
+                            Bold = textBox.FontWeight >= FontWeights.Bold,
+                            Italic = textBox.FontStyle == FontStyles.Italic,
+                            FontFamily = textBox.FontFamily?.Source ?? "Segoe UI",
+                            Alignment = textBox.TextAlignment.ToString()
                         };
 
                         pageAnnotation.Texts.Add(textAnnotation);
+                    }
+                    else if (PdfPageControl.IsImageContainer(container))
+                    {
+                        // Task 19: selected images ride along as base64 payload.
+                        var imageData = _activeSelectionPage.GetImageData(container);
+                        if (imageData != null)
+                        {
+                            pageAnnotation.Images.Add(new ImageAnnotation
+                            {
+                                X = Canvas.GetLeft(container),
+                                Y = Canvas.GetTop(container),
+                                Width = container.ActualWidth > 0 ? container.ActualWidth : container.Width,
+                                Height = container.ActualHeight > 0 ? container.ActualHeight : container.Height,
+                                Format = PdfService.DetectImageFormat(imageData),
+                                ImageDataBase64 = Convert.ToBase64String(imageData)
+                            });
+                        }
                     }
                 }
 
@@ -2081,7 +3717,7 @@ namespace Caelum.Pages
                 System.Windows.Clipboard.SetText(json);
 
                 var mw = Window.GetWindow(this) as MainWindow;
-                mw?.ShowToast("Selection copied", "\uE14D", 1500);
+                mw?.ShowToast(LocalizationService.Get("Editor.SelectionCopied"), "\uE14D", 1500);
             }
             catch (Exception ex)
             {
@@ -2152,6 +3788,16 @@ namespace Caelum.Pages
                         }
                     }
 
+                    if (pageAnnotation.Images != null)
+                    {
+                        foreach (var img in pageAnnotation.Images)
+                        {
+                            hasBoundingBox = true;
+                            if (img.X < minX) minX = img.X;
+                            if (img.Y < minY) minY = img.Y;
+                        }
+                    }
+
                     if (hasBoundingBox)
                     {
                         pasteOffsetX = _lastClickedPoint.X - minX;
@@ -2176,6 +3822,7 @@ namespace Caelum.Pages
                             A = strokeAnnotation.A,
                             Size = strokeAnnotation.Size,
                             IsHighlighter = strokeAnnotation.IsHighlighter,
+                            FitToCurve = strokeAnnotation.FitToCurve,
                             Points = new List<double[]>()
                         };
 
@@ -2205,12 +3852,31 @@ namespace Caelum.Pages
                             R = textAnnotation.R,
                             G = textAnnotation.G,
                             B = textAnnotation.B,
-                            FontSize = textAnnotation.FontSize
+                            FontSize = textAnnotation.FontSize,
+                            Width = textAnnotation.Width,
+                            Height = textAnnotation.Height,
+                            Bold = textAnnotation.Bold,
+                            Italic = textAnnotation.Italic,
+                            FontFamily = textAnnotation.FontFamily,
+                            Alignment = textAnnotation.Alignment
                         };
 
                         // Create the text box on the target page
                         var color = Color.FromRgb(offsetTextAnnotation.R, offsetTextAnnotation.G, offsetTextAnnotation.B);
-                        var c = CreateTextBox(targetPage, new Point(offsetTextAnnotation.X, offsetTextAnnotation.Y), color, offsetTextAnnotation.FontSize, offsetTextAnnotation.Text, select: false, alignToPointer: false);
+                        var c = CreateTextBox(
+                            targetPage,
+                            new Point(offsetTextAnnotation.X, offsetTextAnnotation.Y),
+                            color,
+                            offsetTextAnnotation.FontSize,
+                            offsetTextAnnotation.Text,
+                            select: false,
+                            alignToPointer: false,
+                            bold: offsetTextAnnotation.Bold,
+                            italic: offsetTextAnnotation.Italic,
+                            fontFamily: offsetTextAnnotation.FontFamily,
+                            alignment: ParseTextAlignment(offsetTextAnnotation.Alignment),
+                            width: offsetTextAnnotation.Width > 0 ? offsetTextAnnotation.Width : null,
+                            height: offsetTextAnnotation.Height > 0 ? offsetTextAnnotation.Height : null);
                         if (c != null)
                         {
                             pastedContainers.Add(c);
@@ -2218,20 +3884,356 @@ namespace Caelum.Pages
                     }
                 }
 
+                // Paste image annotations (Task 19) — the copied dimensions
+                // are restored verbatim, only the position takes the offset.
+                if (pageAnnotation.Images != null)
+                {
+                    foreach (var imageAnnotation in pageAnnotation.Images)
+                    {
+                        if (string.IsNullOrEmpty(imageAnnotation.ImageDataBase64))
+                            continue;
+
+                        byte[] imageBytes;
+                        try { imageBytes = Convert.FromBase64String(imageAnnotation.ImageDataBase64); }
+                        catch
+                        {
+                            continue;
+                        }
+
+                        var img = targetPage.AddImage(imageBytes,
+                            new Point(imageAnnotation.X + pasteOffsetX, imageAnnotation.Y + pasteOffsetY),
+                            imageAnnotation.Width, imageAnnotation.Height);
+                        if (img != null)
+                        {
+                            pastedContainers.Add(img);
+                        }
+                    }
+                }
+
                 if (pastedStrokes.Count > 0 || pastedContainers.Count > 0)
                 {
+                    // Undo state FIRST (selection is UI state, not undoable).
                     PushUndoAction(new ItemsAddedAction(targetPage, pastedStrokes, pastedContainers));
+
+                    // Task 8.2: auto-select the pasted content so it shows the
+                    // per-item outlines + handles and is ready to drag/resize.
+                    // Mirrors the Task 7 cross-page rule: a selection lingering
+                    // on another page must be cleared first so only the target
+                    // page holds a selection.
+                    foreach (var page in _pageControls)
+                    {
+                        if (page != targetPage && page.HasSelection)
+                            page.ClearSelection();
+                    }
+                    targetPage.SelectItems(pastedStrokes, pastedContainers);
                 }
 
                 MarkDirty();
 
                 var mw = Window.GetWindow(this) as MainWindow;
-                mw?.ShowToast("Selection pasted", "\uE14D", 1500);
+                mw?.ShowToast(LocalizationService.Get("Editor.SelectionPasted"), "\uE14D", 1500);
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"[PasteSelection] Error: {ex.Message}");
                 // Don't crash if paste fails - just ignore
+            }
+        }
+
+        // ----- Task 19: image annotations (clipboard paste / drag-drop) -----
+
+        /// <summary>
+        /// Task 19: Ctrl+V with a bitmap on the clipboard. Encodes the bitmap
+        /// to PNG, drops it on the target page (last clicked page / active
+        /// selection page / first page), pushes one ItemsAddedAction and
+        /// auto-selects the pasted container. Returns false when the clipboard
+        /// holds no image (caller falls back to annotation JSON paste).
+        /// </summary>
+        private bool PasteClipboardImage()
+        {
+            try
+            {
+                if (!Clipboard.ContainsImage())
+                    return false;
+
+                BitmapSource source = null;
+                try { source = Clipboard.GetImage(); }
+                catch { /* some producers put a PNG stream instead of CF_BITMAP */ }
+
+                if (source == null && Clipboard.GetData("PNG") is MemoryStream pngStream)
+                {
+                    // Browsers expose copied images as a "PNG" format that WPF's
+                    // GetImage() does not decode.
+                    pngStream.Position = 0;
+                    source = BitmapFrame.Create(pngStream, BitmapCreateOptions.None, BitmapCacheOption.OnLoad);
+                }
+
+                if (source == null)
+                    return false;
+
+                var pngBytes = EncodeBitmapSourceToPng(source);
+                if (pngBytes == null || pngBytes.Length == 0)
+                    return false;
+
+                var targetPage = _lastClickedPage ?? _activeSelectionPage ?? _pageControls.FirstOrDefault();
+                if (targetPage == null)
+                    return false;
+
+                Point position = _lastClickedPage == targetPage
+                    ? _lastClickedPoint
+                    : new Point(targetPage.ActualWidth / 2, targetPage.ActualHeight / 2);
+
+                var container = targetPage.AddImage(pngBytes, position);
+                if (container == null)
+                    return false;
+
+                if (_lastClickedPage != targetPage)
+                {
+                    // No click anchor: center the image on the target page.
+                    Canvas.SetLeft(container, Math.Max(0, (targetPage.ActualWidth - container.Width) / 2));
+                    Canvas.SetTop(container, Math.Max(0, (targetPage.ActualHeight - container.Height) / 2));
+                }
+
+                PushUndoAction(new ItemsAddedAction(targetPage,
+                    new List<System.Windows.Ink.Stroke>(),
+                    new List<System.Windows.Controls.Grid> { container }));
+
+                foreach (var page in _pageControls)
+                {
+                    if (page != targetPage && page.HasSelection)
+                        page.ClearSelection();
+                }
+                targetPage.SelectItems(new List<System.Windows.Ink.Stroke>(),
+                    new List<System.Windows.Controls.Grid> { container });
+
+                MarkDirty();
+
+                var mw = Window.GetWindow(this) as MainWindow;
+                mw?.ShowToast(LocalizationService.Get("Editor.ImagePasted"), "\uE8B7", 1500);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[PasteClipboardImage] Error: {ex.Message}");
+                return false;
+            }
+        }
+
+        private static byte[] EncodeBitmapSourceToPng(BitmapSource source)
+        {
+            var encoder = new PngBitmapEncoder();
+            encoder.Frames.Add(BitmapFrame.Create(source));
+            using var stream = new MemoryStream();
+            encoder.Save(stream);
+            return stream.ToArray();
+        }
+
+        private static readonly string[] SupportedImageExtensions = { ".png", ".jpg", ".jpeg" };
+
+        private static bool IsSupportedImageFile(string path)
+        {
+            return Array.Exists(SupportedImageExtensions,
+                ext => string.Equals(System.IO.Path.GetExtension(path), ext, StringComparison.OrdinalIgnoreCase));
+        }
+
+        private void EditorPage_PreviewDragOver(object sender, DragEventArgs e)
+        {
+            if (e.Data.GetDataPresent(DataFormats.FileDrop) &&
+                (e.Data.GetData(DataFormats.FileDrop) is string[] files) &&
+                files.Any(IsSupportedImageFile))
+            {
+                e.Handled = true;
+                e.Effects = DragDropEffects.Copy;
+            }
+            else
+            {
+                e.Effects = DragDropEffects.None;
+            }
+        }
+
+        private void EditorPage_Drop(object sender, DragEventArgs e)
+        {
+            try
+            {
+                if (!(e.Data.GetData(DataFormats.FileDrop) is string[] files))
+                    return;
+
+                var imageFiles = files.Where(IsSupportedImageFile).ToList();
+                if (imageFiles.Count == 0)
+                    return;
+
+                e.Handled = true;
+
+                // Resolve the page under the cursor (PagesContainer coordinates,
+                // same translate trick as FindPageAtContainerPoint).
+                var pointInContainer = e.GetPosition(PagesContainer);
+                PdfPageControl targetPage = null;
+                Point pagePoint = default;
+                foreach (var p in _pageControls)
+                {
+                    var ptInPage = PagesContainer.TranslatePoint(pointInContainer, p);
+                    if (ptInPage.X >= 0 && ptInPage.X <= p.ActualWidth &&
+                        ptInPage.Y >= 0 && ptInPage.Y <= p.ActualHeight)
+                    {
+                        targetPage = p;
+                        pagePoint = ptInPage;
+                        break;
+                    }
+                }
+
+                if (targetPage == null)
+                {
+                    // Dropped over a gap / chrome: fall back to the first
+                    // visible page, centered, stacking multiples.
+                    targetPage = GetFirstVisiblePage();
+                    if (targetPage == null)
+                        return;
+                    pagePoint = new Point(
+                        targetPage.ActualWidth / 2,
+                        targetPage.ActualHeight / 2);
+                }
+
+                var addedContainers = new List<System.Windows.Controls.Grid>();
+                var addedStrokes = new List<System.Windows.Ink.Stroke>();
+                double stackOffset = 0;
+                foreach (var file in imageFiles)
+                {
+                    byte[] bytes;
+                    try { bytes = File.ReadAllBytes(file); }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[EditorPage_Drop] Cannot read {file}: {ex.Message}");
+                        continue;
+                    }
+
+                    var dropPoint = new Point(pagePoint.X + stackOffset, pagePoint.Y + stackOffset);
+                    stackOffset += 20; // multiple files land stair-stepped
+
+                    var container = targetPage.AddImage(bytes, dropPoint);
+                    if (container != null)
+                        addedContainers.Add(container);
+                }
+
+                if (addedContainers.Count == 0)
+                    return;
+
+                PushUndoAction(new ItemsAddedAction(targetPage, addedStrokes, addedContainers));
+
+                foreach (var page in _pageControls)
+                {
+                    if (page != targetPage && page.HasSelection)
+                        page.ClearSelection();
+                }
+                targetPage.SelectItems(addedStrokes, addedContainers);
+
+                MarkDirty();
+
+                var mw = Window.GetWindow(this) as MainWindow;
+                mw?.ShowToast(LocalizationService.Get("Editor.ImageAdded"), "\uE8B7", 1500);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[EditorPage_Drop] Error: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Task 13: Ctrl+D duplicates the current selection in place with a
+        /// (+20,+20) offset, without touching the clipboard. Clones are built
+        /// from the live objects (strokes keep their pressure data), pushed as
+        /// ONE ItemsAddedAction (single Ctrl+Z removes the whole duplicate),
+        /// then auto-selected — mirroring the Task 8.2 paste auto-select flow.
+        /// </summary>
+        private void DuplicateSelection()
+        {
+            var page = _activeSelectionPage;
+            if (page == null || !page.HasSelection)
+                return;
+
+            try
+            {
+                const double offsetX = 20.0;
+                const double offsetY = 20.0;
+
+                var clonedStrokes = new List<System.Windows.Ink.Stroke>();
+                var clonedContainers = new List<System.Windows.Controls.Grid>();
+
+                // Clone strokes: fresh StylusPointCollection (offset applied,
+                // PressureFactor preserved) + cloned DrawingAttributes.
+                foreach (var stroke in page.SelectedStrokes)
+                {
+                    var points = new StylusPointCollection();
+                    foreach (var pt in stroke.StylusPoints)
+                        points.Add(new StylusPoint(pt.X + offsetX, pt.Y + offsetY, pt.PressureFactor));
+
+                    var clone = new Stroke(points, stroke.DrawingAttributes.Clone());
+                    page.AddStrokeQuiet(clone);
+                    clonedStrokes.Add(clone);
+                }
+
+                // Clone text containers through the shared CreateTextBox path
+                // (same structure/event hooks as pasted copies; select:false
+                // keeps them read-only until the auto-select below).
+                foreach (var container in page.SelectedTextContainers)
+                {
+                    if (container.Children.OfType<TextBox>().FirstOrDefault() is TextBox textBox)
+                    {
+                        var color = (textBox.Foreground as SolidColorBrush)?.Color ?? _textColor;
+                        var clone = CreateTextBox(
+                            page,
+                            new Point(Canvas.GetLeft(container) + offsetX, Canvas.GetTop(container) + offsetY),
+                            color, textBox.FontSize, textBox.Text,
+                            select: false,
+                            alignToPointer: false,
+                            bold: textBox.FontWeight >= FontWeights.Bold,
+                            italic: textBox.FontStyle == FontStyles.Italic,
+                            fontFamily: textBox.FontFamily?.Source,
+                            alignment: textBox.TextAlignment,
+                            width: GetPersistedTextWidth(container),
+                            height: GetPersistedTextHeight(container));
+                        if (clone != null)
+                            clonedContainers.Add(clone);
+                    }
+                    else if (PdfPageControl.IsImageContainer(container))
+                    {
+                        // Task 19: duplicate image annotations from their raw
+                        // payload, keeping the live size.
+                        var imageData = page.GetImageData(container);
+                        if (imageData != null)
+                        {
+                            var clone = page.AddImage(imageData,
+                                new Point(Canvas.GetLeft(container) + offsetX, Canvas.GetTop(container) + offsetY),
+                                container.ActualWidth > 0 ? container.ActualWidth : container.Width,
+                                container.ActualHeight > 0 ? container.ActualHeight : container.Height);
+                            if (clone != null)
+                                clonedContainers.Add(clone);
+                        }
+                    }
+                }
+
+                if (clonedStrokes.Count == 0 && clonedContainers.Count == 0)
+                    return;
+
+                // Undo state FIRST (selection is UI state, not undoable).
+                PushUndoAction(new ItemsAddedAction(page, clonedStrokes, clonedContainers));
+
+                // Cross-page rule (Task 7): clear any selection lingering on
+                // other pages, then auto-select the duplicates (Task 8.2 flow).
+                foreach (var other in _pageControls)
+                {
+                    if (other != page && other.HasSelection)
+                        other.ClearSelection();
+                }
+                page.SelectItems(clonedStrokes, clonedContainers);
+
+                MarkDirty();
+
+                var mw = Window.GetWindow(this) as MainWindow;
+                mw?.ShowToast(LocalizationService.Get("Editor.Duplicated"), "\uE8C8", 1500);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[DuplicateSelection] Error: {ex.Message}");
             }
         }
 
@@ -2249,14 +4251,14 @@ namespace Caelum.Pages
 
         private Popup BuildToolPopup(
             string sizeLabel, double min, double max, double value, double step, Action<double> sizeChanged,
-            string colorLabel, Color initialColor, Action<Color> colorChanged)
+            string colorLabel, Color initialColor, Action<Color> colorChanged,
+            out Slider sizeSlider,
+            Func<List<string>> recentColors = null)
         {
             var popup = new Popup { Placement = PlacementMode.Bottom, StaysOpen = true, AllowsTransparency = true };
             var panel = new StackPanel { Margin = new Thickness(16) };
             var border = new Border
             {
-                Background = new SolidColorBrush(Color.FromArgb(250, 255, 255, 255)),
-                BorderBrush = new SolidColorBrush(Color.FromArgb(30, 0, 0, 0)),
                 BorderThickness = new Thickness(1),
                 CornerRadius = new CornerRadius(12),
                 Child = panel,
@@ -2268,16 +4270,18 @@ namespace Caelum.Pages
                     Color = Colors.Black
                 }
             };
+            border.SetResourceReference(Border.BackgroundProperty, "ThemeSurfaceBrush");
+            border.SetResourceReference(Border.BorderBrushProperty, "ThemeBorderBrush");
 
             // Size section
-            var sizeHeader = new TextBlock
+            var sizeHeader = ThemeSubtleHeader(new TextBlock
             {
                 Text = sizeLabel,
                 FontSize = 13,
                 FontWeight = FontWeights.SemiBold,
                 Foreground = new SolidColorBrush(Color.FromRgb(80, 80, 80)),
                 Margin = new Thickness(0, 0, 0, 10)
-            };
+            });
             var slider = new Slider
             {
                 Minimum = min,
@@ -2290,27 +4294,49 @@ namespace Caelum.Pages
             slider.ValueChanged += (s, e) => sizeChanged?.Invoke(e.NewValue);
             panel.Children.Add(sizeHeader);
             panel.Children.Add(slider);
+            // Task 23: expose the slider so preset applications can resync
+            // it when _penSize/_highlighterSize change outside the popup.
+            sizeSlider = slider;
 
             if (colorLabel != null)
             {
                 // Separator
-                var separator = new Border
+                var separator = ThemeDivider(new Border
                 {
                     Height = 1,
                     Background = new SolidColorBrush(Color.FromArgb(25, 0, 0, 0)),
                     Margin = new Thickness(-16, 14, -16, 14)
-                };
+                });
                 panel.Children.Add(separator);
 
-                var colorHeader = new TextBlock
+                var colorHeader = ThemeSubtleHeader(new TextBlock
                 {
                     Text = colorLabel,
                     FontSize = 13,
                     FontWeight = FontWeights.SemiBold,
                     Foreground = new SolidColorBrush(Color.FromRgb(80, 80, 80)),
                     Margin = new Thickness(0, 0, 0, 10)
-                };
+                });
                 panel.Children.Add(colorHeader);
+
+                // Task 14: "最近 Recent" swatch row above the palette (hidden
+                // while empty); repopulated on every popup open.
+                if (recentColors != null)
+                {
+                    var recentSection = new StackPanel { Margin = new Thickness(0, 0, 0, 12), Visibility = Visibility.Collapsed };
+                    var recentRow = new StackPanel { Orientation = Orientation.Horizontal };
+                    recentSection.Children.Add(ThemeSubtleHeader(new TextBlock
+                    {
+                        Text = LocalizationService.Get("Editor.Recent"),
+                        FontSize = 13,
+                        FontWeight = FontWeights.SemiBold,
+                        Foreground = new SolidColorBrush(Color.FromRgb(80, 80, 80)),
+                        Margin = new Thickness(0, 0, 0, 8)
+                    }));
+                    recentSection.Children.Add(recentRow);
+                    panel.Children.Add(recentSection);
+                    popup.Opened += (s, e) => RefreshRecentColorsRow(recentSection, recentRow, recentColors, colorChanged);
+                }
 
                 // HSV color palette grid
                 int cols = 12;
@@ -2407,10 +4433,256 @@ namespace Caelum.Pages
             return popup;
         }
 
+        private void OpenPdfSearch()
+        {
+            PdfSearchPanel.Visibility = Visibility.Visible;
+            PdfSearchTextBox.Focus();
+            PdfSearchTextBox.SelectAll();
+        }
+
+        private void ClosePdfSearch()
+        {
+            _pdfSearchCts?.Cancel();
+            PdfSearchPanel.Visibility = Visibility.Collapsed;
+            PdfSearchResultsListBox.Items.Clear();
+            PdfSearchStatusTextBlock.Text = string.Empty;
+            foreach (var page in _pageControls)
+                page.ClearPdfTextSelection();
+            _pdfSearchResults.Clear();
+        }
+
+        private async void PdfSearchTextBox_TextChanged(object sender, TextChangedEventArgs e)
+        {
+            _pdfSearchCts?.Cancel();
+            _pdfSearchCts = new CancellationTokenSource();
+            try
+            {
+                await RunPdfSearchAsync(PdfSearchTextBox.Text?.Trim() ?? string.Empty, _pdfSearchCts.Token);
+            }
+            catch (OperationCanceledException)
+            {
+            }
+        }
+
+        private async Task RunPdfSearchAsync(string query, CancellationToken cancellationToken)
+        {
+            _pdfSearchResults.Clear();
+            PdfSearchResultsListBox.Items.Clear();
+            if (string.IsNullOrWhiteSpace(query))
+            {
+                PdfSearchStatusTextBlock.Text = string.Empty;
+                return;
+            }
+
+            PdfSearchStatusTextBlock.Text = LocalizationService.Get("Editor.Searching");
+            for (int pageIndex = 0; pageIndex < _pageControls.Count; pageIndex++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var info = await _pdfService.GetPageTextInfoAsync(pageIndex, cancellationToken);
+                string text = info.Text ?? string.Empty;
+                int offset = 0;
+                while (offset < text.Length)
+                {
+                    int hit = text.IndexOf(query, offset, StringComparison.OrdinalIgnoreCase);
+                    if (hit < 0)
+                        break;
+
+                    int snippetStart = Math.Max(0, hit - 28);
+                    int snippetLength = Math.Min(text.Length - snippetStart, query.Length + 56);
+                    string snippet = text.Substring(snippetStart, snippetLength).Replace('\r', ' ').Replace('\n', ' ');
+                    _pdfSearchResults.Add(new PdfSearchResult
+                    {
+                        PageIndex = pageIndex,
+                        StartOffset = hit,
+                        Length = query.Length,
+                        DisplayText = $"{LocalizationService.Format("Editor.PageNumber", pageIndex + 1)}  {snippet}"
+                    });
+                    offset = hit + Math.Max(1, query.Length);
+                }
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            foreach (var result in _pdfSearchResults)
+                PdfSearchResultsListBox.Items.Add(new ListBoxItem { Content = result.DisplayText, Tag = result });
+            PdfSearchStatusTextBlock.Text = LocalizationService.Format("Editor.SearchResults", _pdfSearchResults.Count);
+            if (_pdfSearchResults.Count > 0)
+                PdfSearchResultsListBox.SelectedIndex = 0;
+        }
+
+        private async void PdfSearchResultsListBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (PdfSearchResultsListBox.SelectedItem is ListBoxItem item && item.Tag is PdfSearchResult result)
+                await JumpToPdfSearchResultAsync(result);
+        }
+
+        private async Task JumpToPdfSearchResultAsync(PdfSearchResult result)
+        {
+            if (result == null || result.PageIndex < 0 || result.PageIndex >= _pageControls.Count)
+                return;
+            JumpToPage(result.PageIndex);
+            var info = await _pdfService.GetPageTextInfoAsync(result.PageIndex);
+            var page = _pageControls[result.PageIndex];
+            foreach (var other in _pageControls)
+            {
+                if (!ReferenceEquals(other, page))
+                    other.ClearPdfTextSelection();
+            }
+            page.SetPdfTextSelectionRects(BuildPdfTextSelectionRects(info, result.StartOffset, result.StartOffset + result.Length - 1));
+        }
+
+        private async Task MovePdfSearchSelectionAsync(bool backwards)
+        {
+            if (PdfSearchPanel.Visibility != Visibility.Visible || _pdfSearchResults.Count == 0)
+                return;
+            int current = PdfSearchResultsListBox.SelectedIndex;
+            int next = (current + (backwards ? -1 : 1) + _pdfSearchResults.Count) % _pdfSearchResults.Count;
+            PdfSearchResultsListBox.SelectedIndex = next;
+            await JumpToPdfSearchResultAsync(_pdfSearchResults[next]);
+        }
+
+        private async void PdfSearchTextBox_KeyDown(object sender, KeyEventArgs e)
+        {
+            if (e.Key == Key.Enter)
+            {
+                await MovePdfSearchSelectionAsync(Keyboard.Modifiers.HasFlag(ModifierKeys.Shift));
+                e.Handled = true;
+            }
+            else if (e.Key == Key.Escape)
+            {
+                ClosePdfSearch();
+                e.Handled = true;
+            }
+        }
+
+        private void ClosePdfSearchButton_Click(object sender, RoutedEventArgs e) => ClosePdfSearch();
+
         private async void EditorPage_PreviewKeyDown(object sender, KeyEventArgs e)
         {
+            // Task 16: fullscreen immersive mode. F11 toggles it (never
+            // while a text box is being edited); ESC always leaves it
+            // first — the existing "ESC resets tool" behavior only runs
+            // when not immersive (the handled preview suppresses the
+            // bubbling KeyDown branch).
+            if (e.Key == Key.F11 && !IsEditableTextInputFocused())
+            {
+                ToggleImmersiveMode();
+                e.Handled = true;
+                return;
+            }
+
+            if (e.Key == Key.Escape && _isImmersiveMode)
+            {
+                ToggleImmersiveMode();
+                e.Handled = true;
+                return;
+            }
+
+            if (e.Key == Key.Escape && _resizingTextContainer != null)
+            {
+                CancelTextResize(restoreBounds: true);
+                e.Handled = true;
+                return;
+            }
+
+            if (!IsEditableTextInputFocused() && Keyboard.Modifiers == ModifierKeys.Control && e.Key == Key.F)
+            {
+                OpenPdfSearch();
+                e.Handled = true;
+                return;
+            }
+
+            if (!IsEditableTextInputFocused() && e.Key == Key.F3)
+            {
+                await MovePdfSearchSelectionAsync(Keyboard.Modifiers.HasFlag(ModifierKeys.Shift));
+                e.Handled = true;
+                return;
+            }
+
+            if (e.Key == Key.Escape && PdfSearchPanel.Visibility == Visibility.Visible)
+            {
+                ClosePdfSearch();
+                e.Handled = true;
+                return;
+            }
+
+            if (!IsEditableTextInputFocused() && Keyboard.Modifiers == ModifierKeys.None)
+            {
+                if (e.Key == Key.PageDown)
+                {
+                    JumpToPage(Math.Min(_pageControls.Count - 1, GetCurrentPageIndex() + 1));
+                    e.Handled = true;
+                    return;
+                }
+                if (e.Key == Key.PageUp)
+                {
+                    JumpToPage(Math.Max(0, GetCurrentPageIndex() - 1));
+                    e.Handled = true;
+                    return;
+                }
+                if (e.Key == Key.Home)
+                {
+                    JumpToPage(0);
+                    e.Handled = true;
+                    return;
+                }
+                if (e.Key == Key.End)
+                {
+                    JumpToPage(_pageControls.Count - 1);
+                    e.Handled = true;
+                    return;
+                }
+            }
+
+            if (!IsEditableTextInputFocused() && Keyboard.Modifiers == ModifierKeys.Control && e.Key == Key.M)
+            {
+                BookmarkToggleButton_Click(this, new RoutedEventArgs());
+                e.Handled = true;
+                return;
+            }
+
+            if (!IsEditableTextInputFocused() && Keyboard.Modifiers == ModifierKeys.Control && e.Key == Key.A)
+            {
+                ActivateTool(ToolType.Select);
+                var page = _pageControls.Count == 0 ? null : _pageControls[GetCurrentPageIndex()];
+                if (page != null)
+                {
+                    page.SelectAllAnnotations();
+                    _activeSelectionPage = page;
+                }
+                e.Handled = true;
+                return;
+            }
+
             if (await TryHandleUndoRedoShortcutAsync(e))
                 return;
+
+            // Resize handles own their arrow-key contract. PreviewKeyDown runs
+            // before the handle's KeyDown, so let the handle receive the event
+            // instead of treating the same arrow as a text-box nudge.
+            if (e.OriginalSource is TextResizeHandleBorder
+                || Keyboard.FocusedElement is TextResizeHandleBorder)
+            {
+                return;
+            }
+
+            if (_currentTool == ToolType.Text
+                && _selectedTextBox != null
+                && TryGetTextBoxNudge(e.Key, out double nudgeX, out double nudgeY)
+                && (Keyboard.Modifiers == ModifierKeys.None
+                    || Keyboard.Modifiers == ModifierKeys.Shift
+                    || Keyboard.Modifiers == ModifierKeys.Alt))
+            {
+                bool textEditingHasFocus = IsEditableTextInputFocused();
+                bool allowNudge = !textEditingHasFocus
+                    || Keyboard.Modifiers == ModifierKeys.Alt;
+                if (allowNudge)
+                {
+                    double step = Keyboard.Modifiers == ModifierKeys.Shift ? 10 : 1;
+                    NudgeSelectedTextBox(nudgeX * step, nudgeY * step);
+                    e.Handled = true;
+                    return;
+                }
+            }
 
             if (e.Key == Key.Delete || e.Key == Key.Back)
             {
@@ -2458,7 +4730,7 @@ namespace Caelum.Pages
             consumePointerEvent = false;
             if (originalSource == null) return false;
 
-            var popups = new[] { _penPopup, _highlighterPopup, _eraserPopup, _selectionPopup };
+            var popups = new[] { _penPopup, _highlighterPopup, _eraserPopup, _shapePopup, _selectionPopup };
             bool anyPopupOpen = false;
             foreach (var popup in popups)
             {
@@ -2487,7 +4759,10 @@ namespace Caelum.Pages
         {
             return _currentTool == ToolType.Pen ||
                    _currentTool == ToolType.Highlighter ||
-                   _currentTool == ToolType.Eraser;
+                   _currentTool == ToolType.HiddenInk ||
+                   _currentTool == ToolType.Eraser ||
+                   _currentTool == ToolType.Shape ||
+                   _currentTool == ToolType.Laser;
         }
 
         private bool IsSourceInPopup(DependencyObject source, Popup popup)
@@ -2527,6 +4802,13 @@ namespace Caelum.Pages
             return null;
         }
 
+        // Task 11: 事件源是否位于某个 ScrollBar 的可视子树内
+        // （轨道 / Track / Thumb 及其模板子元素）
+        private static bool IsOriginalSourceOverScrollbar(DependencyObject source)
+        {
+            return source != null && FindAncestor<ScrollBar>(source) != null;
+        }
+
         private void CloseToolPopups(ToolType toolToKeepOpen = ToolType.None)
         {
             if (toolToKeepOpen != ToolType.Pen && _penPopup != null)
@@ -2537,6 +4819,9 @@ namespace Caelum.Pages
 
             if (toolToKeepOpen != ToolType.Eraser && _eraserPopup != null)
                 _eraserPopup.IsOpen = false;
+
+            if (toolToKeepOpen != ToolType.Shape && _shapePopup != null)
+                _shapePopup.IsOpen = false;
 
             if (toolToKeepOpen != ToolType.Select && _selectionPopup != null)
                 _selectionPopup.IsOpen = false;
@@ -2589,6 +4874,9 @@ namespace Caelum.Pages
             DetachAllPageControlEvents();
             PagesContainer.Children.Clear();
             _pageControls.Clear();
+            // Reset the paste anchor so a stale reference to a detached page
+            // control can't become the paste target in the new document.
+            _lastClickedPage = null;
             _pageTopOffsets.Clear();
             _pageHeights.Clear();
             _pageDeleteButtons.Clear();
@@ -2598,6 +4886,7 @@ namespace Caelum.Pages
             _lastRenderedDpiScale = 1.0;
             _pagesRenderedAtScale.Clear();
             _pagesInitiallyRendered.Clear();
+            ClearThumbnailCache();
             DisposeSelectablePdfDocument();
             UpdatePdfSurfaceVisibility();
             ClearUndoRedoHistory();
@@ -2628,18 +4917,52 @@ namespace Caelum.Pages
                         Width = w,
                         Height = h
                     };
+                    // Runtime page controls are created in code, so expose a
+                    // stable non-visible UI Automation id for desktop tests
+                    // and assistive tooling to distinguish page bounds.
+                    AutomationProperties.SetAutomationId(pageControl, $"PdfPageControl.{i}");
+                    pageControl.SetHostActive(_isHostActive);
 
                     pageControl.TextOverlayPointerPressed += PageControl_TextOverlayPointerPressed;
                     pageControl.BackgroundPointerPressed += PageControl_BackgroundPointerPressed;
+                    // handledEventsToo: PdfScrollViewer_PreviewMouseDown marks the
+                    // Select-tool delegate path as handled at an ancestor level,
+                    // which would stop a plain += tunnel handler from firing.
+                    pageControl.AddHandler(
+                        UIElement.PreviewMouseDownEvent,
+                        new MouseButtonEventHandler(PageControl_PreviewMouseDown),
+                        handledEventsToo: true);
                     pageControl.PdfTextSelectionPointerPressed += PageControl_PdfTextSelectionPointerPressed;
                     pageControl.PdfTextSelectionPointerMoved += PageControl_PdfTextSelectionPointerMoved;
                     pageControl.PdfTextSelectionPointerReleased += PageControl_PdfTextSelectionPointerReleased;
                     pageControl.InkMutated += PageControl_InkMutated;
                     pageControl.StrokeCollectedUndoable += PageControl_StrokeCollectedUndoable;
+                    pageControl.StrokesErased += PageControl_StrokesErased;
+                    pageControl.StrokeRecognized += PageControl_StrokeRecognized;
+                    pageControl.ImagesChanged += PageControl_ImagesChanged;
+                    pageControl.AreaHighlightCreated += PageControl_AreaHighlightCreated;
+                    pageControl.StickyNoteActivated += PageControl_StickyNoteActivated;
+                    pageControl.HiddenInkCreated += PageControl_HiddenInkCreated;
+                    pageControl.HiddenInkRemoved += PageControl_HiddenInkRemoved;
+                    pageControl.HiddenInksRemoved += PageControl_HiddenInksRemoved;
                     pageControl.ModeChanged += PageControl_ModeChanged;
                     pageControl.SelectionChanged += PageControl_SelectionChanged;
                     pageControl.SelectionMoveCompleted += PageControl_SelectionMoveCompleted;
                     pageControl.SelectionResizeCompleted += PageControl_SelectionResizeCompleted;
+
+                    // Task 22: ruler snap provider. The page queries the
+                    // active ruler edge at stroke-collection time; the
+                    // viewport→page translation happens per query via
+                    // TranslatePoint, so scrolling/zooming (or moving the
+                    // ruler) never serves a stale segment. Null while the
+                    // ruler is hidden. The edge lives in the overlay, never
+                    // in the document — no dirty flag, no undo, no save.
+                    pageControl.GetRulerEdgeInPageCoords = () =>
+                    {
+                        var edge = GetRulerEdgeEndpoints();
+                        if (edge == null) return null;
+                        return (TranslatePoint(edge.Value.A, pageControl), TranslatePoint(edge.Value.B, pageControl));
+                    };
 
                     if (_penService != null)
                         pageControl.SetPenService(_penService);
@@ -2672,12 +4995,14 @@ namespace Caelum.Pages
                     token.ThrowIfCancellationRequested();
                     await RenderPageInitialAsync(page, token);
                 }
+                TrimPageBitmapWorkingSet(visiblePages);
 
                 if (!string.IsNullOrEmpty(_currentPdfPath))
                     await LoadAnnotationsFromPdfServiceAsync();
 
                 UpdatePageNumberIndicator();
                 SyncSelectableViewerFromCustomView();
+                await RefreshDocumentSidebarAsync(token);
 
                 if (_promptSaveAsAfterLoad && !_hasPromptedForSaveAs)
                     await PromptSaveAsForDraftAsync();
@@ -2687,17 +5012,17 @@ namespace Caelum.Pages
             }
             catch (Exception ex)
             {
-                var errorMsg = $"Failed to load PDF: {ex.Message}";
+                var errorMsg = LocalizationService.Format("Editor.LoadPdfFailed", ex.Message);
                 if (ex.InnerException != null)
-                    errorMsg += $"\n\nDetails: {ex.InnerException.Message}";
+                    errorMsg += $"\n\n{LocalizationService.Format("Editor.ErrorDetails", ex.InnerException.Message)}";
 
                 if (sessionId == _loadSessionId)
                 {
                     var mw = GetMainWindow();
                     if (mw != null)
-                        await DialogService.ShowErrorAsync(mw, "Error", errorMsg);
+                        await DialogService.ShowErrorAsync(mw, LocalizationService.Get("Common.Error"), errorMsg);
                     else
-                        MessageBox.Show(errorMsg, "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                        MessageBox.Show(errorMsg, LocalizationService.Get("Common.Error"), MessageBoxButton.OK, MessageBoxImage.Error);
                 }
             }
             finally
@@ -2705,6 +5030,412 @@ namespace Caelum.Pages
                 if (sessionId == _loadSessionId)
                     HideLoadingOverlay();
             }
+        }
+
+        private async Task RefreshDocumentSidebarAsync(CancellationToken cancellationToken)
+        {
+            if (ThumbnailListBox == null || _pdfService == null)
+                return;
+
+            _thumbnailLoadCts?.Cancel();
+            _thumbnailLoadCts?.Dispose();
+            _thumbnailLoadCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            _thumbnailPagesLoading.Clear();
+            ClearThumbnailCache();
+            _isRefreshingThumbnails = true;
+            try
+            {
+                ThumbnailListBox.Items.Clear();
+                for (int pageIndex = 0; pageIndex < _pageControls.Count; pageIndex++)
+                {
+                    var image = new Image
+                    {
+                        Width = 132,
+                        Height = 170,
+                        Stretch = Stretch.Uniform,
+                        Margin = new Thickness(4)
+                    };
+                    var panel = new StackPanel();
+                    panel.Children.Add(image);
+                    panel.Children.Add(new TextBlock
+                    {
+                Text = LocalizationService.Format("Editor.PageNumber", pageIndex + 1),
+                        HorizontalAlignment = HorizontalAlignment.Center,
+                        Margin = new Thickness(0, 2, 0, 4),
+                        Foreground = (Brush)FindResource("ThemeSubtleForegroundBrush")
+                    });
+
+                    var item = new ListBoxItem { Content = panel, Tag = pageIndex, HorizontalContentAlignment = HorizontalAlignment.Stretch };
+                    item.ContextMenu = BuildThumbnailContextMenu(pageIndex);
+                    item.Loaded += ThumbnailListBoxItem_Loaded;
+                    item.Unloaded += ThumbnailListBoxItem_Unloaded;
+                    ThumbnailListBox.Items.Add(item);
+                }
+
+                UpdateThumbnailSelection();
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            finally
+            {
+                _isRefreshingThumbnails = false;
+            }
+
+            RefreshBookmarks();
+            await RefreshOutlineAsync(cancellationToken);
+        }
+
+        private async void ThumbnailListBoxItem_Loaded(object sender, RoutedEventArgs e)
+        {
+            if (sender is not ListBoxItem item || item.Tag is not int pageIndex ||
+                item.Content is not StackPanel panel ||
+                panel.Children.OfType<Image>().FirstOrDefault() is not Image image ||
+                image.Source != null || _thumbnailPagesLoading.Contains(pageIndex) ||
+                !_isHostActive || _resourcesReleased)
+                return;
+
+            if (TryGetCachedThumbnail(pageIndex, out var cached))
+            {
+                image.Source = cached;
+                return;
+            }
+
+            _thumbnailPagesLoading.Add(pageIndex);
+            try
+            {
+                var token = _thumbnailLoadCts?.Token ?? CancellationToken.None;
+                var bitmap = await _pdfService.RenderPageBitmapSourceAsync(pageIndex, 0.22, token);
+                token.ThrowIfCancellationRequested();
+                if (!_isHostActive || _resourcesReleased)
+                    return;
+                CacheThumbnail(pageIndex, bitmap);
+                image.Source = bitmap;
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[Thumbnail] Failed to render page {pageIndex}: {ex}");
+            }
+            finally
+            {
+                _thumbnailPagesLoading.Remove(pageIndex);
+            }
+        }
+
+        private void ThumbnailListBoxItem_Unloaded(object sender, RoutedEventArgs e)
+        {
+            if (sender is not ListBoxItem item || item.Tag is not int pageIndex ||
+                item.Content is not StackPanel panel ||
+                panel.Children.OfType<Image>().FirstOrDefault() is not Image image)
+                return;
+
+            if (!_thumbnailCache.ContainsKey(pageIndex))
+                image.Source = null;
+        }
+
+        private bool TryGetCachedThumbnail(int pageIndex, out BitmapSource bitmap)
+        {
+            if (!_thumbnailCache.TryGetValue(pageIndex, out bitmap))
+                return false;
+
+            _thumbnailCacheLru.Remove(pageIndex);
+            _thumbnailCacheLru.AddLast(pageIndex);
+            return true;
+        }
+
+        private void CacheThumbnail(int pageIndex, BitmapSource bitmap)
+        {
+            if (bitmap == null)
+                return;
+
+            _thumbnailCache[pageIndex] = bitmap;
+            _thumbnailCacheLru.Remove(pageIndex);
+            _thumbnailCacheLru.AddLast(pageIndex);
+
+            while (_thumbnailCacheLru.Count > ThumbnailCacheCapacity)
+            {
+                int evictedPage = _thumbnailCacheLru.First.Value;
+                _thumbnailCacheLru.RemoveFirst();
+                if (!_thumbnailCache.Remove(evictedPage, out var evictedBitmap))
+                    continue;
+
+                if (evictedPage < ThumbnailListBox.Items.Count &&
+                    ThumbnailListBox.Items[evictedPage] is ListBoxItem evictedItem &&
+                    evictedItem.Content is StackPanel evictedPanel &&
+                    evictedPanel.Children.OfType<Image>().FirstOrDefault() is Image evictedImage &&
+                    ReferenceEquals(evictedImage.Source, evictedBitmap))
+                {
+                    evictedImage.Source = null;
+                }
+            }
+        }
+
+        private void ClearThumbnailCache()
+        {
+            _thumbnailCache.Clear();
+            _thumbnailCacheLru.Clear();
+            if (ThumbnailListBox == null)
+                return;
+
+            foreach (var item in ThumbnailListBox.Items.OfType<ListBoxItem>())
+            {
+                if (item.Content is StackPanel panel &&
+                    panel.Children.OfType<Image>().FirstOrDefault() is Image image)
+                {
+                    image.Source = null;
+                }
+            }
+        }
+
+        private void LoadVisibleThumbnails()
+        {
+            if (ThumbnailListBox == null)
+                return;
+
+            foreach (var item in ThumbnailListBox.Items.OfType<ListBoxItem>().Where(item => item.IsLoaded))
+                ThumbnailListBoxItem_Loaded(item, new RoutedEventArgs(FrameworkElement.LoadedEvent, item));
+        }
+
+        private ContextMenu BuildThumbnailContextMenu(int pageIndex)
+        {
+            var menu = new ContextMenu();
+            var insert = new MenuItem { Header = LocalizationService.Get("Editor.InsertBlankPageBefore") };
+            insert.Click += async (_, __) => await InsertPageAtAsync(pageIndex);
+            var duplicate = new MenuItem { Header = LocalizationService.Get("Editor.DuplicatePage") };
+            duplicate.Click += async (_, __) => await DuplicatePageAtAsync(pageIndex);
+            var delete = new MenuItem { Header = LocalizationService.Get("Editor.DeletePage") };
+            delete.Click += async (_, __) => await DeletePageAtAsync(pageIndex);
+            menu.Items.Add(insert);
+            menu.Items.Add(duplicate);
+            menu.Items.Add(new Separator());
+            menu.Items.Add(delete);
+            PopupZOrderHelper.FixContextMenuTopmost(menu);
+            return menu;
+        }
+
+        private static void RefreshThumbnailContextMenu(ContextMenu menu)
+        {
+            if (menu == null)
+                return;
+
+            var menuItems = menu.Items.OfType<MenuItem>().ToList();
+            if (menuItems.Count > 0)
+                menuItems[0].Header = LocalizationService.Get("Editor.InsertBlankPageBefore");
+            if (menuItems.Count > 1)
+                menuItems[1].Header = LocalizationService.Get("Editor.DuplicatePage");
+            if (menuItems.Count > 2)
+                menuItems[2].Header = LocalizationService.Get("Editor.DeletePage");
+        }
+
+        private void ThumbnailListBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (_isRefreshingThumbnails || ThumbnailListBox.SelectedItem is not ListBoxItem item || item.Tag is not int pageIndex)
+                return;
+            JumpToPage(pageIndex);
+        }
+
+        private void ThumbnailListBox_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+        {
+            if (FindAncestor<ListBoxItem>(e.OriginalSource as DependencyObject) is ListBoxItem item && item.Tag is int pageIndex)
+            {
+                _thumbnailDragStartPoint = e.GetPosition(ThumbnailListBox);
+                _thumbnailDragIndex = pageIndex;
+            }
+        }
+
+        private void ThumbnailListBox_PreviewMouseMove(object sender, MouseEventArgs e)
+        {
+            if (_thumbnailDragIndex < 0 || e.LeftButton != MouseButtonState.Pressed)
+                return;
+
+            var current = e.GetPosition(ThumbnailListBox);
+            if (Math.Abs(current.X - _thumbnailDragStartPoint.X) < SystemParameters.MinimumHorizontalDragDistance &&
+                Math.Abs(current.Y - _thumbnailDragStartPoint.Y) < SystemParameters.MinimumVerticalDragDistance)
+                return;
+
+            int sourceIndex = _thumbnailDragIndex;
+            _thumbnailDragIndex = -1;
+            DragDrop.DoDragDrop(ThumbnailListBox, new DataObject(typeof(int), sourceIndex), DragDropEffects.Move);
+        }
+
+        private async void ThumbnailListBox_Drop(object sender, DragEventArgs e)
+        {
+            if (!e.Data.GetDataPresent(typeof(int)) || string.IsNullOrWhiteSpace(_currentPdfPath))
+                return;
+
+            int fromIndex = (int)e.Data.GetData(typeof(int));
+            var targetItem = FindAncestor<ListBoxItem>(e.OriginalSource as DependencyObject);
+            int toIndex = targetItem?.Tag is int target ? target : _pageControls.Count - 1;
+            if (fromIndex == toIndex || fromIndex < 0 || toIndex < 0)
+                return;
+
+            try
+            {
+                if (_isDirty && !await AutoSaveAsync())
+                    return;
+
+                byte[] before = await File.ReadAllBytesAsync(_currentPdfPath);
+                int focusBefore = GetCurrentPageIndex();
+                var beforeBookmarks = PageBookmarkService.Load(_currentPdfPath).ToList();
+                await _pdfService.ReorderPagesAsync(_currentPdfPath, fromIndex, toIndex);
+                byte[] after = await File.ReadAllBytesAsync(_currentPdfPath);
+                await LoadPdf(_currentPdfPath);
+                int focused = Math.Max(0, Math.Min(toIndex, _pageControls.Count - 1));
+                JumpToPage(focused);
+                var afterBookmarks = PageBookmarkService.ApplyPageMove(_currentPdfPath, fromIndex, toIndex).ToList();
+                RefreshBookmarks();
+                PushUndoAction(new DocumentSnapshotAction(this, before, after, focusBefore, focused, beforeBookmarks, afterBookmarks));
+            }
+            catch (Exception ex)
+            {
+                GetMainWindow()?.ShowToast(LocalizationService.Format("Editor.PageReorderFailed", ex.Message), "\uE783", 3500);
+            }
+        }
+
+        private async Task DuplicatePageAtAsync(int pageIndex)
+        {
+            if (string.IsNullOrWhiteSpace(_currentPdfPath))
+                return;
+            try
+            {
+                if (_isDirty && !await AutoSaveAsync())
+                    return;
+                byte[] before = await File.ReadAllBytesAsync(_currentPdfPath);
+                int focusBefore = GetCurrentPageIndex();
+                var beforeBookmarks = PageBookmarkService.Load(_currentPdfPath).ToList();
+                await _pdfService.DuplicatePageAsync(_currentPdfPath, pageIndex);
+                byte[] after = await File.ReadAllBytesAsync(_currentPdfPath);
+                await LoadPdf(_currentPdfPath);
+                int focused = Math.Max(0, Math.Min(pageIndex + 1, _pageControls.Count - 1));
+                JumpToPage(focused);
+                var afterBookmarks = PageBookmarkService.ApplyPageInsert(_currentPdfPath, pageIndex + 1).ToList();
+                RefreshBookmarks();
+                PushUndoAction(new DocumentSnapshotAction(this, before, after, focusBefore, focused, beforeBookmarks, afterBookmarks));
+            }
+            catch (Exception ex)
+            {
+                GetMainWindow()?.ShowToast(LocalizationService.Format("Editor.PageDuplicateFailed", ex.Message), "\uE783", 3500);
+            }
+        }
+
+        private void UpdateThumbnailSelection()
+        {
+            if (ThumbnailListBox == null || ThumbnailListBox.Items.Count == 0)
+                return;
+            int current = GetCurrentPageIndex();
+            if (current >= 0 && current < ThumbnailListBox.Items.Count)
+                ThumbnailListBox.SelectedIndex = current;
+        }
+
+        private void RefreshBookmarks()
+        {
+            if (BookmarksListBox == null)
+                return;
+            BookmarksListBox.Items.Clear();
+            foreach (var bookmark in PageBookmarkService.Load(_currentPdfPath))
+            {
+                var item = new ListBoxItem
+                {
+                    Tag = bookmark.PageIndex,
+                    Content = PageBookmarkService.GetDisplayLabel(bookmark)
+                };
+                var removeMenu = new ContextMenu();
+                var removeItem = new MenuItem { Header = LocalizationService.Get("Editor.RemoveBookmark") };
+                removeItem.Click += (_, __) =>
+                {
+                    PageBookmarkService.Toggle(_currentPdfPath, bookmark.PageIndex);
+                    RefreshBookmarks();
+                };
+                removeMenu.Items.Add(removeItem);
+                PopupZOrderHelper.FixContextMenuTopmost(removeMenu);
+                item.ContextMenu = removeMenu;
+                BookmarksListBox.Items.Add(item);
+            }
+            UpdateBookmarkButton();
+        }
+
+        private void UpdateBookmarkButton()
+        {
+            if (BookmarkToggleButton == null)
+                return;
+            bool bookmarked = PageBookmarkService.Load(_currentPdfPath).Any(bookmark => bookmark.PageIndex == GetCurrentPageIndex());
+            BookmarkToggleButton.Content = bookmarked
+                ? $"★ {LocalizationService.Get("Editor.UnbookmarkCurrentPage")}"
+                : $"☆ {LocalizationService.Get("Editor.BookmarkCurrentPage")}";
+        }
+
+        private void BookmarkToggleButton_Click(object sender, RoutedEventArgs e)
+        {
+            if (string.IsNullOrWhiteSpace(_currentPdfPath) || _pageControls.Count == 0)
+                return;
+            PageBookmarkService.Toggle(_currentPdfPath, GetCurrentPageIndex());
+            RefreshBookmarks();
+        }
+
+        private void SidebarCollapseButton_Click(object sender, RoutedEventArgs e)
+        {
+            bool isCollapsed = DocumentSidebarTabs.Visibility == Visibility.Collapsed;
+            DocumentSidebarTabs.Visibility = isCollapsed ? Visibility.Visible : Visibility.Collapsed;
+            DocumentSidebar.Width = isCollapsed ? 184 : 38;
+            SidebarCollapseButton.Content = isCollapsed
+                ? $"‹  {LocalizationService.Get("Editor.SidebarCollapse")}"
+                : $"›  {LocalizationService.Get("Editor.SidebarExpand")}";
+        }
+
+        private void BookmarksListBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (BookmarksListBox.SelectedItem is ListBoxItem item && item.Tag is int pageIndex)
+                JumpToPage(pageIndex);
+        }
+
+        private async Task RefreshOutlineAsync(CancellationToken cancellationToken)
+        {
+            if (OutlineTreeView == null)
+                return;
+            OutlineTreeView.Items.Clear();
+            IReadOnlyList<PdfService.PdfOutlineEntry> outline;
+            try
+            {
+                outline = await _pdfService.GetOutlineAsync(cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[Outline] Failed to read outline: {ex}");
+                outline = Array.Empty<PdfService.PdfOutlineEntry>();
+            }
+            if (outline.Count == 0)
+            {
+                for (int i = 0; i < _pageControls.Count; i++)
+                OutlineTreeView.Items.Add(new TreeViewItem
+                {
+                    Header = LocalizationService.Format("Editor.PageNumber", i + 1),
+                    Tag = i
+                });
+                return;
+            }
+
+            foreach (var entry in outline)
+                OutlineTreeView.Items.Add(BuildOutlineTreeItem(entry));
+        }
+
+        private TreeViewItem BuildOutlineTreeItem(PdfService.PdfOutlineEntry entry)
+        {
+            var item = new TreeViewItem { Header = entry.Title, Tag = entry.PageIndex };
+            item.Selected += (_, __) =>
+            {
+                if (item.Tag is int pageIndex && pageIndex >= 0)
+                    JumpToPage(pageIndex);
+            };
+            foreach (var child in entry.Children)
+                item.Items.Add(BuildOutlineTreeItem(child));
+            return item;
         }
 
         private FrameworkElement CreatePageHost(PdfPageControl pageControl)
@@ -2896,11 +5627,12 @@ namespace Caelum.Pages
 
             try
             {
-                if (_isDirty)
-                    await AutoSaveAsync();
+                if (_isDirty && !await AutoSaveAsync())
+                    return;
 
                 byte[] beforeBytes = await File.ReadAllBytesAsync(_currentPdfPath);
                 int undoFocusIndex = Math.Max(0, Math.Min(insertIndex, Math.Max(_pageControls.Count - 1, 0)));
+                var beforeBookmarks = PageBookmarkService.Load(_currentPdfPath).ToList();
 
                 await _pdfService.InsertPageAsync(_currentPdfPath, insertIndex, picker.SelectedTemplate);
 
@@ -2910,7 +5642,9 @@ namespace Caelum.Pages
                 int insertedPageIndex = Math.Max(0, Math.Min(insertIndex, _pageControls.Count - 1));
                 JumpToPage(insertedPageIndex);
                 RecentFilesService.UpdateMetadata(_currentPdfPath, _pageControls.Count, File.GetLastWriteTimeUtc(_currentPdfPath));
-                PushUndoAction(new DocumentSnapshotAction(this, beforeBytes, afterBytes, undoFocusIndex, insertedPageIndex));
+                var afterBookmarks = PageBookmarkService.ApplyPageInsert(_currentPdfPath, insertedPageIndex).ToList();
+                RefreshBookmarks();
+                PushUndoAction(new DocumentSnapshotAction(this, beforeBytes, afterBytes, undoFocusIndex, insertedPageIndex, beforeBookmarks, afterBookmarks));
                 GetMainWindow()?.ShowToast(LocalizationService.Get("Editor.PageAdded"), "\uE710");
             }
             catch (Exception ex)
@@ -2939,10 +5673,11 @@ namespace Caelum.Pages
 
             try
             {
-                if (_isDirty)
-                    await AutoSaveAsync();
+                if (_isDirty && !await AutoSaveAsync())
+                    return;
 
                 byte[] beforeBytes = await File.ReadAllBytesAsync(_currentPdfPath);
+                var beforeBookmarks = PageBookmarkService.Load(_currentPdfPath).ToList();
                 await _pdfService.DeletePageAsync(_currentPdfPath, pageIndex);
 
                 byte[] afterBytes = await File.ReadAllBytesAsync(_currentPdfPath);
@@ -2951,7 +5686,9 @@ namespace Caelum.Pages
                 int focusAfterDelete = Math.Max(0, Math.Min(pageIndex, _pageControls.Count - 1));
                 JumpToPage(focusAfterDelete);
                 RecentFilesService.UpdateMetadata(_currentPdfPath, _pageControls.Count, File.GetLastWriteTimeUtc(_currentPdfPath));
-                PushUndoAction(new DocumentSnapshotAction(this, beforeBytes, afterBytes, pageIndex, focusAfterDelete));
+                var afterBookmarks = PageBookmarkService.ApplyPageDelete(_currentPdfPath, pageIndex).ToList();
+                RefreshBookmarks();
+                PushUndoAction(new DocumentSnapshotAction(this, beforeBytes, afterBytes, pageIndex, focusAfterDelete, beforeBookmarks, afterBookmarks));
                 GetMainWindow()?.ShowToast(LocalizationService.Get("Editor.PageDeleted"), "\uE74D");
             }
             catch (InvalidOperationException)
@@ -3013,11 +5750,16 @@ namespace Caelum.Pages
         /// </summary>
         private async Task RenderPageInitialAsync(PdfPageControl page, CancellationToken token)
         {
-            if (_pagesInitiallyRendered.Contains(page.PageIndex)) return;
+            if (!_isHostActive || _resourcesReleased || _pagesInitiallyRendered.Contains(page.PageIndex)) return;
 
             try
             {
-                var bitmapSource = await _pdfService.RenderPageBitmapSourceAsync(page.PageIndex, 1.0, token);
+                double renderScale = PdfRenderPolicy.CalculateRenderScale(
+                    CurrentPerformanceMode,
+                    page.Width,
+                    page.Height,
+                    1.0);
+                var bitmapSource = await _pdfService.RenderPageBitmapSourceAsync(page.PageIndex, renderScale, token);
                 if (bitmapSource != null)
                 {
                     token.ThrowIfCancellationRequested();
@@ -3072,19 +5814,7 @@ namespace Caelum.Pages
             }
 
             Point centerInPage = new Point(bounds.X + bounds.Width / 2, bounds.Y + bounds.Height / 2);
-            Point centerInContainer = page.TranslatePoint(centerInPage, PagesContainer);
-
-            PdfPageControl targetPage = null;
-            foreach (var p in _pageControls)
-            {
-                Point ptInPage = PagesContainer.TranslatePoint(centerInContainer, p);
-                if (ptInPage.X >= 0 && ptInPage.X <= p.ActualWidth &&
-                    ptInPage.Y >= 0 && ptInPage.Y <= p.ActualHeight)
-                {
-                    targetPage = p;
-                    break;
-                }
-            }
+            PdfPageControl targetPage = FindPageAtContainerPoint(page, centerInPage);
 
             if (targetPage != null && targetPage != page)
             {
@@ -3110,6 +5840,30 @@ namespace Caelum.Pages
             }
         }
 
+        /// <summary>
+        /// Task 9: page hit-test shared by the selection cross-page move and the
+        /// text-box dragHandle cross-page move. Finds the page whose bounds contain
+        /// the given point (expressed in the source page's coordinate system,
+        /// translated through PagesContainer). Returns null when the point lands in
+        /// a gap between pages or outside the document — callers keep the items on
+        /// the source page in that case.
+        /// </summary>
+        private PdfPageControl FindPageAtContainerPoint(PdfPageControl source, Point centerInSource)
+        {
+            Point centerInContainer = source.TranslatePoint(centerInSource, PagesContainer);
+
+            foreach (var p in _pageControls)
+            {
+                Point ptInPage = PagesContainer.TranslatePoint(centerInContainer, p);
+                if (ptInPage.X >= 0 && ptInPage.X <= p.ActualWidth &&
+                    ptInPage.Y >= 0 && ptInPage.Y <= p.ActualHeight)
+                {
+                    return p;
+                }
+            }
+            return null;
+        }
+
         private void PageControl_SelectionResizeCompleted(object sender, SelectionResizeCompletedEventArgs e)
         {
             if (sender is not PdfPageControl page) return;
@@ -3127,11 +5881,34 @@ namespace Caelum.Pages
             ToggleToolButton(ToolType.Highlighter, HighlighterToolButton, _highlighterPopup);
         }
 
+        private void HiddenInkToolButton_Click(object sender, RoutedEventArgs e)
+        {
+            ToggleToolButton(ToolType.HiddenInk, HiddenInkToolButton);
+        }
+
+        private void StickyNoteToolButton_Click(object sender, RoutedEventArgs e)
+        {
+            ToggleToolButton(ToolType.StickyNote, StickyNoteToolButton);
+        }
+
 
 
         private void EraserToolButton_Click(object sender, RoutedEventArgs e)
         {
             ToggleToolButton(ToolType.Eraser, EraserToolButton, _eraserPopup);
+        }
+
+        private void ShapeToolButton_Click(object sender, RoutedEventArgs e)
+        {
+            ToggleToolButton(ToolType.Shape, ShapeToolButton, _shapePopup);
+        }
+
+        // Task 20: laser pointer — ephemeral ink that fades away ~1s after
+        // writing. No popup (no options), so the popup argument stays null
+        // (ToggleToolButton is null-safe for it).
+        private void LaserToolButton_Click(object sender, RoutedEventArgs e)
+        {
+            ToggleToolButton(ToolType.Laser, LaserToolButton);
         }
 
         private void TextToolButton_Click(object sender, RoutedEventArgs e)
@@ -3148,6 +5925,9 @@ namespace Caelum.Pages
 
         private void ActivateTool(ToolType tool)
         {
+            if (_resizingTextContainer != null && tool != ToolType.Text)
+                CancelTextResize(restoreBounds: true);
+
             if (_currentTool == tool) return;
 
             if (_currentTool == ToolType.Select && tool != ToolType.Select)
@@ -3166,8 +5946,14 @@ namespace Caelum.Pages
             CloseToolPopups(tool);
 
             PenToolButton.IsChecked = tool == ToolType.Pen;
-            HighlighterToolButton.IsChecked = tool == ToolType.Highlighter;
+            HighlighterToolButton.IsChecked = tool == ToolType.Highlighter
+                || tool == ToolType.TextHighlight
+                || tool == ToolType.AreaHighlight;
+            HiddenInkToolButton.IsChecked = tool == ToolType.HiddenInk;
+            StickyNoteToolButton.IsChecked = tool == ToolType.StickyNote;
             EraserToolButton.IsChecked = tool == ToolType.Eraser;
+            ShapeToolButton.IsChecked = tool == ToolType.Shape;
+            LaserToolButton.IsChecked = tool == ToolType.Laser;
             TextToolButton.IsChecked = tool == ToolType.Text;
             SelectToolButton.IsChecked = tool == ToolType.Select;
             _isUpdatingToolState = false;
@@ -3191,18 +5977,747 @@ namespace Caelum.Pages
             PenIcon.Foreground = new SolidColorBrush(_penColor);
         }
 
-        private void ApplyToolToAllPages()
+        // Task 15: pen-only drawing (palm rejection) toolbar toggle.
+        private void PenOnlyButton_Click(object sender, RoutedEventArgs e)
         {
-            bool enablePressure = AppSettingsService.Load().EnablePressure;
+            // Persist and retain the same snapshot so the touch gate and all
+            // page controls observe the new value immediately. Loading a
+            // separate snapshot here would leave _applicationSettings stale.
+            var settings = AppSettingsService.Load();
+            settings.PenOnlyMode = PenOnlyButton.IsChecked == true;
+            AppSettingsService.Save(settings);
+            _applicationSettings = settings;
+            ApplyToolToAllPages(settings);
+        }
+
+        private void UpdatePenOnlyButtonVisual()
+        {
+            // Distinct checked tint: blue pen icon while pen-only drawing
+            // is active, neutral gray otherwise.
+            PenOnlyIcon.Foreground = new SolidColorBrush(
+                PenOnlyButton.IsChecked == true
+                    ? Color.FromRgb(0x00, 0x78, 0xD4)
+                    : Color.FromRgb(0x55, 0x55, 0x55));
+        }
+
+        #region Task 23: pen preset slots
+
+        /// <summary>
+        /// Task 23: builds the 3 preset slot circles into
+        /// <see cref="PresetSlotsPanel"/> (XAML placeholder between the
+        /// Highlighter and Eraser buttons) and fills the 3 default presets
+        /// on first use (empty persisted list). Defaults are filled HERE on
+        /// load — AppSettingsService.Sanitize only deep-copies (spec).
+        /// </summary>
+        private void InitializePenPresetSlots()
+        {
+            var settings = AppSettingsService.Load();
+            if (settings.PenPresets == null || settings.PenPresets.Count == 0)
+            {
+                settings.PenPresets = BuildDefaultPenPresets();
+                AppSettingsService.Save(settings);
+            }
+
+            for (int i = 0; i < PenPresetSlotCount; i++)
+            {
+                int slotIndex = i;
+                var slot = new Border
+                {
+                    Width = 22,
+                    Height = 22,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    CornerRadius = new CornerRadius(11),
+                    BorderThickness = new Thickness(1),
+                    Cursor = Cursors.Hand,
+                    Margin = new Thickness(0, 0, i < PenPresetSlotCount - 1 ? 6 : 0, 0),
+                    Child = new TextBlock
+                    {
+                        Text = "P",
+                        FontSize = 9,
+                        FontWeight = FontWeights.Bold,
+                        HorizontalAlignment = HorizontalAlignment.Center,
+                        VerticalAlignment = VerticalAlignment.Center
+                    }
+                };
+
+                // Left-click applies the preset; right-click captures the
+                // current Pen/Highlighter state into the slot.
+                slot.MouseLeftButtonUp += (s, e) => { ApplyPenPreset(slotIndex); e.Handled = true; };
+                slot.MouseRightButtonUp += (s, e) => { CapturePenPreset(slotIndex); e.Handled = true; };
+
+                _presetSlots[i] = slot;
+                PresetSlotsPanel.Children.Add(slot);
+            }
+
+            UpdatePresetSlotVisuals();
+        }
+
+        /// <summary>Task 23: first-use defaults — Pen black 2, Highlighter yellow 8, Pen red 3.</summary>
+        private static List<PenPreset> BuildDefaultPenPresets()
+        {
+            return new List<PenPreset>
+            {
+                new PenPreset { Tool = "Pen", ColorHex = "#000000", Size = 2 },
+                new PenPreset { Tool = "Highlighter", ColorHex = "#FFFF00", Size = 8 },
+                new PenPreset { Tool = "Pen", ColorHex = "#FF0000", Size = 3 }
+            };
+        }
+
+        /// <summary>
+        /// Task 23: exactly <see cref="PenPresetSlotCount"/> presets from the
+        /// persisted list, padding missing/null entries with the defaults
+        /// (hand-trimmed settings.json stays UI-safe; capture persists the
+        /// normalized list).
+        /// </summary>
+        private static List<PenPreset> NormalizePenPresets(List<PenPreset> presets)
+        {
+            var defaults = BuildDefaultPenPresets();
+            var result = new List<PenPreset>(PenPresetSlotCount);
+            for (int i = 0; i < PenPresetSlotCount; i++)
+                result.Add(i < presets?.Count && presets[i] != null ? presets[i] : defaults[i]);
+            return result;
+        }
+
+        /// <summary>
+        /// Task 23: applies a preset slot — switches the active tool to the
+        /// preset's (Pen/Highlighter), loads its color/size into the session
+        /// fields and re-applies to all pages immediately. The popup size
+        /// sliders + preview lines are resynced so reopening a popup shows
+        /// the applied state.
+        /// </summary>
+        private void ApplyPenPreset(int slotIndex)
+        {
+            var preset = NormalizePenPresets(AppSettingsService.Load().PenPresets)[slotIndex];
+            bool isHighlighter = string.Equals(preset.Tool, "Highlighter", StringComparison.OrdinalIgnoreCase);
+            var color = TryParseRecentColor(preset.ColorHex, out var parsed) ? parsed : (isHighlighter ? Colors.Yellow : Colors.Black);
+
+            if (isHighlighter)
+            {
+                _highlighterColor = color;
+                _highlighterSize = preset.Size;
+            }
+            else
+            {
+                _penColor = color;
+                _penSize = preset.Size;
+            }
+
+            CloseToolPopups();
+            var tool = isHighlighter ? ToolType.Highlighter : ToolType.Pen;
+            if (_currentTool != tool)
+                ActivateTool(tool); // button states + ApplyToolToAllPages
+            else
+                ApplyToolToAllPages();
+            UpdateToolIconColors();
+            UpdatePresetSlotVisuals();
+
+            // Resync the popups' size slider + preview line so they reflect
+            // the applied preset (setting slider.Value re-fires the popup's
+            // own size-changed handler — idempotent for the same value).
+            if (_penPopupSizeSlider != null)
+                _penPopupSizeSlider.Value = _penSize;
+            if (_penPopupSizePreview != null)
+                _penPopupSizePreview.Stroke = new SolidColorBrush(_penColor);
+            if (_highlighterPopupSizeSlider != null)
+                _highlighterPopupSizeSlider.Value = _highlighterSize;
+            if (_highlighterPopupSizePreview != null)
+                _highlighterPopupSizePreview.Stroke = new SolidColorBrush(Color.FromArgb(140, _highlighterColor.R, _highlighterColor.G, _highlighterColor.B));
+        }
+
+        /// <summary>
+        /// Task 23: captures the CURRENT Pen/Highlighter tool state (tool
+        /// kind, color, size) into a preset slot and persists it. Capturing
+        /// from any other tool is rejected with a toast hint.
+        /// </summary>
+        private void CapturePenPreset(int slotIndex)
+        {
+            if (_currentTool != ToolType.Pen && _currentTool != ToolType.Highlighter)
+            {
+            GetMainWindow()?.ShowToast(LocalizationService.Get("Editor.SelectPenFirst"), "\uED63", 1500);
+                return;
+            }
+
+            bool isHighlighter = _currentTool == ToolType.Highlighter;
+            var color = isHighlighter ? _highlighterColor : _penColor;
+            var captured = new PenPreset
+            {
+                Tool = isHighlighter ? "Highlighter" : "Pen",
+                ColorHex = $"#{color.R:X2}{color.G:X2}{color.B:X2}",
+                Size = isHighlighter ? _highlighterSize : _penSize
+            };
+
+            SaveSetting(s =>
+            {
+                var presets = NormalizePenPresets(s.PenPresets);
+                presets[slotIndex] = captured;
+                s.PenPresets = presets;
+            });
+
+            UpdatePresetSlotVisuals();
+            GetMainWindow()?.ShowToast(LocalizationService.Format("Editor.PresetSaved", slotIndex + 1), "\uE74E", 1500);
+        }
+
+        /// <summary>
+        /// Task 23: refreshes every slot circle — preset color fill, P/H
+        /// tool letter (contrast-aware) and the accent ring on the slot
+        /// matching the CURRENT tool + color + size. Called from
+        /// ApplyToolToAllPages so every state change path stays in sync.
+        /// </summary>
+        private void UpdatePresetSlotVisuals()
+        {
+            var presets = NormalizePenPresets(AppSettingsService.Load().PenPresets);
+            for (int i = 0; i < PenPresetSlotCount; i++)
+            {
+                var slot = _presetSlots[i];
+                if (slot == null)
+                    continue;
+
+                var preset = presets[i];
+                bool isHighlighter = string.Equals(preset.Tool, "Highlighter", StringComparison.OrdinalIgnoreCase);
+                var color = TryParseRecentColor(preset.ColorHex, out var parsed)
+                    ? parsed
+                    : (isHighlighter ? Colors.Yellow : Colors.Black);
+
+                bool isActive = isHighlighter
+                    ? _currentTool == ToolType.Highlighter && _highlighterColor == color && Math.Abs(_highlighterSize - preset.Size) < 0.001
+                    : _currentTool == ToolType.Pen && _penColor == color && Math.Abs(_penSize - preset.Size) < 0.001;
+
+                slot.Background = new SolidColorBrush(color);
+                slot.BorderBrush = new SolidColorBrush(isActive
+                    ? Color.FromRgb(0x25, 0x63, 0xEB)
+                    : Color.FromArgb(60, 0, 0, 0));
+                slot.BorderThickness = new Thickness(isActive ? 2 : 1);
+
+                if (slot.Child is TextBlock letter)
+                {
+                    letter.Text = isHighlighter ? "H" : "P";
+                    double luminance = 0.299 * color.R + 0.587 * color.G + 0.114 * color.B;
+                    letter.Foreground = new SolidColorBrush(luminance > 140 ? Colors.Black : Colors.White);
+                }
+
+                var toolName = isHighlighter
+                    ? LocalizationService.Get("Editor.ModeHighlighter")
+                    : LocalizationService.Get("Editor.ModePen");
+                slot.ToolTip = LocalizationService.Format(
+                    "Editor.PresetTooltip",
+                    i + 1,
+                    toolName,
+                    preset.ColorHex,
+                    preset.Size.ToString("0.##", LocalizationService.CurrentCulture),
+                    LocalizationService.Get("Editor.PresetClickApply"),
+                    LocalizationService.Get("Editor.PresetRightClickSave"));
+            }
+        }
+
+        #endregion
+
+        #region Task 22: on-screen ruler
+
+        // Task 22: on-screen ruler toggle. This is an OVERLAY toggle, not a
+        // ToolType — it stays active alongside the current tool (e.g. Pen +
+        // ruler ON). Session-only: neither persisted to settings nor saved
+        // with the document. v1: button only (no shortcut, no ESC binding).
+        private void RulerToolButton_Click(object sender, RoutedEventArgs e)
+        {
+            SetRulerVisible(RulerToolButton.IsChecked == true);
+        }
+
+        private void SetRulerVisible(bool visible)
+        {
+            _rulerVisible = visible;
+            RulerToolButton.IsChecked = visible;
+            RulerIcon.Foreground = new SolidColorBrush(
+                visible
+                    ? Color.FromRgb(0x00, 0x78, 0xD4)
+                    : Color.FromRgb(0x55, 0x55, 0x55));
+
+            if (visible)
+            {
+                EnsureRulerVisual();
+                _rulerVisual.Visibility = Visibility.Visible;
+            }
+            else if (_rulerVisual != null)
+            {
+                _rulerVisual.Visibility = Visibility.Collapsed;
+                // Drop any in-flight manipulation so a stale capture can't
+                // keep dragging an invisible ruler.
+                _isDraggingRuler = false;
+                _isRotatingRuler = false;
+            }
+        }
+
+        /// <summary>
+        /// Builds the ruler visual once (Grid 360×56: semi-transparent
+        /// rounded body, tick marks every 10px with longer ticks every
+        /// 50px, a centre handle dot, and transparent end-cap rectangles
+        /// that afford rotation). Rotation snaps to 15° increments.
+        /// </summary>
+        private void EnsureRulerVisual()
+        {
+            if (_rulerVisual != null) return;
+
+            _rulerRotate = new RotateTransform(0, RulerLength / 2, RulerHeight / 2);
+
+            var ruler = new Grid
+            {
+                Width = RulerLength,
+                Height = RulerHeight,
+                // Keep the ruler body draggable even though its visual
+                // children are intentionally non-hit-testable. The full
+                // overlay canvas remains background-free so empty space
+                // still passes through to the document surface.
+                Background = Brushes.Transparent,
+                RenderTransform = _rulerRotate,
+                Cursor = Cursors.SizeAll
+            };
+
+            // Semi-transparent body.
+            ruler.Children.Add(new Rectangle
+            {
+                Fill = new SolidColorBrush(Color.FromArgb(0x33, 0x00, 0x00, 0x00)),
+                Stroke = new SolidColorBrush(Color.FromArgb(0x66, 0x66, 0x66, 0x66)),
+                StrokeThickness = 1,
+                RadiusX = 6,
+                RadiusY = 6,
+                IsHitTestVisible = false
+            });
+
+            // Tick marks along the top edge: minor every 10px, major every
+            // 50px (labels intentionally skipped in v1).
+            var tickBrush = new SolidColorBrush(Color.FromArgb(0x99, 0x33, 0x33, 0x33));
+            for (double x = 10; x < RulerLength; x += 10)
+            {
+                bool major = Math.Abs(x % 50) < 0.01;
+                ruler.Children.Add(new Line
+                {
+                    X1 = x, Y1 = 0,
+                    X2 = x, Y2 = major ? 12 : 6,
+                    Stroke = tickBrush,
+                    StrokeThickness = 1,
+                    IsHitTestVisible = false
+                });
+            }
+
+            // Centre rotation handle dot.
+            ruler.Children.Add(new Ellipse
+            {
+                Width = 8,
+                Height = 8,
+                Fill = new SolidColorBrush(Color.FromArgb(0xAA, 0x00, 0x78, 0xD4)),
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+                IsHitTestVisible = false
+            });
+
+            // Transparent end-cap zones: hitting them starts a rotation
+            // drag instead of a move (they sit above the body in z-order).
+            // Non-null Fill is required for hit testing.
+            var capFill = Brushes.Transparent;
+            var leftCap = new Rectangle { Width = RulerEndCapZone, Height = RulerHeight, Fill = capFill, Cursor = Cursors.SizeNESW, HorizontalAlignment = HorizontalAlignment.Left };
+            var rightCap = new Rectangle { Width = RulerEndCapZone, Height = RulerHeight, Fill = capFill, Cursor = Cursors.SizeNESW, HorizontalAlignment = HorizontalAlignment.Right };
+            ruler.Children.Add(leftCap);
+            ruler.Children.Add(rightCap);
+
+            // Interactions: left-drag the body = move; left-drag either end
+            // cap OR right-drag anywhere = rotate. Stylus/touch input is
+            // promoted to mouse events, so pen/finger drags work too
+            // (manipulating the ruler with the pen is allowed, GoodNotes
+            // style). The ruler never creates ink, so pen-only mode does
+            // not apply to it.
+            ruler.MouseLeftButtonDown += Ruler_MouseLeftButtonDown;
+            ruler.MouseRightButtonDown += Ruler_MouseRightButtonDown;
+            ruler.MouseMove += Ruler_MouseMove;
+            ruler.MouseLeftButtonUp += Ruler_MouseButtonUp;
+            ruler.MouseRightButtonUp += Ruler_MouseButtonUp;
+            ruler.LostMouseCapture += Ruler_LostMouseCapture;
+
+            _rulerVisual = ruler;
+
+            // First show: default to the middle of the viewport so the
+            // ruler can never appear off-screen.
+            double vw = ActualWidth > 0 ? ActualWidth : PdfScrollViewer.ViewportWidth;
+            double vh = ActualHeight > 0 ? ActualHeight : PdfScrollViewer.ViewportHeight;
+            if (vw <= 0) vw = 800;
+            if (vh <= 0) vh = 600;
+            _rulerCenter = new Point(vw / 2, vh / 2);
+            UpdateRulerPosition();
+
+            RulerOverlayCanvas.Children.Add(ruler);
+        }
+
+        private void Ruler_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+        {
+            if (!_rulerVisible || _rulerVisual == null) return;
+
+            // GetPosition applies the ruler's RenderTransform, so local
+            // coordinates are the ruler's own (unrotated) frame — the end
+            // zones stay the first/last 14px of the body at any angle.
+            var local = e.GetPosition(_rulerVisual);
+            bool inEndZone = local.X < RulerEndCapZone || local.X > RulerLength - RulerEndCapZone;
+
+            StartRulerManipulation(e.GetPosition(RulerOverlayCanvas), rotating: inEndZone);
+            _rulerVisual.CaptureMouse();
+            e.Handled = true;
+        }
+
+        // Right-drag anywhere on the ruler rotates it (alternative affordance
+        // when the end caps are hard to hit at steep angles).
+        private void Ruler_MouseRightButtonDown(object sender, MouseButtonEventArgs e)
+        {
+            if (!_rulerVisible || _rulerVisual == null) return;
+
+            StartRulerManipulation(e.GetPosition(RulerOverlayCanvas), rotating: true);
+            _rulerVisual.CaptureMouse();
+            e.Handled = true;
+        }
+
+        private void StartRulerManipulation(Point viewportPoint, bool rotating)
+        {
+            _isDraggingRuler = !rotating;
+            _isRotatingRuler = rotating;
+            _rulerDragOffset = new Point(viewportPoint.X - _rulerCenter.X, viewportPoint.Y - _rulerCenter.Y);
+            _rotateStartPointerAngle = Math.Atan2(viewportPoint.Y - _rulerCenter.Y, viewportPoint.X - _rulerCenter.X) * 180.0 / Math.PI;
+            _rotateStartRulerAngle = _rulerAngle;
+        }
+
+        private void Ruler_MouseMove(object sender, MouseEventArgs e)
+        {
+            if (!_isDraggingRuler && !_isRotatingRuler) return;
+
+            var p = e.GetPosition(RulerOverlayCanvas);
+
+            if (_isDraggingRuler)
+            {
+                _rulerCenter = new Point(p.X - _rulerDragOffset.X, p.Y - _rulerDragOffset.Y);
+                ClampRulerCenter();
+                UpdateRulerPosition();
+            }
+            else if (_isRotatingRuler)
+            {
+                double pointerAngle = Math.Atan2(p.Y - _rulerCenter.Y, p.X - _rulerCenter.X) * 180.0 / Math.PI;
+                _rulerAngle = SnapRulerAngle(_rotateStartRulerAngle + pointerAngle - _rotateStartPointerAngle);
+                _rulerRotate.Angle = _rulerAngle;
+            }
+        }
+
+        private void Ruler_MouseButtonUp(object sender, MouseButtonEventArgs e)
+        {
+            if (!_isDraggingRuler && !_isRotatingRuler) return;
+
+            _rulerVisual?.ReleaseMouseCapture();
+            _isDraggingRuler = false;
+            _isRotatingRuler = false;
+            e.Handled = true;
+        }
+
+        private void Ruler_LostMouseCapture(object sender, MouseEventArgs e)
+        {
+            _isDraggingRuler = false;
+            _isRotatingRuler = false;
+        }
+
+        private void UpdateRulerPosition()
+        {
+            Canvas.SetLeft(_rulerVisual, _rulerCenter.X - RulerLength / 2);
+            Canvas.SetTop(_rulerVisual, _rulerCenter.Y - RulerHeight / 2);
+        }
+
+        // Keeps the ruler reachable: clamping the CENTRE inside the viewport
+        // guarantees at least the centre point of the body stays grabbable,
+        // no matter how the ruler is rotated (a full bounding-box clamp
+        // would need re-clamping on every rotation; v1 keeps it simple).
+        private void ClampRulerCenter()
+        {
+            double vw = ActualWidth > 0 ? ActualWidth : PdfScrollViewer.ViewportWidth;
+            double vh = ActualHeight > 0 ? ActualHeight : PdfScrollViewer.ViewportHeight;
+            if (vw <= 0 || vh <= 0) return;
+
+            _rulerCenter = new Point(
+                Math.Max(0, Math.Min(_rulerCenter.X, vw)),
+                Math.Max(0, Math.Min(_rulerCenter.Y, vh)));
+        }
+
+        // v1: rotation ALWAYS snaps to 15° increments (simple + predictable).
+        private static double SnapRulerAngle(double angle)
+        {
+            double snapped = Math.Round(angle / RulerRotationSnapDegrees) * RulerRotationSnapDegrees;
+            snapped %= 360.0;
+            if (snapped < 0) snapped += 360.0;
+            return snapped;
+        }
+
+        /// <summary>
+        /// Task 22: endpoints of the ruler's TOP edge (the drawing edge) in
+        /// viewport (root-grid) coordinates, or null while the ruler is
+        /// hidden. The edge — not the centre line — is the snap target:
+        /// users draw along the visible edge of the ruler, and a centre-line
+        /// snap would visually jump the stroke half the ruler height (28px)
+        /// away from where it was drawn. Rotating the ruler 180° swaps which
+        /// physical edge is "top", so every direction stays usable.
+        /// </summary>
+        private (Point A, Point B)? GetRulerEdgeEndpoints()
+        {
+            if (!_rulerVisible || _rulerVisual == null) return null;
+
+            double rad = _rulerAngle * Math.PI / 180.0;
+            double cos = Math.Cos(rad);
+            double sin = Math.Sin(rad);
+            // Unit vector along the ruler, and its "up" normal
+            // (pre-rotation -Y rotated by the ruler angle).
+            double dirX = cos, dirY = sin;
+            double upX = sin, upY = -cos;
+            double halfLen = RulerLength / 2;
+            double halfHeight = RulerHeight / 2;
+
+            return (
+                new Point(
+                    _rulerCenter.X - halfLen * dirX + halfHeight * upX,
+                    _rulerCenter.Y - halfLen * dirY + halfHeight * upY),
+                new Point(
+                    _rulerCenter.X + halfLen * dirX + halfHeight * upX,
+                    _rulerCenter.Y + halfLen * dirY + halfHeight * upY));
+        }
+
+        #endregion
+
+        /// <summary>
+        /// Task 16: toggles fullscreen immersive mode. Entering closes all
+        /// tool popups and visually hides the floating toolbar via
+        /// Opacity=0 + IsHitTestVisible=false (preferred over
+        /// Visibility=Collapsed: purely visual, guaranteed zero layout
+        /// shift even though the toolbar is an overlay that doesn't affect
+        /// the page layout either). Writing, scrolling, page jumping and
+        /// Ctrl+Z all keep working — none of them need the toolbar. Leaving
+        /// restores the recorded toolbar state; repeated toggles leave no
+        /// residue.
+        /// </summary>
+        private void ToggleImmersiveMode()
+        {
+            CloseToolPopups();
+            _isImmersiveMode = !_isImmersiveMode;
+
+            if (_isImmersiveMode)
+            {
+                _preImmersiveToolbarOpacity = ToolbarBorder.Opacity;
+                _preImmersiveToolbarHitTestVisible = ToolbarBorder.IsHitTestVisible;
+                _preImmersiveSidebarOpacity = DocumentSidebar.Opacity;
+                _preImmersiveSidebarHitTestVisible = DocumentSidebar.IsHitTestVisible;
+                _preImmersiveSearchOpacity = PdfSearchPanel.Opacity;
+                _preImmersiveSearchHitTestVisible = PdfSearchPanel.IsHitTestVisible;
+                ToolbarBorder.Opacity = 0;
+                ToolbarBorder.IsHitTestVisible = false;
+                DocumentSidebar.Opacity = 0;
+                DocumentSidebar.IsHitTestVisible = false;
+                PdfSearchPanel.Opacity = 0;
+                PdfSearchPanel.IsHitTestVisible = false;
+            }
+            else
+            {
+                ToolbarBorder.Opacity = _preImmersiveToolbarOpacity;
+                ToolbarBorder.IsHitTestVisible = _preImmersiveToolbarHitTestVisible;
+                DocumentSidebar.Opacity = _preImmersiveSidebarOpacity;
+                DocumentSidebar.IsHitTestVisible = _preImmersiveSidebarHitTestVisible;
+                PdfSearchPanel.Opacity = _preImmersiveSearchOpacity;
+                PdfSearchPanel.IsHitTestVisible = _preImmersiveSearchHitTestVisible;
+            }
+        }
+
+        private void ImmersiveModeButton_Click(object sender, RoutedEventArgs e)
+        {
+            ToggleImmersiveMode();
+        }
+
+        public void ApplySettings(AppSettings settings)
+        {
+            string previousPerformanceMode = CurrentPerformanceMode;
+            _applicationSettings = settings ?? new AppSettings();
+
+            try
+            {
+                _penColor = (Color)ColorConverter.ConvertFromString(_applicationSettings.DefaultPenColorHex ?? "#000000");
+            }
+            catch
+            {
+                _penColor = Colors.Black;
+            }
+
+            _penSize = Math.Max(0.5, Math.Min(24, _applicationSettings.DefaultPenSize));
+            if (_autoSaveTimer != null)
+                _autoSaveTimer.Interval = TimeSpan.FromSeconds(Math.Max(15, _applicationSettings.AutoSaveIntervalSeconds));
+
+            ApplyToolToAllPages(_applicationSettings);
+
+            if (!string.Equals(previousPerformanceMode, CurrentPerformanceMode, StringComparison.Ordinal))
+            {
+                var profile = PdfRenderPolicy.GetProfile(CurrentPerformanceMode);
+                _lastRenderedDpiScale = Math.Min(Math.Max(_zoomLevel, 1.0), profile.MaxRenderScale);
+                _pagesInitiallyRendered.Clear();
+                _pagesRenderedAtScale.Clear();
+
+                var visiblePages = GetVisiblePageControls();
+                TrimPageBitmapWorkingSet(visiblePages);
+                if (_isHostActive && !_resourcesReleased)
+                    _ = RenderVisibleWorkingSetAsync();
+            }
+        }
+
+        /// <summary>
+        /// Pauses native rendering and releases display-only bitmaps when this
+        /// editor is behind another tab. Annotation state remains in memory.
+        /// </summary>
+        public void SetHostActive(bool isActive)
+        {
+            if (_resourcesReleased || _isHostActive == isActive)
+                return;
+
+            _isHostActive = isActive;
+            foreach (var page in _pageControls)
+                page.SetHostActive(isActive);
+
+            if (!isActive)
+            {
+                CancelRenderWork();
+                _thumbnailLoadCts?.Cancel();
+                _thumbnailLoadCts?.Dispose();
+                _thumbnailLoadCts = null;
+                _thumbnailPagesLoading.Clear();
+                CancelSmoothScroll();
+
+                foreach (var page in _pageControls)
+                    page.PageSource = null;
+                _pagesInitiallyRendered.Clear();
+                _pagesRenderedAtScale.Clear();
+                ClearThumbnailCache();
+                return;
+            }
+
+            _thumbnailLoadCts = new CancellationTokenSource();
+            LoadVisibleThumbnails();
+            _ = RenderVisibleWorkingSetAsync();
+        }
+
+        private async Task RenderVisibleWorkingSetAsync()
+        {
+            if (!_isHostActive || _resourcesReleased || _pageControls.Count == 0)
+                return;
+
+            _scrollReRenderCts?.Cancel();
+            _scrollReRenderCts?.Dispose();
+            _scrollReRenderCts = new CancellationTokenSource();
+            var token = _scrollReRenderCts.Token;
+
+            try
+            {
+                var visiblePages = GetVisiblePageControls();
+                foreach (var page in visiblePages.Where(page => !_pagesInitiallyRendered.Contains(page.PageIndex)))
+                    await RenderPageInitialAsync(page, token);
+
+                if (_lastRenderedDpiScale > 1.0)
+                {
+                    var zoomPages = visiblePages
+                        .Where(page => !_pagesRenderedAtScale.Contains(page.PageIndex))
+                        .ToList();
+                    if (zoomPages.Count > 0)
+                        await ReRenderPagesAsync(zoomPages, _lastRenderedDpiScale, token);
+                }
+
+                TrimPageBitmapWorkingSet(visiblePages);
+                SetBitmapScalingMode(visiblePages, BitmapScalingMode.HighQuality);
+                QueueAdjacentPagePrerender(visiblePages, token);
+            }
+            catch (OperationCanceledException)
+            {
+            }
+        }
+
+        private void CancelRenderWork()
+        {
+            _zoomRenderDebounceTimer.Stop();
+            _scrollRenderDebounceTimer.Stop();
+            _reRenderCts?.Cancel();
+            _reRenderCts?.Dispose();
+            _reRenderCts = null;
+            _scrollReRenderCts?.Cancel();
+            _scrollReRenderCts?.Dispose();
+            _scrollReRenderCts = null;
+        }
+
+        /// <summary>Final tab-close cleanup for timers, hooks, bitmaps and the native PDF document.</summary>
+        public async Task ReleaseResourcesAsync()
+        {
+            if (_resourcesReleased)
+                return;
+
+            SetHostActive(false);
+            _resourcesReleased = true;
+            CancelActiveLoad();
+            CancelRenderWork();
+
+            _thumbnailLoadCts?.Cancel();
+            _thumbnailLoadCts?.Dispose();
+            _thumbnailLoadCts = null;
+            _pdfSearchCts?.Cancel();
+            _pdfSearchCts?.Dispose();
+            _pdfSearchCts = null;
+
+            _autoSaveTimer?.Stop();
+            if (_autoSaveTimer != null)
+                _autoSaveTimer.Tick -= AutoSaveTimer_Tick;
+            _autoSaveTimer = null;
+
+            _zoomRenderDebounceTimer.Stop();
+            _zoomRenderDebounceTimer.Tick -= ZoomRenderDebounceTimer_Tick;
+            _scrollRenderDebounceTimer.Stop();
+            _scrollRenderDebounceTimer.Tick -= ScrollRenderDebounceTimer_Tick;
+
+            if (_languageChangedSubscribed)
+            {
+                LocalizationService.LanguageChanged -= EditorPage_LanguageChanged;
+                _languageChangedSubscribed = false;
+            }
+
+            _penService?.Dispose();
+            _penService = null;
+            RemoveHorizontalWheelHook();
+            PdfScrollViewer.ScrollChanged -= PdfScrollViewer_ScrollChanged;
+            DetachAllPageControlEvents();
+            DisposeSelectablePdfDocument();
+            ClearThumbnailCache();
+            await _pdfService.DisposeAsync();
+        }
+
+        private void ApplyToolToAllPages(AppSettings settings = null)
+        {
+            settings ??= _applicationSettings ?? AppSettingsService.Load();
+
+            // Task 15: pen-only mode — keep the toolbar toggle in sync with
+            // the persisted setting (also covers startup via the ctor's
+            // ActivateTool(None)) and propagate to every page below.
+            PenOnlyButton.IsChecked = settings.PenOnlyMode;
+            UpdatePenOnlyButtonVisual();
+
+            // Task 23: preset slot active rings follow the current tool,
+            // color and size (every state-change path funnels through here).
+            UpdatePresetSlotVisuals();
+
+            // Task 24: stroke smoothing level (clamped defensively; Sanitize
+            // already bounds it, hand-rolled AppSettings instances may not).
+            int smoothingLevel = Math.Clamp(settings.StrokeSmoothing, 0, 3);
 
             foreach (var page in _pageControls)
             {
-                page.PressureEnabled = enablePressure;
+                page.PressureEnabled = settings.EnablePressure;
+                page.WholeStrokeEraser = settings.WholeStrokeEraser;
+                page.InkSimulationEnabled = settings.InkSimulation;
+                page.ShapeRecognitionEnabled = settings.ShapeRecognition;
+                page.PenOnlyMode = settings.PenOnlyMode;
+                page.StrokeSmoothingLevel = smoothingLevel;
                 page.SetMode(_currentTool == ToolType.Text);
                 page.SetPdfTextSelectionEnabled(_currentTool == ToolType.None || _currentTool == ToolType.TextHighlight);
                 page.SetSelectionMode(_currentTool == ToolType.Select);
                 page.SetSelectionFilter(_selectionFilter);
                 page.SetSelectionShape(_selectionShape);
+                page.ShapeMode = _currentTool == ToolType.Shape;
                 var atts = page.CopyDefaultDrawingAttributes();
 
                 switch (_currentTool)
@@ -3226,8 +6741,37 @@ namespace Caelum.Pages
                         atts.IsHighlighter = true;
                         page.SetInkAttributes(atts);
                         break;
+                    case ToolType.HiddenInk:
+                        page.HiddenInkMaskColor = Colors.White;
+                        page.HiddenInkSize = 28.0;
+                        page.HiddenInkRevealDurationMs = HiddenInkRevealState.DefaultRevealDurationMs;
+                        atts.Color = page.HiddenInkMaskColor;
+                        atts.Width = page.HiddenInkSize;
+                        atts.Height = page.HiddenInkSize;
+                        atts.IsHighlighter = false;
+                        page.SetInkAttributes(atts);
+                        page.SetInputMode(CustomInkInputProcessingMode.HiddenInk);
+                        break;
                     case ToolType.Eraser:
                         page.SetInputMode(CustomInkInputProcessingMode.Erasing);
+                        break;
+                    case ToolType.Shape:
+                        page.CurrentShape = _shapeKind;
+                        page.ShapeColor = _shapeColor;
+                        page.ShapeStrokeSize = _shapeSize;
+                        page.SetInputMode(CustomInkInputProcessingMode.Shape);
+                        break;
+                    case ToolType.Laser:
+                        // Task 20: pure visual layer on the page control —
+                        // no ink attributes, no undo, no dirty flag.
+                        page.SetInputMode(CustomInkInputProcessingMode.Laser);
+                        break;
+                    case ToolType.AreaHighlight:
+                        page.AreaHighlightColor = _highlighterColor;
+                        page.SetInputMode(CustomInkInputProcessingMode.AreaHighlight);
+                        break;
+                    case ToolType.StickyNote:
+                        page.SetInputMode(CustomInkInputProcessingMode.None);
                         break;
                     case ToolType.Text:
                         page.SetInputMode(CustomInkInputProcessingMode.None);
@@ -3255,6 +6799,8 @@ namespace Caelum.Pages
             int currentPageNumber = GetCurrentPageIndex() + 1;
             PageNumberLabel.Text = currentPageNumber.ToString();
             PageCountText.Text = $"/ {_pageControls.Count}";
+            UpdateThumbnailSelection();
+            UpdateBookmarkButton();
         }
 
         private int GetCurrentPageIndex()
@@ -3286,7 +6832,7 @@ namespace Caelum.Pages
             if (_isDirty && !string.IsNullOrEmpty(_currentPdfPath))
             {
                 await AutoSaveAsync();
-                GetMainWindow()?.ShowToast("File auto saved");
+            GetMainWindow()?.ShowToast(LocalizationService.Get("Editor.AutoSaved"));
             }
             NavigateBackCore();
         }
@@ -3311,7 +6857,7 @@ namespace Caelum.Pages
             var versions = Services.VersionControlService.GetVersions(_currentPdfPath);
             if (versions.Count == 0)
             {
-                GetMainWindow()?.ShowToast("No version history available", "\uE946");
+            GetMainWindow()?.ShowToast(LocalizationService.Get("Editor.NoVersionHistory"), "\uE946");
                 return;
             }
 
@@ -3332,22 +6878,31 @@ namespace Caelum.Pages
                         var data = await Services.VersionControlService.LoadVersionAsync(vFile);
                         if (data != null)
                         {
+                            // 恢复前先把当前注释快照为新版本（最新），使恢复可逆
+                            var current = CollectAnnotations();
+                            await Services.VersionControlService.SaveVersionAsync(_currentPdfPath, current);
+
                             ClearAllAnnotations();
+                            // A restored snapshot is a new document state;
+                            // actions from the previous snapshot must not be
+                            // able to reinsert its annotations via Ctrl+Z.
+                            ClearUndoRedoHistory();
                             _pdfService.ExtractedAnnotations = data;
                             await LoadAnnotationsFromPdfServiceAsync();
-                            GetMainWindow()?.ShowToast($"Restored version from {dt:g}");
+            GetMainWindow()?.ShowToast(LocalizationService.Format("Editor.RestoredVersion", dt.ToString("g", LocalizationService.CurrentCulture)));
                             MarkDirty();
                         }
                     }
                     catch (Exception ex)
                     {
-                        GetMainWindow()?.ShowToast("Failed to load version");
+            GetMainWindow()?.ShowToast(LocalizationService.Get("Editor.VersionLoadFailed"));
                         Console.WriteLine($"[VersionHistory] Error: {ex.Message}");
                     }
                 };
                 menu.Items.Add(item);
             }
 
+            PopupZOrderHelper.FixContextMenuTopmost(menu);
             menu.PlacementTarget = VersionHistoryButton;
             menu.IsOpen = true;
         }
@@ -3366,11 +6921,259 @@ namespace Caelum.Pages
             await PrintPdfAsync();
         }
 
+        private async void ExportCurrentPagePng1x_Click(object sender, RoutedEventArgs e) => await ExportPngAsync(false, 1.0);
+        private async void ExportCurrentPagePng2x_Click(object sender, RoutedEventArgs e) => await ExportPngAsync(false, 2.0);
+        private async void ExportAllPagesPng1x_Click(object sender, RoutedEventArgs e) => await ExportPngAsync(true, 1.0);
+        private async void ExportAllPagesPng2x_Click(object sender, RoutedEventArgs e) => await ExportPngAsync(true, 2.0);
+
+        private async Task ExportPngAsync(bool allPages, double dpiScale)
+        {
+            if (string.IsNullOrWhiteSpace(_currentPdfPath) || _pageControls.Count == 0)
+                return;
+
+            try
+            {
+                string folder = null;
+                string singlePath = null;
+                string baseName = System.IO.Path.GetFileNameWithoutExtension(_currentPdfPath);
+                if (allPages)
+                {
+                    using var folderDialog = new System.Windows.Forms.FolderBrowserDialog
+                    {
+                        Description = LocalizationService.Get("Editor.PngFolderDescription"),
+                        SelectedPath = System.IO.Path.GetDirectoryName(_currentPdfPath) ?? string.Empty
+                    };
+                    if (folderDialog.ShowDialog() != System.Windows.Forms.DialogResult.OK)
+                        return;
+                    folder = folderDialog.SelectedPath;
+                }
+                else
+                {
+                    var dialog = new SaveFileDialog
+                    {
+                        Filter = LocalizationService.Get("Editor.PngFileFilter"),
+                        FileName = $"{baseName}_page_{GetCurrentPageIndex() + 1}.png",
+                        AddExtension = true,
+                        DefaultExt = ".png",
+                        OverwritePrompt = true
+                    };
+                    if (dialog.ShowDialog() != true)
+                        return;
+                    singlePath = dialog.FileName;
+                    folder = System.IO.Path.GetDirectoryName(singlePath);
+                }
+
+                var pages = await BuildPrintablePagesAsync(true, dpiScale);
+                IEnumerable<int> indexes = allPages
+                    ? Enumerable.Range(0, pages.Count)
+                    : new[] { Math.Max(0, Math.Min(GetCurrentPageIndex(), pages.Count - 1)) };
+                foreach (int index in indexes)
+                {
+                    string outputPath = allPages
+                        ? System.IO.Path.Combine(folder, $"{baseName}_page_{index + 1:000}.png")
+                        : singlePath;
+                    var encoder = new PngBitmapEncoder();
+                    encoder.Frames.Add(BitmapFrame.Create(pages[index].Bitmap));
+                    using var stream = new FileStream(outputPath, FileMode.Create, FileAccess.Write, FileShare.None);
+                    encoder.Save(stream);
+                }
+
+                GetMainWindow()?.ShowToast(
+                    LocalizationService.Format("Editor.PngExported", allPages ? pages.Count : 1, dpiScale.ToString("0.#", LocalizationService.CurrentCulture)),
+                    "\uE74E",
+                    2500);
+            }
+            catch (Exception ex)
+            {
+                GetMainWindow()?.ShowToast(LocalizationService.Format("Editor.PngExportFailed", ex.Message), "\uE783", 3500);
+            }
+        }
+
+        private async void InsertPdfPages_Click(object sender, RoutedEventArgs e)
+        {
+            if (string.IsNullOrWhiteSpace(_currentPdfPath))
+                return;
+            var dialog = new OpenFileDialog { Filter = LocalizationService.Get("Editor.PdfFileFilter"), Multiselect = false };
+            if (dialog.ShowDialog() != true)
+                return;
+
+            int sourcePageCount;
+            try
+            {
+                using var source = PdfiumPdfDocument.Load(dialog.FileName);
+                sourcePageCount = source.PageCount;
+            }
+            catch (Exception ex)
+            {
+                GetMainWindow()?.ShowToast(LocalizationService.Format("Editor.SourcePdfReadFailed", ex.Message), "\uE783", 3500);
+                return;
+            }
+
+            if (!TryPromptPageRange(sourcePageCount, out int startPage, out int endPage))
+                return;
+            int insertPageIndex = Math.Max(0, GetCurrentPageIndex());
+            await InsertExternalDocumentAsync(() => _pdfService.InsertPdfPagesAsync(
+                _currentPdfPath, dialog.FileName, insertPageIndex, startPage, endPage),
+                insertPageIndex,
+                endPage - startPage + 1,
+                LocalizationService.Get("Editor.PdfPagesInserted"));
+        }
+
+        private async void InsertImagePage_Click(object sender, RoutedEventArgs e)
+        {
+            if (string.IsNullOrWhiteSpace(_currentPdfPath))
+                return;
+            var dialog = new OpenFileDialog { Filter = LocalizationService.Get("Editor.ImageFileFilter"), Multiselect = false };
+            if (dialog.ShowDialog() != true)
+                return;
+            int insertPageIndex = Math.Max(0, GetCurrentPageIndex());
+            await InsertExternalDocumentAsync(() => _pdfService.InsertImagePageAsync(
+                _currentPdfPath, dialog.FileName, insertPageIndex),
+                insertPageIndex,
+                1,
+                LocalizationService.Get("Editor.ImagePageInserted"));
+        }
+
+        private bool TryPromptPageRange(int pageCount, out int startPage, out int endPage)
+        {
+            startPage = 0;
+            endPage = Math.Max(0, pageCount - 1);
+            var dialog = new Window
+            {
+                Title = LocalizationService.Get("Editor.PageRangeTitle"),
+                Width = 330,
+                Height = 170,
+                WindowStartupLocation = WindowStartupLocation.CenterOwner,
+                Owner = GetMainWindow(),
+                ResizeMode = ResizeMode.NoResize
+            };
+            var panel = new StackPanel { Margin = new Thickness(18) };
+            var prompt = new TextBlock { Text = LocalizationService.Format("Editor.PageRangePrompt", pageCount) };
+            panel.Children.Add(prompt);
+            var input = new TextBox { Text = pageCount > 0 ? $"1-{pageCount}" : "1", Margin = new Thickness(0, 10, 0, 10) };
+            panel.Children.Add(input);
+            var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
+            var cancel = new Button { Content = LocalizationService.Get("Common.Cancel"), Width = 70, Margin = new Thickness(0, 0, 8, 0) };
+            var ok = new Button { Content = LocalizationService.Get("Common.OK"), Width = 70, IsDefault = true };
+            EventHandler languageChanged = (_, __) =>
+            {
+                dialog.Title = LocalizationService.Get("Editor.PageRangeTitle");
+                prompt.Text = LocalizationService.Format("Editor.PageRangePrompt", pageCount);
+                cancel.Content = LocalizationService.Get("Common.Cancel");
+                ok.Content = LocalizationService.Get("Common.OK");
+            };
+            LocalizationService.LanguageChanged += languageChanged;
+            dialog.Closed += (_, __) => LocalizationService.LanguageChanged -= languageChanged;
+            cancel.Click += (_, __) => dialog.DialogResult = false;
+            ok.Click += (_, __) => dialog.DialogResult = true;
+            buttons.Children.Add(cancel);
+            buttons.Children.Add(ok);
+            panel.Children.Add(buttons);
+            dialog.Content = panel;
+            if (dialog.ShowDialog() != true)
+                return false;
+
+            var parts = input.Text.Split('-', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            if (!int.TryParse(parts[0], out int first))
+                return false;
+            int last = parts.Length > 1 && int.TryParse(parts[1], out int parsedLast) ? parsedLast : first;
+            if (first < 1 || last < first || last > pageCount)
+                return false;
+            startPage = first - 1;
+            endPage = last - 1;
+            return true;
+        }
+
+        private async Task InsertExternalDocumentAsync(
+            Func<Task> operation,
+            int insertPageIndex,
+            int insertedPageCount,
+            string successMessage)
+        {
+            byte[] before = null;
+            int focusBefore = 0;
+            List<PageBookmark> beforeBookmarks = null;
+            bool operationMayHaveChangedDocument = false;
+            try
+            {
+                if (_isDirty && !await AutoSaveAsync())
+                    return;
+                before = await File.ReadAllBytesAsync(_currentPdfPath);
+                focusBefore = GetCurrentPageIndex();
+                beforeBookmarks = PageBookmarkService.Load(_currentPdfPath).ToList();
+                operationMayHaveChangedDocument = true;
+                await operation();
+                byte[] after = await File.ReadAllBytesAsync(_currentPdfPath);
+                await LoadPdf(_currentPdfPath);
+                int focused = Math.Max(0, Math.Min(insertPageIndex, _pageControls.Count - 1));
+                JumpToPage(focused);
+                var afterBookmarks = PageBookmarkService.ApplyPageInsert(
+                    _currentPdfPath,
+                    insertPageIndex,
+                    insertedPageCount).ToList();
+                RefreshBookmarks();
+                PushUndoAction(new DocumentSnapshotAction(
+                    this,
+                    before,
+                    after,
+                    focusBefore,
+                    focused,
+                    beforeBookmarks,
+                    afterBookmarks));
+                GetMainWindow()?.ShowToast(successMessage, "\uE710", 2000);
+            }
+            catch (Exception ex)
+            {
+                if (operationMayHaveChangedDocument && before != null && !string.IsNullOrWhiteSpace(_currentPdfPath))
+                {
+                    try
+                    {
+                        // The PDF write and bookmark sidecar update are separate files. If
+                        // either half fails before the undo action is registered, restore
+                        // both snapshots so a failed import cannot leave page indices stale.
+                        await WriteDocumentBytesAsync(_currentPdfPath, before);
+                        PageBookmarkService.Replace(_currentPdfPath, beforeBookmarks ?? new List<PageBookmark>());
+                        await LoadPdf(_currentPdfPath);
+                        JumpToPage(Math.Max(0, Math.Min(focusBefore, _pageControls.Count - 1)));
+                        RefreshBookmarks();
+                    }
+                    catch (Exception rollbackException)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[Import] Rollback failed: {rollbackException}");
+                    }
+                }
+                GetMainWindow()?.ShowToast(LocalizationService.Format("Editor.ImportFailed", ex.Message), "\uE783", 3500);
+            }
+        }
+
+        private async void RotateCurrentPage_Click(object sender, RoutedEventArgs e)
+        {
+            if (string.IsNullOrWhiteSpace(_currentPdfPath) || _pageControls.Count == 0)
+                return;
+            try
+            {
+                if (_isDirty && !await AutoSaveAsync())
+                    return;
+                int pageIndex = GetCurrentPageIndex();
+                byte[] before = await File.ReadAllBytesAsync(_currentPdfPath);
+                await _pdfService.RotatePageAsync(_currentPdfPath, pageIndex, 1);
+                byte[] after = await File.ReadAllBytesAsync(_currentPdfPath);
+                await LoadPdf(_currentPdfPath);
+                JumpToPage(pageIndex);
+                PushUndoAction(new DocumentSnapshotAction(this, before, after, pageIndex, pageIndex));
+                GetMainWindow()?.ShowToast(LocalizationService.Get("Editor.PageRotated"), "\uE7AD", 1800);
+            }
+            catch (Exception ex)
+            {
+                GetMainWindow()?.ShowToast(LocalizationService.Format("Editor.RotateFailed", ex.Message), "\uE783", 3500);
+            }
+        }
+
         private async Task PrintPdfAsync()
         {
             if (string.IsNullOrWhiteSpace(_currentPdfPath))
             {
-                GetMainWindow()?.ShowToast("No PDF is currently loaded", "\uE783");
+                GetMainWindow()?.ShowToast(LocalizationService.Get("Editor.NoDocumentLoaded"), "\uE783");
                 return;
             }
 
@@ -3380,25 +7183,25 @@ namespace Caelum.Pages
 
             string originalLoadingText = LoadingText.Text;
             ShowLoadingOverlay();
-            LoadingText.Text = "Preparing print...";
+            LoadingText.Text = LocalizationService.Get("Editor.PreparingPrint");
 
             try
             {
                 var pages = await BuildPrintablePagesAsync(includeAnnotations: true);
                 if (pages.Count == 0)
-                    throw new InvalidOperationException("The document has no pages to print.");
+                    throw new InvalidOperationException(LocalizationService.Get("Editor.NoPagesToPrint"));
 
                 var printDocument = CreatePrintDocument(pages, dialog);
                 dialog.PrintDocument(printDocument.DocumentPaginator, System.IO.Path.GetFileName(_currentPdfPath));
-                GetMainWindow()?.ShowToast("Print job sent", "\uE749", 1500);
+                GetMainWindow()?.ShowToast(LocalizationService.Get("Editor.PrintSent"), "\uE749", 1500);
             }
             catch (Exception ex)
             {
                 var mw = GetMainWindow();
                 if (mw != null)
-                    await DialogService.ShowErrorAsync(mw, "Error", $"Failed to print PDF: {ex.Message}");
+                    await DialogService.ShowErrorAsync(mw, LocalizationService.Get("Common.Error"), LocalizationService.Format("Editor.PrintFailed", ex.Message));
                 else
-                    MessageBox.Show($"Failed to print PDF: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                    MessageBox.Show(LocalizationService.Format("Editor.PrintFailed", ex.Message), LocalizationService.Get("Common.Error"), MessageBoxButton.OK, MessageBoxImage.Error);
             }
             finally
             {
@@ -3407,7 +7210,7 @@ namespace Caelum.Pages
             }
         }
 
-        private async Task<IReadOnlyList<PrintablePageImage>> BuildPrintablePagesAsync(bool includeAnnotations)
+        private async Task<IReadOnlyList<PrintablePageImage>> BuildPrintablePagesAsync(bool includeAnnotations, double dpiScale = 1.0)
         {
             string tempPrintPath = null;
 
@@ -3424,7 +7227,7 @@ namespace Caelum.Pages
                     renderPath = tempPrintPath;
                 }
 
-                return await Task.Run(() => RenderPrintablePages(renderPath, includeAnnotations));
+                return await Task.Run(() => RenderPrintablePages(renderPath, includeAnnotations, dpiScale));
             }
             finally
             {
@@ -3435,11 +7238,11 @@ namespace Caelum.Pages
             }
         }
 
-        private static IReadOnlyList<PrintablePageImage> RenderPrintablePages(string filePath, bool includeAnnotations)
+        private static IReadOnlyList<PrintablePageImage> RenderPrintablePages(string filePath, bool includeAnnotations, double dpiScale = 1.0)
         {
             using var document = PdfiumPdfDocument.Load(filePath);
             var pages = new List<PrintablePageImage>(document.PageCount);
-            const int renderDpi = 220;
+            int renderDpi = Math.Max(72, (int)Math.Round(220 * Math.Max(1.0, dpiScale)));
             var renderFlags = includeAnnotations ? PdfiumViewer.PdfRenderFlags.Annotations : (PdfiumViewer.PdfRenderFlags)0;
 
             for (int pageIndex = 0; pageIndex < document.PageCount; pageIndex++)
@@ -3552,8 +7355,8 @@ namespace Caelum.Pages
 
             try
             {
-                if (_isDirty)
-                    await AutoSaveAsync();
+                if (_isDirty && !await AutoSaveAsync())
+                    return;
 
                 if (!string.Equals(oldPath, newPath, StringComparison.OrdinalIgnoreCase))
                 {
@@ -3603,6 +7406,25 @@ namespace Caelum.Pages
             var center = new Point(PdfScrollViewer.ViewportWidth / 2, PdfScrollViewer.ViewportHeight / 2);
             double newZoom = Math.Max(ZoomMin, Math.Min(ZoomMax, _zoomLevel - ZoomStep));
             ZoomAroundPoint(newZoom, center);
+        }
+
+        private void FitWidthButton_Click(object sender, RoutedEventArgs e) => ApplyFitZoom(fitPage: false);
+
+        private void FitPageButton_Click(object sender, RoutedEventArgs e) => ApplyFitZoom(fitPage: true);
+
+        private void ApplyFitZoom(bool fitPage)
+        {
+            if (_pageControls.Count == 0 || IsSelectablePdfSurfaceActive)
+                return;
+
+            var page = _pageControls[Math.Max(0, Math.Min(GetCurrentPageIndex(), _pageControls.Count - 1))];
+            double viewportWidth = Math.Max(200, PdfScrollViewer.ViewportWidth - 72);
+            double viewportHeight = Math.Max(200, PdfScrollViewer.ViewportHeight - 72);
+            double widthRatio = viewportWidth / Math.Max(1, page.Width);
+            double heightRatio = viewportHeight / Math.Max(1, page.Height);
+            double level = fitPage ? Math.Min(widthRatio, heightRatio) : widthRatio;
+            ApplyCustomZoom(Math.Max(ZoomMin, Math.Min(ZoomMax, level)));
+            JumpToPage(page.PageIndex);
         }
 
         private void ZoomLabel_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
@@ -3735,13 +7557,13 @@ namespace Caelum.Pages
             var panel = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(4) };
             var border = new Border
             {
-                Background = new SolidColorBrush(Color.FromArgb(250, 248, 250, 252)),
-                BorderBrush = new SolidColorBrush(Color.FromArgb(28, 15, 23, 42)),
                 BorderThickness = new Thickness(1),
                 CornerRadius = new CornerRadius(16),
                 Child = panel,
                 Effect = new System.Windows.Media.Effects.DropShadowEffect { BlurRadius = 12, ShadowDepth = 2, Opacity = 0.10, Color = Colors.Black }
             };
+            border.SetResourceReference(Border.BackgroundProperty, "ThemeSurfaceBrush");
+            border.SetResourceReference(Border.BorderBrushProperty, "ThemeBorderBrush");
 
             var deleteButton = new Button
             {
@@ -3753,6 +7575,7 @@ namespace Caelum.Pages
                 ToolTip = LocalizationService.Get("Editor.DeleteTooltip"),
                 Margin = new Thickness(0)
             };
+            _textDeleteButton = deleteButton;
             deleteButton.Template = CreateIconButtonTemplate("#FEE2E2", "#FECACA");
             deleteButton.Content = new TextBlock
             {
@@ -3765,14 +7588,14 @@ namespace Caelum.Pages
             };
             deleteButton.Click += (s, e) => DeleteSelectedTextBox();
 
-            var sep1 = new Border
+            var sep1 = ThemeDivider(new Border
             {
                 Width = 1,
                 Height = 18,
                 Background = new SolidColorBrush(Color.FromArgb(24, 15, 23, 42)),
                 Margin = new Thickness(6, 5, 6, 5),
                 VerticalAlignment = VerticalAlignment.Center
-            };
+            });
 
             var decreaseFontButton = new Button
             {
@@ -3782,9 +7605,10 @@ namespace Caelum.Pages
                 Cursor = Cursors.Hand,
                 Background = Brushes.Transparent,
                 BorderThickness = new Thickness(0),
-                ToolTip = "Smaller text",
+                ToolTip = LocalizationService.Get("Editor.SmallerText"),
                 Content = CreateTextSizeButtonContent(increase: false)
             };
+            _textDecreaseFontButton = decreaseFontButton;
             decreaseFontButton.Template = CreateIconButtonTemplate("#E5E7EB", "#D1D5DB");
             decreaseFontButton.Click += (s, e) => AdjustSelectedTextBoxFontSize(increase: false);
 
@@ -3796,9 +7620,10 @@ namespace Caelum.Pages
                 Cursor = Cursors.Hand,
                 Background = Brushes.Transparent,
                 BorderThickness = new Thickness(0),
-                ToolTip = "Bigger text",
+                ToolTip = LocalizationService.Get("Editor.BiggerText"),
                 Content = CreateTextSizeButtonContent(increase: true)
             };
+            _textIncreaseFontButton = increaseFontButton;
             increaseFontButton.Template = CreateIconButtonTemplate("#E5E7EB", "#D1D5DB");
             increaseFontButton.Click += (s, e) => AdjustSelectedTextBoxFontSize(increase: true);
 
@@ -3813,27 +7638,27 @@ namespace Caelum.Pages
                     Children =
                     {
                         decreaseFontButton,
-                        new Border
+                        ThemeDivider(new Border
                         {
                             Width = 1,
                             Height = 16,
                             Margin = new Thickness(1, 0, 1, 0),
                             VerticalAlignment = VerticalAlignment.Center,
                             Background = new SolidColorBrush(Color.FromArgb(30, 15, 23, 42))
-                        },
+                        }),
                         increaseFontButton
                     }
                 }
             };
 
-            var sep2 = new Border
+            var sep2 = ThemeDivider(new Border
             {
                 Width = 1,
                 Height = 18,
                 Background = new SolidColorBrush(Color.FromArgb(24, 15, 23, 42)),
                 Margin = new Thickness(6, 5, 6, 5),
                 VerticalAlignment = VerticalAlignment.Center
-            };
+            });
 
             _colorIndicator = new Border
             {
@@ -3856,6 +7681,8 @@ namespace Caelum.Pages
             };
             colorButton.Template = CreateIconButtonTemplate("#E0E7FF", "#DBEAFE");
             var colorPopup = new Popup { Placement = PlacementMode.Bottom, StaysOpen = false, AllowsTransparency = true };
+            _textColorPopup = colorPopup;
+            PopupZOrderHelper.FixPopupTopmost(colorPopup);
 
             int cols = 12;
             int rows = 8;
@@ -3903,14 +7730,7 @@ namespace Caelum.Pages
                         var picked = (Color)b.Tag;
                         selectionIndicator.Margin = b.Margin;
                         selectionIndicator.Visibility = Visibility.Visible;
-                        if (_selectedTextBox != null)
-                        {
-                            _selectedTextBox.Foreground = new SolidColorBrush(picked);
-                            _textColor = picked;
-                            _colorIndicator.Background = new SolidColorBrush(picked);
-                            MarkDirty();
-                        }
-                        colorPopup.IsOpen = false;
+                        ApplyTextColor(picked);
                         ev.Handled = true;
                     };
 
@@ -3930,15 +7750,56 @@ namespace Caelum.Pages
 
             paletteGrid.Children.Add(selectionIndicator);
 
-            colorPopup.Child = new Border
+            // Shared apply path for palette cells and recent-color swatches
+            // (Task 14): applies to the selected text box with an undoable
+            // TextStyleChangedAction, records the color, closes the popup.
+            void ApplyTextColor(Color picked)
+            {
+                if (_selectedTextBox != null)
+                {
+                    var beforeBrush = _selectedTextBox.Foreground;
+                    var beforeFontSize = _selectedTextBox.FontSize;
+                    var page = GetPageByTextContainer(_selectedTextBox.Parent as Grid);
+
+                    _selectedTextBox.Foreground = new SolidColorBrush(picked);
+                    _textColor = picked;
+                    _colorIndicator.Background = new SolidColorBrush(picked);
+                    if (page != null)
+                        PushUndoAction(new TextStyleChangedAction(page, _selectedTextBox, beforeFontSize, beforeBrush, _selectedTextBox.FontSize, _selectedTextBox.Foreground));
+                    MarkDirty();
+                    SaveSetting(s => RecordRecentColor(s.RecentTextColors, picked));
+                }
+                colorPopup.IsOpen = false;
+            }
+
+            // Task 14: "最近 Recent" swatch row above the palette (hidden
+            // while empty); repopulated on every popup open.
+            var recentSection = new StackPanel { Margin = new Thickness(0, 0, 0, 12), Visibility = Visibility.Collapsed };
+            var recentRow = new StackPanel { Orientation = Orientation.Horizontal };
+            _textRecentLabel = ThemeSubtleHeader(new TextBlock
+            {
+                Text = LocalizationService.Get("Editor.Recent"),
+                FontSize = 13,
+                FontWeight = FontWeights.SemiBold,
+                Foreground = new SolidColorBrush(Color.FromRgb(80, 80, 80)),
+                Margin = new Thickness(0, 0, 0, 8)
+            });
+            recentSection.Children.Add(_textRecentLabel);
+            recentSection.Children.Add(recentRow);
+
+            var colorPopupBorder = new Border
             {
                 Background = new SolidColorBrush(Color.FromArgb(250, 248, 250, 252)),
                 BorderBrush = new SolidColorBrush(Color.FromArgb(28, 15, 23, 42)),
                 BorderThickness = new Thickness(1),
                 CornerRadius = new CornerRadius(16),
-                Child = new StackPanel { Margin = new Thickness(16), Children = { paletteGrid } },
+                Child = new StackPanel { Margin = new Thickness(16), Children = { recentSection, paletteGrid } },
                 Effect = new System.Windows.Media.Effects.DropShadowEffect { BlurRadius = 24, ShadowDepth = 0, Opacity = 0.18, Color = Colors.Black }
             };
+            colorPopupBorder.SetResourceReference(Border.BackgroundProperty, "ThemeSurfaceBrush");
+            colorPopupBorder.SetResourceReference(Border.BorderBrushProperty, "ThemeBorderBrush");
+            colorPopup.Child = colorPopupBorder;
+            colorPopup.Opened += (s, e) => RefreshRecentColorsRow(recentSection, recentRow, () => AppSettingsService.Load().RecentTextColors, ApplyTextColor);
             colorButton.Click += (s, e) =>
             {
                 colorPopup.PlacementTarget = colorButton;
@@ -3950,6 +7811,76 @@ namespace Caelum.Pages
             panel.Children.Add(fontButtonGroup);
             panel.Children.Add(sep2);
             panel.Children.Add(colorButton);
+
+            var formatSeparator = ThemeDivider(new Border
+            {
+                Width = 1,
+                Height = 18,
+                Background = new SolidColorBrush(Color.FromArgb(24, 15, 23, 42)),
+                Margin = new Thickness(6, 5, 6, 5),
+                VerticalAlignment = VerticalAlignment.Center
+            });
+
+            _textBoldButton = new ToggleButton
+            {
+                Content = "B",
+                Width = 28,
+                Height = 28,
+                FontWeight = FontWeights.Bold,
+                Cursor = Cursors.Hand,
+                ToolTip = LocalizationService.Get("Editor.BoldTooltip")
+            };
+            _textItalicButton = new ToggleButton
+            {
+                Content = "I",
+                Width = 28,
+                Height = 28,
+                FontStyle = FontStyles.Italic,
+                Cursor = Cursors.Hand,
+                ToolTip = LocalizationService.Get("Editor.ItalicTooltip")
+            };
+            _textBoldButton.Click += (_, __) => ApplySelectedTextFormat(tb =>
+                tb.FontWeight = _textBoldButton.IsChecked == true ? FontWeights.Bold : FontWeights.Normal);
+            _textItalicButton.Click += (_, __) => ApplySelectedTextFormat(tb =>
+                tb.FontStyle = _textItalicButton.IsChecked == true ? FontStyles.Italic : FontStyles.Normal);
+
+            _textFontFamilyCombo = new ComboBox
+            {
+                Width = 104,
+                Height = 28,
+                Margin = new Thickness(4, 0, 0, 0),
+                ItemsSource = new[] { "Segoe UI", "Arial", "Times New Roman", "Consolas" },
+                Style = (Style)Application.Current.FindResource("CompactComboBox"),
+                ToolTip = LocalizationService.Get("Editor.FontFamilyTooltip")
+            };
+            _textFontFamilyCombo.SelectionChanged += (_, __) =>
+            {
+                if (_textFontFamilyCombo.SelectedItem is string family)
+                    ApplySelectedTextFormat(tb => tb.FontFamily = new FontFamily(family));
+            };
+
+            _textAlignmentCombo = new ComboBox
+            {
+                Width = 86,
+                Height = 28,
+                Margin = new Thickness(4, 0, 0, 0),
+                ItemsSource = new[] { "Left", "Center", "Right" },
+                Style = (Style)Application.Current.FindResource("CompactComboBox"),
+                ToolTip = LocalizationService.Get("Editor.AlignmentTooltip")
+            };
+            PopupZOrderHelper.FixComboBoxPopupTopmost(_textFontFamilyCombo);
+            PopupZOrderHelper.FixComboBoxPopupTopmost(_textAlignmentCombo);
+            _textAlignmentCombo.SelectionChanged += (_, __) =>
+            {
+                if (_textAlignmentCombo.SelectedItem is string alignment)
+                    ApplySelectedTextFormat(tb => tb.TextAlignment = ParseTextAlignment(alignment));
+            };
+
+            panel.Children.Add(formatSeparator);
+            panel.Children.Add(_textBoldButton);
+            panel.Children.Add(_textItalicButton);
+            panel.Children.Add(_textFontFamilyCombo);
+            panel.Children.Add(_textAlignmentCombo);
 
             _inlineTextBoxToolbar = border;
         }
@@ -3968,6 +7899,9 @@ namespace Caelum.Pages
             if (tb.Parent is Grid container && container.Parent is Panel panel1)
             {
                 panel1.Children.Remove(container);
+                var page = GetPageByTextContainer(container);
+                if (page != null)
+                    PushUndoAction(new TextBoxDeletedAction(page, container));
                 MarkDirty();
             }
             else if (tb.Parent is Panel panel2)
@@ -3975,6 +7909,103 @@ namespace Caelum.Pages
                 panel2.Children.Remove(tb);
                 MarkDirty();
             }
+        }
+
+        /// <summary>
+        /// Resolves the PdfPageControl whose TextOverlay hosts the given text
+        /// container, or null if the container is not attached to a page.
+        /// </summary>
+        private PdfPageControl GetPageByTextContainer(Grid container)
+        {
+            if (container?.Parent is Canvas canvas)
+                return _pageControls.FirstOrDefault(p => p.TextOverlay == canvas);
+            return null;
+        }
+
+        private static bool TryGetTextBoxNudge(Key key, out double deltaX, out double deltaY)
+        {
+            deltaX = 0;
+            deltaY = 0;
+            switch (key)
+            {
+                case Key.Left:
+                    deltaX = -1;
+                    return true;
+                case Key.Right:
+                    deltaX = 1;
+                    return true;
+                case Key.Up:
+                    deltaY = -1;
+                    return true;
+                case Key.Down:
+                    deltaY = 1;
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        private void NudgeSelectedTextBox(double deltaX, double deltaY)
+        {
+            var container = _selectedTextBox?.Parent as Grid;
+            var page = GetPageByTextContainer(container);
+            if (container == null || page == null)
+                return;
+
+            var before = GetTextContainerBounds(container);
+            double pageWidth = page.TextOverlay.ActualWidth > 0
+                ? page.TextOverlay.ActualWidth
+                : page.ActualWidth;
+            double pageHeight = page.TextOverlay.ActualHeight > 0
+                ? page.TextOverlay.ActualHeight
+                : page.ActualHeight;
+            var after = TextAnnotationGeometry.ClampToPage(
+                before with { X = before.X + deltaX, Y = before.Y + deltaY },
+                pageWidth,
+                pageHeight);
+
+            if (Math.Abs(before.X - after.X) <= 0.5
+                && Math.Abs(before.Y - after.Y) <= 0.5)
+            {
+                return;
+            }
+
+            ApplyTextContainerBounds(
+                container,
+                after,
+                autoWidth: IsTextAnnotationAutoWidth(container),
+                autoHeight: IsTextAnnotationAutoHeight(container));
+            PushUndoAction(new TextBoxMovedAction(
+                page,
+                container,
+                new Point(before.X, before.Y),
+                new Point(after.X, after.Y)));
+            MarkDirty();
+            PositionInlineTextBoxToolbar(container);
+        }
+
+        private void BeginTextEditSession(TextBox textBox)
+        {
+            _textEditSessionTextBox = textBox;
+            _textEditSessionOriginalText = textBox.Text;
+        }
+
+        private void CommitTextEditSession()
+        {
+            var textBox = _textEditSessionTextBox;
+            if (textBox == null) return;
+            _textEditSessionTextBox = null;
+
+            string beforeText = _textEditSessionOriginalText;
+            string afterText = textBox.Text;
+            if (string.Equals(beforeText, afterText))
+                return;
+
+            var page = GetPageByTextContainer(textBox.Parent as Grid);
+            if (page == null)
+                return;
+
+            PushUndoAction(new TextEditSessionAction(page, textBox, beforeText, afterText));
         }
 
         private void SelectTextBox(TextBox textBox, bool focusTextBox = true, bool refreshPopupPlacement = false)
@@ -4039,6 +8070,10 @@ namespace Caelum.Pages
                     {
                         handle.Visibility = isSelected ? Visibility.Visible : Visibility.Collapsed;
                     }
+                    else if (child is Border resizeHandle && resizeHandle.Tag is TextResizeHandle)
+                    {
+                        resizeHandle.Visibility = isSelected ? Visibility.Visible : Visibility.Collapsed;
+                    }
                 }
             }
         }
@@ -4050,6 +8085,55 @@ namespace Caelum.Pages
             _currentFontSize = _selectedTextBox.FontSize;
             var current = (_selectedTextBox.Foreground as SolidColorBrush)?.Color ?? Colors.Black;
             _colorIndicator.Background = new SolidColorBrush(current);
+            _textBoldButton?.SetCurrentValue(ToggleButton.IsCheckedProperty, _selectedTextBox.FontWeight >= FontWeights.Bold);
+            _textItalicButton?.SetCurrentValue(ToggleButton.IsCheckedProperty, _selectedTextBox.FontStyle == FontStyles.Italic);
+            if (_textFontFamilyCombo != null)
+                _textFontFamilyCombo.SelectedItem = _selectedTextBox.FontFamily?.Source ?? "Segoe UI";
+            if (_textAlignmentCombo != null)
+                _textAlignmentCombo.SelectedItem = _selectedTextBox.TextAlignment.ToString();
+        }
+
+        private void ApplySelectedTextFormat(Action<TextBox> apply)
+        {
+            var textBox = _selectedTextBox;
+            if (textBox == null || apply == null)
+                return;
+
+            var beforeWeight = textBox.FontWeight;
+            var beforeStyle = textBox.FontStyle;
+            var beforeFamily = textBox.FontFamily;
+            var beforeAlignment = textBox.TextAlignment;
+
+            apply(textBox);
+
+            bool changed = beforeWeight != textBox.FontWeight
+                || beforeStyle != textBox.FontStyle
+                || !string.Equals(beforeFamily?.Source, textBox.FontFamily?.Source, StringComparison.OrdinalIgnoreCase)
+                || beforeAlignment != textBox.TextAlignment;
+            if (!changed)
+                return;
+
+            var page = GetPageByTextContainer(textBox.Parent as Grid);
+            if (page != null)
+            {
+                PushUndoAction(new TextFormatChangedAction(
+                    textBox,
+                    beforeWeight,
+                    beforeStyle,
+                    beforeFamily,
+                    beforeAlignment,
+                    textBox.FontWeight,
+                    textBox.FontStyle,
+                    textBox.FontFamily,
+                    textBox.TextAlignment));
+            }
+
+            _textBold = textBox.FontWeight >= FontWeights.Bold;
+            _textItalic = textBox.FontStyle == FontStyles.Italic;
+            _textFontFamily = textBox.FontFamily?.Source ?? "Segoe UI";
+            _textAlignment = textBox.TextAlignment;
+            SyncPopupToSelectedTextBox();
+            MarkDirty();
         }
 
         private void AdjustSelectedTextBoxFontSize(bool increase)
@@ -4062,8 +8146,13 @@ namespace Caelum.Pages
             if (Math.Abs(nextSize - currentSize) < 0.01)
                 return;
 
+            var beforeBrush = _selectedTextBox.Foreground;
+            var page = GetPageByTextContainer(_selectedTextBox.Parent as Grid);
+
             _selectedTextBox.FontSize = nextSize;
             _currentFontSize = nextSize;
+            if (page != null)
+                PushUndoAction(new TextStyleChangedAction(page, _selectedTextBox, currentSize, beforeBrush, nextSize, _selectedTextBox.Foreground));
             MarkDirty();
             PositionInlineTextBoxToolbar(_selectedTextBox.Parent as UIElement ?? _selectedTextBox);
             _selectedTextBox.Focus();
@@ -4096,6 +8185,26 @@ namespace Caelum.Pages
 
         private static UIElement CreateTextSizeButtonContent(bool increase)
         {
+            var sizeGlyph = new TextBlock
+            {
+                Text = "A",
+                FontSize = increase ? 15 : 13,
+                FontWeight = FontWeights.SemiBold,
+                Foreground = new SolidColorBrush(Color.FromRgb(31, 41, 55)),
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            sizeGlyph.SetResourceReference(TextElement.ForegroundProperty, "ThemeForegroundBrush");
+
+            var directionGlyph = new TextBlock
+            {
+                Text = increase ? "^" : "v",
+                FontSize = 8,
+                Margin = new Thickness(1, 0, 0, 0),
+                Foreground = new SolidColorBrush(Color.FromRgb(75, 85, 99)),
+                VerticalAlignment = increase ? VerticalAlignment.Top : VerticalAlignment.Bottom
+            };
+            directionGlyph.SetResourceReference(TextElement.ForegroundProperty, "ThemeSubtleForegroundBrush");
+
             return new StackPanel
             {
                 Orientation = Orientation.Horizontal,
@@ -4103,22 +8212,8 @@ namespace Caelum.Pages
                 VerticalAlignment = VerticalAlignment.Center,
                 Children =
                 {
-                    new TextBlock
-                    {
-                        Text = "A",
-                        FontSize = increase ? 15 : 13,
-                        FontWeight = FontWeights.SemiBold,
-                        Foreground = new SolidColorBrush(Color.FromRgb(31, 41, 55)),
-                        VerticalAlignment = VerticalAlignment.Center
-                    },
-                    new TextBlock
-                    {
-                        Text = increase ? "^" : "v",
-                        FontSize = 8,
-                        Margin = new Thickness(1, 0, 0, 0),
-                        Foreground = new SolidColorBrush(Color.FromRgb(75, 85, 99)),
-                        VerticalAlignment = increase ? VerticalAlignment.Top : VerticalAlignment.Bottom
-                    }
+                    sizeGlyph,
+                    directionGlyph
                 }
             };
         }
@@ -4234,12 +8329,6 @@ namespace Caelum.Pages
 
         private void PageControl_TextOverlayPointerPressed(object sender, MouseButtonEventArgs e)
         {
-            if (sender is PdfPageControl pageEvent)
-            {
-                _lastClickedPoint = e.GetPosition(pageEvent);
-                _lastClickedPage = pageEvent;
-            }
-
             if (_currentTool != ToolType.Text) return;
 
             var page = sender as PdfPageControl;
@@ -4256,12 +8345,61 @@ namespace Caelum.Pages
             e.Handled = true;
         }
 
-        private Grid CreateTextBox(PdfPageControl page, Point position, Color? color = null, double? fontSize = null, string text = null, bool select = true, bool alignToPointer = false)
+        private Grid CreateTextBox(
+            PdfPageControl page,
+            Point position,
+            Color? color = null,
+            double? fontSize = null,
+            string text = null,
+            bool select = true,
+            bool alignToPointer = false,
+            bool? bold = null,
+            bool? italic = null,
+            string fontFamily = null,
+            TextAlignment? alignment = null,
+            double? width = null,
+            double? height = null)
         {
             var textPadding = new Thickness(10, 8, 10, 8);
-            var container = new Grid { Background = Brushes.Transparent };
+            bool useDefaultSize = text == null && (!width.HasValue || width.Value <= 0) && (!height.HasValue || height.Value <= 0);
+            double? initialWidth = width.HasValue && width.Value > 0
+                ? width.Value
+                : useDefaultSize ? TextAnnotationGeometry.DefaultWidth : null;
+            double? initialHeight = height.HasValue && height.Value > 0
+                ? height.Value
+                : useDefaultSize ? TextAnnotationGeometry.DefaultHeight : null;
 
-            container.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            var container = new Grid
+            {
+                Background = Brushes.Transparent,
+                Tag = "text-annotation"
+            };
+            bool autoWidth = !width.HasValue || width.Value <= 0;
+            bool autoHeight = !height.HasValue || height.Value <= 0;
+            if (useDefaultSize)
+            {
+                // Newly created text boxes use the product default rectangle;
+                // the legacy automatic-size sentinel is reserved for loaded
+                // annotations that explicitly carried zero dimensions.
+                autoWidth = false;
+                autoHeight = false;
+            }
+            container.SetValue(TextAnnotationAutoWidthProperty, autoWidth);
+            container.SetValue(TextAnnotationAutoHeightProperty, autoHeight);
+            if (initialWidth.HasValue || initialHeight.HasValue)
+            {
+                var initialBounds = TextAnnotationGeometry.Normalize(new TextBoxBounds(
+                    position.X,
+                    position.Y,
+                    initialWidth ?? TextAnnotationGeometry.DefaultWidth,
+                    initialHeight ?? TextAnnotationGeometry.DefaultHeight));
+                if (initialWidth.HasValue)
+                    container.Width = initialBounds.Width;
+                if (initialHeight.HasValue)
+                    container.Height = initialBounds.Height;
+            }
+
+            container.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             container.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
             // Visual chrome border spanning both columns
@@ -4281,18 +8419,25 @@ namespace Caelum.Pages
 
             var textBox = new TextBox
             {
-                Text = text ?? "Text",
+                Text = text ?? LocalizationService.Get("Editor.ModeText"),
                 AcceptsReturn = true,
                 TextWrapping = TextWrapping.Wrap,
                 MinWidth = 100,
-                MaxWidth = maxTextBoxWidth,
+                MaxWidth = double.IsNaN(container.Width) ? maxTextBoxWidth : double.PositiveInfinity,
                 MinHeight = 30,
                 BorderThickness = new Thickness(0),
                 Background = Brushes.Transparent,
                 FontSize = fontSize ?? _currentFontSize,
                 Foreground = new SolidColorBrush(color ?? _textColor),
+                FontWeight = (bold ?? _textBold) ? FontWeights.Bold : FontWeights.Normal,
+                FontStyle = (italic ?? _textItalic) ? FontStyles.Italic : FontStyles.Normal,
+                FontFamily = new FontFamily(string.IsNullOrWhiteSpace(fontFamily) ? _textFontFamily : fontFamily),
+                TextAlignment = alignment ?? _textAlignment,
                 IsReadOnly = !select,
                 Padding = textPadding,
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                VerticalAlignment = VerticalAlignment.Stretch,
+                VerticalContentAlignment = VerticalAlignment.Top,
                 CaretBrush = new SolidColorBrush(Color.FromRgb(0, 120, 212))
             };
 
@@ -4300,12 +8445,15 @@ namespace Caelum.Pages
             {
                 if (textBox.Parent is Grid containerGrid)
                 {
-                    double newAvailableWidth = page.ActualWidth - Canvas.GetLeft(containerGrid);
-                    textBox.MaxWidth = Math.Max(100, newAvailableWidth - textPadding.Left - textPadding.Right - 40);
+                    if (double.IsNaN(containerGrid.Width))
+                    {
+                        double newAvailableWidth = page.ActualWidth - Canvas.GetLeft(containerGrid);
+                        textBox.MaxWidth = Math.Max(100, newAvailableWidth - textPadding.Left - textPadding.Right - 40);
+                    }
                 }
             };
 
-            var dragHandle = new Border
+            var dragHandle = new TextAnnotationDragHandleBorder
             {
                 Width = 18,
                 Height = 36,
@@ -4355,6 +8503,8 @@ namespace Caelum.Pages
                 dragIcon.Children.Add(dotColumn);
             }
             dragHandle.Child = dragIcon;
+            AutomationProperties.SetAutomationId(dragHandle, "TextAnnotationDragHandle");
+            AutomationProperties.SetName(dragHandle, LocalizationService.Get("Editor.MoveTextBox"));
 
             Grid.SetColumn(textBox, 0);
             Grid.SetColumn(dragHandle, 1);
@@ -4362,6 +8512,56 @@ namespace Caelum.Pages
             container.Children.Add(chrome);
             container.Children.Add(textBox);
             container.Children.Add(dragHandle);
+
+            var resizeHandleDefinitions = new[]
+            {
+                (TextResizeHandle.TopLeft, HorizontalAlignment.Left, VerticalAlignment.Top, Cursors.SizeNWSE),
+                (TextResizeHandle.Top, HorizontalAlignment.Center, VerticalAlignment.Top, Cursors.SizeNS),
+                (TextResizeHandle.TopRight, HorizontalAlignment.Right, VerticalAlignment.Top, Cursors.SizeNESW),
+                (TextResizeHandle.Left, HorizontalAlignment.Left, VerticalAlignment.Center, Cursors.SizeWE),
+                (TextResizeHandle.Right, HorizontalAlignment.Right, VerticalAlignment.Center, Cursors.SizeWE),
+                (TextResizeHandle.BottomLeft, HorizontalAlignment.Left, VerticalAlignment.Bottom, Cursors.SizeNESW),
+                (TextResizeHandle.Bottom, HorizontalAlignment.Center, VerticalAlignment.Bottom, Cursors.SizeNS),
+                (TextResizeHandle.BottomRight, HorizontalAlignment.Right, VerticalAlignment.Bottom, Cursors.SizeNWSE),
+            };
+
+            foreach (var definition in resizeHandleDefinitions)
+            {
+                var resizeHandle = new TextResizeHandleBorder
+                {
+                    Width = 10,
+                    Height = 10,
+                    Margin = new Thickness(-5),
+                    HorizontalAlignment = definition.Item2,
+                    VerticalAlignment = definition.Item3,
+                    Background = new SolidColorBrush(Color.FromRgb(0, 120, 212)),
+                    BorderBrush = Brushes.White,
+                    BorderThickness = new Thickness(1),
+                    CornerRadius = new CornerRadius(5),
+                    Cursor = definition.Item4,
+                    Focusable = true,
+                    Visibility = select ? Visibility.Visible : Visibility.Collapsed,
+                    Tag = definition.Item1,
+                    ToolTip = LocalizationService.Get("Editor.ResizeTextBox")
+                };
+                AutomationProperties.SetAutomationId(
+                    resizeHandle,
+                    TextAnnotationGeometry.GetResizeHandleAutomationId(definition.Item1));
+                AutomationProperties.SetName(
+                    resizeHandle,
+                    LocalizationService.Get("Editor.ResizeTextBox"));
+                KeyboardNavigation.SetIsTabStop(resizeHandle, true);
+                Grid.SetColumnSpan(resizeHandle, 2);
+                Panel.SetZIndex(resizeHandle, 20);
+                resizeHandle.MouseLeftButtonDown += TextResizeHandle_MouseLeftButtonDown;
+                resizeHandle.MouseMove += TextResizeHandle_MouseMove;
+                resizeHandle.MouseLeftButtonUp += TextResizeHandle_MouseLeftButtonUp;
+                resizeHandle.KeyDown += TextResizeHandle_KeyDown;
+                resizeHandle.StylusDown += TextResizeHandle_StylusDown;
+                resizeHandle.StylusMove += TextResizeHandle_StylusMove;
+                resizeHandle.StylusUp += TextResizeHandle_StylusUp;
+                container.Children.Add(resizeHandle);
+            }
 
             var initialLeft = position.X;
             var initialTop = position.Y;
@@ -4378,7 +8578,9 @@ namespace Caelum.Pages
             dragHandle.MouseLeftButtonDown += DragHandle_MouseLeftButtonDown;
             dragHandle.MouseMove += DragHandle_MouseMove;
             dragHandle.MouseLeftButtonUp += DragHandle_MouseLeftButtonUp;
-            dragHandle.PreviewStylusDown += SuppressTextAnnotationStylusInteraction;
+            dragHandle.StylusDown += DragHandle_StylusDown;
+            dragHandle.StylusMove += DragHandle_StylusMove;
+            dragHandle.StylusUp += DragHandle_StylusUp;
 
             textBox.TextChanged += (s, e) => MarkDirty();
             textBox.PreviewMouseLeftButtonDown += (s, e) =>
@@ -4390,8 +8592,10 @@ namespace Caelum.Pages
             textBox.PreviewStylusDown += SuppressTextAnnotationStylusInteraction;
             textBox.GotFocus += (s, e) =>
             {
+                BeginTextEditSession((TextBox)s);
                 SelectTextBox((TextBox)s);
             };
+            textBox.LostFocus += (s, e) => CommitTextEditSession();
 
             page.TextOverlay.Children.Add(container);
 
@@ -4400,42 +8604,395 @@ namespace Caelum.Pages
                 SelectTextBox(textBox);
                 textBox.SelectAll();
                 textBox.Focus();
+                // Only user-created boxes (select: true) push an undo action here;
+                // PasteSelection pushes a batched ItemsAddedAction and loading
+                // existing annotations must not touch the undo stack.
+                PushUndoAction(new TextBoxAddedAction(page, container));
                 MarkDirty();
             }
 
             return container;
         }
 
-        private void DragHandle_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+        private static TextBoxBounds GetTextContainerBounds(Grid container)
         {
-            if (_currentTool != ToolType.Text) return;
-            var handle = sender as Border;
-            if (handle?.Parent is Grid container)
+            if (container == null)
+                return new TextBoxBounds(0, 0, TextAnnotationGeometry.DefaultWidth, TextAnnotationGeometry.DefaultHeight);
+
+            double left = Canvas.GetLeft(container);
+            double top = Canvas.GetTop(container);
+            double width = !double.IsNaN(container.Width) && container.Width > 0
+                ? container.Width
+                : container.ActualWidth > 0 ? container.ActualWidth : container.RenderSize.Width;
+            double height = !double.IsNaN(container.Height) && container.Height > 0
+                ? container.Height
+                : container.ActualHeight > 0 ? container.ActualHeight : container.RenderSize.Height;
+
+            if (double.IsNaN(left)) left = 0;
+            if (double.IsNaN(top)) top = 0;
+            return TextAnnotationGeometry.Normalize(new TextBoxBounds(left, top, width, height));
+        }
+
+        private static bool IsTextAnnotationAutoWidth(Grid container)
+        {
+            return container?.GetValue(TextAnnotationAutoWidthProperty) is bool value && value;
+        }
+
+        private static bool IsTextAnnotationAutoHeight(Grid container)
+        {
+            return container?.GetValue(TextAnnotationAutoHeightProperty) is bool value && value;
+        }
+
+        private static double GetPersistedTextWidth(Grid container)
+        {
+            return IsTextAnnotationAutoWidth(container) ? 0 : GetTextContainerBounds(container).Width;
+        }
+
+        private static double GetPersistedTextHeight(Grid container)
+        {
+            return IsTextAnnotationAutoHeight(container) ? 0 : GetTextContainerBounds(container).Height;
+        }
+
+        private static void ApplyTextContainerBounds(
+            Grid container,
+            TextBoxBounds bounds,
+            bool? autoWidth = null,
+            bool? autoHeight = null)
+        {
+            if (container == null)
+                return;
+
+            var normalized = TextAnnotationGeometry.Normalize(bounds);
+            if (autoWidth.HasValue)
+                container.SetValue(TextAnnotationAutoWidthProperty, autoWidth.Value);
+            if (autoHeight.HasValue)
+                container.SetValue(TextAnnotationAutoHeightProperty, autoHeight.Value);
+            Canvas.SetLeft(container, normalized.X);
+            Canvas.SetTop(container, normalized.Y);
+            container.Width = IsTextAnnotationAutoWidth(container)
+                ? double.NaN
+                : normalized.Width;
+            container.Height = IsTextAnnotationAutoHeight(container)
+                ? double.NaN
+                : normalized.Height;
+
+            if (container.Children.OfType<TextBox>().FirstOrDefault() is TextBox textBox)
             {
-                var tb = container.Children.OfType<TextBox>().FirstOrDefault();
-                if (tb != null)
-                    SelectTextBox(tb, focusTextBox: false);
+                // The first grid column is star-sized, so the editor fills the
+                // resized rectangle while retaining its own padding and wrapping.
+                textBox.MaxWidth = double.PositiveInfinity;
+                textBox.Width = double.NaN;
+                textBox.Height = double.NaN;
             }
 
-            _dragArmed = true;
-            _draggedContainer = handle?.Parent as Grid;
-            if (_draggedContainer?.Parent is Canvas canvas)
-                _dragPressPointOnCanvas = e.GetPosition(canvas);
-            if (_draggedContainer != null)
+            container.InvalidateMeasure();
+            container.UpdateLayout();
+        }
+
+        private void TextResizeHandle_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+        {
+            if (_currentTool != ToolType.Text || sender is not Border handle || handle.Tag is not TextResizeHandle resizeHandle)
+                return;
+
+            var container = handle.Parent as Grid;
+            var page = GetPageByTextContainer(container);
+            if (container == null || page == null)
+                return;
+
+            BeginTextResize(handle, container, page, resizeHandle, e.GetPosition(page));
+            handle.CaptureMouse();
+            e.Handled = true;
+        }
+
+        private void TextResizeHandle_KeyDown(object sender, KeyEventArgs e)
+        {
+            if (_currentTool != ToolType.Text
+                || sender is not Border handle
+                || handle.Tag is not TextResizeHandle resizeHandle
+                || !TryGetTextBoxNudge(e.Key, out double nudgeX, out double nudgeY)
+                || (Keyboard.Modifiers != ModifierKeys.None && Keyboard.Modifiers != ModifierKeys.Shift))
             {
-                _dragStartX = Canvas.GetLeft(_draggedContainer);
-                _dragStartY = Canvas.GetTop(_draggedContainer);
+                return;
             }
+
+            var container = handle.Parent as Grid;
+            var page = GetPageByTextContainer(container);
+            if (container == null || page == null)
+                return;
+
+            double step = Keyboard.Modifiers == ModifierKeys.Shift ? 10 : 1;
+            var before = GetTextContainerBounds(container);
+            var after = TextAnnotationGeometry.Resize(
+                before,
+                resizeHandle,
+                nudgeX * step,
+                nudgeY * step);
+            double pageWidth = page.TextOverlay.ActualWidth > 0
+                ? page.TextOverlay.ActualWidth
+                : page.ActualWidth;
+            double pageHeight = page.TextOverlay.ActualHeight > 0
+                ? page.TextOverlay.ActualHeight
+                : page.ActualHeight;
+            after = TextAnnotationGeometry.ClampToPage(after, pageWidth, pageHeight);
+
+            bool geometryChanged = Math.Abs(before.X - after.X) > 0.5
+                || Math.Abs(before.Y - after.Y) > 0.5
+                || Math.Abs(before.Width - after.Width) > 0.5
+                || Math.Abs(before.Height - after.Height) > 0.5;
+            if (!geometryChanged)
+                return;
+
+            bool beforeAutoWidth = IsTextAnnotationAutoWidth(container);
+            bool beforeAutoHeight = IsTextAnnotationAutoHeight(container);
+            ApplyTextContainerBounds(container, after, autoWidth: false, autoHeight: false);
+            PushUndoAction(new TextBoxResizedAction(
+                container,
+                before,
+                after,
+                beforeAutoWidth,
+                beforeAutoHeight,
+                afterAutoWidth: false,
+                afterAutoHeight: false));
+            MarkDirty();
+            PositionInlineTextBoxToolbar(container);
+            e.Handled = true;
+        }
+
+        private void TextResizeHandle_StylusDown(object sender, StylusEventArgs e)
+        {
+            if (_currentTool != ToolType.Text || sender is not Border handle || handle.Tag is not TextResizeHandle resizeHandle)
+                return;
+
+            var container = handle.Parent as Grid;
+            var page = GetPageByTextContainer(container);
+            if (container == null || page == null)
+                return;
+
+            BeginTextResize(handle, container, page, resizeHandle, e.GetPosition(page));
+            handle.CaptureStylus();
+            e.Handled = true;
+        }
+
+        private void BeginTextResize(
+            Border handle,
+            Grid container,
+            PdfPageControl page,
+            TextResizeHandle resizeHandle,
+            Point startPoint)
+        {
+            if (container.Children.OfType<TextBox>().FirstOrDefault() is TextBox textBox)
+                SelectTextBox(textBox, focusTextBox: false);
+
+            handle.Focus();
+
+            _resizingTextContainer = container;
+            _resizingTextPage = page;
+            _textResizeHandle = resizeHandle;
+            _textResizeStartPoint = startPoint;
+            _textResizeStartBounds = GetTextContainerBounds(container);
+            _textResizeStartAutoWidth = IsTextAnnotationAutoWidth(container);
+            _textResizeStartAutoHeight = IsTextAnnotationAutoHeight(container);
+        }
+
+        private void TextResizeHandle_MouseMove(object sender, MouseEventArgs e)
+        {
+            if (_resizingTextContainer == null || _resizingTextPage == null)
+                return;
+
+            UpdateTextResize(e.GetPosition(_resizingTextPage));
+            e.Handled = true;
+        }
+
+        private void TextResizeHandle_StylusMove(object sender, StylusEventArgs e)
+        {
+            if (_resizingTextContainer == null || _resizingTextPage == null)
+                return;
+
+            UpdateTextResize(e.GetPosition(_resizingTextPage));
+            e.Handled = true;
+        }
+
+        private void UpdateTextResize(Point point)
+        {
+            if (_resizingTextContainer == null || _resizingTextPage == null)
+                return;
+
+            var resized = TextAnnotationGeometry.Resize(
+                _textResizeStartBounds,
+                _textResizeHandle,
+                point.X - _textResizeStartPoint.X,
+                point.Y - _textResizeStartPoint.Y);
+            double pageWidth = _resizingTextPage.TextOverlay.ActualWidth > 0
+                ? _resizingTextPage.TextOverlay.ActualWidth
+                : _resizingTextPage.ActualWidth;
+            double pageHeight = _resizingTextPage.TextOverlay.ActualHeight > 0
+                ? _resizingTextPage.TextOverlay.ActualHeight
+                : _resizingTextPage.ActualHeight;
+            resized = TextAnnotationGeometry.ClampToPage(resized, pageWidth, pageHeight);
+            ApplyTextContainerBounds(_resizingTextContainer, resized, autoWidth: false, autoHeight: false);
+        }
+
+        private void TextResizeHandle_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+        {
+            if (_resizingTextContainer == null)
+                return;
+
+            if (sender is UIElement handle && handle.IsMouseCaptured)
+                handle.ReleaseMouseCapture();
+
+            CompleteTextResize();
+            e.Handled = true;
+        }
+
+        private void TextResizeHandle_StylusUp(object sender, StylusEventArgs e)
+        {
+            if (_resizingTextContainer == null)
+                return;
+
+            if (sender is UIElement handle && handle.IsStylusCaptured)
+                handle.ReleaseStylusCapture();
+
+            CompleteTextResize();
+            e.Handled = true;
+        }
+
+        private void CompleteTextResize()
+        {
+            var resizedContainer = _resizingTextContainer;
+            if (resizedContainer == null)
+                return;
+
+            var before = _textResizeStartBounds;
+            var after = GetTextContainerBounds(resizedContainer);
+            bool afterAutoWidth = IsTextAnnotationAutoWidth(resizedContainer);
+            bool afterAutoHeight = IsTextAnnotationAutoHeight(resizedContainer);
+            _resizingTextContainer = null;
+            _resizingTextPage = null;
+
+            bool geometryChanged = Math.Abs(before.X - after.X) > 0.5
+                || Math.Abs(before.Y - after.Y) > 0.5
+                || Math.Abs(before.Width - after.Width) > 0.5
+                || Math.Abs(before.Height - after.Height) > 0.5;
+            bool layoutModeChanged = _textResizeStartAutoWidth != afterAutoWidth
+                || _textResizeStartAutoHeight != afterAutoHeight;
+
+            if (!geometryChanged && layoutModeChanged)
+            {
+                // A click or a sub-pixel pointer jitter must not silently
+                // convert an automatic-size annotation into a fixed box.
+                ApplyTextContainerBounds(
+                    resizedContainer,
+                    before,
+                    _textResizeStartAutoWidth,
+                    _textResizeStartAutoHeight);
+            }
+            else if (geometryChanged || layoutModeChanged)
+            {
+                PushUndoAction(new TextBoxResizedAction(
+                    resizedContainer,
+                    before,
+                    after,
+                    _textResizeStartAutoWidth,
+                    _textResizeStartAutoHeight,
+                    afterAutoWidth,
+                    afterAutoHeight));
+                MarkDirty();
+            }
+        }
+
+        private void CancelTextResize(bool restoreBounds)
+        {
+            var resizingContainer = _resizingTextContainer;
+            if (resizingContainer == null)
+                return;
+
+            if (restoreBounds)
+                ApplyTextContainerBounds(
+                    resizingContainer,
+                    _textResizeStartBounds,
+                    _textResizeStartAutoWidth,
+                    _textResizeStartAutoHeight);
+
+            Mouse.Capture(null);
+            Stylus.Capture(null);
+            _resizingTextContainer = null;
+            _resizingTextPage = null;
+        }
+
+        private void DragHandle_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+        {
+            if (sender is Border handle && handle.Parent is Grid container && container.Parent is Canvas canvas)
+                BeginTextBoxDrag(handle, e.GetPosition(canvas));
             e.Handled = true;
         }
 
         private void DragHandle_MouseMove(object sender, MouseEventArgs e)
         {
-            if ((!_isDragging && !_dragArmed) || _draggedContainer == null) return;
-            var canvas = _draggedContainer.Parent as Canvas;
-            if (canvas == null) return;
+            if (_draggedContainer?.Parent is Canvas canvas)
+                UpdateTextBoxDrag(e.GetPosition(canvas), () =>
+                {
+                    var handle = _draggedContainer.Children.OfType<Border>().FirstOrDefault(b => b.Cursor == Cursors.SizeAll);
+                    handle?.CaptureMouse();
+                });
+            e.Handled = _isDragging || _dragArmed;
+        }
 
-            var currentPoint = e.GetPosition(canvas);
+        private void DragHandle_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+        {
+            var handle = sender as Border;
+            handle?.ReleaseMouseCapture();
+            var wasDragging = CompleteTextBoxDrag();
+            e.Handled = wasDragging;
+        }
+
+        private void DragHandle_StylusDown(object sender, StylusEventArgs e)
+        {
+            if (sender is Border handle && handle.Parent is Grid container && container.Parent is Canvas canvas)
+            {
+                BeginTextBoxDrag(handle, e.GetPosition(canvas));
+                handle.CaptureStylus();
+                e.Handled = true;
+            }
+        }
+
+        private void DragHandle_StylusMove(object sender, StylusEventArgs e)
+        {
+            if (_draggedContainer?.Parent is Canvas canvas)
+                UpdateTextBoxDrag(e.GetPosition(canvas), () =>
+                {
+                    var handle = _draggedContainer.Children.OfType<Border>().FirstOrDefault(b => b.Cursor == Cursors.SizeAll);
+                    handle?.CaptureStylus();
+                });
+            e.Handled = _isDragging || _dragArmed;
+        }
+
+        private void DragHandle_StylusUp(object sender, StylusEventArgs e)
+        {
+            (sender as Border)?.ReleaseStylusCapture();
+            var wasDragging = CompleteTextBoxDrag();
+            e.Handled = wasDragging;
+        }
+
+        private void BeginTextBoxDrag(Border handle, Point pressPoint)
+        {
+            if (_currentTool != ToolType.Text || handle?.Parent is not Grid container)
+                return;
+
+            if (container.Children.OfType<TextBox>().FirstOrDefault() is TextBox textBox)
+                SelectTextBox(textBox, focusTextBox: false);
+
+            _dragArmed = true;
+            _draggedContainer = container;
+            _dragPressPointOnCanvas = pressPoint;
+            _draggedContainerPage = GetPageByTextContainer(container);
+            _dragStartX = Canvas.GetLeft(container);
+            _dragStartY = Canvas.GetTop(container);
+        }
+
+        private void UpdateTextBoxDrag(Point currentPoint, Action capture)
+        {
+            if ((!_isDragging && !_dragArmed) || _draggedContainer == null)
+                return;
 
             if (_dragArmed && !_isDragging)
             {
@@ -4445,8 +9002,7 @@ namespace Caelum.Pages
                 {
                     _isDragging = true;
                     _dragArmed = false;
-                    var handle = _draggedContainer.Children.OfType<Border>().FirstOrDefault(b => b.Cursor == Cursors.SizeAll);
-                    handle?.CaptureMouse();
+                    capture?.Invoke();
                     if (_inlineTextBoxToolbar != null)
                         _inlineTextBoxToolbar.Visibility = Visibility.Collapsed;
                 }
@@ -4456,31 +9012,75 @@ namespace Caelum.Pages
             {
                 var dx = currentPoint.X - _dragPressPointOnCanvas.X;
                 var dy = currentPoint.Y - _dragPressPointOnCanvas.Y;
-                var maxX = Math.Max(0, canvas.ActualWidth - _draggedContainer.ActualWidth);
-                var maxY = Math.Max(0, canvas.ActualHeight - _draggedContainer.ActualHeight);
-                var newX = Math.Max(0, Math.Min(_dragStartX + dx, maxX));
-                var newY = Math.Max(0, Math.Min(_dragStartY + dy, maxY));
-                Canvas.SetLeft(_draggedContainer, newX);
-                Canvas.SetTop(_draggedContainer, newY);
-                e.Handled = true;
+                // Task 9: no clamping while dragging — the container must be free to
+                // follow the pointer beyond the source page bounds so a cross-page
+                // drop can be detected on pointer-up. When no other page is hit,
+                // pointer-up clamps the container back into the source page.
+                Canvas.SetLeft(_draggedContainer, _dragStartX + dx);
+                Canvas.SetTop(_draggedContainer, _dragStartY + dy);
             }
         }
 
-        private void DragHandle_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+        private bool CompleteTextBoxDrag()
         {
-            if (!_isDragging && !_dragArmed) return;
+            if (!_isDragging && !_dragArmed)
+                return false;
+
             var wasDragging = _isDragging;
             _dragArmed = false;
             _isDragging = false;
-            var handle = sender as Border;
-            handle?.ReleaseMouseCapture();
 
             if (_draggedContainer != null)
             {
                 var endX = Canvas.GetLeft(_draggedContainer);
                 var endY = Canvas.GetTop(_draggedContainer);
                 if (Math.Abs(endX - _dragStartX) > 0.5 || Math.Abs(endY - _dragStartY) > 0.5)
+                {
+                    var sourcePage = _draggedContainerPage ?? GetPageByTextContainer(_draggedContainer);
+                    var targetPage = sourcePage != null
+                        ? FindPageAtContainerPoint(sourcePage, new Point(
+                            endX + _draggedContainer.ActualWidth / 2,
+                            endY + _draggedContainer.ActualHeight / 2))
+                        : null;
+
+                    if (sourcePage != null && targetPage != null && targetPage != sourcePage)
+                    {
+                        // Task 9: cross-page drop — reuse the selection cross-page
+                        // mechanism with a single text container and no strokes.
+                        // adjust = -targetOriginInSourcePage so that after the
+                        // quiet re-parent the container lands at the same visual
+                        // position inside the target page.
+                        Point targetOriginInSource = targetPage.TranslatePoint(new Point(0, 0), sourcePage);
+                        var moveAction = new SelectionCrossPageMoveAction(
+                            sourcePage, targetPage,
+                            endX - _dragStartX, endY - _dragStartY,
+                            -targetOriginInSource.X, -targetOriginInSource.Y,
+                            new List<System.Windows.Ink.Stroke>(),
+                            new List<System.Windows.Controls.Grid> { _draggedContainer });
+
+                        if (sourcePage.HasSelection && sourcePage.SelectedTextContainers.Contains(_draggedContainer))
+                            sourcePage.ClearSelection();
+
+                        moveAction.ExecuteInitialTransfer();
+                        PushUndoAction(moveAction);
+                    }
+                    else
+                    {
+                        // Same page, or a miss into a gap between pages / beyond the
+                        // document: clamp back into the source page bounds (previous
+                        // in-drag clamp behaviour) and record a same-page move.
+                        if (sourcePage != null && _draggedContainer.Parent is Canvas canvas)
+                        {
+                            endX = Math.Max(0, Math.Min(endX, Math.Max(0, canvas.ActualWidth - _draggedContainer.ActualWidth)));
+                            endY = Math.Max(0, Math.Min(endY, Math.Max(0, canvas.ActualHeight - _draggedContainer.ActualHeight)));
+                            Canvas.SetLeft(_draggedContainer, endX);
+                            Canvas.SetTop(_draggedContainer, endY);
+                        }
+                        if (sourcePage != null)
+                            PushUndoAction(new TextBoxMovedAction(sourcePage, _draggedContainer, new Point(_dragStartX, _dragStartY), new Point(endX, endY)));
+                    }
                     MarkDirty();
+                }
                 if (wasDragging)
                 {
                     var tb = _draggedContainer.Children.OfType<TextBox>().FirstOrDefault();
@@ -4492,47 +9092,85 @@ namespace Caelum.Pages
                 }
             }
             _draggedContainer = null;
-            e.Handled = wasDragging;
+            _draggedContainerPage = null;
+            return wasDragging;
         }
 
-        private void PageControl_BackgroundPointerPressed(object sender, MouseButtonEventArgs e)
+        private void PageControl_PreviewMouseDown(object sender, MouseButtonEventArgs e)
         {
-            if (sender is PdfPageControl page)
+            // Task 8.1: ANY left click on ANY page refreshes the paste anchor,
+            // regardless of the active tool. PreviewMouseDown tunnels through
+            // before the child layers (InkCanvas / SelectionOverlayCanvas /
+            // TextBox) can mark the event handled, so pen / select / shape /
+            // eraser clicks — which the bubbling BackgroundPointerPressed
+            // never sees — all update the anchor too. Coordinates are
+            // page-relative.
+            if (e.ChangedButton == MouseButton.Left && sender is PdfPageControl page)
             {
                 _lastClickedPoint = e.GetPosition(page);
                 _lastClickedPage = page;
             }
+        }
 
+        private void PageControl_BackgroundPointerPressed(object sender, MouseButtonEventArgs e)
+        {
             if (_selectedTextBox != null) DeselectTextBox();
+
+            if (_currentTool == ToolType.StickyNote && sender is PdfPageControl page)
+            {
+                var note = new StickyNoteAnnotation
+                {
+                    X = e.GetPosition(page).X,
+                    Y = e.GetPosition(page).Y,
+                    Text = string.Empty
+                };
+                var container = page.AddStickyNote(note);
+                if (container != null)
+                {
+                    PushUndoAction(new ItemsAddedAction(
+                        page,
+                        new List<System.Windows.Ink.Stroke>(),
+                        new List<Grid> { container }));
+                    OpenStickyNoteEditor(page, container, note);
+                }
+                e.Handled = true;
+            }
         }
 
         private async Task SaveAnnotationsToPdfAsync()
         {
             if (string.IsNullOrEmpty(_currentPdfPath))
             {
-                GetMainWindow()?.ShowToast("No PDF is currently loaded", "\uE783");
+                GetMainWindow()?.ShowToast(LocalizationService.Get("Editor.NoDocumentLoaded"), "\uE783");
                 return;
             }
 
             try
             {
+                // Flush an active TextBox edit before collecting annotations so
+                // Ctrl+S cannot save clean and then create a new dirty undo
+                // action when focus eventually leaves the editor.
+                CommitTextEditSession();
                 var annotations = CollectAnnotations();
+                long saveGeneration = _dirtyGeneration;
 
-                // Save to local version control sidecar
-                _ = Services.VersionControlService.SaveVersionAsync(_currentPdfPath, annotations);
-
+                // The PDF is the source of truth. Only create a history sidecar
+                // after the atomic PDF save succeeds, otherwise a failed save
+                // would leave a misleading "ghost" version behind.
                 await _pdfService.SaveAnnotationsToPdfAsync(_currentPdfPath, annotations);
-                _isDirty = false;
+                await Services.VersionControlService.SaveVersionAsync(_currentPdfPath, annotations);
+                if (_dirtyGeneration == saveGeneration)
+                    _isDirty = false;
 
-                GetMainWindow()?.ShowToast("Saved successfully");
+                GetMainWindow()?.ShowToast(LocalizationService.Get("Editor.SavedSuccessfully"));
             }
             catch (Exception ex)
             {
                 var mw = GetMainWindow();
                 if (mw != null)
-                    await DialogService.ShowErrorAsync(mw, "Error", $"Failed to save annotations: {ex.Message}");
+                    await DialogService.ShowErrorAsync(mw, LocalizationService.Get("Common.Error"), LocalizationService.Format("Editor.SaveFailed", ex.Message));
                 else
-                    MessageBox.Show($"Failed to save annotations: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                    MessageBox.Show(LocalizationService.Format("Editor.SaveFailed", ex.Message), LocalizationService.Get("Common.Error"), MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
 
@@ -4541,17 +9179,26 @@ namespace Caelum.Pages
             if (!_isDirty || string.IsNullOrEmpty(_currentPdfPath)) return false;
             try
             {
+                CommitTextEditSession();
                 var annotations = CollectAnnotations();
+                long saveGeneration = _dirtyGeneration;
 
-                // Save to local version control sidecar
-                _ = Services.VersionControlService.SaveVersionAsync(_currentPdfPath, annotations);
-
+                // Keep autosave history transactional with the document save.
                 await _pdfService.SaveAnnotationsToPdfAsync(_currentPdfPath, annotations);
+                await Services.VersionControlService.SaveVersionAsync(_currentPdfPath, annotations);
+                if (_dirtyGeneration != saveGeneration)
+                {
+                    _isDirty = true;
+                    return false;
+                }
+
                 _isDirty = false;
                 return true;
             }
-            catch
+            catch (Exception ex)
             {
+                System.Diagnostics.Debug.WriteLine($"[AutoSave] Failed: {ex}");
+                GetMainWindow()?.ShowToast(LocalizationService.Format("Editor.AutoSaveFailed", ex.Message), "\uE783", 3500);
                 return false;
             }
         }
@@ -4564,6 +9211,7 @@ namespace Caelum.Pages
                 var pa = new PageAnnotation();
                 pa.Strokes = page.GetStrokeData();
                 pa.Highlights = page.GetHighlights().ToList();
+                pa.HiddenInks = page.GetHiddenInkData().ToList();
 
                 foreach (var element in page.TextOverlay.Children)
                 {
@@ -4577,7 +9225,13 @@ namespace Caelum.Pages
                             X = Canvas.GetLeft((Grid)containerTb.Parent),
                             Y = Canvas.GetTop((Grid)containerTb.Parent),
                             R = color.R, G = color.G, B = color.B,
-                            FontSize = containerTb.FontSize
+                            FontSize = containerTb.FontSize,
+                            Width = GetPersistedTextWidth((Grid)containerTb.Parent),
+                            Height = GetPersistedTextHeight((Grid)containerTb.Parent),
+                            Bold = containerTb.FontWeight >= FontWeights.Bold,
+                            Italic = containerTb.FontStyle == FontStyles.Italic,
+                            FontFamily = containerTb.FontFamily?.Source ?? "Segoe UI",
+                            Alignment = containerTb.TextAlignment.ToString()
                         });
                     }
                     else if (element is TextBox tb)
@@ -4589,15 +9243,117 @@ namespace Caelum.Pages
                             X = Canvas.GetLeft(tb),
                             Y = Canvas.GetTop(tb),
                             R = color.R, G = color.G, B = color.B,
-                            FontSize = tb.FontSize
+                            FontSize = tb.FontSize,
+                            Width = GetTextContainerBounds(tb.Parent as Grid).Width,
+                            Height = GetTextContainerBounds(tb.Parent as Grid).Height,
+                            Bold = tb.FontWeight >= FontWeights.Bold,
+                            Italic = tb.FontStyle == FontStyles.Italic,
+                            FontFamily = tb.FontFamily?.Source ?? "Segoe UI",
+                            Alignment = tb.TextAlignment.ToString()
                         });
                     }
                 }
 
-                if (pa.Strokes.Count > 0 || pa.Texts.Count > 0 || pa.Highlights.Count > 0)
+                // Task 19: image annotations (raw encoded bytes + geometry).
+                foreach (var imageContainer in page.ImageContainers)
+                {
+                    var imageData = page.GetImageData(imageContainer);
+                    if (imageData == null)
+                        continue;
+
+                    pa.Images.Add(new ImageAnnotation
+                    {
+                        X = Canvas.GetLeft(imageContainer),
+                        Y = Canvas.GetTop(imageContainer),
+                        Width = imageContainer.ActualWidth > 0 ? imageContainer.ActualWidth : imageContainer.Width,
+                        Height = imageContainer.ActualHeight > 0 ? imageContainer.ActualHeight : imageContainer.Height,
+                        Format = PdfService.DetectImageFormat(imageData),
+                        ImageDataBase64 = Convert.ToBase64String(imageData)
+                    });
+                }
+
+                // Task 25/26/27: overlay annotations share the image
+                // selection/move/resize pipeline. Rebuild their saved models
+                // from the live container geometry so a move or scale is
+                // preserved even when the user saves before another redraw.
+                foreach (var container in page.GetOverlayContainers())
+                {
+                    var data = page.GetOverlayData(container);
+                    double x = Canvas.GetLeft(container);
+                    double y = Canvas.GetTop(container);
+                    if (double.IsNaN(x)) x = 0;
+                    if (double.IsNaN(y)) y = 0;
+
+                    if (data is TextMarkupAnnotation markup)
+                    {
+                        var copy = new TextMarkupAnnotation
+                        {
+                            Kind = markup.Kind,
+                            X = x,
+                            Y = y,
+                            R = markup.R,
+                            G = markup.G,
+                            B = markup.B
+                        };
+                        double originalWidth = markup.Rects
+                            .Where(r => r != null && r.Length >= 4)
+                            .Select(r => r[0] + r[2])
+                            .DefaultIfEmpty(1)
+                            .Max();
+                        double originalHeight = markup.Rects
+                            .Where(r => r != null && r.Length >= 4)
+                            .Select(r => r[1] + r[3])
+                            .DefaultIfEmpty(1)
+                            .Max();
+                        double width = container.ActualWidth > 0 ? container.ActualWidth : container.Width;
+                        double height = container.ActualHeight > 0 ? container.ActualHeight : container.Height;
+                        double scaleX = originalWidth > 0 ? width / originalWidth : 1;
+                        double scaleY = originalHeight > 0 ? height / originalHeight : 1;
+                        foreach (var rect in markup.Rects)
+                        {
+                            if (rect != null && rect.Length >= 4)
+                                copy.Rects.Add(new[] { rect[0] * scaleX, rect[1] * scaleY, rect[2] * scaleX, rect[3] * scaleY });
+                        }
+                        pa.TextMarkups.Add(copy);
+                    }
+                    else if (data is AreaHighlightAnnotation area)
+                    {
+                        pa.AreaHighlights.Add(new AreaHighlightAnnotation
+                        {
+                            X = x,
+                            Y = y,
+                            Width = container.ActualWidth > 0 ? container.ActualWidth : container.Width,
+                            Height = container.ActualHeight > 0 ? container.ActualHeight : container.Height,
+                            R = area.R,
+                            G = area.G,
+                            B = area.B,
+                            A = area.A
+                        });
+                    }
+                    else if (data is StickyNoteAnnotation note)
+                    {
+                        pa.StickyNotes.Add(new StickyNoteAnnotation
+                        {
+                            X = x,
+                            Y = y,
+                            Text = note.Text
+                        });
+                    }
+                }
+
+                if (pa.Strokes.Count > 0 || pa.Texts.Count > 0 || pa.Highlights.Count > 0 || pa.Images.Count > 0
+                    || pa.TextMarkups.Count > 0 || pa.AreaHighlights.Count > 0 || pa.StickyNotes.Count > 0
+                    || pa.HiddenInks.Count > 0)
                     annotations[page.PageIndex] = pa;
             }
             return annotations;
+        }
+
+        private static TextAlignment ParseTextAlignment(string value)
+        {
+            return Enum.TryParse<TextAlignment>(value, true, out var alignment)
+                ? alignment
+                : TextAlignment.Left;
         }
 
         private MainWindow GetMainWindow()
@@ -4611,6 +9367,7 @@ namespace Caelum.Pages
 
             try
             {
+                _isLoadingAnnotations = true;
                 foreach (var page in _pageControls)
                 {
                     if (_pdfService.ExtractedAnnotations.TryGetValue(page.PageIndex, out var pa))
@@ -4620,16 +9377,56 @@ namespace Caelum.Pages
                             page.AddStroke(sa);
                         }
 
+                        foreach (var hiddenInk in pa.HiddenInks ?? new List<HiddenInkAnnotation>())
+                        {
+                            page.AddHiddenInk(hiddenInk);
+                        }
+
                         foreach (var ta in pa.Texts)
                         {
                             var color = Color.FromRgb(ta.R, ta.G, ta.B);
-                            CreateTextBox(page, new Point(ta.X, ta.Y), color: color, fontSize: ta.FontSize, text: ta.Text, select: false);
+                            CreateTextBox(
+                                page,
+                                new Point(ta.X, ta.Y),
+                                color: color,
+                                fontSize: ta.FontSize,
+                                text: ta.Text,
+                                select: false,
+                                width: ta.Width > 0 ? ta.Width : null,
+                                height: ta.Height > 0 ? ta.Height : null,
+                                bold: ta.Bold,
+                                italic: ta.Italic,
+                                fontFamily: ta.FontFamily,
+                                alignment: ParseTextAlignment(ta.Alignment));
                         }
 
                         foreach (var hl in pa.Highlights)
                         {
                             page.AddHighlight(hl);
                         }
+
+                        // Task 19: restored image annotations keep their saved
+                        // geometry verbatim.
+                        foreach (var ia in pa.Images)
+                        {
+                            if (string.IsNullOrEmpty(ia.ImageDataBase64))
+                                continue;
+
+                            byte[] imageBytes;
+                            try { imageBytes = Convert.FromBase64String(ia.ImageDataBase64); }
+                            catch { continue; }
+
+                            page.AddImage(imageBytes, new Point(ia.X, ia.Y), ia.Width, ia.Height);
+                        }
+
+                        foreach (var markup in pa.TextMarkups)
+                            page.AddTextMarkup(markup);
+
+                        foreach (var area in pa.AreaHighlights)
+                            page.AddAreaHighlight(area);
+
+                        foreach (var note in pa.StickyNotes)
+                            page.AddStickyNote(note);
                     }
                 }
             }
@@ -4637,10 +9434,156 @@ namespace Caelum.Pages
             {
                 System.Diagnostics.Debug.WriteLine($"LoadAnnotationsFromPdfServiceAsync EXCEPTION: {ex.GetType().Name}: {ex.Message}");
             }
+            finally
+            {
+                _isLoadingAnnotations = false;
+            }
             await Task.CompletedTask;
         }
 
         private void PageControl_InkMutated(object sender, EventArgs e) => MarkDirty();
+
+        private void PageControl_HiddenInkCreated(object sender, HiddenInkAnnotation annotation)
+        {
+            if (_isLoadingAnnotations || annotation == null || sender is not PdfPageControl page)
+                return;
+
+            PushUndoAction(new HiddenInkAddedAction(page, annotation));
+        }
+
+        private void PageControl_HiddenInkRemoved(object sender, HiddenInkAnnotation annotation)
+        {
+            if (_isLoadingAnnotations || annotation == null || sender is not PdfPageControl page)
+                return;
+
+            PushUndoAction(new HiddenInkRemovedAction(page, annotation));
+        }
+
+        private void PageControl_HiddenInksRemoved(
+            object sender,
+            HiddenInksRemovedEventArgs e)
+        {
+            if (_isLoadingAnnotations || e?.Annotations == null
+                || e.Annotations.Count == 0 || sender is not PdfPageControl page)
+                return;
+
+            PushUndoAction(new HiddenInksRemovedAction(page, e.Annotations));
+        }
+
+        private void PageControl_ImagesChanged(object sender, EventArgs e)
+        {
+            if (!_isLoadingAnnotations)
+                MarkDirty();
+        }
+
+        private void PageControl_AreaHighlightCreated(object sender, Grid container)
+        {
+            if (sender is PdfPageControl page && container != null)
+            {
+                PushUndoAction(new ItemsAddedAction(
+                    page,
+                    new List<System.Windows.Ink.Stroke>(),
+                    new List<Grid> { container }));
+            }
+        }
+
+        private void PageControl_StickyNoteActivated(object sender, Grid container)
+        {
+            if (sender is not PdfPageControl page || container == null)
+                return;
+
+            if (page.GetOverlayData(container) is StickyNoteAnnotation note)
+                OpenStickyNoteEditor(page, container, note);
+        }
+
+        private void OpenStickyNoteEditor(PdfPageControl page, Grid container, StickyNoteAnnotation note)
+        {
+            CommitStickyNoteEdit();
+
+            _stickyNoteEditingModel = note;
+            _stickyNoteEditingOriginalText = note.Text ?? string.Empty;
+            _stickyNoteEditor = new TextBox
+            {
+                Text = _stickyNoteEditingOriginalText,
+                AcceptsReturn = true,
+                TextWrapping = TextWrapping.Wrap,
+                MinWidth = 220,
+                MaxWidth = 320,
+                MinHeight = 76,
+                MaxHeight = 180,
+                FontSize = 14,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                Margin = new Thickness(0, 0, 0, 8)
+            };
+
+            var saveButton = new Button
+            {
+                Content = LocalizationService.Get("Common.Save"),
+                HorizontalAlignment = HorizontalAlignment.Right,
+                Padding = new Thickness(12, 5, 12, 5),
+                MinWidth = 72
+            };
+            _stickyNoteSaveButton = saveButton;
+
+            var panel = new StackPanel { Margin = new Thickness(12) };
+            panel.Children.Add(_stickyNoteEditor);
+            panel.Children.Add(saveButton);
+
+            var border = new Border
+            {
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(8),
+                Child = panel
+            };
+            border.SetResourceReference(Border.BackgroundProperty, "ThemeSurfaceBrush");
+            border.SetResourceReference(Border.BorderBrushProperty, "ThemeBorderBrush");
+
+            _stickyNotePopup = new Popup
+            {
+                PlacementTarget = container,
+                Placement = PlacementMode.Bottom,
+                StaysOpen = false,
+                AllowsTransparency = true,
+                Child = border
+            };
+            PopupZOrderHelper.FixPopupTopmost(_stickyNotePopup);
+            _stickyNotePopup.Closed += StickyNotePopup_Closed;
+            saveButton.Click += (_, __) => _stickyNotePopup.IsOpen = false;
+            _stickyNotePopup.IsOpen = true;
+            _stickyNoteEditor.Focus();
+            _stickyNoteEditor.SelectAll();
+        }
+
+        private void StickyNotePopup_Closed(object sender, EventArgs e)
+        {
+            CommitStickyNoteEdit();
+        }
+
+        private void CommitStickyNoteEdit()
+        {
+            if (_stickyNotePopup == null)
+                return;
+
+            var popup = _stickyNotePopup;
+            var note = _stickyNoteEditingModel;
+            var before = _stickyNoteEditingOriginalText ?? string.Empty;
+            var after = _stickyNoteEditor?.Text ?? string.Empty;
+
+            _stickyNotePopup = null;
+            _stickyNoteEditor = null;
+            _stickyNoteSaveButton = null;
+            _stickyNoteEditingModel = null;
+            _stickyNoteEditingOriginalText = null;
+
+            if (note != null && !string.Equals(before, after, StringComparison.Ordinal))
+            {
+                note.Text = after;
+                PushUndoAction(new StickyNoteEditAction(note, before, after));
+                MarkDirty();
+            }
+
+            popup.Closed -= StickyNotePopup_Closed;
+        }
 
         private void PageControl_StrokeCollectedUndoable(object sender, System.Windows.Ink.Stroke stroke)
         {
@@ -4648,10 +9591,27 @@ namespace Caelum.Pages
                 PushUndoAction(new StrokeAddedAction(page, stroke));
         }
 
-        private void MarkDirty() => _isDirty = true;
+        private void PageControl_StrokesErased(object sender, StrokesErasedEventArgs e)
+        {
+            if (sender is PdfPageControl page)
+                PushUndoAction(new StrokesErasedAction(page, e.RemovedStrokes, e.AddedStrokes));
+        }
+
+        private void PageControl_StrokeRecognized(object sender, StrokeRecognizedEventArgs e)
+        {
+            if (sender is PdfPageControl page)
+                PushUndoAction(new StrokeReplacedAction(page, e.OriginalStroke, e.IdealStroke));
+        }
+
+        private void MarkDirty()
+        {
+            _dirtyGeneration++;
+            _isDirty = true;
+        }
 
         private void NavigateBackCore()
         {
+            SetHostActive(false);
             if (NavigationService != null && NavigationService.CanGoBack)
                 NavigationService.GoBack();
             else if (NavigationService != null)
@@ -4682,8 +9642,19 @@ namespace Caelum.Pages
             {
                 pageControl.TextOverlayPointerPressed -= PageControl_TextOverlayPointerPressed;
                 pageControl.BackgroundPointerPressed -= PageControl_BackgroundPointerPressed;
+                pageControl.RemoveHandler(
+                    UIElement.PreviewMouseDownEvent,
+                    new MouseButtonEventHandler(PageControl_PreviewMouseDown));
                 pageControl.InkMutated -= PageControl_InkMutated;
                 pageControl.StrokeCollectedUndoable -= PageControl_StrokeCollectedUndoable;
+                pageControl.StrokesErased -= PageControl_StrokesErased;
+                pageControl.StrokeRecognized -= PageControl_StrokeRecognized;
+                pageControl.ImagesChanged -= PageControl_ImagesChanged;
+                pageControl.AreaHighlightCreated -= PageControl_AreaHighlightCreated;
+                pageControl.StickyNoteActivated -= PageControl_StickyNoteActivated;
+                pageControl.HiddenInkCreated -= PageControl_HiddenInkCreated;
+                pageControl.HiddenInkRemoved -= PageControl_HiddenInkRemoved;
+                pageControl.HiddenInksRemoved -= PageControl_HiddenInksRemoved;
                 pageControl.SelectionChanged -= PageControl_SelectionChanged;
                 pageControl.SelectionMoveCompleted -= PageControl_SelectionMoveCompleted;
                 pageControl.SelectionResizeCompleted -= PageControl_SelectionResizeCompleted;
@@ -4726,38 +9697,6 @@ namespace Caelum.Pages
                 (byte)((r + m) * 255),
                 (byte)((g + m) * 255),
                 (byte)((b + m) * 255));
-        }
-
-        [DllImport("user32.dll")]
-        private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
-
-        [DllImport("user32.dll")]
-        private static extern int GetWindowLong(IntPtr hWnd, int nIndex);
-
-        [DllImport("user32.dll")]
-        private static extern int SetWindowLong(IntPtr hWnd, int nIndex, int dwNewLong);
-
-        private void FixPopupTopmost(Popup popup)
-        {
-            popup.Opened += (s, e) =>
-            {
-                var source = PresentationSource.FromVisual(popup.Child) as System.Windows.Interop.HwndSource;
-                if (source != null)
-                {
-                    // Remove topmost z-order imposed by WPF's transparent popup
-                    SetWindowPos(source.Handle, new IntPtr(-2), 0, 0, 0, 0, 0x0010 | 0x0002 | 0x0001);
-                    // Add WS_EX_NOACTIVATE so the popup never steals Windows-level focus
-                    // from the main window. Without this, interacting with a Slider or
-                    // other focusable control inside the popup causes the popup HWND to
-                    // become the active window; the first subsequent click on the main
-                    // window is then swallowed by Windows to re-activate it, making
-                    // toolbar buttons appear to require two clicks.
-                    const int GWL_EXSTYLE = -20;
-                    const int WS_EX_NOACTIVATE = 0x08000000;
-                    int exStyle = GetWindowLong(source.Handle, GWL_EXSTYLE);
-                    SetWindowLong(source.Handle, GWL_EXSTYLE, exStyle | WS_EX_NOACTIVATE);
-                }
-            };
         }
 
         private static ControlTemplate CreateIconButtonTemplate(string hoverColor, string pressedColor)
@@ -4821,11 +9760,3 @@ namespace Caelum.Pages
         }
     }
 }
-
-
-
-
-
-
-
-

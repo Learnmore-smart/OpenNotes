@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Threading;
@@ -20,6 +21,8 @@ namespace Caelum.Services
             ["Common.Error"] = ("Error", "\u9519\u8BEF", "Erreur"),
             ["Common.OK"] = ("OK", "\u786E\u5B9A", "OK"),
             ["Common.Save"] = ("Save", "\u4FDD\u5B58", "Enregistrer"),
+            ["Common.Browse"] = ("Browse", "\u6D4F\u89C8", "Parcourir"),
+            ["Common.Close"] = ("Close", "\u5173\u95ED", "Fermer"),
             ["Editor.AutoSaved"] = ("Auto-saved", "\u5DF2\u81EA\u52A8\u4FDD\u5B58", "Enregistr\u00E9 automatiquement"),
             ["Editor.DeleteTooltip"] = ("Delete", "\u5220\u9664", "Supprimer"),
             ["Editor.EraserTooltip"] = ("Eraser", "\u6A61\u76AE\u64E6", "Gomme"),
@@ -34,6 +37,7 @@ namespace Caelum.Services
             ["Editor.Loading"] = ("Loading...", "\u52A0\u8F7D\u4E2D...", "Chargement..."),
             ["Editor.ModeEraser"] = ("Eraser", "\u6A61\u76AE\u64E6", "Gomme"),
             ["Editor.ModeHighlighter"] = ("Highlighter", "\u8357\u5149\u7B14", "Surligneur"),
+            ["Editor.ModeHiddenInk"] = ("Hidden ink", "\u9690\u85CF\u58A8\u8FF9", "Encre masquée"),
             ["Editor.ModePen"] = ("Pen", "\u753B\u7B14", "Stylo"),
             ["Editor.ModeSelect"] = ("Select", "\u9009\u62E9", "S\u00E9lection"),
             ["Editor.ModeText"] = ("Text", "\u6587\u672C", "Texte"),
@@ -70,6 +74,127 @@ namespace Caelum.Services
             ["Editor.ZoomEditTooltip"] = ("Click to set zoom", "\u70B9\u51FB\u8BBE\u7F6E\u7F29\u653E", "Cliquer pour r\u00E9gler le zoom"),
             ["Editor.ZoomInTooltip"] = ("Zoom in", "\u653E\u5927", "Zoom avant"),
             ["Editor.ZoomOutTooltip"] = ("Zoom out", "\u7F29\u5C0F", "Zoom arri\u00E8re"),
+            ["Editor.ResizeTextBox"] = ("Resize text box", "\u8C03\u6574\u6587\u672C\u6846\u5927\u5C0F", "Redimensionner la zone de texte"),
+            ["Editor.MoveTextBox"] = ("Move text box", "\u79FB\u52A8\u6587\u672C\u6846", "D\u00E9placer la zone de texte"),
+            ["Editor.ModeShape"] = ("Shape", "\u5F62\u72B6", "Forme"),
+            ["Editor.ModeLaser"] = ("Laser pointer", "\u6FC0\u5149\u7B14", "Pointeur laser"),
+            ["Editor.Stylus"] = ("Stylus", "\u624B\u5199\u7B14", "Stylet"),
+            ["Editor.PenFeaturePressure"] = ("pressure", "\u538B\u611F", "pression"),
+            ["Editor.PenFeatureTilt"] = ("tilt", "\u503E\u659C", "inclinaison"),
+            ["Editor.PenFeatureBarrel"] = ("barrel button", "\u7B14\u8EAB\u6309\u952E", "bouton du stylet"),
+            ["Editor.InkAnalysisUnavailable"] = ("Handwriting to text is not available in this build", "\u5F53\u524D\u7248\u672C\u6682\u4E0D\u652F\u6301\u624B\u5199\u8F6C\u6587\u5B57", "La conversion de l\u2019\u00E9criture en texte n\u2019est pas disponible dans cette version"),
+            ["Editor.InkAnalysisTooltip"] = ("Windows Ink Analysis is not available in this build", "\u5F53\u524D\u7248\u672C\u4E0D\u652F\u6301 Windows Ink Analysis", "Windows Ink Analysis n\u2019est pas disponible dans cette version"),
+            ["Editor.SearchResults"] = ("{0} results · F3 next / Shift+F3 previous", "{0} \u4E2A\u7ED3\u679C · F3 \u4E0B\u4E00\u4E2A / Shift+F3 \u4E0A\u4E00\u4E2A", "{0} résultats · F3 suivant / Maj+F3 précédent"),
+            ["Editor.PageNumber"] = ("Page {0}", "\u7B2C {0} \u9875", "Page {0}"),
+            ["Editor.LoadPdfFailed"] = ("Failed to load PDF: {0}", "\u52A0\u8F7D PDF \u5931\u8D25\uFF1A{0}", "Échec du chargement du PDF : {0}"),
+            ["Editor.ErrorDetails"] = ("Details: {0}", "\u8BE6\u7EC6\u4FE1\u606F\uFF1A{0}", "Détails : {0}"),
+            ["Editor.InsertBlankPageBefore"] = ("Insert blank page before", "\u5728\u6B64\u9875\u524D\u63D2\u5165\u7A7A\u767D\u9875", "Insérer une page vierge avant"),
+            ["Editor.DuplicatePage"] = ("Duplicate page", "\u590D\u5236\u9875\u9762", "Dupliquer la page"),
+            ["Editor.DeletePage"] = ("Delete page", "\u5220\u9664\u9875\u9762", "Supprimer la page"),
+            ["Editor.PageReorderFailed"] = ("Page reorder failed: {0}", "\u9875\u9762\u91CD\u6392\u5931\u8D25\uFF1A{0}", "Échec du réordonnancement des pages : {0}"),
+            ["Editor.PageDuplicateFailed"] = ("Page duplication failed: {0}", "\u590D\u5236\u9875\u9762\u5931\u8D25\uFF1A{0}", "Échec de la duplication de la page : {0}"),
+            ["Editor.RemoveBookmark"] = ("Remove bookmark", "\u5220\u9664\u4E66\u7B7E", "Supprimer le signet"),
+            ["Editor.UnbookmarkCurrentPage"] = ("Remove bookmark from current page", "\u53D6\u6D88\u5F53\u524D\u9875\u6536\u85CF", "Retirer le signet de la page actuelle"),
+            ["Editor.SidebarExpand"] = ("Expand panel", "\u5C55\u5F00\u9762\u677F", "Développer le panneau"),
+            ["Editor.PresetTooltip"] = ("Slot {0}: {1} {2} · {3}\n{4} · {5}", "\u69FD\u4F4D {0}\uFF1A{1} {2} · {3}\n{4} · {5}", "Emplacement {0} : {1} {2} · {3}\n{4} · {5}"),
+            ["Editor.PresetClickApply"] = ("Click to apply", "\u5DE6\u952E\u5E94\u7528", "Cliquer pour appliquer"),
+            ["Editor.PresetRightClickSave"] = ("Right-click to save current", "\u53F3\u952E\u4FDD\u5B58\u5F53\u524D\u8BBE\u7F6E", "Clic droit pour enregistrer l’actuel"),
+            ["Editor.PngFolderDescription"] = ("Choose a folder for PNG export", "\u9009\u62E9 PNG \u5BFC\u51FA\u6587\u4EF6\u5939", "Choisir un dossier pour l’export PNG"),
+            ["Editor.PngFileFilter"] = ("PNG image|*.png", "PNG \u56FE\u7247|*.png", "Image PNG|*.png"),
+            ["Editor.PdfFileFilter"] = ("PDF files|*.pdf", "PDF \u6587\u4EF6|*.pdf", "Fichiers PDF|*.pdf"),
+            ["Editor.ImageFileFilter"] = ("Images|*.png;*.jpg;*.jpeg;*.bmp", "\u56FE\u7247|*.png;*.jpg;*.jpeg;*.bmp", "Images|*.png;*.jpg;*.jpeg;*.bmp"),
+            ["Editor.PageRangeTitle"] = ("Choose page range", "\u9009\u62E9\u9875\u7801\u8303\u56F4", "Choisir une plage de pages"),
+            ["Editor.PageRangePrompt"] = ("Enter a page range (1-{0}), for example 2-4:", "\u8F93\u5165\u9875\u7801\u8303\u56F4\uFF081-{0}\uFF09\uFF0C\u4F8B\u5982 2-4\uFF1A", "Saisissez une plage de pages (1-{0}), par exemple 2-4 :"),
+            ["Editor.PdfPagesInserted"] = ("PDF pages inserted", "PDF \u9875\u9762\u5DF2\u63D2\u5165", "Pages PDF insérées"),
+            ["Editor.ImagePageInserted"] = ("Image page inserted", "\u56FE\u7247\u9875\u9762\u5DF2\u63D2\u5165", "Page image insérée"),
+            ["Editor.ImportFailed"] = ("Import failed: {0}", "\u5BFC\u5165\u5931\u8D25\uFF1A{0}", "Échec de l’importation : {0}"),
+            ["Editor.NoPagesToPrint"] = ("The document has no pages to print.", "\u6587\u6863\u6CA1\u6709\u53EF\u6253\u5370\u7684\u9875\u9762\u3002", "Le document ne contient aucune page à imprimer."),
+            ["Editor.BookmarkPage"] = ("Page {0}", "\u7B2C {0} \u9875", "Page {0}"),
+            ["PageTemplate.DottedTitle"] = ("Dotted", "\u70B9\u9635", "Pointillée"),
+            ["PageTemplate.DottedHint"] = ("For free notes and design sketches", "\u9002\u5408\u81EA\u7531\u7B14\u8BB0\u4E0E\u8BBE\u8BA1\u8349\u56FE", "Pour les notes libres et les croquis"),
+            ["PageTemplate.MusicTitle"] = ("Music", "\u4E94\u7EBF\u8C31", "Musique"),
+            ["PageTemplate.MusicHint"] = ("Staff-lined pages for music", "\u4E94\u7EBF\u8C31\u5206\u7EC4\u9875\u9762", "Pages à portée musicale"),
+            ["PageTemplate.CornellTitle"] = ("Cornell", "\u5EB7\u5948\u5C14", "Cornell"),
+            ["PageTemplate.CornellHint"] = ("Sections for cues, notes, and summary", "\u7EBF\u7D22\u3001\u7B14\u8BB0\u4E0E\u603B\u7ED3\u5206\u533A", "Sections pour indices, notes et résumé"),
+            ["Editor.Copy"] = ("Copied", "\u5DF2\u590D\u5236", "Copié"),
+            ["Editor.TextCopied"] = ("Text copied", "\u6587\u672C\u5DF2\u590D\u5236", "Texte copié"),
+            ["Editor.Cut"] = ("Cut", "\u5DF2\u526A\u5207", "Coupé"),
+            ["Editor.SelectionCopied"] = ("Selection copied", "\u9009\u4E2D\u5185\u5BB9\u5DF2\u590D\u5236", "Sélection copiée"),
+            ["Editor.SelectionPasted"] = ("Selection pasted", "\u9009\u4E2D\u5185\u5BB9\u5DF2\u7C98\u8D34", "Sélection collée"),
+            ["Editor.ImagePasted"] = ("Image pasted", "\u56FE\u7247\u5DF2\u7C98\u8D34", "Image collée"),
+            ["Editor.ImageAdded"] = ("Image added", "\u56FE\u7247\u5DF2\u63D2\u5165", "Image ajoutée"),
+            ["Editor.Duplicated"] = ("Duplicated", "\u5DF2\u91CD\u590D", "Dupliqué"),
+            ["Editor.PenDetected"] = ("{0} pen detected{1}", "\u68C0\u6D4B\u5230 {0} \u7B14{1}", "Stylet {0} détecté{1}"),
+            ["Editor.ShapeHeader"] = ("Shape", "\u5F62\u72B6", "Forme"),
+            ["Editor.ShapeLine"] = ("Line", "\u76F4\u7EBF", "Ligne"),
+            ["Editor.ShapeRectangle"] = ("Rectangle", "\u77E9\u5F62", "Rectangle"),
+            ["Editor.ShapeEllipse"] = ("Ellipse", "\u692D\u5706", "Ellipse"),
+            ["Editor.ShapeArrow"] = ("Arrow", "\u7BAD\u5934", "Flèche"),
+            ["Editor.EraserModeHeader"] = ("Eraser mode", "\u64E6\u9664\u6A21\u5F0F", "Mode gomme"),
+            ["Editor.EraserPixel"] = ("Pixel erase", "\u50CF\u7D20\u64E6\u9664", "Effacer les pixels"),
+            ["Editor.EraserStroke"] = ("Whole stroke", "\u6574\u7B14\u64E6\u9664", "Trait entier"),
+            ["Editor.HighlighterModeHeader"] = ("Mode", "\u6A21\u5F0F", "Mode"),
+            ["Editor.HighlighterFreehand"] = ("Freehand", "\u624B\u7ED8", "Main levée"),
+            ["Editor.HighlighterText"] = ("Text", "\u6587\u672C\u9AD8\u4EAE", "Texte"),
+            ["Editor.HighlighterUnderline"] = ("Underline", "\u4E0B\u5212\u7EBF", "Souligné"),
+            ["Editor.HighlighterStrikeOut"] = ("Strikeout", "\u5220\u9664\u7EBF", "Barré"),
+            ["Editor.HighlighterSquiggly"] = ("Squiggly", "\u6CE2\u6D6A\u7EBF", "Ondulé"),
+            ["Editor.HighlighterArea"] = ("Area", "\u533A\u57DF", "Zone"),
+            ["Editor.Pressure"] = ("Pressure", "\u538B\u611F", "Pression"),
+            ["Editor.InkSimulation"] = ("Ink simulation", "\u58A8\u6C34\u6A21\u62DF", "Simulation d'encre"),
+            ["Editor.ShapeRecognition"] = ("Shape recognition", "\u5F62\u72B6\u8BC6\u522B", "Reconnaissance des formes"),
+            ["Editor.SmoothingHeader"] = ("Smoothing", "\u5E73\u6ED1", "Lissage"),
+            ["Editor.SmoothingOff"] = ("Off", "\u5173", "Désactivé"),
+            ["Editor.SmoothingLow"] = ("Low", "\u4F4E", "Faible"),
+            ["Editor.SmoothingMid"] = ("Medium", "\u4E2D", "Moyen"),
+            ["Editor.SmoothingHigh"] = ("High", "\u9AD8", "Élevé"),
+            ["Editor.SmallerText"] = ("Smaller text", "\u51CF\u5C0F\u6587\u5B57", "Texte plus petit"),
+            ["Editor.BiggerText"] = ("Bigger text", "\u589E\u5927\u6587\u5B57", "Texte plus grand"),
+            ["Editor.BoldTooltip"] = ("Bold", "\u7C97\u4F53", "Gras"),
+            ["Editor.ItalicTooltip"] = ("Italic", "\u659C\u4F53", "Italique"),
+            ["Editor.FontFamilyTooltip"] = ("Font family", "\u5B57\u4F53", "Famille de polices"),
+            ["Editor.AlignmentTooltip"] = ("Alignment", "\u5BF9\u9F50\u65B9\u5F0F", "Alignement"),
+            ["Editor.Recent"] = ("Recent", "\u6700\u8FD1", "Récent"),
+            ["Editor.SelectPenFirst"] = ("Select Pen or Highlighter first", "\u8BF7\u5148\u9009\u62E9\u753B\u7B14\u6216\u9AD8\u4EAE\u7B14", "Sélectionnez d'abord le stylet ou le surligneur"),
+            ["Editor.PresetSaved"] = ("Slot {0} saved", "\u69FD\u4F4D {0} \u5DF2\u4FDD\u5B58", "Emplacement {0} enregistré"),
+            ["Editor.SavedSuccessfully"] = ("Saved successfully", "\u4FDD\u5B58\u6210\u529F", "Enregistré"),
+            ["Editor.NoVersionHistory"] = ("No version history available", "\u6682\u65E0\u7248\u672C\u5386\u53F2", "Aucun historique de versions"),
+            ["Editor.RestoredVersion"] = ("Restored version from {0}", "\u5DF2\u4ECE {0} \u6062\u590D\u7248\u672C", "Version restaurée du {0}"),
+            ["Editor.VersionLoadFailed"] = ("Failed to load version", "\u52A0\u8F7D\u7248\u672C\u5931\u8D25", "Échec du chargement de la version"),
+            ["Editor.PngExported"] = ("PNG exported ({0} pages, {1}x)", "PNG \u5DF2\u5BFC\u51FA\uFF08{0} \u9875\uFF0C{1}x\uFF09", "PNG exporté ({0} pages, {1}x)"),
+            ["Editor.PngExportFailed"] = ("PNG export failed: {0}", "PNG \u5BFC\u51FA\u5931\u8D25\uFF1A{0}", "Échec de l'export PNG : {0}"),
+            ["Editor.SourcePdfReadFailed"] = ("Unable to read the source PDF: {0}", "\u65E0\u6CD5\u8BFB\u53D6\u6E90 PDF\uFF1A{0}", "Impossible de lire le PDF source : {0}"),
+            ["Editor.PageRotated"] = ("Page rotated 90°", "\u9875\u9762\u5DF2\u65CB\u8F6C 90°", "Page tournée de 90°"),
+            ["Editor.RotateFailed"] = ("Rotate failed: {0}", "\u65CB\u8F6C\u5931\u8D25\uFF1A{0}", "Échec de la rotation : {0}"),
+            ["Editor.PreparingPrint"] = ("Preparing print...", "\u6B63\u5728\u51C6\u5907\u6253\u5370...", "Préparation de l'impression..."),
+            ["Editor.PrintSent"] = ("Print job sent", "\u6253\u5370\u4EFB\u52A1\u5DF2\u53D1\u9001", "Tâche d'impression envoyée"),
+            ["Editor.PrintFailed"] = ("Failed to print PDF: {0}", "\u6253\u5370 PDF \u5931\u8D25\uFF1A{0}", "Échec de l'impression du PDF : {0}"),
+            ["Editor.SaveFailed"] = ("Failed to save annotations: {0}", "\u4FDD\u5B58\u6CE8\u91CA\u5931\u8D25\uFF1A{0}", "Échec de l'enregistrement des annotations : {0}"),
+            ["Editor.AutoSaveFailed"] = ("Auto-save failed: {0}", "\u81EA\u52A8\u4FDD\u5B58\u5931\u8D25\uFF1A{0}", "Échec de l'enregistrement automatique : {0}"),
+            ["Editor.UndoFailed"] = ("Undo failed: {0}", "\u64A4\u9500\u5931\u8D25\uFF1A{0}", "Échec de l'annulation : {0}"),
+            ["Editor.RedoFailed"] = ("Redo failed: {0}", "\u91CD\u505A\u5931\u8D25\uFF1A{0}", "Échec du rétablissement : {0}"),
+            ["Editor.Searching"] = ("Searching...", "\u641C\u7D22\u4E2D...", "Recherche..."),
+            ["Editor.PrintTooltip"] = ("Print...", "\u6253\u5370...", "Imprimer..."),
+            ["Editor.VersionHistoryTooltip"] = ("View version history", "\u67E5\u770B\u7248\u672C\u5386\u53F2", "Afficher l'historique des versions"),
+            ["Editor.PenOnlyTooltip"] = ("Pen only", "\u4EC5\u7B14\u7ED8\u5236", "Stylet uniquement"),
+            ["Editor.FitWidthTooltip"] = ("Fit width", "\u9002\u5BBD", "Ajuster à la largeur"),
+            ["Editor.FitPageTooltip"] = ("Fit page", "\u9002\u5408\u9875\u9762", "Ajuster à la page"),
+            ["Editor.RotateTooltip"] = ("Rotate 90°", "\u65CB\u8F6C 90°", "Tourner de 90°"),
+            ["Editor.ImmersiveTooltip"] = ("Immersive mode (F11)", "沉浸模式（F11）", "Mode immersif (F11)"),
+            ["Editor.StickyNoteTooltip"] = ("Sticky note", "\u4FBF\u7B7E", "Note autocollante"),
+            ["Editor.HiddenInkTooltip"] = ("Hidden ink — click to reveal for 3 seconds", "\u9690\u85CF\u58A8\u8FF9\u2014\u2014\u70B9\u51FB\u663E\u793A 3 \u79D2", "Encre masquée — cliquer pour afficher pendant 3 secondes"),
+            ["Editor.RulerTooltip"] = ("Ruler", "\u76F4\u5C3A", "Règle"),
+            ["Editor.SaveDocumentTooltip"] = ("Save document", "\u4FDD\u5B58\u6587\u6863", "Enregistrer le document"),
+            ["Editor.CurrentPagePng"] = ("Export current page PNG ({0}x)", "\u5BFC\u51FA\u5F53\u524D\u9875 PNG\uFF08{0}x\uFF09", "Exporter la page actuelle en PNG ({0}x)"),
+            ["Editor.AllPagesPng"] = ("Export all pages PNG ({0}x)", "\u5BFC\u51FA\u5168\u90E8\u9875 PNG\uFF08{0}x\uFF09", "Exporter toutes les pages en PNG ({0}x)"),
+            ["Editor.InsertPdfPage"] = ("Insert pages from PDF", "\u4ECE PDF \u63D2\u5165\u9875\u9762", "Insérer des pages depuis un PDF"),
+            ["Editor.InsertImagePage"] = ("Insert page from image", "\u4ECE\u56FE\u7247\u63D2\u5165\u9875\u9762", "Insérer une page depuis une image"),
+            ["Editor.RotateCurrentPage"] = ("Rotate current page 90°", "\u65CB\u8F6C\u5F53\u524D\u9875 90°", "Tourner la page actuelle de 90°"),
+            ["Editor.SidebarCollapse"] = ("Collapse panel", "\u6536\u8D77\u9762\u677F", "Réduire le panneau"),
+            ["Editor.PagesTab"] = ("Pages", "\u9875\u9762", "Pages"),
+            ["Editor.OutlineTab"] = ("Outline", "\u5927\u7EB2", "Plan"),
+            ["Editor.BookmarksTab"] = ("Bookmarks", "\u4E66\u7B7E", "Signets"),
+            ["Editor.BookmarkCurrentPage"] = ("Bookmark current page", "\u6536\u85CF\u5F53\u524D\u9875", "Ajouter la page actuelle aux signets"),
             ["Home.Context.CopyPath"] = ("Copy path", "\u590D\u5236\u8DEF\u5F84", "Copier le chemin"),
             ["Home.Context.Export"] = ("Export copy", "\u5BFC\u51FA\u526F\u672C", "Exporter une copie"),
             ["Home.Context.Open"] = ("Open", "\u6253\u5F00", "Ouvrir"),
@@ -128,7 +253,7 @@ namespace Caelum.Services
             ["Home.Subtitle"] = ("Open a PDF, create a notebook, or organize your library.", "\u6253\u5F00 PDF\u3001\u521B\u5EFA\u7B14\u8BB0\u672C\uFF0C\u6216\u6574\u7406\u4F60\u7684\u5E93\u3002", "Ouvrez un PDF, cr\u00E9ez un carnet ou organisez votre biblioth\u00E8que."),
             ["Home.Title"] = ("Library", "\u5E93", "Biblioth\u00E8que"),
             ["Main.About"] = ("About", "\u5173\u4E8E", "\u00C0 propos"),
-            ["Main.AboutMessage"] = ("Caelum\nThe Modern Digital Ink Notetaker for Windows", "Caelum\n\u9762\u5411 Windows \u7684\u73B0\u4EE3\u6570\u5B57\u58A8\u8FF9\u7B14\u8BB0\u5DE5\u5177", "Caelum\nLe carnet d'encre num\u00E9rique moderne pour Windows"),
+            ["Main.AboutMessage"] = ("OpenNotes\nA paper-like PDF annotation workspace for Windows", "OpenNotes\n\u4E00\u4E2A\u7EB8\u5F20\u822C\u7684 Windows PDF \u6279\u6CE8\u5DE5\u4F5C\u53F0", "OpenNotes\nUn espace d'annotation PDF sur Windows, comme une feuille de papier"),
             ["Main.AboutTitle"] = ("About", "\u5173\u4E8E", "\u00C0 propos"),
             ["Main.CloseTabTooltip"] = ("Close tab", "\u5173\u95ED\u9009\u9879\u5361", "Fermer l'onglet"),
             ["Main.FileAutoSaved"] = ("File auto-saved", "\u6587\u4EF6\u5DF2\u81EA\u52A8\u4FDD\u5B58", "Fichier enregistr\u00E9 automatiquement"),
@@ -142,22 +267,46 @@ namespace Caelum.Services
             ["Main.SettingsSaved"] = ("Settings saved", "\u8BBE\u7F6E\u5DF2\u4FDD\u5B58", "Param\u00E8tres enregistr\u00E9s"),
             ["Main.SortByDate"] = ("Sort by date", "\u6309\u65E5\u671F\u6392\u5E8F", "Trier par date"),
             ["Main.SortByName"] = ("Sort by name", "\u6309\u540D\u79F0\u6392\u5E8F", "Trier par nom"),
-            ["Settings.LanguageHint"] = ("Choose the interface language for Caelum. Changes preview immediately.", "\u9009\u62E9 Caelum \u7684\u754C\u9762\u8BED\u8A00\u3002\u66F4\u6539\u4F1A\u7ACB\u5373\u9884\u89C8\u3002", "Choisissez la langue de l'interface de Caelum. Les changements sont pr\u00E9visualis\u00E9s imm\u00E9diatement."),
+            ["Product.Description"] = ("A paper-like PDF annotation workspace for Windows.", "\u4E00\u4E2A\u7EB8\u5F20\u822C\u7684 Windows PDF \u6279\u6CE8\u5DE5\u4F5C\u53F0\u3002", "Un espace d’annotation PDF sur Windows, comme une feuille de papier."),
+            ["Settings.LanguageHint"] = ("Choose the interface language for OpenNotes. Changes preview immediately.", "\u9009\u62E9 OpenNotes \u7684\u754C\u9762\u8BED\u8A00\u3002\u66F4\u6539\u4F1A\u7ACB\u5373\u9884\u89C8\u3002", "Choisissez la langue de l'interface d'OpenNotes. Les changements sont pr\u00E9visualis\u00E9s imm\u00E9diatement."),
             ["Settings.LanguageLabel"] = ("Display language", "\u663E\u793A\u8BED\u8A00", "Langue d'affichage"),
             ["Settings.Subtitle"] = ("Customize utilities and language.", "\u8C03\u6574\u5DE5\u5177\u529F\u80FD\u4E0E\u8BED\u8A00\u3002", "Personnalisez les utilitaires et la langue."),
             ["Settings.Title"] = ("Settings", "\u8BBE\u7F6E", "Param\u00E8tres"),
             ["Settings.UtilityHint"] = ("On the Home page, Select mode enables multi-select. In document tabs, it switches back to text selection.", "\u5728\u4E3B\u9875\u4E2D\uFF0C\u9009\u62E9\u6A21\u5F0F\u53EF\u542F\u7528\u591A\u9009\u3002\u5728\u6587\u6863\u9009\u9879\u5361\u4E2D\uFF0C\u5B83\u4F1A\u5207\u56DE\u6587\u672C\u9009\u62E9\u3002", "Sur l'accueil, le mode S\u00E9lection active la s\u00E9lection multiple. Dans les onglets de document, il r\u00E9active la s\u00E9lection de texte."),
-            ["Settings.UtilityLabel"] = ("Utility modes", "\u5DE5\u5177\u6A21\u5F0F", "Modes utilitaires")
+            ["Settings.UtilityLabel"] = ("Utility modes", "\u5DE5\u5177\u6A21\u5F0F", "Modes utilitaires"),
+            ["Settings.AutoSaveInterval"] = ("Auto-save interval", "\u81EA\u52A8\u4FDD\u5B58\u95F4\u9694", "Intervalle d'enregistrement automatique"),
+            ["Settings.Pressure"] = ("Pressure", "\u538B\u611F", "Pression"),
+            ["Settings.Enabled"] = ("Enabled", "\u542F\u7528", "Activé"),
+            ["Settings.PenOnly"] = ("Pen-only drawing", "\u4EC5\u7B14\u7ED8\u5236", "Dessin au stylet uniquement"),
+            ["Settings.Smoothing"] = ("Smoothing", "\u7B14\u8FF9\u5E73\u6ED1", "Lissage"),
+            ["Settings.DefaultPenColor"] = ("Default pen color", "\u9ED8\u8BA4\u7B14\u989C\u8272", "Couleur de stylet par défaut"),
+            ["Settings.DefaultPenSize"] = ("Default pen size", "\u9ED8\u8BA4\u7B14\u7C97\u7EC6", "Épaisseur de stylet par défaut"),
+            ["Settings.Performance"] = ("Performance", "\u6027\u80FD", "Performances"),
+            ["Settings.PerformanceBatterySaver"] = ("Battery saver", "\u8282\u80FD", "Économie d’énergie"),
+            ["Settings.PerformanceBalanced"] = ("Balanced (recommended)", "\u5747\u8861\uFF08\u63A8\u8350\uFF09", "Équilibré (recommandé)"),
+            ["Settings.PerformanceBestQuality"] = ("Best quality", "\u6700\u4F73\u8D28\u91CF", "Qualité optimale"),
+            ["Settings.Theme"] = ("Theme", "\u4E3B\u9898", "Thème"),
+            ["Settings.ThemeLight"] = ("Light", "\u6D45\u8272", "Clair"),
+            ["Settings.ThemeDark"] = ("Dark", "\u6DF1\u8272", "Sombre"),
+            ["Settings.ThemeSystem"] = ("System", "\u8DDF\u968F\u7CFB\u7EDF", "Système"),
+            ["Settings.ThemeHighContrast"] = ("High contrast", "\u9AD8\u5BF9\u6BD4\u5EA6", "Contraste élevé")
         };
 
         public static AppLanguage CurrentLanguage { get; private set; } = AppLanguage.English;
 
         public static CultureInfo CurrentCulture { get; private set; } = CultureInfo.GetCultureInfo("en-US");
 
+        public static event EventHandler LanguageChanged;
+
         public static IReadOnlyList<LanguageOption> GetLanguageOptions() => LanguageOptions;
+
+        public static IReadOnlyDictionary<string, (string English, string Chinese, string French)> GetCatalog() => Strings;
 
         public static void ApplyLanguage(AppLanguage language)
         {
+            if (CurrentLanguage == language)
+                return;
+
             CurrentLanguage = language;
             CurrentCulture = language switch
             {
@@ -170,14 +319,20 @@ namespace Caelum.Services
             Thread.CurrentThread.CurrentUICulture = CurrentCulture;
             CultureInfo.DefaultThreadCurrentCulture = CurrentCulture;
             CultureInfo.DefaultThreadCurrentUICulture = CurrentCulture;
+            LanguageChanged?.Invoke(null, EventArgs.Empty);
         }
 
         public static string Get(string key)
         {
-            if (!Strings.TryGetValue(key, out var value))
-                return key;
+            return GetForLanguage(key, CurrentLanguage);
+        }
 
-            return CurrentLanguage switch
+        public static string GetForLanguage(string key, AppLanguage language)
+        {
+            if (!Strings.TryGetValue(key, out var value))
+                throw new KeyNotFoundException($"Missing localization key: {key}");
+
+            return language switch
             {
                 AppLanguage.Chinese => value.Chinese,
                 AppLanguage.French => value.French,
@@ -188,6 +343,17 @@ namespace Caelum.Services
         public static string Format(string key, params object[] args)
         {
             return string.Format(CurrentCulture, Get(key), args);
+        }
+
+        public static string FormatForLanguage(string key, AppLanguage language, params object[] args)
+        {
+            CultureInfo culture = language switch
+            {
+                AppLanguage.Chinese => CultureInfo.GetCultureInfo("zh-CN"),
+                AppLanguage.French => CultureInfo.GetCultureInfo("fr-FR"),
+                _ => CultureInfo.GetCultureInfo("en-US")
+            };
+            return string.Format(culture, GetForLanguage(key, language), args);
         }
     }
 }

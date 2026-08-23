@@ -19,11 +19,28 @@
             <Image x:Name="PdfImage" Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Top"
                    RenderOptions.BitmapScalingMode="HighQuality"/>
 
+            <!-- Task 12.2: swap overlay — same layout slot as PdfImage, sits
+                 directly above it. Stages the incoming bitmap for a few frames
+                 so the main image can swap underneath without a blank /
+                 re-interpolation flash (see SwapPageSource in code-behind). -->
+            <Image x:Name="PdfImageOverlay" Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Top"
+                   RenderOptions.BitmapScalingMode="HighQuality" Opacity="0" IsHitTestVisible="False"/>
+
+            <!-- Task 19: Image annotation layer (pasted/dropped images).
+                 Sits below the ink layer so strokes draw over images; selection
+                 happens through SelectionOverlayCanvas, never directly. -->
+            <Canvas x:Name="ImageOverlayCanvas" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
+                    Background="Transparent" IsHitTestVisible="False"/>
+
         <!-- Ink Layer (WPF InkCanvas) -->
         <InkCanvas x:Name="InkCanvas" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Background="Transparent"
                    Stylus.IsPressAndHoldEnabled="False"
                    Stylus.IsTapFeedbackEnabled="False"
                    Stylus.IsFlicksEnabled="False" />
+
+        <!-- Shape Drag Preview Layer (dashed outline while dragging a shape) -->
+        <Canvas x:Name="ShapePreviewCanvas" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
+                Background="Transparent" IsHitTestVisible="False"/>
 
         <!-- Text/Widget Layer -->
         <Canvas x:Name="TextOverlayCanvas" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"/>
@@ -39,6 +56,12 @@
         <Canvas x:Name="SelectionOverlayCanvas" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
                 Background="Transparent" Visibility="Collapsed" IsHitTestVisible="True"/>
 
+        <!-- Study mode: opaque freehand masks. The canvas itself has no
+             background, so only a mask path is hit-testable; clicks elsewhere
+             still reach the normal editor surface. -->
+        <Canvas x:Name="HiddenInkCanvas" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
+                Background="{x:Null}" ClipToBounds="True" IsHitTestVisible="True"/>
+
         <!-- Eraser Indicator (on its own Canvas so SetLeft/SetTop works) -->
         <Canvas x:Name="EraserCanvas" IsHitTestVisible="False">
             <Ellipse x:Name="EraserIndicator"
@@ -50,6 +73,13 @@
                      Visibility="Collapsed"
                      IsHitTestVisible="False"/>
         </Canvas>
+
+        <!-- Task 20: laser pointer layer — topmost visual. Ephemeral ink that
+             fades away shortly after writing; never enters InkCanvas.Strokes,
+             so it is invisible to undo / dirty / save. Hit-testing stays off:
+             input is captured by the InkCanvas laser-mode handlers. -->
+        <Canvas x:Name="LaserInkCanvas" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
+                Background="Transparent" IsHitTestVisible="False"/>
         </Grid>
     </Grid>
 </UserControl>

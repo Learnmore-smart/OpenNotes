@@ -38,10 +38,22 @@ namespace Caelum
             StateChanged += MainWindow_StateChanged;
             KeyDown += MainWindow_KeyDown;
             TitleBarBorder.MouseLeftButtonDown += (sender, args) => DragMove();
+            LocalizationService.LanguageChanged += LocalizationService_LanguageChanged;
+            Closed += (_, __) => LocalizationService.LanguageChanged -= LocalizationService_LanguageChanged;
+            ThemeService.Apply(AppSettingsService.Load().Theme);
             ApplyLocalization();
+
+            // Popups must not float above other applications after Alt-Tab (Task 10)
+            PopupZOrderHelper.FixContextMenuTopmost(SortContextMenu);
+            PopupZOrderHelper.FixContextMenuTopmost(MoreContextMenu);
 
             // Create the first Home tab
             AddNewHomeTab(activate: true);
+        }
+
+        private void LocalizationService_LanguageChanged(object sender, EventArgs e)
+        {
+            ApplyLocalization();
         }
 
         private void LoadAppIcon()
@@ -198,6 +210,9 @@ namespace Caelum
         {
             if (_activeTab == tab) return;
 
+            if (_activeTab?.Frame?.Content is EditorPage previousEditor)
+                previousEditor.SetHostActive(false);
+
             foreach (var t in _tabs)
             {
                 t.IsActive = false;
@@ -208,6 +223,9 @@ namespace Caelum
             tab.IsActive = true;
             tab.Frame.Visibility = Visibility.Visible;
             _activeTab = tab;
+
+            if (tab.Frame.Content is EditorPage activeEditor)
+                activeEditor.SetHostActive(WindowState != WindowState.Minimized);
 
             UpdateNavButtons();
             RebuildTabBar();
@@ -221,6 +239,7 @@ namespace Caelum
             {
                 var saved = await editor.AutoSaveAsync();
                 if (saved) ShowToast(LocalizationService.Get("Main.FileAutoSaved"));
+                await editor.ReleaseResourcesAsync();
             }
 
             tab.Frame.Navigated -= Frame_Navigated;
@@ -251,17 +270,29 @@ namespace Caelum
             }
         }
 
+        private static Brush GetThemeBrush(string key, Brush fallback)
+        {
+            return Application.Current?.TryFindResource(key) as Brush ?? fallback;
+        }
+
+        private static void UseThemeBrush(FrameworkElement element, DependencyProperty property, string key)
+        {
+            if (element == null || Application.Current?.TryFindResource(key) == null)
+                return;
+
+            // Keep a DynamicResource expression so an in-place settings preview
+            // updates existing tab chrome when ThemeService swaps the palette.
+            element.SetResourceReference(property, key);
+        }
+
         private Border CreateTabButton(AppTab tab)
         {
             bool isActive = tab == _activeTab;
-            var activeForeground = new SolidColorBrush(Color.FromRgb(31, 41, 55));
-            var inactiveForeground = new SolidColorBrush(Color.FromRgb(107, 114, 128));
-            var activeCloseForeground = new SolidColorBrush(Color.FromRgb(75, 85, 99));
-            var inactiveCloseForeground = new SolidColorBrush(Color.FromRgb(156, 163, 175));
-            var activeBackground = new SolidColorBrush(Color.FromRgb(255, 255, 255));
-            var hoverBackground = new SolidColorBrush(Color.FromArgb(18, 17, 24, 39));
+            var activeForeground = GetThemeBrush("ThemeForegroundBrush", SystemColors.ControlTextBrush);
+            var inactiveForeground = GetThemeBrush("ThemeSubtleForegroundBrush", SystemColors.GrayTextBrush);
+            var activeBackground = GetThemeBrush("ThemeSurfaceAltBrush", SystemColors.WindowBrush);
+            var activeBorderBrush = GetThemeBrush("ThemeBorderBrush", SystemColors.ActiveBorderBrush);
             var transparentBackground = Brushes.Transparent;
-            var activeBorderBrush = new SolidColorBrush(Color.FromArgb(18, 17, 24, 39));
 
             // Tab content: icon + title + close button
             var icon = new TextBlock
@@ -273,6 +304,7 @@ namespace Caelum
                 VerticalAlignment = VerticalAlignment.Center,
                 Margin = new Thickness(0, 0, 6, 0)
             };
+            UseThemeBrush(icon, TextBlock.ForegroundProperty, "ThemeForegroundBrush");
 
             var title = new TextBlock
             {
@@ -284,16 +316,20 @@ namespace Caelum
                 TextTrimming = TextTrimming.CharacterEllipsis,
                 FontWeight = isActive ? FontWeights.Medium : FontWeights.Normal
             };
+            UseThemeBrush(title, TextBlock.ForegroundProperty, isActive ? "ThemeForegroundBrush" : "ThemeSubtleForegroundBrush");
+
+            var closeIcon = new TextBlock
+            {
+                Text = "\uE8BB",
+                FontFamily = new FontFamily("Segoe MDL2 Assets"),
+                FontSize = 10,
+                Foreground = inactiveForeground
+            };
+            UseThemeBrush(closeIcon, TextBlock.ForegroundProperty, "ThemeSubtleForegroundBrush");
 
             var closeBtn = new Button
             {
-                Content = new TextBlock
-                {
-                    Text = "\uE8BB",
-                    FontFamily = new FontFamily("Segoe MDL2 Assets"),
-                    FontSize = 10,
-                    Foreground = isActive ? activeCloseForeground : inactiveCloseForeground
-                },
+                Content = closeIcon,
                 Width = 20,
                 Height = 20,
                 Background = transparentBackground,
@@ -319,7 +355,10 @@ namespace Caelum
             closeBtnTemplate.VisualTree = closeBorder;
 
             var hoverTrigger = new Trigger { Property = UIElement.IsMouseOverProperty, Value = true };
-            hoverTrigger.Setters.Add(new Setter(Border.BackgroundProperty, new SolidColorBrush(Color.FromArgb(18, 17, 24, 39)), "CloseBg"));
+            hoverTrigger.Setters.Add(new Setter(
+                Border.BackgroundProperty,
+                new DynamicResourceExtension("ThemeControlHoverBrush"),
+                "CloseBg"));
             closeBtnTemplate.Triggers.Add(hoverTrigger);
 
             closeBtn.Template = closeBtnTemplate;
@@ -346,15 +385,24 @@ namespace Caelum
                 Height = 32,
                 MinWidth = 72,
                 AllowDrop = true,
+                Focusable = true,
+                ToolTip = tab.Title,
                 Cursor = Cursors.Hand,
                 SnapsToDevicePixels = true
             };
+            KeyboardNavigation.SetIsTabStop(border, true);
+
+            if (isActive)
+            {
+                UseThemeBrush(border, Border.BackgroundProperty, "ThemeSurfaceAltBrush");
+                UseThemeBrush(border, Border.BorderBrushProperty, "ThemeBorderBrush");
+            }
 
             border.MouseEnter += (s, e) =>
             {
                 if (capturedTab != _activeTab)
                 {
-                    border.Background = hoverBackground;
+                    UseThemeBrush(border, Border.BackgroundProperty, "ThemeControlHoverBrush");
                 }
 
                 closeBtn.Opacity = 1;
@@ -365,6 +413,7 @@ namespace Caelum
                 if (capturedTab != _activeTab)
                 {
                     border.Background = transparentBackground;
+                    border.BorderBrush = transparentBackground;
                 }
 
                 closeBtn.Opacity = capturedTab == _activeTab ? 1 : 0.72;
@@ -412,6 +461,30 @@ namespace Caelum
             {
                 if (_tabDragCandidate == capturedTab)
                     _tabDragCandidate = null;
+            };
+
+            border.GotKeyboardFocus += (s, e) =>
+            {
+                UseThemeBrush(border, Border.BorderBrushProperty, "ThemeFocusBrush");
+                border.BorderThickness = new Thickness(2);
+            };
+
+            border.LostKeyboardFocus += (s, e) =>
+            {
+                border.BorderThickness = capturedTab == _activeTab ? new Thickness(1) : new Thickness(0);
+                if (capturedTab == _activeTab)
+                    UseThemeBrush(border, Border.BorderBrushProperty, "ThemeBorderBrush");
+                else
+                    border.BorderBrush = transparentBackground;
+            };
+
+            border.KeyDown += (s, e) =>
+            {
+                if (e.Key == Key.Enter || e.Key == Key.Space)
+                {
+                    ActivateTab(capturedTab);
+                    e.Handled = true;
+                }
             };
 
             // Middle-click to close
@@ -509,6 +582,12 @@ namespace Caelum
 
         private void Frame_Navigated(object sender, NavigationEventArgs e)
         {
+            if (e.Content is EditorPage navigatedEditor)
+            {
+                bool isActiveEditor = sender == _activeTab?.Frame && WindowState != WindowState.Minimized;
+                navigatedEditor.SetHostActive(isActiveEditor);
+            }
+
             if (sender == _activeTab?.Frame)
             {
                 UpdateNavButtons();
@@ -533,6 +612,8 @@ namespace Caelum
             }
             if (ActiveFrame?.CanGoBack == true)
             {
+                if (ActiveFrame.Content is EditorPage currentEditor)
+                    currentEditor.SetHostActive(false);
                 ActiveFrame.GoBack();
             }
         }
@@ -552,6 +633,7 @@ namespace Caelum
             {
                 var saved = await editor.AutoSaveAsync();
                 if (saved) ShowToast(LocalizationService.Get("Main.FileAutoSaved"));
+                editor.SetHostActive(false);
             }
             ActiveFrame.Navigate(new HomePage());
         }
@@ -606,6 +688,8 @@ namespace Caelum
             _activeTab.Title = name;
             _activeTab.FilePath = filePath;
             _activeTab.Icon = Path.GetExtension(filePath).ToLowerInvariant() == ".pdf" ? "\uEA90" : "\uE7C3";
+            if (ActiveFrame?.Content is EditorPage currentEditor)
+                currentEditor.SetHostActive(false);
             ActiveFrame?.Navigate(new EditorPage(filePath, promptSaveAsAfterLoad, pendingLibraryFolderId, isNotebookDraft));
             RebuildTabBar();
         }
@@ -641,7 +725,7 @@ namespace Caelum
 
         private void MainWindow_KeyDown(object sender, KeyEventArgs e)
         {
-            if (Keyboard.Modifiers == ModifierKeys.Control)
+            if (Keyboard.Modifiers.HasFlag(ModifierKeys.Control))
             {
                 if (e.Key == Key.T)
                 {
@@ -653,6 +737,14 @@ namespace Caelum
                     CloseTab(_activeTab);
                     e.Handled = true;
                 }
+                else if (e.Key == Key.Tab && _tabs.Count > 1)
+                {
+                    int currentIndex = Math.Max(0, _tabs.IndexOf(_activeTab));
+                    bool backwards = Keyboard.Modifiers.HasFlag(ModifierKeys.Shift);
+                    int nextIndex = (currentIndex + (backwards ? -1 : 1) + _tabs.Count) % _tabs.Count;
+                    ActivateTab(_tabs[nextIndex]);
+                    e.Handled = true;
+                }
             }
         }
 
@@ -660,6 +752,8 @@ namespace Caelum
         private void MainWindow_StateChanged(object sender, EventArgs e)
         {
             MaximizeIcon.Text = WindowState == WindowState.Maximized ? "\uE923" : "\uE922";
+            if (ActiveFrame?.Content is EditorPage activeEditor)
+                activeEditor.SetHostActive(WindowState != WindowState.Minimized);
         }
 
         private void MinimizeButton_Click(object sender, RoutedEventArgs e) => WindowState = WindowState.Minimized;
@@ -677,6 +771,7 @@ namespace Caelum
                 if (tab.Frame?.Content is EditorPage editor)
                 {
                     await editor.AutoSaveAsync();
+                    await editor.ReleaseResourcesAsync();
                 }
             }
             base.OnClosing(e);

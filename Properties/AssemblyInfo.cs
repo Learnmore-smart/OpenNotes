@@ -1,3 +1,3 @@
 using System.Runtime.CompilerServices;
 
-[assembly: InternalsVisibleTo("WindowsNotesApp.Tests")]
+[assembly: InternalsVisibleTo("OpenNotes.Tests")]

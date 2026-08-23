@@ -3,6 +3,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Media.Effects;
+using Caelum.Models;
 
 namespace Caelum.Services
 {
@@ -41,12 +42,13 @@ namespace Caelum.Services
 
             var mainBorder = new Border
             {
-                Background = new SolidColorBrush(Color.FromRgb(248, 248, 251)),
                 CornerRadius = new CornerRadius(22),
                 BorderThickness = new Thickness(1),
-                BorderBrush = new SolidColorBrush(Color.FromRgb(218, 218, 226)),
                 Padding = new Thickness(24)
             };
+            mainBorder.SetResourceReference(Border.BackgroundProperty, "ThemeSurfaceAltBrush");
+            mainBorder.SetResourceReference(Border.BorderBrushProperty, "ThemeBorderBrush");
+            mainBorder.SetResourceReference(UIElement.OpacityProperty, "ThemeSurfaceOpacity");
 
             var scrollViewer = new ScrollViewer
             {
@@ -73,14 +75,22 @@ namespace Caelum.Services
             {
                 Text = title,
                 FontSize = 24,
-                FontWeight = FontWeights.SemiBold,
-                Foreground = new SolidColorBrush(Color.FromRgb(31, 41, 55))
+                FontWeight = FontWeights.SemiBold
             };
+            titleLabel.SetResourceReference(TextBlock.ForegroundProperty, "ThemeForegroundBrush");
             titleStackPanel.Children.Add(titleLabel);
             Grid.SetColumn(titleStackPanel, 0);
             headerGrid.Children.Add(titleStackPanel);
 
             // Close button
+            var closeIcon = new TextBlock
+            {
+                Text = "\xE8BB",
+                FontFamily = new FontFamily("Segoe MDL2 Assets"),
+                FontSize = 11
+            };
+            closeIcon.SetResourceReference(TextBlock.ForegroundProperty, "ThemeSubtleForegroundBrush");
+
             var closeButton = new Button
             {
                 Width = 34,
@@ -89,25 +99,9 @@ namespace Caelum.Services
                 Background = Brushes.Transparent,
                 BorderThickness = new Thickness(0),
                 Cursor = System.Windows.Input.Cursors.Hand,
-                Content = new TextBlock
-                {
-                    Text = "\xE8BB",
-                    FontFamily = new FontFamily("Segoe MDL2 Assets"),
-                    FontSize = 11,
-                    Foreground = new SolidColorBrush(Color.FromRgb(75, 85, 99))
-                }
+                Content = closeIcon
             };
-            var closeButtonTemplate = new ControlTemplate(typeof(Button));
-            var templateFactory = new FrameworkElementFactory(typeof(Border));
-            templateFactory.Name = "Root";
-            templateFactory.SetValue(Border.BackgroundProperty, new TemplateBindingExtension(Button.BackgroundProperty));
-            templateFactory.SetValue(Border.CornerRadiusProperty, new CornerRadius(10));
-            var contentPresenter = new FrameworkElementFactory(typeof(ContentPresenter));
-            contentPresenter.SetValue(ContentPresenter.HorizontalAlignmentProperty, HorizontalAlignment.Center);
-            contentPresenter.SetValue(ContentPresenter.VerticalAlignmentProperty, VerticalAlignment.Center);
-            templateFactory.AppendChild(contentPresenter);
-            closeButtonTemplate.VisualTree = templateFactory;
-            closeButton.Template = closeButtonTemplate;
+            closeButton.Template = CreateCloseButtonTemplate();
             closeButton.Click += (s, ev) =>
             {
                 dialog.DialogResult = false;
@@ -122,11 +116,11 @@ namespace Caelum.Services
             {
                 Text = content,
                 FontSize = 14,
-                Foreground = new SolidColorBrush(Color.FromRgb(107, 114, 128)),
                 TextWrapping = TextWrapping.Wrap,
                 VerticalAlignment = VerticalAlignment.Top,
                 Margin = new Thickness(0, 22, 0, 0)
             };
+            contentText.SetResourceReference(TextBlock.ForegroundProperty, "ThemeSubtleForegroundBrush");
             Grid.SetRow(contentText, 1);
             grid.Children.Add(contentText);
 
@@ -140,10 +134,12 @@ namespace Caelum.Services
             Grid.SetRow(btnPanel, 2);
 
             bool? result = null;
+            Button cancelBtn = null;
+            Button okBtn = null;
 
             if (!string.IsNullOrEmpty(cancelButtonText))
             {
-                var cancelBtn = new Button
+                cancelBtn = new Button
                 {
                     Content = cancelButtonText,
                     Margin = new Thickness(0, 0, 10, 0),
@@ -164,7 +160,7 @@ namespace Caelum.Services
 
             if (!string.IsNullOrEmpty(okButtonText))
             {
-                var okBtn = new Button
+                okBtn = new Button
                 {
                     Content = okButtonText,
                     IsDefault = true
@@ -185,10 +181,81 @@ namespace Caelum.Services
             grid.Children.Add(btnPanel);
 
             dialog.Content = mainBorder;
-            dialog.ShowDialog();
+            EventHandler languageChanged = (_, __) =>
+            {
+                dialog.Title = RefreshKnownCatalogText(title);
+                titleLabel.Text = RefreshKnownCatalogText(title);
+                contentText.Text = RefreshKnownCatalogText(content);
+                if (cancelBtn != null)
+                    cancelBtn.Content = RefreshKnownCatalogText(cancelButtonText);
+                if (okBtn != null)
+                    okBtn.Content = RefreshKnownCatalogText(okButtonText);
+            };
+            LocalizationService.LanguageChanged += languageChanged;
+            try
+            {
+                dialog.ShowDialog();
+            }
+            finally
+            {
+                LocalizationService.LanguageChanged -= languageChanged;
+            }
 
             await System.Threading.Tasks.Task.CompletedTask;
             return result;
+        }
+
+        internal static ControlTemplate CreateCloseButtonTemplate()
+        {
+            var closeButtonTemplate = new ControlTemplate(typeof(Button));
+            var templateFactory = new FrameworkElementFactory(typeof(Border));
+            templateFactory.Name = "Root";
+            templateFactory.SetValue(Border.BackgroundProperty, new TemplateBindingExtension(Button.BackgroundProperty));
+            templateFactory.SetValue(Border.BorderBrushProperty, new DynamicResourceExtension("ThemeFocusBrush"));
+            templateFactory.SetValue(Border.BorderThicknessProperty, new Thickness(0));
+            templateFactory.SetValue(Border.CornerRadiusProperty, new CornerRadius(10));
+            var contentPresenter = new FrameworkElementFactory(typeof(ContentPresenter));
+            contentPresenter.SetValue(ContentPresenter.HorizontalAlignmentProperty, HorizontalAlignment.Center);
+            contentPresenter.SetValue(ContentPresenter.VerticalAlignmentProperty, VerticalAlignment.Center);
+            templateFactory.AppendChild(contentPresenter);
+            closeButtonTemplate.VisualTree = templateFactory;
+
+            var closeFocusTrigger = new Trigger { Property = UIElement.IsKeyboardFocusedProperty, Value = true };
+            closeFocusTrigger.Setters.Add(new Setter(
+                Border.BackgroundProperty,
+                new DynamicResourceExtension("ThemeControlHoverBrush"),
+                "Root"));
+            closeFocusTrigger.Setters.Add(new Setter(
+                Border.BorderBrushProperty,
+                new DynamicResourceExtension("ThemeFocusBrush"),
+                "Root"));
+            closeFocusTrigger.Setters.Add(new Setter(Border.BorderThicknessProperty, new Thickness(2), "Root"));
+            closeButtonTemplate.Triggers.Add(closeFocusTrigger);
+            return closeButtonTemplate;
+        }
+
+        private static string RefreshKnownCatalogText(string value)
+        {
+            if (string.IsNullOrEmpty(value))
+                return value;
+
+            var catalog = LocalizationService.GetCatalog();
+            foreach (var entry in catalog)
+            {
+                if (string.Equals(value, entry.Value.English, StringComparison.Ordinal) ||
+                    string.Equals(value, entry.Value.Chinese, StringComparison.Ordinal) ||
+                    string.Equals(value, entry.Value.French, StringComparison.Ordinal))
+                {
+                    return LocalizationService.CurrentLanguage switch
+                    {
+                        AppLanguage.Chinese => entry.Value.Chinese,
+                        AppLanguage.French => entry.Value.French,
+                        _ => entry.Value.English
+                    };
+                }
+            }
+
+            return value;
         }
     }
 }

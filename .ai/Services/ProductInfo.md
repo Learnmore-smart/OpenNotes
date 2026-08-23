@@ -1,0 +1,33 @@
+# Services/ProductInfo.cs
+> Last updated: 2026-08-21（test-only data-root override implemented）| Protection: STANDARD
+
+## Purpose
+Single source of truth for the visible OpenNotes brand and the compatibility identifiers that must remain Caelum/WindowsNotesApp.
+
+## Public API
+
+- `DisplayName`: `OpenNotes`
+- `LegacyName`: `Caelum`
+- `LegacyDataDirectoryName`: `Caelum` (`%LOCALAPPDATA%\Caelum`)
+- `LegacyAppxIdentity`: `WindowsNotesApp`
+- `RepositoryUrl`: `https://github.com/Learnmore-smart/Windows-Notes`
+- `WebsiteUrl`: `https://learnmore-smart.github.io/Windows-Notes/`
+- `Version`: `4.0.0`
+- `Description`: localized through `LocalizationService.Get("Product.Description")`
+
+## Important Notes / NEVER Change
+
+- `OpenNotes` is the visible product, assembly, project and workspace name; the root `Caelum` namespace, data directory, and AppX identity remain legacy compatibility identifiers.
+- The formal checkout folder is already `OpenNotes`; this is separate from the legacy data directory and namespace.
+- The current repository and Pages URLs intentionally retain the existing `Windows-Notes` path; changing them requires a separately verified redirect/repository migration.
+- `Description` must remain a localization key, not a hard-coded language-specific sentence.
+- `GetDataDirectory()` may honor `OPENNOTES_DATA_ROOT` only when explicitly set by a test/diagnostic process; with no override it must resolve exactly to `%LOCALAPPDATA%\Caelum`.
+
+## Open Threads / Resume Context
+
+- **Status:** ready_for_next
+- `GetDataDirectory()` is implemented and used by settings, recent files, bookmarks, and version history. The opt-in override is only for isolated test/diagnostic processes; the production default remains `%LOCALAPPDATA%\Caelum`.
+
+## Change History
+
+- 2026-08-21: Added `OPENNOTES_DATA_ROOT` as an opt-in isolated-run root while preserving the legacy production directory.

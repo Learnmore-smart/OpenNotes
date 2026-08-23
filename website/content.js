@@ -3,8 +3,8 @@
 
   const copy = {
     en: {
-      "meta.title": "OpenNotes — PDF notes that keep your hand",
-      "meta.description": "OpenNotes is a quiet, pen-first PDF annotation workspace for Windows.",
+      "meta.title": "OpenNotes — Open a PDF. Leave a trace.",
+      "meta.description": "OpenNotes is a pen-first Windows workspace for reading, annotating, and keeping your marks with the PDF.",
       "accessibility.skip": "Skip to content",
       "brand.aria": "OpenNotes home",
       "nav.primary": "Primary navigation",
@@ -14,9 +14,9 @@
       "language.label": "Choose language",
       "theme.toggle": "Toggle light and dark theme",
       "theme.label": "Theme",
-      "hero.eyebrow": "PDF annotation / Windows",
-      "hero.title": "Make the <em>PDF</em> feel like paper again.",
-      "hero.lede": "A quiet, pen-first workspace for reading, marking, and reshaping documents on Windows.",
+      "hero.eyebrow": "The annotated paper archive",
+      "hero.title": "Open a PDF. Leave a trace.",
+      "hero.lede": "Read with the page in front. Write with the tools you already understand. Keep every mark with the document.",
       "hero.cta": "Get OpenNotes",
       "hero.secondary": "See the workspace",
       "hero.meta": "Windows 10 1809+ · .NET 8 · Open source",
@@ -27,6 +27,9 @@
       "demo.toolbar": "Annotation preview tools",
       "demo.canvas": "Interactive annotation preview",
       "demo.textbox": "Resizable text note",
+      "demo.drag": "Move text note",
+      "demo.dragging": "Text note moving — release it where the thought belongs",
+      "demo.dragged": "Text note moved — type here or keep shaping the note",
       "demo.resize": "Resize note",
       "demo.resize.nw": "Resize note from top left",
       "demo.resize.n": "Resize note from top",
@@ -41,11 +44,14 @@
       "demo.highlighter": "Highlighter",
       "demo.eraser": "Eraser",
       "demo.clear": "Clear marks",
+      "demo.undo": "Undo",
       "demo.ready": "Pen ready — draw anywhere on the page",
       "demo.highlighterReady": "Highlighter ready — pull a thought into focus",
       "demo.eraserReady": "Eraser ready — sweep over a mark to remove it",
       "demo.cleared": "Page cleared — choose a tool and draw again",
-      "demo.textSelected": "Text note selected — type, then resize from the blue handles",
+      "demo.undone": "Last mark undone — keep drawing when you're ready",
+      "demo.undoEmpty": "Nothing to undo yet",
+      "demo.textSelected": "Text note selected — type, move from the grip, or resize from the blue handles",
       "demo.textResized": "Text note selected — drag a blue handle to resize",
       "demo.textResizeKeyboard": "Text note resized — use arrow keys to adjust width and height",
       "demo.hint": "Pointer input stays in your browser",
@@ -115,8 +121,8 @@
       "not-found.back": "Return to OpenNotes"
     },
     zh: {
-      "meta.title": "OpenNotes — 让 PDF 保留手写的温度",
-      "meta.description": "OpenNotes 是一款面向 Windows 的安静、以手写笔为先的 PDF 批注工作区。",
+      "meta.title": "OpenNotes — 打开 PDF，留下痕迹。",
+      "meta.description": "OpenNotes 是一款以手写笔为先的 Windows 工作区，用来阅读和批注 PDF，并让每一笔都跟随文档。",
       "accessibility.skip": "跳到正文",
       "brand.aria": "OpenNotes 首页",
       "nav.primary": "主导航",
@@ -126,9 +132,9 @@
       "language.label": "选择语言",
       "theme.toggle": "切换浅色和深色主题",
       "theme.label": "主题",
-      "hero.eyebrow": "PDF 批注 / Windows",
-      "hero.title": "让 <em>PDF</em> 找回纸张的手感。",
-      "hero.lede": "一处安静、以手写笔为先的 Windows 工作区，用来阅读、标记和重新整理文档。",
+      "hero.eyebrow": "蓝色墨水批注档案",
+      "hero.title": "打开 PDF，留下痕迹。",
+      "hero.lede": "让页面始终在前。用你已经熟悉的工具书写。让每一笔都跟随文档。",
       "hero.cta": "获取 OpenNotes",
       "hero.secondary": "看看工作区",
       "hero.meta": "Windows 10 1809+ · .NET 8 · 开源",
@@ -139,6 +145,9 @@
       "demo.toolbar": "批注预览工具",
       "demo.canvas": "交互式批注预览",
       "demo.textbox": "可调整大小的文本便签",
+      "demo.drag": "移动文本便签",
+      "demo.dragging": "正在移动文本便签 — 把它放到想法所在的位置",
+      "demo.dragged": "文本便签已移动 — 在这里输入，或继续调整便签",
       "demo.resize": "调整便签大小",
       "demo.resize.nw": "从左上角调整便签大小",
       "demo.resize.n": "从上边缘调整便签大小",
@@ -153,11 +162,14 @@
       "demo.highlighter": "荧光笔",
       "demo.eraser": "橡皮擦",
       "demo.clear": "清除笔迹",
+      "demo.undo": "撤销",
       "demo.ready": "画笔已就绪 — 在页面上任意书写",
       "demo.highlighterReady": "荧光笔已就绪 — 把想法标记出来",
       "demo.eraserReady": "橡皮擦已就绪 — 在笔迹上划过即可删除",
       "demo.cleared": "页面已清空 — 选择工具重新书写",
-      "demo.textSelected": "文本便签已选中 — 输入文字，再从蓝色手柄调整大小",
+      "demo.undone": "已撤销上一笔 — 准备好后继续书写",
+      "demo.undoEmpty": "暂时没有可撤销的笔迹",
+      "demo.textSelected": "文本便签已选中 — 输入文字、拖动手柄移动，或从蓝色圆点调整大小",
       "demo.textResized": "文本便签已选中 — 拖动任意蓝色手柄调整大小",
       "demo.textResizeKeyboard": "文本便签已调整 — 使用方向键调整宽度和高度",
       "demo.hint": "指针输入只留在浏览器中",
@@ -227,8 +239,8 @@
       "not-found.back": "返回 OpenNotes"
     },
     fr: {
-      "meta.title": "OpenNotes — des PDF qui gardent votre geste",
-      "meta.description": "OpenNotes est un espace d’annotation PDF calme et pensé pour le stylet sous Windows.",
+      "meta.title": "OpenNotes — Ouvrez un PDF. Laissez une trace.",
+      "meta.description": "OpenNotes est un espace Windows pensé pour le stylet, pour lire et annoter vos PDF sans séparer les marques du document.",
       "accessibility.skip": "Aller au contenu",
       "brand.aria": "Accueil OpenNotes",
       "nav.primary": "Navigation principale",
@@ -238,9 +250,9 @@
       "language.label": "Choisir la langue",
       "theme.toggle": "Changer entre les thèmes clair et sombre",
       "theme.label": "Thème",
-      "hero.eyebrow": "Annotation PDF / Windows",
-      "hero.title": "Retrouvez le <em>papier</em> dans vos PDF.",
-      "hero.lede": "Un espace calme, pensé pour le stylet, pour lire, annoter et réorganiser vos documents sous Windows.",
+      "hero.eyebrow": "L’archive de papier annoté",
+      "hero.title": "Ouvrez un PDF. Laissez une trace.",
+      "hero.lede": "Gardez la page devant vous. Écrivez avec des outils familiers. Laissez chaque marque suivre le document.",
       "hero.cta": "Obtenir OpenNotes",
       "hero.secondary": "Voir l’espace de travail",
       "hero.meta": "Windows 10 1809+ · .NET 8 · Open source",
@@ -251,6 +263,9 @@
       "demo.toolbar": "Outils de prévisualisation",
       "demo.canvas": "Aperçu interactif des annotations",
       "demo.textbox": "Note texte redimensionnable",
+      "demo.drag": "Déplacer la note texte",
+      "demo.dragging": "Note en mouvement — relâchez-la là où l’idée doit rester",
+      "demo.dragged": "Note déplacée — écrivez ici ou continuez à la façonner",
       "demo.resize": "Redimensionner la note",
       "demo.resize.nw": "Redimensionner depuis le coin supérieur gauche",
       "demo.resize.n": "Redimensionner depuis le bord supérieur",
@@ -265,11 +280,14 @@
       "demo.highlighter": "Surligneur",
       "demo.eraser": "Gomme",
       "demo.clear": "Effacer les marques",
+      "demo.undo": "Annuler",
       "demo.ready": "Stylet prêt — dessinez sur la page",
       "demo.highlighterReady": "Surligneur prêt — faites ressortir une idée",
       "demo.eraserReady": "Gomme prête — passez sur une marque pour la retirer",
       "demo.cleared": "Page effacée — choisissez un outil et dessinez à nouveau",
-      "demo.textSelected": "Note texte sélectionnée — écrivez, puis redimensionnez avec les poignées bleues",
+      "demo.undone": "Dernière marque annulée — reprenez quand vous êtes prêt",
+      "demo.undoEmpty": "Rien à annuler pour l’instant",
+      "demo.textSelected": "Note sélectionnée — écrivez, déplacez-la avec la poignée ou redimensionnez-la avec les points bleus",
       "demo.textResized": "Note texte sélectionnée — faites glisser une poignée bleue pour redimensionner",
       "demo.textResizeKeyboard": "Note texte redimensionnée — utilisez les flèches pour ajuster largeur et hauteur",
       "demo.hint": "Les gestes restent dans votre navigateur",
@@ -346,7 +364,14 @@
   function getStoredLocale() {
     try {
       const stored = window.localStorage.getItem(storageKey);
-      return supportedLocales.includes(stored) ? stored : "en";
+      if (supportedLocales.includes(stored)) {
+        return stored;
+      }
+
+      const preferred = (navigator.languages || [navigator.language || "en"])
+        .map((locale) => locale.toLowerCase())
+        .find((locale) => locale.startsWith("zh") || locale.startsWith("fr") || locale.startsWith("en"));
+      return preferred?.startsWith("zh") ? "zh" : preferred?.startsWith("fr") ? "fr" : "en";
     } catch (_error) {
       return "en";
     }

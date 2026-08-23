@@ -8,6 +8,11 @@ namespace Caelum
 {
     public partial class App : Application
     {
+        static App()
+        {
+            WindowsEnvironment.NormalizeForWpf();
+        }
+
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
         private static extern bool SetDllDirectory(string lpPathName);
 

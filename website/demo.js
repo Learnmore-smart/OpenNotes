@@ -5,10 +5,13 @@
   const canvas = document.querySelector("[data-demo-canvas]");
   const status = document.querySelector("[data-demo-status]");
   const textBox = document.querySelector("[data-demo-text]");
+  const dragGrip = document.querySelector("[data-demo-drag]");
+  const undoButton = document.querySelector("[data-demo-undo]");
+  const clearButton = document.querySelector("[data-demo-clear]");
   const resizeHandles = [...document.querySelectorAll("[data-demo-resize]")];
   const resizeDirections = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
 
-  if (!surface || !canvas || !status || !textBox || resizeHandles.length !== resizeDirections.length) {
+  if (!surface || !canvas || !status || !textBox || !dragGrip || !undoButton || !clearButton || resizeHandles.length !== resizeDirections.length) {
     return;
   }
 
@@ -35,10 +38,14 @@
   ];
 
   let marks = seededMarks.map((mark) => ({ ...mark, points: mark.points.map((point) => [...point]) }));
+  const undoStack = [];
+  const maxUndoDepth = 40;
   let activeTool = "pen";
   let activeStroke = null;
+  let eraserSnapshot = null;
   let surfaceSize = { width: 1, height: 1 };
   let resizeState = null;
+  let dragState = null;
 
   function localized(key, fallback) {
     const locale = document.documentElement.lang || "en";
@@ -103,6 +110,28 @@
     }
   }
 
+  function cloneMarks(source) {
+    return source.map((mark) => ({
+      ...mark,
+      points: mark.points.map((point) => [...point])
+    }));
+  }
+
+  function updateUndoControls() {
+    const canUndo = undoStack.length > 0;
+    undoButton.disabled = !canUndo;
+    undoButton.setAttribute("aria-disabled", String(!canUndo));
+    clearButton.disabled = marks.length === 0 && !activeStroke;
+  }
+
+  function rememberMarks(snapshot) {
+    undoStack.push(cloneMarks(snapshot));
+    if (undoStack.length > maxUndoDepth) {
+      undoStack.shift();
+    }
+    updateUndoControls();
+  }
+
   function updateStatus(message) {
     status.textContent = message;
   }
@@ -126,8 +155,14 @@
 
   function eraseAt(point) {
     const radius = Math.max(16, surfaceSize.width * 0.025);
-    marks = marks.filter((mark) => !mark.points.some((candidate) => pointDistance(candidate, [point.x, point.y]) < radius));
-    redraw();
+    const nextMarks = marks.filter((mark) => !mark.points.some((candidate) => pointDistance(candidate, [point.x, point.y]) < radius));
+    const changed = nextMarks.length !== marks.length;
+    if (changed) {
+      marks = nextMarks;
+      redraw();
+      updateUndoControls();
+    }
+    return changed;
   }
 
   function beginDrawing(event) {
@@ -140,6 +175,7 @@
     const point = toCanvasPoint(event);
 
     if (activeTool === "eraser") {
+      eraserSnapshot = cloneMarks(marks);
       eraseAt(point);
       return;
     }
@@ -176,18 +212,47 @@
       canvas.releasePointerCapture(event.pointerId);
     }
 
+    if (eraserSnapshot && marks.length < eraserSnapshot.length) {
+      rememberMarks(eraserSnapshot);
+    }
+    eraserSnapshot = null;
+
     if (activeStroke && activeStroke.points.length > 1) {
+      rememberMarks(marks);
       marks.push(activeStroke);
     }
     activeStroke = null;
     redraw();
+    updateUndoControls();
   }
 
   function clearMarks() {
+    if (marks.length === 0) {
+      updateStatus(localized("demo.undoEmpty", "Nothing to undo yet"));
+      return;
+    }
+
+    rememberMarks(marks);
     marks = [];
     activeStroke = null;
     redraw();
     updateStatus(localized("demo.cleared", "Page cleared — choose a tool and draw again"));
+    updateUndoControls();
+  }
+
+  function undoMarks() {
+    if (undoStack.length === 0) {
+      updateStatus(localized("demo.undoEmpty", "Nothing to undo yet"));
+      updateUndoControls();
+      return;
+    }
+
+    marks = undoStack.pop();
+    activeStroke = null;
+    eraserSnapshot = null;
+    redraw();
+    updateUndoControls();
+    updateStatus(localized("demo.undone", "Last mark undone — keep drawing when you're ready"));
   }
 
   function clamp(value, minimum, maximum) {
@@ -232,6 +297,21 @@
     syncResizeHandles();
   }
 
+  function clampTextPosition(left, top, width = textBox.offsetWidth, height = textBox.offsetHeight) {
+    const { padding } = getTextBoxLimits();
+    return {
+      left: clamp(left, padding, Math.max(padding, surface.clientWidth - padding - width)),
+      top: clamp(top, padding, Math.max(padding, surface.clientHeight - padding - height))
+    };
+  }
+
+  function setTextBoxPosition(left, top) {
+    const position = clampTextPosition(left, top);
+    textBox.style.left = `${position.left}px`;
+    textBox.style.top = `${position.top}px`;
+    syncResizeHandles();
+  }
+
   function syncResizeHandles() {
     const left = textBox.offsetLeft;
     const top = textBox.offsetTop;
@@ -258,6 +338,9 @@
       handle.style.left = `${position[0]}px`;
       handle.style.top = `${position[1]}px`;
     });
+
+    dragGrip.style.left = `${right - 14}px`;
+    dragGrip.style.top = `${top}px`;
   }
 
   function resizeRectangle(start, direction, deltaX, deltaY) {
@@ -342,15 +425,81 @@
     updateStatus(localized("demo.textResizeKeyboard", "Text note resized — use arrow keys to adjust width and height"));
   }
 
+  function beginTextDrag(event) {
+    if (event.button !== undefined && event.button !== 0) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    dragGrip.setPointerCapture(event.pointerId);
+    const rect = getTextBoxRect();
+    dragState = {
+      pointerId: event.pointerId,
+      left: rect.left,
+      top: rect.top,
+      x: event.clientX,
+      y: event.clientY
+    };
+    surface.classList.add("is-dragging-text");
+    updateStatus(localized("demo.dragging", "Text note moving — release it where the thought belongs"));
+  }
+
+  function continueTextDrag(event) {
+    if (!dragState || event.pointerId !== dragState.pointerId || !dragGrip.hasPointerCapture(event.pointerId)) {
+      return;
+    }
+
+    event.preventDefault();
+    setTextBoxPosition(
+      dragState.left + event.clientX - dragState.x,
+      dragState.top + event.clientY - dragState.y
+    );
+  }
+
+  function endTextDrag(event) {
+    if (!dragState || event.pointerId !== dragState.pointerId) {
+      return;
+    }
+
+    if (dragGrip.hasPointerCapture(event.pointerId)) {
+      dragGrip.releasePointerCapture(event.pointerId);
+    }
+    dragState = null;
+    surface.classList.remove("is-dragging-text");
+    updateStatus(localized("demo.dragged", "Text note moved — type here or keep shaping the note"));
+  }
+
+  function keyboardTextDrag(event) {
+    const horizontal = event.key === "ArrowLeft" || event.key === "ArrowRight";
+    const vertical = event.key === "ArrowUp" || event.key === "ArrowDown";
+    if (!horizontal && !vertical) {
+      return;
+    }
+
+    event.preventDefault();
+    const step = event.shiftKey ? 24 : 8;
+    const deltaX = event.key === "ArrowLeft" ? -step : event.key === "ArrowRight" ? step : 0;
+    const deltaY = event.key === "ArrowUp" ? -step : event.key === "ArrowDown" ? step : 0;
+    setTextBoxPosition(textBox.offsetLeft + deltaX, textBox.offsetTop + deltaY);
+    updateStatus(localized("demo.dragged", "Text note moved — type here or keep shaping the note"));
+  }
+
   document.querySelectorAll("[data-demo-tool]").forEach((button) => {
     button.addEventListener("click", () => selectTool(button.dataset.demoTool));
   });
-  document.querySelector("[data-demo-clear]")?.addEventListener("click", clearMarks);
+  undoButton.addEventListener("click", undoMarks);
+  clearButton.addEventListener("click", clearMarks);
 
   canvas.addEventListener("pointerdown", beginDrawing);
   canvas.addEventListener("pointermove", continueDrawing);
   canvas.addEventListener("pointerup", endDrawing);
   canvas.addEventListener("pointercancel", endDrawing);
+  dragGrip.addEventListener("pointerdown", beginTextDrag);
+  dragGrip.addEventListener("pointermove", continueTextDrag);
+  dragGrip.addEventListener("pointerup", endTextDrag);
+  dragGrip.addEventListener("pointercancel", endTextDrag);
+  dragGrip.addEventListener("keydown", keyboardTextDrag);
   resizeHandles.forEach((handle) => {
     handle.addEventListener("pointerdown", beginResize);
     handle.addEventListener("pointermove", continueResize);
@@ -427,6 +576,7 @@
 
   selectTool(activeTool);
   resizeCanvas();
+  updateUndoControls();
   loadOptionalArtwork();
 })();
 
@@ -434,6 +584,7 @@
   "use strict";
 
   const storageKey = "opennotes-theme";
+  const siteHeader = document.querySelector("[data-site-header]");
 
   function readStoredTheme() {
     try {
@@ -447,6 +598,10 @@
     const activeTheme = theme === "light" ? "light" : "dark";
     document.documentElement.dataset.theme = activeTheme;
     document.querySelector("[data-demo-theme]")?.setAttribute("aria-pressed", String(activeTheme === "light"));
+    document.querySelector('meta[name="theme-color"]')?.setAttribute(
+      "content",
+      activeTheme === "light" ? "#e6e1d8" : "#0c141d"
+    );
 
     try {
       window.localStorage.setItem(storageKey, activeTheme);
@@ -456,6 +611,9 @@
   }
 
   applyTheme(readStoredTheme());
+  const updateHeaderMaterial = () => siteHeader?.classList.toggle("is-scrolled", window.scrollY > 12);
+  updateHeaderMaterial();
+  window.addEventListener("scroll", updateHeaderMaterial, { passive: true });
   document.addEventListener("click", (event) => {
     const target = event.target instanceof Element ? event.target.closest("[data-demo-theme]") : null;
     if (!target) {

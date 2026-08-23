@@ -5,6 +5,9 @@ namespace Caelum.Models
         Blank,
         Notebook,
         Lined,
-        Quadrille
+        Quadrille,
+        Dotted,
+        Music,
+        Cornell
     }
 }

@@ -11,12 +11,13 @@ namespace Caelum.Services
 {
     public class VersionControlService
     {
+        public const int MaxVersions = 50;
+
         private static string GetVersionDir(string filePath)
         {
-            var appData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
             var hashBytes = SHA256.HashData(Encoding.UTF8.GetBytes(filePath.ToLowerInvariant()));
             var hash = BitConverter.ToString(hashBytes).Replace("-", "").ToLowerInvariant();
-            var dir = Path.Combine(appData, "Caelum", "VersionHistory", hash);
+            var dir = Path.Combine(ProductInfo.GetDataDirectory(), "VersionHistory", hash);
             if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
             return dir;
         }
@@ -24,11 +25,24 @@ namespace Caelum.Services
         public static async Task SaveVersionAsync(string filePath, Dictionary<int, PageAnnotation> annotations)
         {
             var dir = GetVersionDir(filePath);
-            var timestamp = DateTime.UtcNow.ToString("yyyyMMdd_HHmmss");
-            var file = Path.Combine(dir, $"{timestamp}.json");
+            // Include milliseconds and a short random suffix so two saves in
+            // the same clock tick never overwrite one another.
+            var timestamp = DateTime.UtcNow.ToString("yyyyMMdd_HHmmss_fff");
+            var file = Path.Combine(dir, $"{timestamp}_{Guid.NewGuid():N}.json");
 
             var json = JsonSerializer.Serialize(annotations);
             await File.WriteAllTextAsync(file, json);
+
+            PruneVersions(filePath);
+        }
+
+        private static void PruneVersions(string filePath)
+        {
+            var versions = GetVersions(filePath); // newest first (与 GetVersions 契约一致)
+            for (int i = MaxVersions; i < versions.Count; i++)
+            {
+                try { File.Delete(versions[i]); } catch { /* best-effort */ }
+            }
         }
 
         public static List<string> GetVersions(string filePath)
@@ -37,7 +51,9 @@ namespace Caelum.Services
             if (!Directory.Exists(dir)) return new List<string>();
             var files = Directory.GetFiles(dir, "*.json");
             var list = new List<string>(files);
-            list.Sort((a,b) => File.GetCreationTime(b).CompareTo(File.GetCreationTime(a)));
+            // Creation time is not stable across copies/restores. Last-write
+            // time reflects the order in which snapshots were actually saved.
+            list.Sort((a,b) => File.GetLastWriteTimeUtc(b).CompareTo(File.GetLastWriteTimeUtc(a)));
             return list;
         }
 

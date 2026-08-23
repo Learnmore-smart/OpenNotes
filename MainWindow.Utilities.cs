@@ -15,11 +15,20 @@ namespace Caelum
         public void PreviewSettings(AppSettings settings)
         {
             LocalizationService.ApplyLanguage(settings.Language);
-            ApplyLocalization();
+            ThemeService.Apply(settings.Theme);
+
+            foreach (var tab in _tabs.Where(tab => tab?.Frame?.Content is EditorPage))
+            {
+                if (tab.Frame.Content is EditorPage editor)
+                    editor.ApplySettings(settings);
+            }
         }
 
         private void ApplyLocalization()
         {
+            Title = ProductInfo.DisplayName;
+            if (ProductNameTextBlock != null)
+                ProductNameTextBlock.Text = ProductInfo.DisplayName;
             SearchPlaceholder.Text = LocalizationService.Get("Main.SearchPlaceholder");
             SelectButtonLabel.Text = LocalizationService.Get("Main.Select");
             SortByNameMenuItem.Header = LocalizationService.Get("Main.SortByName");
@@ -57,11 +66,13 @@ namespace Caelum
                 if (tab.Frame?.Content is HomePage home)
                 {
                     tab.Title = GetHomeTabTitle();
-                    home.ApplyLocalization();
+                    if (!home.IsLoaded)
+                        home.ApplyLocalization();
                 }
                 else if (tab.Frame?.Content is EditorPage editor)
                 {
-                    editor.ApplyLocalization();
+                    if (!editor.IsLoaded)
+                        editor.ApplyLocalization();
                 }
             }
         }

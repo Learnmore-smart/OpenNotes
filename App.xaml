@@ -10,6 +10,36 @@
             <SolidColorBrush x:Key="AppGlassSurfacePressedBrush" Color="White" Opacity="0.24"/>
             <SolidColorBrush x:Key="AppGlassBorderBrush" Color="White" Opacity="0.22"/>
             <SolidColorBrush x:Key="AppGlassSubtleBorderBrush" Color="White" Opacity="0.10"/>
+            <!-- Task 39: runtime-swappable application chrome palette. -->
+            <SolidColorBrush x:Key="ThemeWindowBackgroundBrush" Color="#F3EFE7"/>
+            <SolidColorBrush x:Key="ThemeSurfaceBrush" Color="#FFFDF8"/>
+            <SolidColorBrush x:Key="ThemeSurfaceAltBrush" Color="#F3EFE6"/>
+            <SolidColorBrush x:Key="ThemeCanvasBrush" Color="#D7D3CB"/>
+            <SolidColorBrush x:Key="ThemeBorderBrush" Color="#D2CBC0"/>
+            <SolidColorBrush x:Key="ThemeForegroundBrush" Color="#1E2933"/>
+            <SolidColorBrush x:Key="ThemeSubtleForegroundBrush" Color="#66717B"/>
+            <SolidColorBrush x:Key="ThemeControlHoverBrush" Color="#E6EDF4"/>
+            <SolidColorBrush x:Key="ThemeControlPressedBrush" Color="#D3E0EB"/>
+            <SolidColorBrush x:Key="ThemeSelectionBrush" Color="#DCEAF8"/>
+            <SolidColorBrush x:Key="ThemeSelectionForegroundBrush" Color="#164C86"/>
+            <SolidColorBrush x:Key="ThemeAccentBrush" Color="#1C5D99"/>
+            <SolidColorBrush x:Key="ThemeAccentHoverBrush" Color="#2872AF"/>
+            <SolidColorBrush x:Key="ThemeAccentPressedBrush" Color="#124776"/>
+            <SolidColorBrush x:Key="ThemeDisabledForegroundBrush" Color="#949694"/>
+            <SolidColorBrush x:Key="ThemeScrollbarTrackBrush" Color="#1F52606C"/>
+            <SolidColorBrush x:Key="ThemeScrollbarThumbBrush" Color="#A85C6975"/>
+            <SolidColorBrush x:Key="ThemeScrollbarThumbHoverBrush" Color="#CC394B5A"/>
+            <SolidColorBrush x:Key="ThemeScrollbarThumbPressedBrush" Color="#E8212D38"/>
+            <SolidColorBrush x:Key="ThemeSliderTrackBrush" Color="#221C5D99"/>
+            <SolidColorBrush x:Key="ThemeMenuSeparatorBrush" Color="#1F1E2933"/>
+            <SolidColorBrush x:Key="ThemeFocusBrush" Color="#154F86"/>
+            <SolidColorBrush x:Key="ThemeDeskBrush" Color="#E6E1D8"/>
+            <SolidColorBrush x:Key="ThemePaperBrush" Color="#FFFDF7"/>
+            <SolidColorBrush x:Key="ThemePaperAltBrush" Color="#F3EFE6"/>
+            <SolidColorBrush x:Key="ThemeInkBrush" Color="#1C5D99"/>
+            <SolidColorBrush x:Key="ThemeMarginBrush" Color="#B94B52"/>
+            <SolidColorBrush x:Key="ThemeMarkBrush" Color="#D9A72E"/>
+            <Duration x:Key="ThemeAnimationDuration">0:0:0.16</Duration>
             <!-- 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?Sleek ScrollBar 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?-->
             <Style x:Key="SleekScrollBarThumb" TargetType="Thumb">
                 <Setter Property="OverridesDefaultStyle" Value="True"/>
@@ -19,16 +49,16 @@
                         <ControlTemplate TargetType="Thumb">
                             <Border x:Name="ThumbBorder"
                                     Margin="1"
-                                    Background="#B4556474"
-                                    BorderBrush="#22FFFFFF"
+                                    Background="{DynamicResource ThemeScrollbarThumbBrush}"
+                                    BorderBrush="{DynamicResource ThemeBorderBrush}"
                                     BorderThickness="1"
                                     CornerRadius="6"/>
                             <ControlTemplate.Triggers>
                                 <Trigger Property="IsMouseOver" Value="True">
-                                    <Setter TargetName="ThumbBorder" Property="Background" Value="#CC334155"/>
+                                    <Setter TargetName="ThumbBorder" Property="Background" Value="{DynamicResource ThemeScrollbarThumbHoverBrush}"/>
                                 </Trigger>
                                 <Trigger Property="IsDragging" Value="True">
-                                    <Setter TargetName="ThumbBorder" Property="Background" Value="#E81F2937"/>
+                                    <Setter TargetName="ThumbBorder" Property="Background" Value="{DynamicResource ThemeScrollbarThumbPressedBrush}"/>
                                 </Trigger>
                             </ControlTemplate.Triggers>
                         </ControlTemplate>
@@ -52,7 +82,7 @@
                 <Setter Property="Template">
                     <Setter.Value>
                         <ControlTemplate TargetType="ScrollBar">
-                            <Border Background="#1F94A3B8" BorderBrush="#18FFFFFF" BorderThickness="1" CornerRadius="8">
+                            <Border Background="{DynamicResource ThemeScrollbarTrackBrush}" BorderBrush="{DynamicResource ThemeBorderBrush}" BorderThickness="1" CornerRadius="8">
                                 <Track x:Name="PART_Track" IsDirectionReversed="True">
                                     <Track.Thumb>
                                         <Thumb Style="{StaticResource SleekVerticalScrollBarThumb}"/>
@@ -77,7 +107,7 @@
                 <Setter Property="Template">
                     <Setter.Value>
                         <ControlTemplate TargetType="ScrollBar">
-                            <Border Background="#1F94A3B8" BorderBrush="#18FFFFFF" BorderThickness="1" CornerRadius="8">
+                            <Border Background="{DynamicResource ThemeScrollbarTrackBrush}" BorderBrush="{DynamicResource ThemeBorderBrush}" BorderThickness="1" CornerRadius="8">
                                 <Track x:Name="PART_Track">
                                     <Track.Thumb>
                                         <Thumb Style="{StaticResource SleekHorizontalScrollBarThumb}"/>
@@ -149,8 +179,9 @@
 
             <!-- 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?Modern ComboBox 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?-->
             <Style x:Key="ModernComboBox" TargetType="ComboBox">
-                <Setter Property="Background" Value="#F3F4F6"/>
-                <Setter Property="Foreground" Value="#1F2937"/>
+                <Setter Property="Background" Value="{DynamicResource ThemeSurfaceBrush}"/>
+                <Setter Property="Foreground" Value="{DynamicResource ThemeForegroundBrush}"/>
+                <Setter Property="ItemContainerStyle" Value="{DynamicResource ModernComboBoxItem}"/>
                 <Setter Property="BorderThickness" Value="0"/>
                 <Setter Property="BorderBrush" Value="Transparent"/>
                 <Setter Property="Padding" Value="14,10"/>
@@ -168,16 +199,16 @@
                                         <ControlTemplate TargetType="ToggleButton">
                                             <Border x:Name="Border" Background="{TemplateBinding Background}" BorderBrush="Transparent" BorderThickness="0" CornerRadius="16">
                                                 <Grid>
-                                                    <TextBlock Text="&#xE70D;" FontFamily="Segoe MDL2 Assets" FontSize="12" Foreground="#6B7280"
+                                                    <TextBlock Text="&#xE70D;" FontFamily="Segoe MDL2 Assets" FontSize="12" Foreground="{DynamicResource ThemeSubtleForegroundBrush}"
                                                                HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,16,0"/>
                                                 </Grid>
                                             </Border>
                                             <ControlTemplate.Triggers>
                                                 <Trigger Property="IsMouseOver" Value="True">
-                                                    <Setter TargetName="Border" Property="Background" Value="#E5E7EB"/>
+                                                    <Setter TargetName="Border" Property="Background" Value="{DynamicResource ThemeControlHoverBrush}"/>
                                                 </Trigger>
                                                 <Trigger Property="IsChecked" Value="True">
-                                                    <Setter TargetName="Border" Property="Background" Value="#E5E7EB"/>
+                                                    <Setter TargetName="Border" Property="Background" Value="{DynamicResource ThemeControlPressedBrush}"/>
                                                 </Trigger>
                                             </ControlTemplate.Triggers>
                                         </ControlTemplate>
@@ -189,7 +220,7 @@
                                 <Popup x:Name="Popup" Placement="Bottom" IsOpen="{TemplateBinding IsDropDownOpen}"
                                        AllowsTransparency="True" Focusable="False" PopupAnimation="Slide">
                                     <Grid x:Name="DropDown" SnapsToDevicePixels="True" MinWidth="{TemplateBinding ActualWidth}">
-                                        <Border x:Name="DropDownBorder" Background="White" BorderBrush="#E5E7EB" BorderThickness="1" CornerRadius="16" Margin="0,6,0,0"
+                                        <Border x:Name="DropDownBorder" Background="{DynamicResource ThemeSurfaceBrush}" BorderBrush="{DynamicResource ThemeBorderBrush}" BorderThickness="1" CornerRadius="16" Margin="0,6,0,0"
                                                 Padding="6">
                                             <Border.Effect>
                                                 <DropShadowEffect BlurRadius="24" ShadowDepth="6" Opacity="0.12" Color="#000"/>
@@ -210,7 +241,7 @@
                 <Setter Property="Padding" Value="14,12"/>
                 <Setter Property="FontSize" Value="18"/>
                 <Setter Property="Cursor" Value="Hand"/>
-                <Setter Property="Foreground" Value="#1F2937"/>
+                <Setter Property="Foreground" Value="{DynamicResource ThemeForegroundBrush}"/>
                 <Setter Property="Template">
                     <Setter.Value>
                         <ControlTemplate TargetType="ComboBoxItem">
@@ -219,11 +250,11 @@
                             </Border>
                             <ControlTemplate.Triggers>
                                 <Trigger Property="IsMouseOver" Value="True">
-                                    <Setter TargetName="Bg" Property="Background" Value="#F3F4F6"/>
+                                    <Setter TargetName="Bg" Property="Background" Value="{DynamicResource ThemeControlHoverBrush}"/>
                                 </Trigger>
                                 <Trigger Property="IsSelected" Value="True">
-                                    <Setter TargetName="Bg" Property="Background" Value="#E0F2FE"/>
-                                    <Setter Property="Foreground" Value="#0369A1"/>
+                                    <Setter TargetName="Bg" Property="Background" Value="{DynamicResource ThemeSelectionBrush}"/>
+                                    <Setter Property="Foreground" Value="{DynamicResource ThemeSelectionForegroundBrush}"/>
                                 </Trigger>
                             </ControlTemplate.Triggers>
                         </ControlTemplate>
@@ -232,9 +263,16 @@
             </Style>
 
             <!-- 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?Modern Dialog Button 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?-->
+            <Style x:Key="CompactComboBox" TargetType="ComboBox" BasedOn="{StaticResource ModernComboBox}">
+                <Setter Property="Height" Value="28"/>
+                <Setter Property="MinHeight" Value="28"/>
+                <Setter Property="FontSize" Value="12"/>
+                <Setter Property="Padding" Value="8,4"/>
+            </Style>
+
             <Style x:Key="DialogPrimaryButton" TargetType="Button">
-                <Setter Property="Background" Value="#0078D4"/>
-                <Setter Property="Foreground" Value="White"/>
+                <Setter Property="Background" Value="{DynamicResource ThemeAccentBrush}"/>
+                <Setter Property="Foreground" Value="{DynamicResource ThemeSurfaceBrush}"/>
                 <Setter Property="FontSize" Value="13"/>
                 <Setter Property="FontWeight" Value="SemiBold"/>
                 <Setter Property="Height" Value="34"/>
@@ -248,10 +286,10 @@
                             </Border>
                             <ControlTemplate.Triggers>
                                 <Trigger Property="IsMouseOver" Value="True">
-                                    <Setter TargetName="Root" Property="Background" Value="#106EBE"/>
+                                    <Setter TargetName="Root" Property="Background" Value="{DynamicResource ThemeAccentHoverBrush}"/>
                                 </Trigger>
                                 <Trigger Property="IsPressed" Value="True">
-                                    <Setter TargetName="Root" Property="Background" Value="#005A9E"/>
+                                    <Setter TargetName="Root" Property="Background" Value="{DynamicResource ThemeAccentPressedBrush}"/>
                                 </Trigger>
                             </ControlTemplate.Triggers>
                         </ControlTemplate>
@@ -260,8 +298,8 @@
             </Style>
 
             <Style x:Key="DialogSecondaryButton" TargetType="Button">
-                <Setter Property="Background" Value="#F0F0F0"/>
-                <Setter Property="Foreground" Value="#333"/>
+                <Setter Property="Background" Value="{DynamicResource ThemeSurfaceAltBrush}"/>
+                <Setter Property="Foreground" Value="{DynamicResource ThemeForegroundBrush}"/>
                 <Setter Property="FontSize" Value="13"/>
                 <Setter Property="Height" Value="34"/>
                 <Setter Property="MinWidth" Value="90"/>
@@ -270,15 +308,15 @@
                     <Setter.Value>
                         <ControlTemplate TargetType="Button">
                             <Border x:Name="Root" Background="{TemplateBinding Background}" CornerRadius="8" Padding="16,0"
-                                    BorderBrush="#E0E0E0" BorderThickness="1">
+                                    BorderBrush="{DynamicResource ThemeBorderBrush}" BorderThickness="1">
                                 <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
                             </Border>
                             <ControlTemplate.Triggers>
                                 <Trigger Property="IsMouseOver" Value="True">
-                                    <Setter TargetName="Root" Property="Background" Value="#E4E4E4"/>
+                                    <Setter TargetName="Root" Property="Background" Value="{DynamicResource ThemeControlHoverBrush}"/>
                                 </Trigger>
                                 <Trigger Property="IsPressed" Value="True">
-                                    <Setter TargetName="Root" Property="Background" Value="#D8D8D8"/>
+                                    <Setter TargetName="Root" Property="Background" Value="{DynamicResource ThemeControlPressedBrush}"/>
                                 </Trigger>
                             </ControlTemplate.Triggers>
                         </ControlTemplate>
@@ -288,16 +326,8 @@
 
             <!-- 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?Glass Popup Border 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?-->
             <Style x:Key="GlassPopupBorder" TargetType="Border">
-                <Setter Property="Background">
-                    <Setter.Value>
-                        <SolidColorBrush Color="White" Opacity="0.92"/>
-                    </Setter.Value>
-                </Setter>
-                <Setter Property="BorderBrush">
-                    <Setter.Value>
-                        <SolidColorBrush Color="White" Opacity="0.45"/>
-                    </Setter.Value>
-                </Setter>
+                <Setter Property="Background" Value="{DynamicResource ThemePaperBrush}"/>
+                <Setter Property="BorderBrush" Value="{DynamicResource ThemeBorderBrush}"/>
                 <Setter Property="BorderThickness" Value="1"/>
                 <Setter Property="CornerRadius" Value="14"/>
                 <Setter Property="Effect">
@@ -315,13 +345,13 @@
                     <Setter.Value>
                         <ControlTemplate TargetType="Slider">
                             <Grid VerticalAlignment="Center">
-                                <Border Height="4" CornerRadius="2" Background="#15000000" VerticalAlignment="Center" Margin="9,0"/>
+                                <Border Height="4" CornerRadius="2" Background="{DynamicResource ThemeSliderTrackBrush}" VerticalAlignment="Center" Margin="9,0"/>
                                 <Track x:Name="PART_Track">
                                     <Track.DecreaseRepeatButton>
                                         <RepeatButton Command="Slider.DecreaseLarge">
                                             <RepeatButton.Template>
                                                 <ControlTemplate TargetType="RepeatButton">
-                                                    <Border Background="#0078D4" CornerRadius="2" Height="4" VerticalAlignment="Center"/>
+                                                    <Border Background="{DynamicResource ThemeAccentBrush}" CornerRadius="2" Height="4" VerticalAlignment="Center"/>
                                                 </ControlTemplate>
                                             </RepeatButton.Template>
                                         </RepeatButton>
@@ -340,12 +370,12 @@
                                             <Thumb.Template>
                                                 <ControlTemplate TargetType="Thumb">
                                                     <Grid>
-                                                        <Ellipse Width="18" Height="18" Fill="White">
+                                                        <Ellipse Width="18" Height="18" Fill="{DynamicResource ThemeSurfaceBrush}">
                                                             <Ellipse.Effect>
                                                                 <DropShadowEffect BlurRadius="6" ShadowDepth="1" Opacity="0.18"/>
                                                             </Ellipse.Effect>
                                                         </Ellipse>
-                                                        <Ellipse x:Name="ThumbDot" Width="10" Height="10" Fill="#0078D4"/>
+                                                        <Ellipse x:Name="ThumbDot" Width="10" Height="10" Fill="{DynamicResource ThemeAccentBrush}"/>
                                                     </Grid>
                                                     <ControlTemplate.Triggers>
                                                         <Trigger Property="IsMouseOver" Value="True">
@@ -374,13 +404,13 @@
                 <Setter Property="OverridesDefaultStyle" Value="True"/>
                 <Setter Property="Grid.IsSharedSizeScope" Value="True"/>
                 <Setter Property="HasDropShadow" Value="True"/>
-                <Setter Property="Background" Value="#FCFCFC"/> <!-- Almost solid white to fix shadow bleed -->
+                <Setter Property="Background" Value="{DynamicResource ThemeSurfaceBrush}"/>
                 <Setter Property="Template">
                     <Setter.Value>
                         <ControlTemplate TargetType="ContextMenu">
                             <!-- Outer border to provide margin space so drop shadow doesn't clip on the popup bounds -->
                             <Border Background="Transparent" Padding="12">
-                                <Border Background="{TemplateBinding Background}" BorderBrush="#20000000" BorderThickness="1" CornerRadius="8" Padding="3">
+                                <Border Background="{TemplateBinding Background}" BorderBrush="{DynamicResource ThemeBorderBrush}" BorderThickness="1" CornerRadius="8" Padding="3">
                                     <Border.Effect>
                                         <DropShadowEffect BlurRadius="12" ShadowDepth="4" Opacity="0.10" Color="#000"/>
                                     </Border.Effect>
@@ -399,7 +429,7 @@
                 <Setter Property="OverridesDefaultStyle" Value="True"/>
                 <Setter Property="Padding" Value="10,6"/>
                 <Setter Property="FontSize" Value="13"/>
-                <Setter Property="Foreground" Value="#222222"/>
+                <Setter Property="Foreground" Value="{DynamicResource ThemeForegroundBrush}"/>
                 <Setter Property="Background" Value="Transparent"/>
                 <Setter Property="Template">
                     <Setter.Value>
@@ -413,15 +443,15 @@
                                     </Grid.ColumnDefinitions>
                                     <ContentPresenter x:Name="IconPresenter" Content="{TemplateBinding Icon}" Margin="8,0,0,0" VerticalAlignment="Center" Width="16" Height="16"/>
                                     <ContentPresenter x:Name="HeaderHost" Grid.Column="1" RecognizesAccessKey="True" ContentSource="Header" Margin="{TemplateBinding Padding}" VerticalAlignment="Center"/>
-                                    <TextBlock x:Name="InputGestureText" Grid.Column="2" Text="{TemplateBinding InputGestureText}" Margin="16,0,8,0" VerticalAlignment="Center" Foreground="#888888"/>
+                                    <TextBlock x:Name="InputGestureText" Grid.Column="2" Text="{TemplateBinding InputGestureText}" Margin="16,0,8,0" VerticalAlignment="Center" Foreground="{DynamicResource ThemeSubtleForegroundBrush}"/>
                                 </Grid>
                             </Border>
                             <ControlTemplate.Triggers>
                                 <Trigger Property="IsHighlighted" Value="True">
-                                    <Setter TargetName="TemplateRoot" Property="Background" Value="#0D000000"/>
+                                    <Setter TargetName="TemplateRoot" Property="Background" Value="{DynamicResource ThemeControlHoverBrush}"/>
                                 </Trigger>
                                 <Trigger Property="IsEnabled" Value="False">
-                                    <Setter Property="Foreground" Value="#999999"/>
+                                    <Setter Property="Foreground" Value="{DynamicResource ThemeDisabledForegroundBrush}"/>
                                 </Trigger>
                                 <Trigger Property="Icon" Value="{x:Null}">
                                     <Setter TargetName="IconPresenter" Property="Visibility" Value="Collapsed"/>
@@ -436,7 +466,7 @@
             <Style x:Key="{x:Static MenuItem.SeparatorStyleKey}" TargetType="Separator">
                 <Setter Property="Height" Value="1"/>
                 <Setter Property="Margin" Value="0,4"/>
-                <Setter Property="Background" Value="#10000000"/>
+                <Setter Property="Background" Value="{DynamicResource ThemeMenuSeparatorBrush}"/>
                 <Setter Property="Template">
                     <Setter.Value>
                         <ControlTemplate TargetType="Separator">

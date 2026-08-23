@@ -47,9 +47,7 @@ namespace Caelum.Services
 
         static RecentFilesService()
         {
-            var dir = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "Caelum");
+            var dir = ProductInfo.GetDataDirectory();
             Directory.CreateDirectory(dir);
             _filePath = Path.Combine(dir, "recent_files.json");
             _legacyFilePath = Path.Combine(dir, "recent_files.txt");

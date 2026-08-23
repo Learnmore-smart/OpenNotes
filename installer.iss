@@ -1,24 +1,24 @@
-; Inno Setup Script for Caelum
+; Inno Setup Script for OpenNotes (legacy namespace/data identity remains Caelum)
 ; This creates a proper Windows installer with Start Menu shortcuts,
 ; Program Files installation, and an uninstaller.
 
 #ifndef MyAppName
-  #define MyAppName "Caelum"
+  #define MyAppName "OpenNotes"
 #endif
 #ifndef MyAppVersion
-  #define MyAppVersion "3.0.3"
+  #define MyAppVersion "4.0.0"
 #endif
 #ifndef MyAppPublisher
   #define MyAppPublisher "Learnmore_smart"
 #endif
 #ifndef MyAppURL
-  #define MyAppURL "https://github.com/Learnmore-smart/Caelum"
+  #define MyAppURL "https://github.com/Learnmore-smart/Windows-Notes"
 #endif
 #ifndef MyAppExeName
-  #define MyAppExeName "Caelum.exe"
+  #define MyAppExeName "OpenNotes.exe"
 #endif
 #ifndef MyAppOutputBaseFilename
-  #define MyAppOutputBaseFilename "Caelum-Setup-{#MyAppVersion}"
+  #define MyAppOutputBaseFilename "OpenNotes-Setup-{#MyAppVersion}"
 #endif
 
 [Setup]

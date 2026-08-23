@@ -26,6 +26,8 @@ namespace Caelum
                 : initialFolderPath;
 
             InitializeComponent();
+            LocalizationService.LanguageChanged += LocalizationService_LanguageChanged;
+            Closed += (_, __) => LocalizationService.LanguageChanged -= LocalizationService_LanguageChanged;
             ApplyLocalization();
             UpdateModeVisualState();
             UpdateSelectionVisualState();
@@ -54,17 +56,29 @@ namespace Caelum
             QuadrilleTitleTextBlock.Text = LocalizationService.Get("Editor.PageTemplateQuadrille");
             QuadrilleHintTextBlock.Text = LocalizationService.Get("Editor.PageTemplateQuadrilleHint");
 
+            DottedTitleTextBlock.Text = LocalizationService.Get("PageTemplate.DottedTitle");
+            DottedHintTextBlock.Text = LocalizationService.Get("PageTemplate.DottedHint");
+            MusicTitleTextBlock.Text = LocalizationService.Get("PageTemplate.MusicTitle");
+            MusicHintTextBlock.Text = LocalizationService.Get("PageTemplate.MusicHint");
+            CornellTitleTextBlock.Text = LocalizationService.Get("PageTemplate.CornellTitle");
+            CornellHintTextBlock.Text = LocalizationService.Get("PageTemplate.CornellHint");
+
             PathLabelTextBlock.Text = LocalizationService.Get("Home.CreateNotebookPathLabel");
             BrowsePathButton.ToolTip = LocalizationService.Get("Home.CreateNotebookBrowseFolder");
             CreateButton.Content = LocalizationService.Get("Home.CreateNotebookAction");
             CancelButton.Content = LocalizationService.Get("Common.Cancel");
         }
 
+        private void LocalizationService_LanguageChanged(object sender, EventArgs e)
+        {
+            ApplyLocalization();
+        }
+
         private void UpdateModeVisualState()
         {
             PathSectionBorder.Visibility = _isNotebookCreationMode ? Visibility.Visible : Visibility.Collapsed;
             CreateButton.Visibility = _isNotebookCreationMode ? Visibility.Visible : Visibility.Collapsed;
-            Height = _isNotebookCreationMode ? 660 : 560;
+            Height = _isNotebookCreationMode ? 860 : 760;
         }
 
         private void UpdateSelectionVisualState()
@@ -73,6 +87,9 @@ namespace Caelum
             NotebookCard.Tag = SelectedTemplate == PageInsertTemplate.Notebook;
             LinedCard.Tag = SelectedTemplate == PageInsertTemplate.Lined;
             QuadrilleCard.Tag = SelectedTemplate == PageInsertTemplate.Quadrille;
+            DottedCard.Tag = SelectedTemplate == PageInsertTemplate.Dotted;
+            MusicCard.Tag = SelectedTemplate == PageInsertTemplate.Music;
+            CornellCard.Tag = SelectedTemplate == PageInsertTemplate.Cornell;
         }
 
         private void UpdateFolderPathText()
@@ -95,6 +112,9 @@ namespace Caelum
         private void NotebookCard_Click(object sender, RoutedEventArgs e) => SelectTemplate(PageInsertTemplate.Notebook);
         private void LinedCard_Click(object sender, RoutedEventArgs e) => SelectTemplate(PageInsertTemplate.Lined);
         private void QuadrilleCard_Click(object sender, RoutedEventArgs e) => SelectTemplate(PageInsertTemplate.Quadrille);
+        private void DottedCard_Click(object sender, RoutedEventArgs e) => SelectTemplate(PageInsertTemplate.Dotted);
+        private void MusicCard_Click(object sender, RoutedEventArgs e) => SelectTemplate(PageInsertTemplate.Music);
+        private void CornellCard_Click(object sender, RoutedEventArgs e) => SelectTemplate(PageInsertTemplate.Cornell);
 
         private void CancelButton_Click(object sender, RoutedEventArgs e)
         {
