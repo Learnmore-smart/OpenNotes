@@ -14,21 +14,27 @@ namespace Caelum.Services
             WriteIndented = true
         };
 
-        private static readonly string SettingsPath;
+        private static string _cachedSettingsPath;
         private static AppSettings _cachedSettings;
 
-        static AppSettingsService()
+        private static string GetSettingsPath()
         {
             var folder = ProductInfo.GetDataDirectory();
             Directory.CreateDirectory(folder);
-            SettingsPath = Path.Combine(folder, "settings.json");
+            return Path.Combine(folder, "settings.json");
         }
 
         public static AppSettings Load()
         {
             lock (SyncRoot)
             {
-                _cachedSettings ??= ReadSettingsCore();
+                var path = GetSettingsPath();
+                if (_cachedSettings == null
+                    || !string.Equals(_cachedSettingsPath, path, StringComparison.OrdinalIgnoreCase))
+                {
+                    _cachedSettings = ReadSettingsCore(path);
+                    _cachedSettingsPath = path;
+                }
                 return Clone(_cachedSettings);
             }
         }
@@ -37,20 +43,22 @@ namespace Caelum.Services
         {
             lock (SyncRoot)
             {
+                var path = GetSettingsPath();
                 _cachedSettings = Sanitize(settings);
-                File.WriteAllText(SettingsPath, JsonSerializer.Serialize(_cachedSettings, SerializerOptions));
+                _cachedSettingsPath = path;
+                File.WriteAllText(path, JsonSerializer.Serialize(_cachedSettings, SerializerOptions));
                 return Clone(_cachedSettings);
             }
         }
 
-        private static AppSettings ReadSettingsCore()
+        private static AppSettings ReadSettingsCore(string path)
         {
             try
             {
-                if (!File.Exists(SettingsPath))
+                if (!File.Exists(path))
                     return new AppSettings();
 
-                var json = File.ReadAllText(SettingsPath);
+                var json = File.ReadAllText(path);
                 if (string.IsNullOrWhiteSpace(json))
                     return new AppSettings();
 
@@ -86,6 +94,7 @@ namespace Caelum.Services
                 ? source.DefaultPenColorHex.ToUpperInvariant()
                 : "#000000";
             string theme = NormalizeTheme(source.Theme);
+            string workspaceBackdrop = NormalizeWorkspaceBackdrop(source.WorkspaceBackdrop);
             string performanceMode = PdfRenderPolicy.NormalizeMode(source.PerformanceMode);
 
             return new AppSettings
@@ -105,6 +114,7 @@ namespace Caelum.Services
                 DefaultPenColorHex = defaultPenColor,
                 DefaultPenSize = defaultPenSize,
                 Theme = theme,
+                WorkspaceBackdrop = workspaceBackdrop,
                 PerformanceMode = performanceMode
             };
         }
@@ -128,6 +138,7 @@ namespace Caelum.Services
                 DefaultPenColorHex = settings.DefaultPenColorHex,
                 DefaultPenSize = settings.DefaultPenSize,
                 Theme = settings.Theme,
+                WorkspaceBackdrop = settings.WorkspaceBackdrop,
                 PerformanceMode = settings.PerformanceMode
             };
         }
@@ -184,11 +195,21 @@ namespace Caelum.Services
             return "Light";
         }
 
+        private static string NormalizeWorkspaceBackdrop(string value)
+        {
+            if (string.Equals(value?.Trim(), "Paper", StringComparison.OrdinalIgnoreCase))
+                return "Paper";
+            if (string.Equals(value?.Trim(), "Slate", StringComparison.OrdinalIgnoreCase))
+                return "Slate";
+            return "Neutral";
+        }
+
         /// <summary>
         /// Task 23: null-guarded deep copy of the pen preset slots (each
         /// entry cloned so mutating one settings clone never aliases another).
         /// Old settings.json files without the field deserialize to an empty
-        /// list; the 3 defaults are filled by EditorPage on first use.
+        /// list; EditorPage may use in-memory visual fallbacks without writing
+        /// those defaults back to the persisted settings.
         /// </summary>
         private static List<PenPreset> CopyPenPresets(List<PenPreset> source)
         {

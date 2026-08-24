@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
@@ -29,6 +30,18 @@ namespace Caelum
         private Point _tabDragStartPoint;
         private AppTab _tabDragCandidate;
         private bool _isTabDragInProgress;
+        private bool _windowCloseWorkflowActive;
+        private bool _allowWindowClose;
+        private bool _navigationWorkflowActive;
+        private readonly HashSet<AppTab> _tabCloseWorkflows = new HashSet<AppTab>();
+        // A Frame navigation journal can keep an EditorPage behind a HomePage.
+        // Track every editor seen by that frame so tab/window close releases
+        // hidden native documents as well as the currently visible content.
+        private readonly Dictionary<Frame, HashSet<EditorPage>> _frameEditors =
+            new Dictionary<Frame, HashSet<EditorPage>>();
+        private CancellationTokenSource _windowCloseCts;
+        private CancellationTokenSource _toastCts;
+        private static readonly TimeSpan CloseWorkflowTimeout = TimeSpan.FromSeconds(30);
 
         public MainWindow()
         {
@@ -36,11 +49,19 @@ namespace Caelum
             LoadAppIcon();
             SourceInitialized += MainWindow_SourceInitialized;
             StateChanged += MainWindow_StateChanged;
+            Deactivated += MainWindow_Deactivated;
             KeyDown += MainWindow_KeyDown;
             TitleBarBorder.MouseLeftButtonDown += (sender, args) => DragMove();
             LocalizationService.LanguageChanged += LocalizationService_LanguageChanged;
-            Closed += (_, __) => LocalizationService.LanguageChanged -= LocalizationService_LanguageChanged;
-            ThemeService.Apply(AppSettingsService.Load().Theme);
+            Closed += (_, __) =>
+            {
+                Deactivated -= MainWindow_Deactivated;
+                LocalizationService.LanguageChanged -= LocalizationService_LanguageChanged;
+                PopupZOrderHelper.UnfixContextMenuTopmost(SortContextMenu);
+                PopupZOrderHelper.UnfixContextMenuTopmost(MoreContextMenu);
+            };
+            var startupSettings = AppSettingsService.Load();
+            ThemeService.Apply(startupSettings.Theme, workspaceBackdrop: startupSettings.WorkspaceBackdrop);
             ApplyLocalization();
 
             // Popups must not float above other applications after Alt-Tab (Task 10)
@@ -54,6 +75,26 @@ namespace Caelum
         private void LocalizationService_LanguageChanged(object sender, EventArgs e)
         {
             ApplyLocalization();
+        }
+
+        private void MainWindow_Deactivated(object sender, EventArgs e)
+        {
+            SortContextMenu.IsOpen = false;
+            MoreContextMenu.IsOpen = false;
+            // Popup HWNDs are detached from the Frame visual tree. Sweep every
+            // retained editor (including journal entries hidden behind Home)
+            // so an OpenNotes popup can never remain above another app.
+            var editors = _frameEditors.Values
+                .SelectMany(editorsForFrame => editorsForFrame)
+                .Concat(_tabs.SelectMany(tab => GetFrameEditors(tab.Frame)))
+                .Distinct()
+                .ToList();
+
+            foreach (var editor in editors)
+            {
+                editor.CancelInteraction("window deactivated");
+                editor.CloseTransientUi("window deactivated");
+            }
         }
 
         private void LoadAppIcon()
@@ -150,6 +191,13 @@ namespace Caelum
         private Frame ActiveFrame => _activeTab?.Frame;
         internal bool IsActiveContent(object content) => ReferenceEquals(ActiveFrame?.Content, content);
 
+        private IReadOnlyList<EditorPage> GetFrameEditors(Frame frame)
+        {
+            return frame != null && _frameEditors.TryGetValue(frame, out var editors)
+                ? editors.ToList()
+                : Array.Empty<EditorPage>();
+        }
+
         public void AddNewHomeTab(bool activate = true)
         {
             var tab = new AppTab { Title = GetHomeTabTitle(), Icon = "\uE80F" };
@@ -173,6 +221,8 @@ namespace Caelum
 
         public void OpenFileInNewTab(string filePath, bool promptSaveAsAfterLoad = false, string pendingLibraryFolderId = null, bool isNotebookDraft = false)
         {
+            if (_windowCloseWorkflowActive || _navigationWorkflowActive || _tabCloseWorkflows.Count > 0)
+                return;
             RecentFilesService.AddOrPromote(filePath);
 
             // Check if this file is already open
@@ -208,10 +258,15 @@ namespace Caelum
 
         private void ActivateTab(AppTab tab)
         {
+            if (_windowCloseWorkflowActive || _navigationWorkflowActive || _tabCloseWorkflows.Count > 0)
+                return;
             if (_activeTab == tab) return;
 
             if (_activeTab?.Frame?.Content is EditorPage previousEditor)
+            {
+                previousEditor.CloseTransientUi("tab switch");
                 previousEditor.SetHostActive(false);
+            }
 
             foreach (var t in _tabs)
             {
@@ -225,7 +280,11 @@ namespace Caelum
             _activeTab = tab;
 
             if (tab.Frame.Content is EditorPage activeEditor)
+            {
                 activeEditor.SetHostActive(WindowState != WindowState.Minimized);
+                if (WindowState != WindowState.Minimized)
+                    activeEditor.ResumeDocumentInteraction();
+            }
 
             UpdateNavButtons();
             RebuildTabBar();
@@ -234,21 +293,155 @@ namespace Caelum
 
         private async void CloseTab(AppTab tab)
         {
-            // Auto-save if editor
-            if (tab.Frame?.Content is EditorPage editor)
+            if (tab == null || !_tabs.Contains(tab))
+                return;
+            if (_windowCloseWorkflowActive || _navigationWorkflowActive || !_tabCloseWorkflows.Add(tab))
+                return;
+
+            // A tab is not removed until the editor has persisted its newest
+            // generation and released native resources. A failed save keeps
+            // the tab/document alive for recovery.
+            EditorPage activeEditor = null;
+            var preparedEditors = new List<EditorPage>();
+            bool releaseStarted = false;
+            bool releaseHandoff = false;
+            try
             {
-                var saved = await editor.AutoSaveAsync();
-                if (saved) ShowToast(LocalizationService.Get("Main.FileAutoSaved"));
-                await editor.ReleaseResourcesAsync();
+                using var timeout = new CancellationTokenSource(CloseWorkflowTimeout);
+                var editors = GetFrameEditors(tab.Frame).ToList();
+                if (tab.Frame?.Content is EditorPage currentEditor && !editors.Contains(currentEditor))
+                    editors.Add(currentEditor);
+
+                foreach (var editor in editors)
+                {
+                    activeEditor = editor;
+                    bool wasDirty = editor.IsDirty;
+                    if (!await editor.PrepareForCloseAsync(timeout.Token))
+                    {
+                        foreach (var prepared in preparedEditors)
+                            prepared.CancelClosePreparation();
+                        return;
+                    }
+                    if (wasDirty)
+                        ShowToast(LocalizationService.Get("Main.FileAutoSaved"));
+                    preparedEditors.Add(editor);
+                }
+
+                for (int releaseIndex = 0; releaseIndex < preparedEditors.Count; releaseIndex++)
+                {
+                    var editor = preparedEditors[releaseIndex];
+                    activeEditor = editor;
+                    releaseStarted = true;
+                    Task<bool> releaseTask = editor.ReleaseResourcesAsync();
+                    bool releaseCompleted;
+                    try
+                    {
+                        releaseCompleted = await releaseTask.WaitAsync(timeout.Token);
+                    }
+                    catch (OperationCanceledException) when (!releaseTask.IsCompleted)
+                    {
+                        // The underlying release is deliberately not aborted
+                        // mid-disposal.  Leave the editor admitted as busy so
+                        // a later close attempt can join and finish it.
+                        releaseHandoff = true;
+                        _ = ContinueTimedOutTabCloseAsync(
+                            tab,
+                            preparedEditors.ToList(),
+                            releaseIndex,
+                            releaseTask);
+                        ShowToast(LocalizationService.Get("Editor.SaveFailed"), "\uE783", 3500);
+                        return;
+                    }
+                    if (!releaseCompleted)
+                    {
+                        editor.CancelClosePreparation();
+                        return;
+                    }
+                }
+
+                RemoveTabAfterResourcesReleased(tab);
             }
+            catch (Exception ex)
+            {
+                if (!releaseStarted)
+                {
+                    foreach (var prepared in preparedEditors)
+                        prepared.CancelClosePreparation();
+                    activeEditor?.CancelClosePreparation();
+                }
+                ShowToast(LocalizationService.Format("Editor.SaveFailed", ex.Message), "\uE783", 3500);
+            }
+            finally
+            {
+                if (!releaseHandoff)
+                    _tabCloseWorkflows.Remove(tab);
+            }
+        }
+
+        /// <summary>
+        /// Completes a tab close after the UI timeout stopped waiting.  The
+        /// workflow marker remains installed until every native release task
+        /// has actually settled, so ActivateTab/re-close cannot re-enter a
+        /// partially disposed editor.
+        /// </summary>
+        private async Task ContinueTimedOutTabCloseAsync(
+            AppTab tab,
+            IReadOnlyList<EditorPage> preparedEditors,
+            int releaseIndex,
+            Task<bool> releaseTask)
+        {
+            try
+            {
+                if (!await releaseTask.ConfigureAwait(false))
+                    throw new InvalidOperationException("The document release did not complete.");
+
+                for (int i = releaseIndex + 1; i < preparedEditors.Count; i++)
+                {
+                    if (!await preparedEditors[i].ReleaseResourcesAsync().ConfigureAwait(false))
+                        throw new InvalidOperationException("The document release did not complete.");
+                }
+
+                await Dispatcher.InvokeAsync(
+                    () => RemoveTabAfterResourcesReleased(tab),
+                    System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+            }
+            catch (Exception ex)
+            {
+                await Dispatcher.InvokeAsync(
+                    () =>
+                    {
+                        ShowToast(LocalizationService.Format("Editor.SaveFailed", ex.Message), "\uE783", 3500);
+                        // Editors after the failed release were only prepared,
+                        // never admitted to native cleanup.  Re-open their
+                        // input/autosave admission, while the failed/current
+                        // release remains blocked for an explicit retry.
+                        for (int i = releaseIndex + 1; i < preparedEditors.Count; i++)
+                            preparedEditors[i].CancelClosePreparation();
+                    },
+                    System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+                // ReleaseResourcesAsync retains the editor's blocked/failed
+                // state.  Removing only the workflow marker permits an
+                // explicit retry without enabling the editor implicitly.
+                await Dispatcher.InvokeAsync(
+                    () => _tabCloseWorkflows.Remove(tab),
+                    System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+            }
+        }
+
+        private void RemoveTabAfterResourcesReleased(AppTab tab)
+        {
+            if (tab?.Frame == null || !_tabs.Contains(tab))
+                return;
 
             tab.Frame.Navigated -= Frame_Navigated;
             TabContentArea.Children.Remove(tab.Frame);
             _tabs.Remove(tab);
+            _frameEditors.Remove(tab.Frame);
+            _tabCloseWorkflows.Remove(tab);
 
             if (_tabs.Count == 0)
             {
-                // Always keep at least one tab
+                // Always keep at least one tab.
                 AddNewHomeTab(activate: true);
             }
             else if (tab == _activeTab)
@@ -539,6 +732,8 @@ namespace Caelum
 
         private void MoveTab(AppTab draggedTab, AppTab targetTab, bool insertAfter)
         {
+            if (_windowCloseWorkflowActive || _navigationWorkflowActive || _tabCloseWorkflows.Count > 0)
+                return;
             if (draggedTab == null || targetTab == null || draggedTab == targetTab)
                 return;
 
@@ -584,8 +779,21 @@ namespace Caelum
         {
             if (e.Content is EditorPage navigatedEditor)
             {
+                if (sender is Frame navigatedFrame)
+                {
+                    if (!_frameEditors.TryGetValue(navigatedFrame, out var editors))
+                    {
+                        editors = new HashSet<EditorPage>();
+                        _frameEditors[navigatedFrame] = editors;
+                    }
+
+                    editors.Add(navigatedEditor);
+                }
+
                 bool isActiveEditor = sender == _activeTab?.Frame && WindowState != WindowState.Minimized;
                 navigatedEditor.SetHostActive(isActiveEditor);
+                if (isActiveEditor)
+                    navigatedEditor.ResumeDocumentInteraction();
             }
 
             if (sender == _activeTab?.Frame)
@@ -605,21 +813,48 @@ namespace Caelum
 
         private async void NavBack_Click(object sender, RoutedEventArgs e)
         {
-            if (ActiveFrame?.Content is EditorPage editor)
+            if (_windowCloseWorkflowActive || _navigationWorkflowActive || _tabCloseWorkflows.Count > 0)
+                return;
+
+            _navigationWorkflowActive = true;
+            try
             {
-                var saved = await editor.AutoSaveAsync();
-                if (saved) ShowToast(LocalizationService.Get("Main.FileAutoSaved"));
+                using var timeout = new CancellationTokenSource(CloseWorkflowTimeout);
+                EditorPage preparedEditor = ActiveFrame?.Content as EditorPage;
+                bool wasDirty = preparedEditor?.IsDirty == true;
+                bool navigated = await NavigationCloseCoordinator.TryNavigateBackAsync(
+                    () => preparedEditor == null
+                        ? Task.FromResult(true)
+                        : preparedEditor.PrepareForNavigationAsync(timeout.Token),
+                    () => ActiveFrame?.CanGoBack == true,
+                    () => preparedEditor?.CancelClosePreparation(),
+                    () =>
+                    {
+                        if (ActiveFrame?.Content is EditorPage currentEditor)
+                            currentEditor.SetHostActive(false);
+                        ActiveFrame?.GoBack();
+                        return Task.CompletedTask;
+                    });
+                if (navigated && wasDirty)
+                    ShowToast(LocalizationService.Get("Main.FileAutoSaved"));
+
             }
-            if (ActiveFrame?.CanGoBack == true)
+            catch (Exception ex)
             {
-                if (ActiveFrame.Content is EditorPage currentEditor)
-                    currentEditor.SetHostActive(false);
-                ActiveFrame.GoBack();
+                ShowToast(LocalizationService.Format("Editor.SaveFailed", ex.Message), "\uE783", 3500);
+                if (ActiveFrame?.Content is EditorPage editor)
+                    editor.CancelClosePreparation();
+            }
+            finally
+            {
+                _navigationWorkflowActive = false;
             }
         }
 
         private void NavForward_Click(object sender, RoutedEventArgs e)
         {
+            if (_windowCloseWorkflowActive || _navigationWorkflowActive || _tabCloseWorkflows.Count > 0)
+                return;
             if (ActiveFrame?.CanGoForward == true)
             {
                 ActiveFrame.GoForward();
@@ -628,18 +863,40 @@ namespace Caelum
 
         private async void NavHome_Click(object sender, RoutedEventArgs e)
         {
-            if (ActiveFrame == null) return;
-            if (ActiveFrame.Content is EditorPage editor)
+            if (_windowCloseWorkflowActive || _navigationWorkflowActive || _tabCloseWorkflows.Count > 0 || ActiveFrame == null)
+                return;
+
+            _navigationWorkflowActive = true;
+            try
             {
-                var saved = await editor.AutoSaveAsync();
-                if (saved) ShowToast(LocalizationService.Get("Main.FileAutoSaved"));
-                editor.SetHostActive(false);
+                using var timeout = new CancellationTokenSource(CloseWorkflowTimeout);
+                if (ActiveFrame.Content is EditorPage editor)
+                {
+                    bool wasDirty = editor.IsDirty;
+                    if (!await editor.PrepareForNavigationAsync(timeout.Token))
+                        return;
+                    if (wasDirty)
+                        ShowToast(LocalizationService.Get("Main.FileAutoSaved"));
+                    editor.SetHostActive(false);
+                }
+                ActiveFrame.Navigate(new HomePage());
             }
-            ActiveFrame.Navigate(new HomePage());
+            catch (Exception ex)
+            {
+                ShowToast(LocalizationService.Format("Editor.SaveFailed", ex.Message), "\uE783", 3500);
+                if (ActiveFrame?.Content is EditorPage editor)
+                    editor.CancelClosePreparation();
+            }
+            finally
+            {
+                _navigationWorkflowActive = false;
+            }
         }
 
         private void NewTab_Click(object sender, RoutedEventArgs e)
         {
+            if (_windowCloseWorkflowActive || _navigationWorkflowActive || _tabCloseWorkflows.Count > 0)
+                return;
             AddNewHomeTab(activate: true);
         }
 
@@ -669,7 +926,8 @@ namespace Caelum
         // Called by HomePage/EditorPage to navigate the current tab to a file
         public void NavigateActiveTabToFile(string filePath, bool promptSaveAsAfterLoad = false, string pendingLibraryFolderId = null, bool isNotebookDraft = false)
         {
-            if (_activeTab == null) return;
+            if (_windowCloseWorkflowActive || _navigationWorkflowActive || _tabCloseWorkflows.Count > 0 || _activeTab == null)
+                return;
 
             RecentFilesService.AddOrPromote(filePath);
 
@@ -729,6 +987,8 @@ namespace Caelum
             {
                 if (e.Key == Key.T)
                 {
+                    if (_windowCloseWorkflowActive || _navigationWorkflowActive || _tabCloseWorkflows.Count > 0)
+                        return;
                     AddNewHomeTab(activate: true);
                     e.Handled = true;
                 }
@@ -753,7 +1013,11 @@ namespace Caelum
         {
             MaximizeIcon.Text = WindowState == WindowState.Maximized ? "\uE923" : "\uE922";
             if (ActiveFrame?.Content is EditorPage activeEditor)
+            {
                 activeEditor.SetHostActive(WindowState != WindowState.Minimized);
+                if (WindowState != WindowState.Minimized)
+                    activeEditor.ResumeDocumentInteraction();
+            }
         }
 
         private void MinimizeButton_Click(object sender, RoutedEventArgs e) => WindowState = WindowState.Minimized;
@@ -763,18 +1027,154 @@ namespace Caelum
 
         private void CloseButton_Click(object sender, RoutedEventArgs e) => Close();
 
-        protected override async void OnClosing(System.ComponentModel.CancelEventArgs e)
+        protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
         {
-            // Auto-save all open editor tabs
-            foreach (var tab in _tabs)
+            if (_allowWindowClose)
             {
-                if (tab.Frame?.Content is EditorPage editor)
+                base.OnClosing(e);
+                return;
+            }
+
+            // WPF does not await an async override. Cancel this attempt and
+            // complete the save/release protocol before requesting Close()
+            // again, otherwise the process can exit while an older snapshot
+            // is still in flight.
+            e.Cancel = true;
+            if (_windowCloseWorkflowActive)
+                return;
+
+            _windowCloseWorkflowActive = true;
+            _windowCloseCts?.Dispose();
+            _windowCloseCts = new CancellationTokenSource(CloseWorkflowTimeout);
+            _ = CompleteWindowCloseAsync(_windowCloseCts.Token);
+        }
+
+        private async Task CompleteWindowCloseAsync(CancellationToken cancellationToken)
+        {
+            var preparedEditors = new List<EditorPage>();
+            var releasesStarted = new HashSet<EditorPage>();
+            bool releaseHandoff = false;
+            try
+            {
+                var allEditors = _tabs
+                    .SelectMany(tab => GetFrameEditors(tab.Frame))
+                    .Distinct()
+                    .ToList();
+                foreach (var tab in _tabs)
                 {
-                    await editor.AutoSaveAsync();
-                    await editor.ReleaseResourcesAsync();
+                    if (tab.Frame?.Content is EditorPage currentEditor && !allEditors.Contains(currentEditor))
+                        allEditors.Add(currentEditor);
+                }
+
+                foreach (var editor in allEditors)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (!await editor.PrepareForCloseAsync(cancellationToken))
+                        return;
+
+                    preparedEditors.Add(editor);
+                }
+
+                for (int releaseIndex = 0; releaseIndex < preparedEditors.Count; releaseIndex++)
+                {
+                    var editor = preparedEditors[releaseIndex];
+                    cancellationToken.ThrowIfCancellationRequested();
+                    releasesStarted.Add(editor);
+                    Task<bool> releaseTask = editor.ReleaseResourcesAsync();
+                    try
+                    {
+                        if (!await releaseTask.WaitAsync(cancellationToken))
+                            return;
+                    }
+                    catch (OperationCanceledException) when (!releaseTask.IsCompleted)
+                    {
+                        // Keep the window workflow active while the native
+                        // release continues in the background.  A second
+                        // OnClosing attempt is cancelled and cannot race a
+                        // second DisposeAsync call.
+                        releaseHandoff = true;
+                        _ = ContinueTimedOutWindowCloseAsync(
+                            preparedEditors.ToList(),
+                            releaseIndex,
+                            releaseTask);
+                        return;
+                    }
+                }
+
+                _allowWindowClose = true;
+                await Dispatcher.InvokeAsync(
+                    Close,
+                    System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+            }
+            catch (Exception ex)
+            {
+                ShowToast(LocalizationService.Format("Editor.SaveFailed", ex.Message), "\uE783", 3500);
+            }
+            finally
+            {
+                if (!_allowWindowClose)
+                {
+                    foreach (var editor in preparedEditors)
+                    {
+                        if (!releasesStarted.Contains(editor))
+                            editor.CancelClosePreparation();
+                    }
+                }
+
+                if (!releaseHandoff)
+                {
+                    _windowCloseWorkflowActive = false;
+                    _windowCloseCts?.Dispose();
+                    _windowCloseCts = null;
                 }
             }
-            base.OnClosing(e);
+        }
+
+        /// <summary>
+        /// Finishes a window close after its bounded UI wait elapsed.  The
+        /// guard and all prepared editors remain busy until this task settles.
+        /// </summary>
+        private async Task ContinueTimedOutWindowCloseAsync(
+            IReadOnlyList<EditorPage> preparedEditors,
+            int releaseIndex,
+            Task<bool> releaseTask)
+        {
+            try
+            {
+                if (!await releaseTask.ConfigureAwait(false))
+                    throw new InvalidOperationException("The document release did not complete.");
+
+                for (int i = releaseIndex + 1; i < preparedEditors.Count; i++)
+                {
+                    if (!await preparedEditors[i].ReleaseResourcesAsync().ConfigureAwait(false))
+                        throw new InvalidOperationException("The document release did not complete.");
+                }
+
+                await Dispatcher.InvokeAsync(
+                    () =>
+                    {
+                        _allowWindowClose = true;
+                        Close();
+                    },
+                    System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+            }
+            catch (Exception ex)
+            {
+                await Dispatcher.InvokeAsync(
+                    () =>
+                    {
+                        ShowToast(LocalizationService.Format("Editor.SaveFailed", ex.Message), "\uE783", 3500);
+                        // The suffix was prepared but not yet released.  A
+                        // timeout/failure must not strand those editors in a
+                        // close-preparation state or leave them half-detached.
+                        for (int i = releaseIndex + 1; i < preparedEditors.Count; i++)
+                            preparedEditors[i].CancelClosePreparation();
+                        _windowCloseWorkflowActive = false;
+                        _windowCloseCts?.Dispose();
+                        _windowCloseCts = null;
+                    },
+                    System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+            }
         }
 
         private void MainWindow_SourceInitialized(object sender, EventArgs e)
@@ -929,20 +1329,55 @@ namespace Caelum
         // 鈹€鈹€鈹€ Toast 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
         public async void ShowToast(string message, string icon = "\uE73E", int durationMs = 2500)
         {
+            _toastCts?.Cancel();
+            _toastCts?.Dispose();
+            _toastCts = new CancellationTokenSource();
+            CancellationToken toastToken = _toastCts.Token;
+
             ToastIcon.Text = icon;
             ToastText.Text = message;
             ToastBorder.Visibility = Visibility.Visible;
 
-            var fadeIn = new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(220));
-            fadeIn.EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut };
-            ToastBorder.BeginAnimation(OpacityProperty, fadeIn);
+            TimeSpan fadeInDuration = ThemeService.GetAnimationDuration(TimeSpan.FromMilliseconds(220));
+            if (fadeInDuration == TimeSpan.Zero)
+            {
+                ToastBorder.BeginAnimation(OpacityProperty, null);
+                ToastBorder.Opacity = 1;
+            }
+            else
+            {
+                var fadeIn = new DoubleAnimation(0, 1, fadeInDuration)
+                {
+                    EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
+                };
+                ToastBorder.BeginAnimation(OpacityProperty, fadeIn);
+            }
 
-            await Task.Delay(durationMs);
+            try
+            {
+                await Task.Delay(durationMs, toastToken);
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
 
-            var fadeOut = new DoubleAnimation(1, 0, TimeSpan.FromMilliseconds(350));
-            fadeOut.EasingFunction = new CubicEase { EasingMode = EasingMode.EaseIn };
-            fadeOut.Completed += (s, ev) => ToastBorder.Visibility = Visibility.Collapsed;
-            ToastBorder.BeginAnimation(OpacityProperty, fadeOut);
+            TimeSpan fadeOutDuration = ThemeService.GetAnimationDuration(TimeSpan.FromMilliseconds(350));
+            if (fadeOutDuration == TimeSpan.Zero)
+            {
+                ToastBorder.BeginAnimation(OpacityProperty, null);
+                ToastBorder.Opacity = 0;
+                ToastBorder.Visibility = Visibility.Collapsed;
+            }
+            else
+            {
+                var fadeOut = new DoubleAnimation(1, 0, fadeOutDuration)
+                {
+                    EasingFunction = new CubicEase { EasingMode = EasingMode.EaseIn }
+                };
+                fadeOut.Completed += (s, ev) => ToastBorder.Visibility = Visibility.Collapsed;
+                ToastBorder.BeginAnimation(OpacityProperty, fadeOut);
+            }
         }
 
         [DllImport("dwmapi.dll")]

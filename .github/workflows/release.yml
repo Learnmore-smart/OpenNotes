@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Release version (for example 4.0.0 or v4.0.0)"
+        description: "Release version (for example 5.0.0 or v5.0.0)"
         required: true
       prerelease:
         description: "Mark the GitHub release as a prerelease"

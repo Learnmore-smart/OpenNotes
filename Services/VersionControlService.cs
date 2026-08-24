@@ -4,6 +4,7 @@ using System.IO;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using Caelum.Models;
 
@@ -22,8 +23,12 @@ namespace Caelum.Services
             return dir;
         }
 
-        public static async Task SaveVersionAsync(string filePath, Dictionary<int, PageAnnotation> annotations)
+        public static async Task SaveVersionAsync(
+            string filePath,
+            Dictionary<int, PageAnnotation> annotations,
+            CancellationToken cancellationToken = default)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var dir = GetVersionDir(filePath);
             // Include milliseconds and a short random suffix so two saves in
             // the same clock tick never overwrite one another.
@@ -31,8 +36,9 @@ namespace Caelum.Services
             var file = Path.Combine(dir, $"{timestamp}_{Guid.NewGuid():N}.json");
 
             var json = JsonSerializer.Serialize(annotations);
-            await File.WriteAllTextAsync(file, json);
+            await File.WriteAllTextAsync(file, json, cancellationToken);
 
+            cancellationToken.ThrowIfCancellationRequested();
             PruneVersions(filePath);
         }
 
@@ -57,9 +63,11 @@ namespace Caelum.Services
             return list;
         }
 
-        public static async Task<Dictionary<int, PageAnnotation>> LoadVersionAsync(string versionFilePath)
+        public static async Task<Dictionary<int, PageAnnotation>> LoadVersionAsync(
+            string versionFilePath,
+            CancellationToken cancellationToken = default)
         {
-            var json = await File.ReadAllTextAsync(versionFilePath);
+            var json = await File.ReadAllTextAsync(versionFilePath, cancellationToken);
             return JsonSerializer.Deserialize<Dictionary<int, PageAnnotation>>(json);
         }
     }

@@ -6,6 +6,7 @@ param(
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
+. (Join-Path $PSScriptRoot 'OpenNotesEditorAutomationIds.ps1')
 
 if ([string]::IsNullOrWhiteSpace($ExecutablePath)) {
     $ExecutablePath = Join-Path $PSScriptRoot '..\bin\Debug\net8.0-windows\win-x64\OpenNotes.exe'
@@ -403,10 +404,10 @@ try {
 
     $textTool = Wait-Until {
         $window = Find-MainWindow $process.Id
-        Find-DescendantByAutomationId $window 'TextToolButton'
+        Find-DescendantByAutomationId $window $EditorAutomationIds.Text
     } 60
-    if ($null -eq $textTool) { throw 'TextToolButton was not found after opening the PDF.' }
-    $initialTextState = Get-ToggleState $process.Id 'TextToolButton'
+    if ($null -eq $textTool) { throw 'Text tool was not found after opening the PDF.' }
+    $initialTextState = Get-ToggleState $process.Id $EditorAutomationIds.Text
     Write-Output "TEXT_TOOL_STATE_BEFORE_POINTER=$initialTextState"
     $hwnd = [IntPtr]$mainWindow.Current.NativeWindowHandle
     [void][PointerSmokeNative]::ShowWindow($hwnd, 5)
@@ -423,7 +424,7 @@ try {
     $toolDispatchMode = Send-PointerClick $hwnd $toolX $toolY
     Write-Output "TEXT_TOOL_POINTER_CLICK x=$toolX y=$toolY mode='$toolDispatchMode'"
     Start-Sleep -Milliseconds 500
-    $textTool = Find-DescendantByAutomationId (Find-MainWindow $process.Id) 'TextToolButton'
+    $textTool = Find-DescendantByAutomationId (Find-MainWindow $process.Id) $EditorAutomationIds.Text
     $toggle = $textTool.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)
     $stateAfterFirstPointer = $toggle.Current.ToggleState.ToString()
     Write-Output "TEXT_TOOL_STATE_AFTER_POINTER=$stateAfterFirstPointer"
@@ -434,35 +435,35 @@ try {
         $toolDispatchMode = Send-PointerClick $hwnd $toolX $toolY
         Write-Output "TEXT_TOOL_POINTER_RETRY attempt=$retry x=$toolX y=$toolY mode='$toolDispatchMode'"
         Start-Sleep -Milliseconds 500
-        $textTool = Find-DescendantByAutomationId (Find-MainWindow $process.Id) 'TextToolButton'
+        $textTool = Find-DescendantByAutomationId (Find-MainWindow $process.Id) $EditorAutomationIds.Text
         $toggle = $textTool.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)
         $stateAfterFirstPointer = $toggle.Current.ToggleState.ToString()
         Write-Output "TEXT_TOOL_STATE_AFTER_RETRY attempt=$retry state=$stateAfterFirstPointer"
     }
     if ($toggle.Current.ToggleState.ToString() -ne 'On') {
-        throw 'The real pointer click did not activate TextToolButton.'
+        throw 'The real pointer click did not activate the Text tool.'
     }
 
-    Invoke-ToolbarPointerClick $process.Id $hwnd 'PenToolButton'
-    $penAfter = Get-ToggleState $process.Id 'PenToolButton'
-    $textAfterPen = Get-ToggleState $process.Id 'TextToolButton'
+    Invoke-ToolbarPointerClick $process.Id $hwnd $EditorAutomationIds.Pen
+    $penAfter = Get-ToggleState $process.Id $EditorAutomationIds.Pen
+    $textAfterPen = Get-ToggleState $process.Id $EditorAutomationIds.Text
     Write-Output "TOOL_POINTER_STATE_AFTER_PEN pen='$penAfter' text='$textAfterPen'"
-    Invoke-ToolbarPointerClick $process.Id $hwnd 'TextToolButton'
-    $penAfterText = Get-ToggleState $process.Id 'PenToolButton'
-    $textAfterText = Get-ToggleState $process.Id 'TextToolButton'
+    Invoke-ToolbarPointerClick $process.Id $hwnd $EditorAutomationIds.Text
+    $penAfterText = Get-ToggleState $process.Id $EditorAutomationIds.Pen
+    $textAfterText = Get-ToggleState $process.Id $EditorAutomationIds.Text
     Write-Output "TOOL_POINTER_STATE_AFTER_TEXT pen='$penAfterText' text='$textAfterText'"
     if ($penAfterText -ne 'Off' -or $textAfterText -ne 'On') {
         throw 'Toolbar pointer clicks did not execute the expected tool-switch handlers.'
     }
 
-    $viewer = Find-DescendantByAutomationId (Find-MainWindow $process.Id) 'PdfScrollViewer'
+    $viewer = Find-DescendantByAutomationId (Find-MainWindow $process.Id) $EditorAutomationIds.PdfScrollViewer
     if ($null -eq $viewer) { throw 'PdfScrollViewer was not found.' }
     $viewerRect = $viewer.Current.BoundingRectangle
     if ($viewerRect.Width -lt 300 -or $viewerRect.Height -lt 200) { throw "PdfScrollViewer has unusable bounds: $viewerRect" }
 
-    Invoke-ToolbarPointerClick $process.Id $hwnd 'PenToolButton'
-    $penState = Get-ToggleState $process.Id 'PenToolButton'
-    if ($penState -ne 'On') { throw "PenToolButton was not active for the real drawing smoke: $penState" }
+    Invoke-ToolbarPointerClick $process.Id $hwnd $EditorAutomationIds.Pen
+    $penState = Get-ToggleState $process.Id $EditorAutomationIds.Pen
+    if ($penState -ne 'On') { throw "Pen tool was not active for the real drawing smoke: $penState" }
     $strokeStartX = [int][Math]::Round($viewerRect.Left + ($viewerRect.Width * 0.34))
     $strokeStartY = [int][Math]::Round($viewerRect.Top + ($viewerRect.Height * 0.56))
     $strokeEndX = $strokeStartX + 220
@@ -470,18 +471,18 @@ try {
     $strokeDispatchMode = Send-PointerDrag $hwnd $strokeStartX $strokeStartY $strokeEndX $strokeEndY
     Write-Output "PEN_POINTER_DRAG start=$strokeStartX,$strokeStartY end=$strokeEndX,$strokeEndY mode='$strokeDispatchMode' viewerRect=$viewerRect"
     Start-Sleep -Milliseconds 500
-    $undoAfterStroke = Find-DescendantByAutomationId (Find-MainWindow $process.Id) 'UndoButton'
-    $saveAfterStroke = Find-DescendantByAutomationId (Find-MainWindow $process.Id) 'SavePdfButton'
+    $undoAfterStroke = Find-DescendantByAutomationId (Find-MainWindow $process.Id) $EditorAutomationIds.Undo
+    $saveAfterStroke = Find-DescendantByAutomationId (Find-MainWindow $process.Id) $EditorAutomationIds.Save
     Write-Output "PEN_POINTER_AFTER_DRAG undoEnabled=$($null -ne $undoAfterStroke -and $undoAfterStroke.Current.IsEnabled) saveEnabled=$($null -ne $saveAfterStroke -and $saveAfterStroke.Current.IsEnabled)"
     $inkCountBeforeStrokeSave = Get-PdfInkAnnotationCount $pdfPath
     $hashBeforeStrokeSave = (Get-FileHash -LiteralPath $pdfPath -Algorithm SHA256).Hash
     $saveButton = Wait-Until {
-        $candidate = Find-DescendantByAutomationId (Find-MainWindow $process.Id) 'SavePdfButton'
+        $candidate = Find-DescendantByAutomationId (Find-MainWindow $process.Id) $EditorAutomationIds.Save
         if ($null -ne $candidate -and $candidate.Current.IsEnabled) { return $candidate }
         return $null
     } 10
     if ($null -eq $saveButton) { throw 'SavePdfButton was not enabled after the real pen stroke.' }
-    Invoke-ToolbarPointerClick $process.Id $hwnd 'SavePdfButton'
+    Invoke-ToolbarPointerClick $process.Id $hwnd $EditorAutomationIds.Save
     $strokeSavedHash = Wait-Until {
         try {
             $candidateHash = (Get-FileHash -LiteralPath $pdfPath -Algorithm SHA256).Hash
@@ -497,8 +498,8 @@ try {
     }
     Write-Output "PEN_POINTER_DRAW_COMPLETED mode='$strokeDispatchMode' inkBefore=$inkCountBeforeStrokeSave inkAfter=$inkCountAfterStroke"
 
-    Invoke-ToolbarPointerClick $process.Id $hwnd 'EraserToolButton'
-    $eraserState = Get-ToggleState $process.Id 'EraserToolButton'
+    Invoke-ToolbarPointerClick $process.Id $hwnd $EditorAutomationIds.Eraser
+    $eraserState = Get-ToggleState $process.Id $EditorAutomationIds.Eraser
     if ($eraserState -ne 'On') { throw "EraserToolButton was not active for the real eraser smoke: $eraserState" }
     $eraseX = [int][Math]::Round(($strokeStartX + $strokeEndX) * 0.5)
     $eraseY = [int][Math]::Round(($strokeStartY + $strokeEndY) * 0.5)
@@ -506,11 +507,11 @@ try {
     Start-Sleep -Milliseconds 700
     $inkCountBeforeEraseSave = Get-PdfInkAnnotationCount $pdfPath
     $hashBeforeEraseSave = (Get-FileHash -LiteralPath $pdfPath -Algorithm SHA256).Hash
-    $saveButton = Find-DescendantByAutomationId (Find-MainWindow $process.Id) 'SavePdfButton'
+    $saveButton = Find-DescendantByAutomationId (Find-MainWindow $process.Id) $EditorAutomationIds.Save
     if ($null -eq $saveButton -or -not $saveButton.Current.IsEnabled) {
         throw 'SavePdfButton was not enabled after the real whole-stroke erase.'
     }
-    Invoke-ToolbarPointerClick $process.Id $hwnd 'SavePdfButton'
+    Invoke-ToolbarPointerClick $process.Id $hwnd $EditorAutomationIds.Save
     $eraseSavedHash = Wait-Until {
         try {
             $candidateHash = (Get-FileHash -LiteralPath $pdfPath -Algorithm SHA256).Hash
@@ -526,7 +527,7 @@ try {
     }
     Write-Output "ERASER_POINTER_COMPLETED mode='$eraseDispatchMode' inkBefore=$inkCountBeforeEraseSave inkAfter=$inkCountAfterErase"
 
-    Invoke-ToolbarPointerClick $process.Id $hwnd 'TextToolButton'
+    Invoke-ToolbarPointerClick $process.Id $hwnd $EditorAutomationIds.Text
     Start-Sleep -Milliseconds 300
     $clickX = [int][Math]::Round($viewerRect.Left + ($viewerRect.Width * 0.50))
     $clickY = [int][Math]::Round($viewerRect.Top + ($viewerRect.Height * 0.42))
@@ -552,10 +553,9 @@ try {
     Write-Output "TEXT_BOX_CREATED rect=$($textBox.Current.BoundingRectangle)"
 
     $handleIds = @(
-        'TextResizeHandle.TopLeft', 'TextResizeHandle.Top', 'TextResizeHandle.TopRight',
-        'TextResizeHandle.Left', 'TextResizeHandle.Right',
-        'TextResizeHandle.BottomLeft', 'TextResizeHandle.Bottom', 'TextResizeHandle.BottomRight'
-    )
+        'TopLeft', 'Top', 'TopRight', 'Left', 'Right',
+        'BottomLeft', 'Bottom', 'BottomRight'
+    ) | ForEach-Object { Get-EditorTextResizeHandleAutomationId $_ }
     $missing = @()
     foreach ($handleId in $handleIds) {
         $handle = Find-DescendantByAutomationId (Find-MainWindow $process.Id) $handleId
@@ -571,7 +571,7 @@ try {
         throw "RESIZE_HANDLES_MISSING ids='$($missing -join ',')'"
     }
 
-    $bottomRightHandle = Find-DescendantByAutomationId (Find-MainWindow $process.Id) 'TextResizeHandle.BottomRight'
+    $bottomRightHandle = Find-DescendantByAutomationId (Find-MainWindow $process.Id) $EditorAutomationIds.TextResizeHandleBottomRight
     $beforeResizeRect = $textBox.Current.BoundingRectangle
     $handleRect = $bottomRightHandle.Current.BoundingRectangle
     $dragStartX = [int][Math]::Round($handleRect.Left + ($handleRect.Width * 0.5))
@@ -598,11 +598,11 @@ try {
     $expandedRect = $expandedTextBox.Current.BoundingRectangle
     Write-Output "TEXT_BOX_RESIZED before=$beforeResizeRect after=$expandedRect"
 
-    $undoButton = Find-DescendantByAutomationId (Find-MainWindow $process.Id) 'UndoButton'
+    $undoButton = Find-DescendantByAutomationId (Find-MainWindow $process.Id) $EditorAutomationIds.Undo
     if ($null -eq $undoButton -or -not $undoButton.Current.IsEnabled) {
         throw 'UndoButton was not enabled after the real text-box resize.'
     }
-    Invoke-ToolbarPointerClick $process.Id $hwnd 'UndoButton'
+    Invoke-ToolbarPointerClick $process.Id $hwnd $EditorAutomationIds.Undo
     $restoredTextBox = Wait-Until {
         $candidate = Get-VisibleEdit (Find-MainWindow $process.Id) $viewerRect
         if ($null -eq $candidate) { return $null }
@@ -619,11 +619,11 @@ try {
     }
     Write-Output "TEXT_RESIZE_UNDO restored=True rect=$($restoredTextBox.Current.BoundingRectangle)"
 
-    $redoButton = Find-DescendantByAutomationId (Find-MainWindow $process.Id) 'RedoButton'
+    $redoButton = Find-DescendantByAutomationId (Find-MainWindow $process.Id) $EditorAutomationIds.Redo
     if ($null -eq $redoButton -or -not $redoButton.Current.IsEnabled) {
         throw 'RedoButton was not enabled after undoing the real text-box resize.'
     }
-    Invoke-ToolbarPointerClick $process.Id $hwnd 'RedoButton'
+    Invoke-ToolbarPointerClick $process.Id $hwnd $EditorAutomationIds.Redo
     $redoneTextBox = Wait-Until {
         $candidate = Get-VisibleEdit (Find-MainWindow $process.Id) $viewerRect
         if ($null -eq $candidate) { return $null }
@@ -641,7 +641,7 @@ try {
     Write-Output "TEXT_RESIZE_REDO restored=True rect=$($redoneTextBox.Current.BoundingRectangle)"
 
     # Leave the isolated document at its original geometry before cleanup.
-    Invoke-ToolbarPointerClick $process.Id $hwnd 'UndoButton'
+    Invoke-ToolbarPointerClick $process.Id $hwnd $EditorAutomationIds.Undo
     $finalTextBox = Wait-Until {
         $candidate = Get-VisibleEdit (Find-MainWindow $process.Id) $viewerRect
         if ($null -eq $candidate) { return $null }
@@ -666,11 +666,11 @@ try {
     Write-Output "TEXT_BOX_VALUE_ENTERED value='$enteredText'"
 
     $hashBeforeSave = (Get-FileHash -LiteralPath $pdfPath -Algorithm SHA256).Hash
-    $saveButton = Find-DescendantByAutomationId (Find-MainWindow $process.Id) 'SavePdfButton'
+    $saveButton = Find-DescendantByAutomationId (Find-MainWindow $process.Id) $EditorAutomationIds.Save
     if ($null -eq $saveButton -or -not $saveButton.Current.IsEnabled) {
         throw 'SavePdfButton was not enabled during the real save/reopen smoke.'
     }
-    Invoke-ToolbarPointerClick $process.Id $hwnd 'SavePdfButton'
+    Invoke-ToolbarPointerClick $process.Id $hwnd $EditorAutomationIds.Save
     $savedHash = Wait-Until {
         try {
             $candidateHash = (Get-FileHash -LiteralPath $pdfPath -Algorithm SHA256).Hash
@@ -707,10 +707,10 @@ try {
     Invoke-UiAutomationElement $fileTile
     $textTool = Wait-Until {
         $window = Find-MainWindow $process.Id
-        Find-DescendantByAutomationId $window 'TextToolButton'
+        Find-DescendantByAutomationId $window $EditorAutomationIds.Text
     } 60
     if ($null -eq $textTool) { throw 'TextToolButton was not found after reopening the saved PDF.' }
-    $viewer = Find-DescendantByAutomationId (Find-MainWindow $process.Id) 'PdfScrollViewer'
+    $viewer = Find-DescendantByAutomationId (Find-MainWindow $process.Id) $EditorAutomationIds.PdfScrollViewer
     if ($null -eq $viewer) { throw 'PdfScrollViewer was not found after save/reopen.' }
     $viewerRect = $viewer.Current.BoundingRectangle
     $reopenedTextBox = Wait-Until {

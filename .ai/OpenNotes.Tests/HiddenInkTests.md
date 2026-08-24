@@ -1,5 +1,5 @@
 # OpenNotes.Tests/HiddenInkTests.cs
-> Last updated: 2026-08-20 | Protection: STANDARD
+> Last updated: 2026-08-23（Wave 2 automated scope complete: gray/default/PDF/UIA contract） | Protection: STANDARD
 
 ## Purpose
 
@@ -7,8 +7,8 @@ Verify Hidden Ink model persistence, reveal timing, geometry and ownership rules
 
 ## Open Threads / Resume Context
 
-- **Status:** ready_for_next
-- Model/PDF coverage is complete; real pointer, timer, eraser, save/reopen UI and third-party viewer checks remain manual.
+- **Status:** ready_for_next — Wave 2 automated scope complete
+- Wave 2 adds model/source/PDF contracts for the new neutral-gray default, explicit legacy white round-trip, reveal state exclusion, missing-`/C` production default, and the themed non-eye card vector mark. The source contract also requires stable `HiddenInkToolButton` AutomationId plus localized Automation Name/HelpText; real pointer/timer/eraser/UIA/save-reopen and third-party viewer checks remain environment-dependent.
 
 ## Important Notes / NEVER Change
 
@@ -20,3 +20,5 @@ Verify Hidden Ink model persistence, reveal timing, geometry and ownership rules
 | Date | Change | Author |
 |---|---|---|
 | 2026-08-20 | Documented Hidden Ink regression tests. | Codex |
+| 2026-08-23 | Added Wave 2 gray-default/legacy-white/transient-reveal RED contracts. | Codex |
+| 2026-08-23 | Verified production missing-`/C` fallback and localized UIA Name/HelpText alongside the stable smoke AutomationId. | Codex |

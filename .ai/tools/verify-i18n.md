@@ -1,5 +1,5 @@
 # tools/verify-i18n.ps1
-> Last updated: 2026-08-20 | Protection: STANDARD
+> Last updated: 2026-08-23（Wave 3 P2 dynamic ItemsSource audit complete） | Protection: STANDARD
 
 ## Purpose
 
@@ -7,9 +7,9 @@ Fail-closed static verification for application catalog completeness, localizati
 
 ## Open Threads / Resume Context
 
-- **Status:** in_progress
-- **Intent:** Keep the three app catalogs and all visible WPF strings synchronized.
-- **Next steps:** Run after every localization or XAML copy change; runtime refresh of already-open windows remains a desktop check.
+- **Status:** Wave 3 P2 follow-up complete for the static verifier.
+- **Intent/result:** Keep the three app catalogs and all visible WPF strings synchronized. The verifier now rejects the former literal alignment `ItemsSource` array and the production model resolves labels through `LocalizationService`; runtime refresh of an already-open ComboBox is covered by the STA/UIA contract.
+- **Evidence:** `tools/verify-i18n.ps1` passed with `268` catalog entries, `420` localization calls, `0` hard-coded visible strings, and no dynamic ItemsSource issues.
 
 ## Important Notes / NEVER Change
 

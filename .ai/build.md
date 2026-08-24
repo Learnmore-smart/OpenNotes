@@ -1,5 +1,5 @@
 # build.ps1
-> Last updated: 2026-08-23 | Protection: STANDARD
+> Last updated: 2026-08-24（5.0.0 release package） | Protection: STANDARD
 
 ## Purpose
 
@@ -8,7 +8,7 @@ Builds the Windows desktop application. Local installer packaging follows the re
 ## Open Threads / Resume Context
 
 - **Status:** complete
-- The local-only package was created with a clean self-contained win-x64 publish followed by Inno Setup 6.7.3. No remote API, tag, Pages deployment, or GitHub Release was invoked.
+- The OpenNotes 5.0.0 package was created with a self-contained win-x64 Release publish followed by Inno Setup 6.7.3. Remote Git/tag/Release work is tracked by the release execution handoff; Pages deployment remains out of scope.
 
 ## Important Notes / NEVER Change
 

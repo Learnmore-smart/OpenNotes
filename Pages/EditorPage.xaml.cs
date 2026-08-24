@@ -1,11 +1,16 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
+using System.ComponentModel;
 using System.IO;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Automation;
+using System.Windows.Automation.Peers;
+using System.Windows.Automation.Provider;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Documents;
@@ -14,6 +19,7 @@ using System.Windows.Input;
 using System.Windows.Markup;
 using System.Windows.Interop;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
 using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
 using Microsoft.Win32;
@@ -21,10 +27,11 @@ using Caelum.Controls;
 using Caelum.Models;
 using Caelum.Services;
 using PdfiumPdfDocument = PdfiumViewer.PdfDocument;
+using Path = System.Windows.Shapes.Path;
 
 namespace Caelum.Pages
 {
-    public sealed partial class EditorPage : Page
+    public sealed partial class EditorPage : Page, IInteractionCancellation
     {
         private static readonly DependencyProperty TextAnnotationAutoWidthProperty =
             DependencyProperty.RegisterAttached(
@@ -43,6 +50,15 @@ namespace Caelum.Pages
         /// a free-form rectangle. Session-only (not persisted).
         /// </summary>
         private enum HighlighterApplyMode { Freehand, TextHighlight, Underline, StrikeOut, Squiggly, AreaHighlight }
+
+        // Keep popup previews aligned with the actual annotation pipelines:
+        // freehand highlighter strokes are semi-transparent, text highlights
+        // use PdfPageControl's 120 alpha overlay, text markup strokes remain
+        // opaque, and area highlights expose an opaque edge plus a 30% fill.
+        private const byte FreehandHighlighterOpacity = 140;
+        private const byte TextHighlightOpacity = 120;
+        private const byte AreaHighlightStrokeOpacity = 220;
+        private const byte AreaHighlightFillOpacity = 76;
 
         private HighlighterApplyMode _highlighterApplyMode = HighlighterApplyMode.Freehand;
 
@@ -63,23 +79,17 @@ namespace Caelum.Pages
         private bool _textItalic;
         private string _textFontFamily = "Segoe UI";
         private TextAlignment _textAlignment = TextAlignment.Left;
+        private bool _isRefreshingTextAlignmentOptions;
         private bool _isUpdatingToolState;
         private AppSettings _applicationSettings;
 
-        // Task 23: pen preset slots — 3 toolbar circles between the
-        // Highlighter and Eraser buttons. Left-click applies the preset
-        // (tool + color + size); right-click captures the CURRENT
-        // Pen/Highlighter state into the slot. Persisted in
-        // AppSettings.PenPresets (defaults filled on first load).
-        private const int PenPresetSlotCount = 3;
-        private readonly Border[] _presetSlots = new Border[PenPresetSlotCount];
-        // Popup internals kept as fields so ApplyPenPreset can resync the
-        // size slider + preview line after changing _penSize/_highlighterSize
-        // outside the popup's own handlers.
+        // Popup internals are retained so runtime color/size refreshes can
+        // update the live previews while a popup is open.
         private Slider _penPopupSizeSlider;
         private Line _penPopupSizePreview;
         private Slider _highlighterPopupSizeSlider;
         private Line _highlighterPopupSizePreview;
+        private readonly Dictionary<HighlighterApplyMode, Path> _highlighterModePreviews = new();
 
         // Task 16: fullscreen immersive mode. While active the floating
         // toolbar is visually hidden (Opacity 0 + IsHitTestVisible false —
@@ -122,12 +132,73 @@ namespace Caelum.Pages
         private const double RulerRotationSnapDegrees = 15.0;
 
         private readonly PdfService _pdfService;
+        // Every asynchronous menu/sidebar/undo continuation captures this
+        // boundary. Load/release/host transitions cancel the previous token so
+        // a detached popup can never mutate a replacement document.
+        private readonly DocumentOperationSession _documentOperationSession = new();
+        private readonly ConditionalWeakTable<ContextMenu, ContextMenuOperationBinding> _sidebarContextMenuBindings = new();
         private CancellationTokenSource _loadCts;
         private int _loadSessionId;
+        private int _completedLoadSessionId;
         private bool _isDirty;
         private long _dirtyGeneration;
+        private readonly DocumentSaveCoordinator _documentSaveCoordinator = new();
+        // Manual Save and the autosave timer share one task boundary. A
+        // second caller reuses this task instead of collecting/writing a
+        // second PDF while the first atomic replacement is in flight.
+        private readonly object _saveGate = new();
+        private Task<DocumentSaveResult> _autoSaveInFlight;
+        private int _autoSaveTimerRunning;
         private string _currentPdfPath;
         public string CurrentPdfPath => _currentPdfPath;
+        public bool IsDirty => _documentSaveCoordinator.IsDirty;
+
+        private DocumentOperationLease CaptureDocumentOperationLease(
+            object modelIdentity = null,
+            CancellationToken cancellationToken = default)
+        {
+            EnsureInitialDocumentOperationSession();
+            return _documentOperationSession.Capture(
+                _loadSessionId,
+                _currentPdfPath,
+                modelIdentity,
+                cancellationToken);
+        }
+
+        private void EnsureInitialDocumentOperationSession()
+        {
+            // A newly-created draft starts at session zero. Some document
+            // creation paths assign its first path before the normal LoadPdf
+            // boundary runs; make that initial in-memory identity explicit so
+            // save/text-session callbacks still use the shared lease contract.
+            if (_loadSessionId == 0 && _completedLoadSessionId == 0 &&
+                !string.IsNullOrWhiteSpace(_currentPdfPath))
+                _documentOperationSession.Begin(_loadSessionId, _currentPdfPath, _pdfService);
+        }
+
+        private DocumentOperationLease CaptureDocumentOperationLease(
+            int sessionId,
+            string filePath,
+            object modelIdentity = null,
+            CancellationToken cancellationToken = default)
+        {
+            return _documentOperationSession.Capture(
+                sessionId,
+                filePath,
+                modelIdentity,
+                cancellationToken);
+        }
+
+        private bool ValidateDocumentOperationLease(
+            DocumentOperationLease lease,
+            object modelIdentity = null)
+        {
+            return _documentOperationSession.Validate(
+                lease,
+                _loadSessionId,
+                _currentPdfPath,
+                modelIdentity);
+        }
         private bool _promptSaveAsAfterLoad;
         private bool _hasPromptedForSaveAs;
         private string _pendingLibraryFolderId;
@@ -140,6 +211,7 @@ namespace Caelum.Pages
         private TextBox _textEditSessionTextBox;
         private string _textEditSessionOriginalText;
         private Border _colorIndicator;
+        private Button _textColorButton;
         private Border _inlineTextBoxToolbar;
         private Button _textDeleteButton;
         private Button _textDecreaseFontButton;
@@ -154,11 +226,18 @@ namespace Caelum.Pages
         private Popup _eraserPopup;
         private Popup _shapePopup;
         private Popup _selectionPopup;
+        private readonly List<(Popup Popup, EventHandler Handler)> _toolPopupOpenedHandlers = new();
         private Popup _stickyNotePopup;
         private TextBox _stickyNoteEditor;
         private Button _stickyNoteSaveButton;
+        private Button _stickyNoteCancelButton;
+        private Button _stickyNoteDeleteButton;
         private StickyNoteAnnotation _stickyNoteEditingModel;
+        private Grid _stickyNoteEditingContainer;
         private string _stickyNoteEditingOriginalText;
+        private Point _stickyNoteEditingOriginalPosition;
+        private PdfPageControl _stickyNoteEditingPage;
+        private int _stickyNoteEditingSessionId;
         private ToggleButton _textBoldButton;
         private ToggleButton _textItalicButton;
         private ComboBox _textFontFamilyCombo;
@@ -166,6 +245,85 @@ namespace Caelum.Pages
         private PdfPageControl _activeSelectionPage;
         private bool _isDelegatingSelection;
         private PdfPageControl _selectionDelegateTarget;
+        private bool _isUpdatingSelectionPopup;
+
+        /// <summary>
+        /// Weak registry for every editor-owned transient surface. WPF
+        /// ContextMenu/ComboBox popups are detached from the editor visual tree,
+        /// so an explicit registry is the only reliable way to close them on a
+        /// window deactivation or editor unload. Weak references keep rebuilt
+        /// localized controls collectible.
+        /// </summary>
+        private sealed class TransientUiRegistry
+        {
+            private readonly List<WeakReference<Popup>> _popups = new();
+            private readonly List<WeakReference<ContextMenu>> _menus = new();
+            private readonly List<WeakReference<ComboBox>> _comboBoxes = new();
+
+            public void Register(Popup popup)
+            {
+                if (popup != null && !_popups.Any(reference => reference.TryGetTarget(out var current) && ReferenceEquals(current, popup)))
+                    _popups.Add(new WeakReference<Popup>(popup));
+            }
+
+            public void Register(ContextMenu menu)
+            {
+                if (menu != null && !_menus.Any(reference => reference.TryGetTarget(out var current) && ReferenceEquals(current, menu)))
+                    _menus.Add(new WeakReference<ContextMenu>(menu));
+            }
+
+            public void Register(ComboBox comboBox)
+            {
+                if (comboBox != null && !_comboBoxes.Any(reference => reference.TryGetTarget(out var current) && ReferenceEquals(current, comboBox)))
+                    _comboBoxes.Add(new WeakReference<ComboBox>(comboBox));
+            }
+
+            public void CloseAll()
+            {
+                foreach (var reference in _popups.ToList())
+                {
+                    if (reference.TryGetTarget(out var popup))
+                        popup.IsOpen = false;
+                }
+
+                foreach (var reference in _menus.ToList())
+                {
+                    if (reference.TryGetTarget(out var menu))
+                        menu.IsOpen = false;
+                }
+
+                foreach (var reference in _comboBoxes.ToList())
+                {
+                    if (reference.TryGetTarget(out var comboBox))
+                        comboBox.IsDropDownOpen = false;
+                }
+
+                _popups.RemoveAll(reference => !reference.TryGetTarget(out _));
+                _menus.RemoveAll(reference => !reference.TryGetTarget(out _));
+                _comboBoxes.RemoveAll(reference => !reference.TryGetTarget(out _));
+            }
+
+            public bool HasOpenSurface()
+            {
+                return _popups.Any(reference => reference.TryGetTarget(out var popup) && popup.IsOpen)
+                    || _menus.Any(reference => reference.TryGetTarget(out var menu) && menu.IsOpen)
+                    || _comboBoxes.Any(reference => reference.TryGetTarget(out var comboBox) && comboBox.IsDropDownOpen);
+            }
+        }
+
+        private readonly TransientUiRegistry _transientUiRegistry = new();
+
+        private sealed class TextAlignmentOption
+        {
+            public TextAlignmentOption(TextAlignment value, string label)
+            {
+                Value = value;
+                Label = label;
+            }
+
+            public TextAlignment Value { get; }
+            public string Label { get; }
+        }
 
         private Point _lastClickedPoint;
         private PdfPageControl _lastClickedPage;
@@ -193,6 +351,7 @@ namespace Caelum.Pages
         private PdfPageControl _draggedContainerPage;
         private double _dragStartX;
         private double _dragStartY;
+        private bool _suppressTextCaptureCancellation;
 
         private Grid _resizingTextContainer;
         private PdfPageControl _resizingTextPage;
@@ -213,18 +372,22 @@ namespace Caelum.Pages
         private class StrokeAddedAction : IUndoAction
         {
             private readonly PdfPageControl _page;
-            private readonly System.Windows.Ink.Stroke _stroke;
-            public StrokeAddedAction(PdfPageControl page, System.Windows.Ink.Stroke stroke) { _page = page; _stroke = stroke; }
+            private readonly StrokePlacement _placement;
+            public StrokeAddedAction(PdfPageControl page, System.Windows.Ink.Stroke stroke)
+            {
+                _page = page;
+                _placement = page.CaptureStrokePlacement(stroke);
+            }
             public bool LeavesDocumentDirty => true;
             public Task UndoAsync()
             {
-                _page.RemoveStrokeQuiet(_stroke);
+                _page.RemoveStrokeQuiet(_placement);
                 return Task.CompletedTask;
             }
 
             public Task RedoAsync()
             {
-                _page.AddStrokeQuiet(_stroke);
+                _page.AddStrokeQuiet(_placement.ForOwner(_page, _placement.Index));
                 return Task.CompletedTask;
             }
         }
@@ -316,58 +479,100 @@ namespace Caelum.Pages
         private class StrokesErasedAction : IUndoAction
         {
             private readonly PdfPageControl _page;
-            private readonly List<System.Windows.Ink.Stroke> _removedOriginals;
-            private readonly List<System.Windows.Ink.Stroke> _addedFragments;
+            private readonly List<StrokePlacement> _removedOriginals;
+            private readonly List<StrokePlacement> _addedFragments;
             public StrokesErasedAction(PdfPageControl page, List<System.Windows.Ink.Stroke> removedOriginals, List<System.Windows.Ink.Stroke> addedFragments)
+                : this(
+                    page,
+                    CapturePlacements(page, removedOriginals),
+                    CapturePlacements(page, addedFragments))
+            {
+            }
+
+            public StrokesErasedAction(
+                PdfPageControl page,
+                List<StrokePlacement> removedOriginals,
+                List<StrokePlacement> addedFragments)
             {
                 _page = page;
-                _removedOriginals = removedOriginals;
-                _addedFragments = addedFragments;
+                _removedOriginals = removedOriginals ?? new List<StrokePlacement>();
+                _addedFragments = addedFragments ?? new List<StrokePlacement>();
             }
             public bool LeavesDocumentDirty => true;
             public Task UndoAsync()
             {
-                foreach (var fragment in _addedFragments) _page.RemoveStrokeQuiet(fragment);
-                foreach (var original in _removedOriginals) _page.AddStrokeQuiet(original);
+                foreach (var fragment in _addedFragments.OrderByDescending(p => p.Index))
+                    _page.RemoveStrokeQuiet(fragment);
+                foreach (var original in _removedOriginals.OrderBy(p => p.Index))
+                    _page.AddStrokeQuiet(original.ForOwner(_page, original.Index));
                 return Task.CompletedTask;
             }
 
             public Task RedoAsync()
             {
-                foreach (var original in _removedOriginals) _page.RemoveStrokeQuiet(original);
-                foreach (var fragment in _addedFragments) _page.AddStrokeQuiet(fragment);
+                foreach (var original in _removedOriginals.OrderByDescending(p => p.Index))
+                    _page.RemoveStrokeQuiet(original);
+                foreach (var fragment in _addedFragments.OrderBy(p => p.Index))
+                    _page.AddStrokeQuiet(fragment.ForOwner(_page, fragment.Index));
                 return Task.CompletedTask;
+            }
+
+            private static List<StrokePlacement> CapturePlacements(
+                PdfPageControl page,
+                List<System.Windows.Ink.Stroke> strokes)
+            {
+                return (strokes ?? new List<System.Windows.Ink.Stroke>())
+                    .Select(page.CaptureStrokePlacement)
+                    .ToList();
             }
         }
 
         /// <summary>
-        /// A scribble shape recognition replaced the original freehand
-        /// stroke with an ideal shape stroke in place. Undo restores the
-        /// freehand original, redo re-applies the ideal shape.
+        /// A scribble shape recognition replaced one tokenized stroke in
+        /// place. Only immutable snapshots are retained, so erase/other
+        /// actions can make a later undo or redo a safe no-op.
         /// </summary>
-        private class StrokeReplacedAction : IUndoAction
+        private sealed class StrokeReplacedAction : IUndoAction
         {
             private readonly PdfPageControl _page;
-            private readonly System.Windows.Ink.Stroke _originalStroke;
-            private readonly System.Windows.Ink.Stroke _idealStroke;
-            public StrokeReplacedAction(PdfPageControl page, System.Windows.Ink.Stroke originalStroke, System.Windows.Ink.Stroke idealStroke)
+            private readonly Guid _token;
+            private readonly int _originalIndex;
+            private readonly StrokeReplacementSnapshot _originalSnapshot;
+            private readonly StrokeReplacementSnapshot _idealSnapshot;
+
+            public StrokeReplacedAction(
+                PdfPageControl page,
+                Guid token,
+                int originalIndex,
+                StrokeReplacementSnapshot originalSnapshot,
+                StrokeReplacementSnapshot idealSnapshot)
             {
                 _page = page;
-                _originalStroke = originalStroke;
-                _idealStroke = idealStroke;
+                _token = token;
+                _originalIndex = originalIndex;
+                _originalSnapshot = originalSnapshot;
+                _idealSnapshot = idealSnapshot;
             }
+
             public bool LeavesDocumentDirty => true;
+
             public Task UndoAsync()
             {
-                _page.RemoveStrokeQuiet(_idealStroke);
-                _page.AddStrokeQuiet(_originalStroke);
+                _page.TryReplaceStrokeQuiet(
+                    _token,
+                    StrokeReplacementSide.Ideal,
+                    _originalSnapshot,
+                    out _);
                 return Task.CompletedTask;
             }
 
             public Task RedoAsync()
             {
-                _page.RemoveStrokeQuiet(_originalStroke);
-                _page.AddStrokeQuiet(_idealStroke);
+                _page.TryReplaceStrokeQuiet(
+                    _token,
+                    StrokeReplacementSide.Original,
+                    _idealSnapshot,
+                    out _);
                 return Task.CompletedTask;
             }
         }
@@ -375,14 +580,16 @@ namespace Caelum.Pages
         private class ItemsAddedAction : IUndoAction
         {
             private readonly PdfPageControl _page;
-            private readonly List<System.Windows.Ink.Stroke> _strokes;
+            private readonly List<StrokePlacement> _strokes;
             private readonly List<System.Windows.Controls.Grid> _containers;
 
             public ItemsAddedAction(PdfPageControl page, List<System.Windows.Ink.Stroke> strokes, List<System.Windows.Controls.Grid> containers)
             {
                 _page = page;
-                _strokes = strokes;
-                _containers = containers;
+                _strokes = (strokes ?? new List<System.Windows.Ink.Stroke>())
+                    .Select(page.CaptureStrokePlacement)
+                    .ToList();
+                _containers = containers ?? new List<System.Windows.Controls.Grid>();
             }
             public bool LeavesDocumentDirty => true;
             public Task UndoAsync()
@@ -392,14 +599,16 @@ namespace Caelum.Pages
                 // them so it cannot reference removed strokes/containers.
                 if (_page.HasSelection)
                     _page.ClearSelection();
-                foreach (var stroke in _strokes) _page.RemoveStrokeQuiet(stroke);
+                foreach (var stroke in _strokes.OrderByDescending(p => p.Index))
+                    _page.RemoveStrokeQuiet(stroke);
                 foreach (var container in _containers) _page.RemoveTextContainerQuiet(container);
                 return Task.CompletedTask;
             }
 
             public Task RedoAsync()
             {
-                foreach (var stroke in _strokes) _page.AddStrokeQuiet(stroke);
+                foreach (var stroke in _strokes.OrderBy(p => p.Index))
+                    _page.AddStrokeQuiet(stroke.ForOwner(_page, stroke.Index));
                 foreach (var container in _containers) _page.AddTextContainerQuiet(container);
                 return Task.CompletedTask;
             }
@@ -408,26 +617,41 @@ namespace Caelum.Pages
         private class ItemsRemovedAction : IUndoAction
         {
             private readonly PdfPageControl _page;
-            private readonly List<System.Windows.Ink.Stroke> _strokes;
+            private readonly List<StrokePlacement> _strokes;
             private readonly List<System.Windows.Controls.Grid> _containers;
 
             public ItemsRemovedAction(PdfPageControl page, List<System.Windows.Ink.Stroke> strokes, List<System.Windows.Controls.Grid> containers)
+                : this(
+                    page,
+                    (strokes ?? new List<System.Windows.Ink.Stroke>())
+                        .Select(page.CaptureStrokePlacement)
+                        .ToList(),
+                    containers)
+            {
+            }
+
+            public ItemsRemovedAction(
+                PdfPageControl page,
+                List<StrokePlacement> placements,
+                List<System.Windows.Controls.Grid> containers)
             {
                 _page = page;
-                _strokes = strokes;
-                _containers = containers;
+                _strokes = placements ?? new List<StrokePlacement>();
+                _containers = containers ?? new List<System.Windows.Controls.Grid>();
             }
             public bool LeavesDocumentDirty => true;
             public Task UndoAsync()
             {
-                foreach (var stroke in _strokes) _page.AddStrokeQuiet(stroke);
+                foreach (var stroke in _strokes.OrderBy(p => p.Index))
+                    _page.AddStrokeQuiet(stroke.ForOwner(_page, stroke.Index));
                 foreach (var container in _containers) _page.AddTextContainerQuiet(container);
                 return Task.CompletedTask;
             }
 
             public Task RedoAsync()
             {
-                foreach (var stroke in _strokes) _page.RemoveStrokeQuiet(stroke);
+                foreach (var stroke in _strokes.OrderByDescending(p => p.Index))
+                    _page.RemoveStrokeQuiet(stroke);
                 foreach (var container in _containers) _page.RemoveTextContainerQuiet(container);
                 return Task.CompletedTask;
             }
@@ -435,12 +659,21 @@ namespace Caelum.Pages
 
         private sealed class StickyNoteEditAction : IUndoAction
         {
+            private readonly PdfPageControl _page;
+            private readonly Grid _container;
             private readonly StickyNoteAnnotation _note;
             private readonly string _before;
             private readonly string _after;
 
-            public StickyNoteEditAction(StickyNoteAnnotation note, string before, string after)
+            public StickyNoteEditAction(
+                PdfPageControl page,
+                Grid container,
+                StickyNoteAnnotation note,
+                string before,
+                string after)
             {
+                _page = page;
+                _container = container;
                 _note = note;
                 _before = before;
                 _after = after;
@@ -450,13 +683,98 @@ namespace Caelum.Pages
 
             public Task UndoAsync()
             {
-                _note.Text = _before;
+                if (!_page.SetStickyNoteTextQuiet(_container, _before))
+                    _note.Text = _before;
                 return Task.CompletedTask;
             }
 
             public Task RedoAsync()
             {
-                _note.Text = _after;
+                if (!_page.SetStickyNoteTextQuiet(_container, _after))
+                    _note.Text = _after;
+                return Task.CompletedTask;
+            }
+        }
+
+        private sealed class StickyNoteMovedAction : IUndoAction
+        {
+            private readonly PdfPageControl _page;
+            private readonly Grid _container;
+            private readonly Point _before;
+            private readonly Point _after;
+
+            public StickyNoteMovedAction(
+                PdfPageControl page,
+                Grid container,
+                Point before,
+                Point after)
+            {
+                _page = page;
+                _container = container;
+                _before = before;
+                _after = after;
+            }
+
+            public bool LeavesDocumentDirty => true;
+            public Task UndoAsync()
+            {
+                _page.SetStickyNotePositionQuiet(_container, _before);
+                return Task.CompletedTask;
+            }
+
+            public Task RedoAsync()
+            {
+                _page.SetStickyNotePositionQuiet(_container, _after);
+                return Task.CompletedTask;
+            }
+        }
+
+        private sealed class StickyNoteAddedAction : IUndoAction
+        {
+            private readonly PdfPageControl _page;
+            private readonly Grid _container;
+
+            public StickyNoteAddedAction(PdfPageControl page, Grid container)
+            {
+                _page = page;
+                _container = container;
+            }
+
+            public bool LeavesDocumentDirty => true;
+            public Task UndoAsync()
+            {
+                _page.RemoveTextContainerQuiet(_container);
+                return Task.CompletedTask;
+            }
+
+            public Task RedoAsync()
+            {
+                _page.AddTextContainerQuiet(_container);
+                return Task.CompletedTask;
+            }
+        }
+
+        private sealed class StickyNoteDeletedAction : IUndoAction
+        {
+            private readonly PdfPageControl _page;
+            private readonly Grid _container;
+
+            public StickyNoteDeletedAction(PdfPageControl page, Grid container)
+            {
+                _page = page;
+                _container = container;
+            }
+
+            public bool LeavesDocumentDirty => true;
+            public Task UndoAsync()
+            {
+                _page.AddTextContainerQuiet(_container);
+                return Task.CompletedTask;
+            }
+
+            public Task RedoAsync()
+            {
+                _page.RemoveTextContainerQuiet(_container);
                 return Task.CompletedTask;
             }
         }
@@ -738,12 +1056,32 @@ namespace Caelum.Pages
             private readonly double _deltaY;
             private readonly double _adjustX;
             private readonly double _adjustY;
-            private readonly List<System.Windows.Ink.Stroke> _strokes;
+            private readonly List<StrokePlacement> _sourcePlacements;
+            private readonly List<StrokePlacement> _targetPlacements = new List<StrokePlacement>();
             private readonly List<System.Windows.Controls.Grid> _containers;
+
+            public bool LastOperationSucceeded { get; private set; }
 
             public SelectionCrossPageMoveAction(PdfPageControl sourcePage, PdfPageControl targetPage,
                 double deltaX, double deltaY, double adjustX, double adjustY,
                 List<System.Windows.Ink.Stroke> strokes, List<System.Windows.Controls.Grid> containers)
+                : this(
+                    sourcePage,
+                    targetPage,
+                    deltaX,
+                    deltaY,
+                    adjustX,
+                    adjustY,
+                    (strokes ?? new List<System.Windows.Ink.Stroke>())
+                        .Select(sourcePage.CaptureStrokePlacement)
+                        .ToList(),
+                    containers)
+            {
+            }
+
+            public SelectionCrossPageMoveAction(PdfPageControl sourcePage, PdfPageControl targetPage,
+                double deltaX, double deltaY, double adjustX, double adjustY,
+                List<StrokePlacement> sourcePlacements, List<System.Windows.Controls.Grid> containers)
             {
                 _sourcePage = sourcePage;
                 _targetPage = targetPage;
@@ -751,66 +1089,320 @@ namespace Caelum.Pages
                 _deltaY = deltaY;
                 _adjustX = adjustX;
                 _adjustY = adjustY;
-                _strokes = strokes;
-                _containers = containers;
+                _sourcePlacements = sourcePlacements ?? new List<StrokePlacement>();
+                _containers = containers ?? new List<System.Windows.Controls.Grid>();
             }
 
             public bool LeavesDocumentDirty => true;
 
-            public void ExecuteInitialTransfer()
+            public bool ExecuteInitialTransfer()
             {
-                foreach (var stroke in _strokes)
+                LastOperationSucceeded = false;
+                _targetPlacements.Clear();
+                var moved = new List<(StrokePlacement Source, StrokePlacement Target)>();
+                var movedContainers = new List<System.Windows.Controls.Grid>();
+                try
                 {
-                    _sourcePage.RemoveStrokeQuiet(stroke);
-                    _targetPage.AddStrokeQuiet(stroke);
-                }
+                    foreach (var expectedSourcePlacement in _sourcePlacements.OrderBy(p => p.Index).ToList())
+                    {
+                        if (!_sourcePage.TryCaptureCurrentStrokePlacement(
+                                expectedSourcePlacement,
+                                out var sourcePlacement))
+                        {
+                            RollbackInitialTransfers(moved);
+                            return false;
+                        }
 
-                foreach (var container in _containers)
+                        var targetPlacement = _targetPage.AddStrokeQuiet(
+                            sourcePlacement.ForOwner(
+                                _targetPage,
+                                _targetPage.GetStrokes().Count));
+                        if (targetPlacement == null)
+                        {
+                            RollbackInitialTransfers(moved);
+                            return false;
+                        }
+
+                        if (!_sourcePage.RemoveStrokeQuietExact(sourcePlacement))
+                        {
+                            _targetPage.RemoveStrokeQuietExact(targetPlacement);
+                            RollbackInitialTransfers(moved);
+                            return false;
+                        }
+
+                        moved.Add((sourcePlacement, targetPlacement));
+                    }
+
+                    if (moved.Count == 0 && _containers.Count == 0)
+                        return false;
+
+                    foreach (var container in _containers)
+                    {
+                        if (container == null)
+                        {
+                            RollbackContainers(movedContainers);
+                            RollbackInitialTransfers(moved);
+                            return false;
+                        }
+
+                        _sourcePage.RemoveTextContainerQuiet(container);
+                        _targetPage.AddTextContainerQuiet(container);
+                        TransferImageData(_sourcePage, _targetPage, container);
+                        TransferOverlayData(_sourcePage, _targetPage, container);
+                        movedContainers.Add(container);
+                    }
+
+                    _targetPage.MoveItemsDirectly(
+                        moved.Select(pair => pair.Target.Stroke).ToList(),
+                        _containers,
+                        _adjustX,
+                        _adjustY);
+
+                    foreach (var pair in moved)
+                    {
+                        var expected = _sourcePlacements.FirstOrDefault(placement =>
+                            placement.Token == pair.Source.Token
+                            && placement.Side == pair.Source.Side);
+                        RememberCurrentSourcePlacement(expected, pair.Source);
+                    }
+
+                    _targetPlacements.AddRange(moved.Select(pair => pair.Target));
+                    LastOperationSucceeded = true;
+                    return true;
+                }
+                catch
                 {
-                    _sourcePage.RemoveTextContainerQuiet(container);
-                    _targetPage.AddTextContainerQuiet(container);
-                    TransferImageData(_sourcePage, _targetPage, container);
+                    RollbackContainers(movedContainers);
+                    RollbackInitialTransfers(moved);
+                    _targetPlacements.Clear();
+                    LastOperationSucceeded = false;
+                    return false;
                 }
-
-                _targetPage.MoveItemsDirectly(_strokes, _containers, _adjustX, _adjustY);
             }
 
             public Task UndoAsync()
             {
-                foreach (var stroke in _strokes)
+                LastOperationSucceeded = false;
+                var moved = new List<(StrokePlacement Target, StrokePlacement Source)>();
+                var movedContainers = new List<System.Windows.Controls.Grid>();
+                try
                 {
-                    _targetPage.RemoveStrokeQuiet(stroke);
-                    _sourcePage.AddStrokeQuiet(stroke);
+                    foreach (var expectedTargetPlacement in _targetPlacements.OrderByDescending(p => p.Index))
+                    {
+                        if (!_targetPage.TryCaptureCurrentStrokePlacement(
+                                expectedTargetPlacement,
+                                out var currentTargetPlacement)
+                            || !_targetPage.RemoveStrokeQuietExact(currentTargetPlacement))
+                        {
+                            RollbackUndoTransfers(moved);
+                            return Task.CompletedTask;
+                        }
+
+                        var sourcePlacement = FindSourcePlacement(expectedTargetPlacement);
+                        if (sourcePlacement == null)
+                        {
+                            _targetPage.AddStrokeQuiet(currentTargetPlacement);
+                            RollbackUndoTransfers(moved);
+                            return Task.CompletedTask;
+                        }
+
+                        var restored = _sourcePage.AddStrokeQuiet(
+                            sourcePlacement.ForOwner(_sourcePage, sourcePlacement.Index));
+                        if (restored == null)
+                        {
+                            _targetPage.AddStrokeQuiet(currentTargetPlacement);
+                            RollbackUndoTransfers(moved);
+                            return Task.CompletedTask;
+                        }
+
+                        moved.Add((currentTargetPlacement, restored));
+                    }
+
+                    foreach (var container in _containers)
+                    {
+                        if (container == null)
+                        {
+                            RollbackContainers(movedContainers);
+                            RollbackUndoTransfers(moved);
+                            return Task.CompletedTask;
+                        }
+
+                        _targetPage.RemoveTextContainerQuiet(container);
+                        _sourcePage.AddTextContainerQuiet(container);
+                        TransferImageData(_targetPage, _sourcePage, container);
+                        TransferOverlayData(_targetPage, _sourcePage, container);
+                        movedContainers.Add(container);
+                    }
+
+                    _sourcePage.MoveItemsDirectly(
+                        moved.Select(pair => pair.Source.Stroke).ToList(),
+                        _containers,
+                        -_deltaX - _adjustX,
+                        -_deltaY - _adjustY);
+
+                    foreach (var pair in moved)
+                    {
+                        var expected = FindSourcePlacement(pair.Target);
+                        RememberCurrentSourcePlacement(expected, pair.Source);
+                    }
+
+                    _targetPlacements.Clear();
+                    _targetPlacements.AddRange(moved.Select(pair => pair.Target));
+                    LastOperationSucceeded = true;
+                }
+                catch
+                {
+                    RollbackContainers(movedContainers);
+                    RollbackUndoTransfers(moved);
                 }
 
-                foreach (var container in _containers)
-                {
-                    _targetPage.RemoveTextContainerQuiet(container);
-                    _sourcePage.AddTextContainerQuiet(container);
-                    TransferImageData(_targetPage, _sourcePage, container);
-                }
-
-                _sourcePage.MoveItemsDirectly(_strokes, _containers, -_deltaX - _adjustX, -_deltaY - _adjustY);
                 return Task.CompletedTask;
             }
 
             public Task RedoAsync()
             {
-                foreach (var stroke in _strokes)
+                LastOperationSucceeded = false;
+                var moved = new List<(StrokePlacement Source, StrokePlacement Target)>();
+                var movedContainers = new List<System.Windows.Controls.Grid>();
+                var previousTargets = _targetPlacements.ToList();
+                try
                 {
-                    _sourcePage.RemoveStrokeQuiet(stroke);
-                    _targetPage.AddStrokeQuiet(stroke);
+                    foreach (var targetPlacement in previousTargets.OrderBy(p => p.Index))
+                    {
+                        var sourcePlacement = FindSourcePlacement(targetPlacement);
+                        if (sourcePlacement == null
+                            || !_sourcePage.TryCaptureCurrentStrokePlacement(
+                                sourcePlacement,
+                                out var currentSourcePlacement)
+                            || !_sourcePage.RemoveStrokeQuietExact(currentSourcePlacement))
+                        {
+                            RollbackRedoTransfers(moved);
+                            return Task.CompletedTask;
+                        }
+
+                        var resolvedTarget = _targetPage.AddStrokeQuiet(targetPlacement);
+                        if (resolvedTarget == null)
+                        {
+                            _sourcePage.AddStrokeQuiet(
+                                currentSourcePlacement.ForOwner(
+                                    _sourcePage,
+                                    currentSourcePlacement.Index));
+                            RollbackRedoTransfers(moved);
+                            return Task.CompletedTask;
+                        }
+
+                        moved.Add((currentSourcePlacement, resolvedTarget));
+                    }
+
+                    foreach (var container in _containers)
+                    {
+                        if (container == null)
+                        {
+                            RollbackContainers(movedContainers);
+                            RollbackRedoTransfers(moved);
+                            return Task.CompletedTask;
+                        }
+
+                        _sourcePage.RemoveTextContainerQuiet(container);
+                        _targetPage.AddTextContainerQuiet(container);
+                        TransferImageData(_sourcePage, _targetPage, container);
+                        TransferOverlayData(_sourcePage, _targetPage, container);
+                        movedContainers.Add(container);
+                    }
+
+                    _targetPage.MoveItemsDirectly(
+                        moved.Select(pair => pair.Target.Stroke).ToList(),
+                        _containers,
+                        _deltaX + _adjustX,
+                        _deltaY + _adjustY);
+
+                    foreach (var sourcePlacement in moved)
+                        RememberCurrentSourcePlacement(
+                            FindSourcePlacement(sourcePlacement.Target),
+                            sourcePlacement.Source);
+
+                    _targetPlacements.Clear();
+                    _targetPlacements.AddRange(moved.Select(pair => pair.Target));
+                    LastOperationSucceeded = true;
+                }
+                catch
+                {
+                    RollbackContainers(movedContainers);
+                    RollbackRedoTransfers(moved);
+                    _targetPlacements.Clear();
+                    _targetPlacements.AddRange(previousTargets);
                 }
 
-                foreach (var container in _containers)
-                {
-                    _sourcePage.RemoveTextContainerQuiet(container);
-                    _targetPage.AddTextContainerQuiet(container);
-                    TransferImageData(_sourcePage, _targetPage, container);
-                }
-
-                _targetPage.MoveItemsDirectly(_strokes, _containers, _deltaX + _adjustX, _deltaY + _adjustY);
                 return Task.CompletedTask;
+            }
+
+            private void RollbackInitialTransfers(
+                IReadOnlyList<(StrokePlacement Source, StrokePlacement Target)> moved)
+            {
+                for (int index = moved.Count - 1; index >= 0; index--)
+                {
+                    var pair = moved[index];
+                    _targetPage.RemoveStrokeQuietExact(pair.Target);
+                    _sourcePage.AddStrokeQuiet(
+                        pair.Source.ForOwner(_sourcePage, pair.Source.Index));
+                }
+            }
+
+            private void RollbackUndoTransfers(
+                IReadOnlyList<(StrokePlacement Target, StrokePlacement Source)> moved)
+            {
+                for (int index = moved.Count - 1; index >= 0; index--)
+                {
+                    var pair = moved[index];
+                    _sourcePage.RemoveStrokeQuietExact(pair.Source);
+                    _targetPage.AddStrokeQuiet(
+                        pair.Target.ForOwner(_targetPage, pair.Target.Index));
+                }
+            }
+
+            private void RollbackContainers(
+                IReadOnlyList<System.Windows.Controls.Grid> movedContainers)
+            {
+                for (int index = movedContainers.Count - 1; index >= 0; index--)
+                {
+                    var container = movedContainers[index];
+                    _targetPage.RemoveTextContainerQuiet(container);
+                    _targetPage.RemoveImageData(container);
+                    _sourcePage.AddTextContainerQuiet(container);
+                    TransferImageData(_targetPage, _sourcePage, container);
+                    TransferOverlayData(_targetPage, _sourcePage, container);
+                }
+            }
+
+            private void RollbackRedoTransfers(
+                IReadOnlyList<(StrokePlacement Source, StrokePlacement Target)> moved)
+            {
+                for (int index = moved.Count - 1; index >= 0; index--)
+                {
+                    var pair = moved[index];
+                    _targetPage.RemoveStrokeQuietExact(pair.Target);
+                    _sourcePage.AddStrokeQuiet(
+                        pair.Source.ForOwner(_sourcePage, pair.Source.Index));
+                }
+            }
+
+            private void RememberCurrentSourcePlacement(
+                StrokePlacement expected,
+                StrokePlacement current)
+            {
+                if (expected == null || current == null)
+                    return;
+
+                int index = _sourcePlacements.IndexOf(expected);
+                if (index >= 0)
+                    _sourcePlacements[index] = current;
+            }
+
+            private StrokePlacement FindSourcePlacement(StrokePlacement targetPlacement)
+            {
+                return _sourcePlacements.FirstOrDefault(sourcePlacement =>
+                    sourcePlacement.Token == targetPlacement.Token
+                    && sourcePlacement.Side == targetPlacement.Side);
             }
 
             /// <summary>
@@ -823,6 +1415,18 @@ namespace Caelum.Pages
                 var data = source.GetImageData(container);
                 if (data != null && target.GetImageData(container) == null)
                     target.SetImageData(container, data);
+            }
+
+            private static void TransferOverlayData(PdfPageControl source, PdfPageControl target, System.Windows.Controls.Grid container)
+            {
+                // Overlay payloads (markup, area highlight, and Sticky Note)
+                // live in a per-page dictionary just like image bytes.  Keep
+                // the same model object attached to the reparented container;
+                // otherwise a cross-page move renders but loses content/colour
+                // on copy, save, or a later undo/redo.
+                var data = source.GetOverlayData(container);
+                if (data != null)
+                    target.SetOverlayData(container, data);
             }
         }
 
@@ -865,6 +1469,11 @@ namespace Caelum.Pages
             private readonly int _redoFocusPageIndex;
             private readonly IReadOnlyList<PageBookmark> _beforeBookmarks;
             private readonly IReadOnlyList<PageBookmark> _afterBookmarks;
+            private DocumentOperationLease _operationLease;
+            private DocumentOperationLease _completedOperationLease;
+
+            public bool LastOperationSucceeded { get; private set; }
+            public DocumentOperationLease CompletedOperationLease => _completedOperationLease;
 
             public DocumentSnapshotAction(
                 EditorPage owner,
@@ -890,20 +1499,40 @@ namespace Caelum.Pages
 
             public Task RedoAsync() => ApplyAsync(_afterBytes, _redoFocusPageIndex, _afterBookmarks);
 
+            public void SetOperationLease(DocumentOperationLease operationLease)
+            {
+                _completedOperationLease?.Dispose();
+                _completedOperationLease = null;
+                _operationLease = operationLease;
+                LastOperationSucceeded = false;
+            }
+
             private async Task ApplyAsync(byte[] bytes, int focusPageIndex, IReadOnlyList<PageBookmark> bookmarks)
             {
-                await _owner.ApplyDocumentSnapshotAsync(bytes, focusPageIndex);
-                if (bookmarks == null || string.IsNullOrWhiteSpace(_owner._currentPdfPath))
+                LastOperationSucceeded = false;
+                _completedOperationLease?.Dispose();
+                _completedOperationLease = await _owner.ApplyDocumentSnapshotAsync(
+                    bytes,
+                    focusPageIndex,
+                    _operationLease);
+                if (_completedOperationLease == null || bookmarks == null || string.IsNullOrWhiteSpace(_owner._currentPdfPath))
+                {
+                    LastOperationSucceeded = _completedOperationLease != null;
                     return;
+                }
 
                 try
                 {
+                    if (!_owner.ValidateDocumentOperationLease(_completedOperationLease))
+                        return;
                     PageBookmarkService.Replace(_owner._currentPdfPath, bookmarks);
-                    _owner.RefreshBookmarks();
+                    _owner.RefreshBookmarks(_owner._loadSessionId, _owner._currentPdfPath, _completedOperationLease);
+                    LastOperationSucceeded = _owner.ValidateDocumentOperationLease(_completedOperationLease);
                 }
                 catch (Exception ex)
                 {
-                    System.Diagnostics.Debug.WriteLine($"[Bookmarks] Snapshot restore failed: {ex}");
+                    if (_owner.ValidateDocumentOperationLease(_completedOperationLease))
+                        System.Diagnostics.Debug.WriteLine($"[Bookmarks] Snapshot restore failed: {ex}");
                 }
             }
 
@@ -932,6 +1561,125 @@ namespace Caelum.Pages
             public string DisplayText { get; init; }
         }
 
+        // Sidebar rows are deliberately lightweight view-models.  The item
+        // containers and thumbnails are created by WPF's recycling presenter;
+        // document loading only publishes these rows and never builds a full
+        // visual tree for every page.
+        public sealed class SidebarPageItem : INotifyPropertyChanged
+        {
+            private BitmapSource _thumbnail;
+            private string _pageLabel;
+
+            public SidebarPageItem(int pageIndex, string pageLabel)
+            {
+                PageIndex = pageIndex;
+                _pageLabel = pageLabel ?? string.Empty;
+            }
+
+            public int PageIndex { get; }
+            public string PageLabel
+            {
+                get => _pageLabel;
+                set
+                {
+                    value ??= string.Empty;
+                    if (string.Equals(_pageLabel, value, StringComparison.Ordinal))
+                        return;
+                    _pageLabel = value;
+                    PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(PageLabel)));
+                }
+            }
+            public BitmapSource Thumbnail
+            {
+                get => _thumbnail;
+                set
+                {
+                    if (ReferenceEquals(_thumbnail, value))
+                        return;
+                    _thumbnail = value;
+                    PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Thumbnail)));
+                }
+            }
+
+            public event PropertyChangedEventHandler PropertyChanged;
+        }
+
+        public sealed class SidebarBookmarkItem
+        {
+            private string _label;
+
+            public SidebarBookmarkItem(int pageIndex, string label)
+            {
+                PageIndex = pageIndex;
+                _label = label ?? string.Empty;
+            }
+
+            public int PageIndex { get; }
+            public string Label
+            {
+                get => _label;
+                set => _label = value ?? string.Empty;
+            }
+        }
+
+        public sealed class SidebarOutlineItem
+        {
+            public SidebarOutlineItem(int pageIndex, string title, string automationId)
+            {
+                PageIndex = pageIndex;
+                Title = title ?? string.Empty;
+                AutomationId = automationId ?? string.Empty;
+            }
+
+            public int PageIndex { get; }
+            public string Title { get; set; }
+            public string AutomationId { get; }
+            public ObservableCollection<SidebarOutlineItem> Children { get; } = new();
+        }
+
+        // A small, deterministic guard shared by all asynchronous sidebar
+        // continuations.  It is intentionally independent of WPF controls so
+        // a late result can be rejected in an STA test without a live window.
+        private sealed class SidebarLoadSessionGate
+        {
+            private int _sessionId;
+            private string _filePath;
+
+            public SidebarLoadSessionGate(int sessionId, string filePath)
+            {
+                Begin(sessionId, filePath);
+            }
+
+            public void Begin(int sessionId, string filePath)
+            {
+                _sessionId = sessionId;
+                _filePath = DocumentOperationSession.NormalizePath(filePath);
+            }
+
+            public bool IsCurrent(int sessionId, string filePath)
+            {
+                return _sessionId == sessionId &&
+                    string.Equals(
+                        _filePath,
+                        DocumentOperationSession.NormalizePath(filePath),
+                        StringComparison.OrdinalIgnoreCase);
+            }
+        }
+
+        private sealed class ContextMenuOperationBinding
+        {
+            public ContextMenuOperationBinding(object model, int sessionId, string filePath)
+            {
+                Model = model;
+                SessionId = sessionId;
+                FilePath = filePath;
+            }
+
+            public object Model { get; }
+            public int SessionId { get; }
+            public string FilePath { get; }
+        }
+
         private readonly List<IUndoAction> _undoStack = new List<IUndoAction>();
         private readonly List<IUndoAction> _redoStack = new List<IUndoAction>();
 
@@ -955,17 +1703,55 @@ namespace Caelum.Pages
         private CancellationTokenSource _pdfSearchCts;
         private CancellationTokenSource _thumbnailLoadCts;
         private readonly HashSet<int> _thumbnailPagesLoading = new HashSet<int>();
+        // A recycled sidebar row can finish after a reload. Keep the loading
+        // marker generation-scoped so an old callback cannot block the same
+        // page index in the replacement document (or clear its marker).
+        private readonly Dictionary<int, int> _thumbnailPageLoadSessions = new Dictionary<int, int>();
         private const int ThumbnailCacheCapacity = 24;
         private readonly Dictionary<int, BitmapSource> _thumbnailCache = new Dictionary<int, BitmapSource>();
         private readonly LinkedList<int> _thumbnailCacheLru = new LinkedList<int>();
         private bool _isRefreshingThumbnails;
+        private bool _isSynchronizingThumbnailSelection;
+        private bool _isApplyingSidebarResizeValue;
         private Point _thumbnailDragStartPoint;
         private int _thumbnailDragIndex = -1;
+        private int _thumbnailDragSessionId = -1;
+        private string _thumbnailDragPath;
+        private enum SidebarTab
+        {
+            Pages,
+            Outline,
+            Bookmarks
+        }
+
+        private SidebarTab _sidebarTab = SidebarTab.Pages;
+        private bool _sidebarCollapsed;
+        private double _sidebarExpandedWidth = 184.0;
+        private const double SidebarMinWidth = 154.0;
+        private const double SidebarMaxWidth = 320.0;
+        private const double SidebarCollapsedWidth = 38.0;
+        private const double SidebarResizeStep = 8.0;
+        private const double SidebarResizeLargeStep = 32.0;
+        private readonly ObservableCollection<SidebarPageItem> _sidebarPageItems = new();
+        private readonly ObservableCollection<SidebarBookmarkItem> _sidebarBookmarkItems = new();
+        private readonly ObservableCollection<SidebarOutlineItem> _sidebarOutlineItems = new();
+        private readonly SidebarLoadSessionGate _sidebarLoadSessionGate = new(0, string.Empty);
+
+        public ReadOnlyObservableCollection<SidebarPageItem> SidebarPageItems { get; }
+        public ReadOnlyObservableCollection<SidebarBookmarkItem> SidebarBookmarkItems { get; }
+        public ReadOnlyObservableCollection<SidebarOutlineItem> SidebarOutlineItems { get; }
         private CancellationTokenSource _scrollReRenderCts;
         private readonly System.Windows.Threading.DispatcherTimer _scrollRenderDebounceTimer;
         private const double PageSpacing = 28.0;
         private bool _isHostActive = true;
         private bool _resourcesReleased;
+        private bool _documentInteractionBlocked;
+        private readonly DocumentEditAdmission _editAdmission = new();
+        private readonly DocumentReleaseState _releaseState = new();
+        private readonly object _lifecycleGate = new();
+        private Task<bool> _navigationPreparationInFlight;
+        private Task<bool> _closePreparationInFlight;
+        private Task<bool> _releaseResourcesInFlight;
 
         // Smooth scrolling
         private double _targetVerticalOffset;
@@ -1014,22 +1800,38 @@ namespace Caelum.Pages
 
         public EditorPage()
         {
+            SidebarPageItems = new ReadOnlyObservableCollection<SidebarPageItem>(_sidebarPageItems);
+            SidebarBookmarkItems = new ReadOnlyObservableCollection<SidebarBookmarkItem>(_sidebarBookmarkItems);
+            SidebarOutlineItems = new ReadOnlyObservableCollection<SidebarOutlineItem>(_sidebarOutlineItems);
             InitializeComponent();
+            // XAML assigns the one-based initial value while the TextChanged
+            // handler is already wired.  Keep that binding from opening a
+            // user edit session before the first document is loaded.
+            if (PageNumberTextBox != null)
+            {
+                PageNumberTextBox.SetCurrentValue(TextBox.TextProperty, "1");
+                _pageJumpOpeningValue = "1";
+            }
+            _isPageJumpEditing = false;
+            _isPageJumpInitializing = false;
+            if (OutlineTreeView != null)
+                OutlineTreeView.PageInvoker = JumpToPage;
+            if (SidebarResizeThumb != null)
+                SidebarResizeThumb.ValueChanged += SidebarResizeThumb_ValueChanged;
             InitializeTextBoxPopup();
             CreateToolPopups();
-            InitializePenPresetSlots();
             ApplySettings(AppSettingsService.Load());
             ApplyLocalization();
+            SetSidebarTab(SidebarTab.Pages);
 
             _pdfService = new PdfService();
+            // Keep the empty editor's initial session usable for in-memory
+            // interaction tests and pre-load command wiring. A real PDF load
+            // immediately rotates this boundary to its path/session identity.
+            _documentOperationSession.Begin(_loadSessionId, _currentPdfPath, _pdfService);
             ActivateTool(ToolType.None);
 
-            PopupZOrderHelper.FixPopupTopmost(_penPopup);
-            PopupZOrderHelper.FixPopupTopmost(_highlighterPopup);
-            PopupZOrderHelper.FixPopupTopmost(_eraserPopup);
-            PopupZOrderHelper.FixPopupTopmost(_shapePopup);
-            PopupZOrderHelper.FixPopupTopmost(_selectionPopup);
-            PopupZOrderHelper.FixContextMenuTopmost(PdfViewerContextMenu);
+            FixToolPopupZOrder();
 
             KeyDown += EditorPage_KeyDown;
 
@@ -1075,24 +1877,28 @@ namespace Caelum.Pages
 
         private void EditorPage_Unloaded(object sender, RoutedEventArgs e)
         {
+            CloseTransientUi("unloaded");
             if (_languageChangedSubscribed)
             {
                 LocalizationService.LanguageChanged -= EditorPage_LanguageChanged;
                 _languageChangedSubscribed = false;
             }
 
-            CancelTextResize(restoreBounds: false);
+            CancelTextBoxDrag(restoreBounds: true);
+            CancelTextResize(restoreBounds: true);
             SetHostActive(false);
+            UnfixTransientUiHooks();
             _autoSaveTimer?.Stop();
             _penService?.Dispose();
             _penService = null;
             RemoveHorizontalWheelHook();
             ClearPdfTextSelection();
+            DetachToolPopupHandlers();
         }
 
         private void EnsureAutoSaveTimer()
         {
-            if (_resourcesReleased)
+            if (_resourcesReleased || !_releaseState.CanResumeInteraction)
                 return;
 
             if (_autoSaveTimer == null)
@@ -1316,6 +2122,11 @@ namespace Caelum.Pages
             if ((_currentTool != ToolType.None && _currentTool != ToolType.TextHighlight) || sender is not PdfPageControl page)
                 return;
 
+            using var operationLease = CaptureDocumentOperationLease(page);
+            if (!ValidateDocumentOperationLease(operationLease, page) || !_pageControls.Contains(page))
+                return;
+            int requestId = Interlocked.Increment(ref _pdfTextSelectionRequestId);
+
             if (_selectedTextBox != null)
                 DeselectTextBox();
 
@@ -1323,15 +2134,14 @@ namespace Caelum.Pages
             ClearPdfTextSelection();
             _pdfTextSelectionPressPoint = e.Position;
 
-            int requestId = Interlocked.Increment(ref _pdfTextSelectionRequestId);
-
             try
             {
                 var textInfo = _pdfService.TryGetCachedPageTextInfo(page.PageIndex, out var cachedTextInfo)
                     ? cachedTextInfo
-                    : await _pdfService.GetPageTextInfoAsync(page.PageIndex);
+                    : await _pdfService.GetPageTextInfoAsync(page.PageIndex, operationLease.Token);
 
-                if (requestId != _pdfTextSelectionRequestId || (_currentTool != ToolType.None && _currentTool != ToolType.TextHighlight))
+                if (!ValidateDocumentOperationLease(operationLease, page) || !_pageControls.Contains(page) ||
+                    requestId != _pdfTextSelectionRequestId || (_currentTool != ToolType.None && _currentTool != ToolType.TextHighlight))
                     return;
 
                 int anchorOffset = FindNearestTextOffset(textInfo, e.Position, 24.0);
@@ -1346,6 +2156,11 @@ namespace Caelum.Pages
             }
             catch (OperationCanceledException)
             {
+            }
+            catch (Exception ex)
+            {
+                if (ValidateDocumentOperationLease(operationLease, page))
+                    System.Diagnostics.Debug.WriteLine($"[PdfTextSelection] Failed to read page text: {ex}");
             }
         }
 
@@ -1518,11 +2333,27 @@ namespace Caelum.Pages
 
         private async void AutoSaveTimer_Tick(object sender, EventArgs e)
         {
-            var saved = await AutoSaveAsync();
-            if (saved)
+            // DispatcherTimer callbacks are async void. Guard the callback
+            // itself as well as AutoSaveAsync's shared task so an interval
+            // tick cannot re-enter while the previous save is awaiting disk.
+            if (Interlocked.Exchange(ref _autoSaveTimerRunning, 1) != 0)
+                return;
+
+            try
             {
-                var mw = Window.GetWindow(this) as MainWindow;
-                mw?.ShowToast(LocalizationService.Get("Editor.AutoSaved"), "\uE74E", 1500);
+                using var operationLease = CaptureDocumentOperationLease(_pdfService);
+                if (!ValidateDocumentOperationLease(operationLease))
+                    return;
+                var saved = await AutoSaveAsync(operationLease);
+                if (saved && ValidateDocumentOperationLease(operationLease))
+                {
+                    var mw = Window.GetWindow(this) as MainWindow;
+                    mw?.ShowToast(LocalizationService.Get("Editor.AutoSaved"), "\uE74E", 1500);
+                }
+            }
+            finally
+            {
+                Volatile.Write(ref _autoSaveTimerRunning, 0);
             }
         }
 
@@ -1676,20 +2507,27 @@ namespace Caelum.Pages
 
         private async void EditorPage_KeyDown(object sender, KeyEventArgs e)
         {
+            if (_documentInteractionBlocked || _resourcesReleased)
+            {
+                e.Handled = true;
+                return;
+            }
+
             if (e.Key == Key.Escape)
             {
+                CloseTransientUi("escape");
                 ActivateTool(ToolType.None);
                 e.Handled = true;
             }
             else if (Keyboard.Modifiers == ModifierKeys.Control && e.Key == Key.S)
             {
-                await SaveAnnotationsToPdfAsync();
                 e.Handled = true;
+                await SaveAnnotationsToPdfAsync();
             }
             else if (Keyboard.Modifiers == ModifierKeys.Control && e.Key == Key.P)
             {
-                await PrintPdfAsync();
                 e.Handled = true;
+                await PrintPdfAsync();
             }
             else if (Keyboard.Modifiers == ModifierKeys.Control && e.Key == Key.C)
             {
@@ -2078,7 +2916,15 @@ namespace Caelum.Pages
             _scrollAnimationTarget = toOffset;
             _scrollAnimationStart = PdfScrollViewer.VerticalOffset;
             _scrollAnimationStartTime = DateTime.UtcNow;
-            _scrollAnimationDuration = TimeSpan.FromMilliseconds(180);
+            _scrollAnimationDuration = ThemeService.GetAnimationDuration(TimeSpan.FromMilliseconds(180));
+
+            if (_scrollAnimationDuration == TimeSpan.Zero)
+            {
+                _isScrollAnimating = false;
+                System.Windows.Media.CompositionTarget.Rendering -= CompositionTarget_ScrollRendering;
+                PdfScrollViewer.ScrollToVerticalOffset(_scrollAnimationTarget);
+                return;
+            }
 
             if (!_isScrollAnimating)
             {
@@ -2092,7 +2938,15 @@ namespace Caelum.Pages
             _hScrollAnimationTarget = toOffset;
             _hScrollAnimationStart = PdfScrollViewer.HorizontalOffset;
             _hScrollAnimationStartTime = DateTime.UtcNow;
-            _hScrollAnimationDuration = TimeSpan.FromMilliseconds(180);
+            _hScrollAnimationDuration = ThemeService.GetAnimationDuration(TimeSpan.FromMilliseconds(180));
+
+            if (_hScrollAnimationDuration == TimeSpan.Zero)
+            {
+                _isHScrollAnimating = false;
+                System.Windows.Media.CompositionTarget.Rendering -= CompositionTarget_HScrollRendering;
+                PdfScrollViewer.ScrollToHorizontalOffset(_hScrollAnimationTarget);
+                return;
+            }
 
             if (!_isHScrollAnimating)
             {
@@ -2103,6 +2957,14 @@ namespace Caelum.Pages
 
         private void CompositionTarget_HScrollRendering(object sender, EventArgs e)
         {
+            if (_hScrollAnimationDuration == TimeSpan.Zero || !ThemeService.ShouldAnimate)
+            {
+                PdfScrollViewer.ScrollToHorizontalOffset(_hScrollAnimationTarget);
+                _isHScrollAnimating = false;
+                System.Windows.Media.CompositionTarget.Rendering -= CompositionTarget_HScrollRendering;
+                return;
+            }
+
             var elapsed = DateTime.UtcNow - _hScrollAnimationStartTime;
             double progress = Math.Min(1.0, elapsed.TotalMilliseconds / _hScrollAnimationDuration.TotalMilliseconds);
             double easedProgress = 1.0 - Math.Pow(1.0 - progress, 3);
@@ -2119,6 +2981,14 @@ namespace Caelum.Pages
 
         private void CompositionTarget_ScrollRendering(object sender, EventArgs e)
         {
+            if (_scrollAnimationDuration == TimeSpan.Zero || !ThemeService.ShouldAnimate)
+            {
+                PdfScrollViewer.ScrollToVerticalOffset(_scrollAnimationTarget);
+                _isScrollAnimating = false;
+                System.Windows.Media.CompositionTarget.Rendering -= CompositionTarget_ScrollRendering;
+                return;
+            }
+
             var elapsed = DateTime.UtcNow - _scrollAnimationStartTime;
             double progress = Math.Min(1.0, elapsed.TotalMilliseconds / _scrollAnimationDuration.TotalMilliseconds);
             double easedProgress = 1.0 - Math.Pow(1.0 - progress, 3);
@@ -2683,40 +3553,92 @@ namespace Caelum.Pages
         private async Task PerformUndoAsync()
         {
             if (_undoStack.Count == 0) return;
-            var action = _undoStack[_undoStack.Count - 1];
-            try
+            if (!TryBeginDocumentEdit(out var editLease))
+                return;
+
+            using (editLease)
             {
-                await action.UndoAsync();
-                _undoStack.RemoveAt(_undoStack.Count - 1);
-                _redoStack.Add(action);
-                UpdateUndoRedoButtons();
-                ApplyDirtyStateForAction(action);
-                UpdateSelectedTextBoxPopupVisibility(forceRefresh: true);
-            }
-            catch (Exception ex)
-            {
-                GetMainWindow()?.ShowToast(
-                    LocalizationService.Format("Editor.UndoFailed", ex.Message), "\uE783", 3500);
+                var action = _undoStack[_undoStack.Count - 1];
+                using var operationLease = CaptureDocumentOperationLease(_pdfService);
+                if (action is DocumentSnapshotAction snapshotAction)
+                    snapshotAction.SetOperationLease(operationLease);
+                try
+                {
+                    await action.UndoAsync();
+                    if (action is SelectionCrossPageMoveAction crossPageMove
+                        && !crossPageMove.LastOperationSucceeded)
+                        return;
+                    if (action is DocumentSnapshotAction snapshot
+                        ? !snapshot.LastOperationSucceeded ||
+                          !ValidateDocumentOperationLease(snapshot.CompletedOperationLease)
+                        : !ValidateDocumentOperationLease(operationLease))
+                    {
+                        return;
+                    }
+                    _undoStack.RemoveAt(_undoStack.Count - 1);
+                    _redoStack.Add(action);
+                    UpdateUndoRedoButtons();
+                    ApplyDirtyStateForAction(action);
+                    UpdateSelectedTextBoxPopupVisibility(forceRefresh: true);
+                }
+                catch (Exception ex)
+                {
+                    if (!ValidateDocumentOperationLease(operationLease))
+                        return;
+                    GetMainWindow()?.ShowToast(
+                        LocalizationService.Format("Editor.UndoFailed", ex.Message), "\uE783", 3500);
+                }
+                finally
+                {
+                    if (action is DocumentSnapshotAction completedSnapshotAction)
+                        completedSnapshotAction.SetOperationLease(null);
+                }
             }
         }
 
         private async Task PerformRedoAsync()
         {
             if (_redoStack.Count == 0) return;
-            var action = _redoStack[_redoStack.Count - 1];
-            try
+            if (!TryBeginDocumentEdit(out var editLease))
+                return;
+
+            using (editLease)
             {
-                await action.RedoAsync();
-                _redoStack.RemoveAt(_redoStack.Count - 1);
-                _undoStack.Add(action);
-                UpdateUndoRedoButtons();
-                ApplyDirtyStateForAction(action);
-                UpdateSelectedTextBoxPopupVisibility(forceRefresh: true);
-            }
-            catch (Exception ex)
-            {
-                GetMainWindow()?.ShowToast(
-                    LocalizationService.Format("Editor.RedoFailed", ex.Message), "\uE783", 3500);
+                var action = _redoStack[_redoStack.Count - 1];
+                using var operationLease = CaptureDocumentOperationLease(_pdfService);
+                if (action is DocumentSnapshotAction snapshotAction)
+                    snapshotAction.SetOperationLease(operationLease);
+                try
+                {
+                    await action.RedoAsync();
+                    if (action is SelectionCrossPageMoveAction crossPageMove
+                        && !crossPageMove.LastOperationSucceeded)
+                        return;
+                    if (action is DocumentSnapshotAction snapshot
+                        ? !snapshot.LastOperationSucceeded ||
+                          !ValidateDocumentOperationLease(snapshot.CompletedOperationLease)
+                        : !ValidateDocumentOperationLease(operationLease))
+                    {
+                        return;
+                    }
+                    _redoStack.RemoveAt(_redoStack.Count - 1);
+                    _undoStack.Add(action);
+                    UpdateUndoRedoButtons();
+                    ApplyDirtyStateForAction(action);
+                    UpdateSelectedTextBoxPopupVisibility(forceRefresh: true);
+                }
+                catch (Exception ex)
+                {
+                    if (!ValidateDocumentOperationLease(operationLease))
+                        return;
+                    GetMainWindow()?.ShowToast(
+                        LocalizationService.Format("Editor.RedoFailed", ex.Message), "\uE783", 3500);
+                }
+                finally
+                {
+                    if (action is DocumentSnapshotAction completedSnapshotAction)
+                        completedSnapshotAction.SetOperationLease(null);
+                }
             }
         }
 
@@ -2728,8 +3650,8 @@ namespace Caelum.Pages
 
         private void ApplyDirtyStateForAction(IUndoAction action)
         {
-            _dirtyGeneration++;
-            _isDirty = action.LeavesDocumentDirty;
+            _documentSaveCoordinator.RecordChange(action.LeavesDocumentDirty);
+            SyncDirtyStateMirror();
         }
 
         private void ClearUndoRedoHistory()
@@ -2741,10 +3663,26 @@ namespace Caelum.Pages
 
         private void PushUndoAction(IUndoAction action)
         {
-            _undoStack.Add(action);
-            _redoStack.Clear();
-            UpdateUndoRedoButtons();
-            ApplyDirtyStateForAction(action);
+            if (action == null)
+                return;
+
+            if (!TryBeginDocumentEdit(out var editLease))
+            {
+                // The underlying WPF event can arrive after it has already
+                // changed the model.  Retain that generation for the close
+                // save loop instead of silently dropping it.
+                _documentSaveCoordinator.RecordChange(action.LeavesDocumentDirty);
+                SyncDirtyStateMirror();
+                return;
+            }
+
+            using (editLease)
+            {
+                _undoStack.Add(action);
+                _redoStack.Clear();
+                UpdateUndoRedoButtons();
+                ApplyDirtyStateForAction(action);
+            }
         }
 
         private async void UndoButton_Click(object sender, RoutedEventArgs e) => await PerformUndoAsync();
@@ -2757,9 +3695,10 @@ namespace Caelum.Pages
                 LocalizationService.Get("Editor.PopupSize"), 0.5, 8, _penSize, 0.25,
                 v => { _penSize = v; if (_penPopupSizePreview != null) _penPopupSizePreview.StrokeThickness = v; if (_currentTool == ToolType.Pen) ApplyToolToAllPages(); },
                 LocalizationService.Get("Editor.PopupColor"), _penColor,
-                c => { _penColor = c; if (_penPopupSizePreview != null) _penPopupSizePreview.Stroke = new SolidColorBrush(c); UpdateToolIconColors(); if (_currentTool == ToolType.Pen) ApplyToolToAllPages(); SaveSetting(s => RecordRecentColor(s.RecentPenColors, c)); UpdatePresetSlotVisuals(); },
+                c => { _penColor = c; if (_penPopupSizePreview != null) _penPopupSizePreview.Stroke = new SolidColorBrush(c); UpdateToolIconColors(); if (_currentTool == ToolType.Pen) ApplyToolToAllPages(); SaveSetting(s => RecordRecentColor(s.RecentPenColors, c)); },
                 out _penPopupSizeSlider,
-                () => AppSettingsService.Load().RecentPenColors);
+                () => AppSettingsService.Load().RecentPenColors,
+                sizeAutomationId: "Editor.Pen.Size");
             _penPopupSizePreview = AddSizePreviewSection(_penPopup, _penSize, _penColor, isHighlighter: false);
             AddPenBehaviourToggles(_penPopup);
             AddPenSmoothingSection(_penPopup);
@@ -2767,11 +3706,12 @@ namespace Caelum.Pages
             // Highlighter popup — with size preview section
             _highlighterPopup = BuildToolPopup(
                 LocalizationService.Get("Editor.PopupSize"), 2, 48, _highlighterSize, 0.5,
-                v => { _highlighterSize = v; if (_highlighterPopupSizePreview != null) _highlighterPopupSizePreview.StrokeThickness = v; if (_currentTool == ToolType.Highlighter) ApplyToolToAllPages(); },
+                v => { _highlighterSize = v; if (_highlighterPopupSizePreview != null) _highlighterPopupSizePreview.StrokeThickness = v; UpdateHighlighterModePreviewVisuals(); if (_currentTool == ToolType.Highlighter) ApplyToolToAllPages(); },
                 LocalizationService.Get("Editor.PopupColor"), _highlighterColor,
-                c => { _highlighterColor = c; if (_highlighterPopupSizePreview != null) _highlighterPopupSizePreview.Stroke = new SolidColorBrush(Color.FromArgb(140, c.R, c.G, c.B)); UpdateToolIconColors(); if (_currentTool == ToolType.Highlighter) ApplyToolToAllPages(); SaveSetting(s => RecordRecentColor(s.RecentHighlighterColors, c)); UpdatePresetSlotVisuals(); },
+                c => { _highlighterColor = c; if (_highlighterPopupSizePreview != null) _highlighterPopupSizePreview.Stroke = new SolidColorBrush(GetHighlighterPreviewStrokeColor(HighlighterApplyMode.Freehand, c)); UpdateHighlighterModePreviewVisuals(); UpdateToolIconColors(); if (_currentTool == ToolType.Highlighter || _currentTool == ToolType.AreaHighlight) ApplyToolToAllPages(); SaveSetting(s => RecordRecentColor(s.RecentHighlighterColors, c)); },
                 out _highlighterPopupSizeSlider,
-                () => AppSettingsService.Load().RecentHighlighterColors);
+                () => AppSettingsService.Load().RecentHighlighterColors,
+                sizeAutomationId: "Editor.Highlighter.Size");
             _highlighterPopupSizePreview = AddSizePreviewSection(_highlighterPopup, _highlighterSize, _highlighterColor, isHighlighter: true);
             AddHighlighterModeSection(_highlighterPopup);
 
@@ -2779,7 +3719,8 @@ namespace Caelum.Pages
                 LocalizationService.Get("Editor.PopupEraserSize"), 4, 80, _eraserSize, 1,
                 v => { _eraserSize = v; ShowEraserSizePreview(v); ApplyToolToAllPages(); },
                 null, default, null,
-                out _);
+                out _,
+                sizeAutomationId: "Editor.Eraser.Size");
             AddEraserModeSection(_eraserPopup);
 
             // Shape popup — sub-type selector above the shared size slider
@@ -2789,7 +3730,8 @@ namespace Caelum.Pages
                 v => { _shapeSize = v; if (_currentTool == ToolType.Shape) ApplyToolToAllPages(); },
                 LocalizationService.Get("Editor.PopupColor"), _shapeColor,
                 c => { _shapeColor = c; if (_currentTool == ToolType.Shape) ApplyToolToAllPages(); },
-                out _);
+                out _,
+                sizeAutomationId: "Editor.Shape.Size");
             AddShapeSubTypeSection(_shapePopup);
 
             CreateSelectionPopup();
@@ -2810,27 +3752,34 @@ namespace Caelum.Pages
                 Text = LocalizationService.Get("Editor.ShapeHeader"),
                 FontSize = 13,
                 FontWeight = FontWeights.SemiBold,
-                Foreground = new SolidColorBrush(Color.FromRgb(80, 80, 80)),
                 Margin = new Thickness(0, 0, 0, 10)
             });
 
             var row1 = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 8) };
             var row2 = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 14) };
-            Border lineButton = null!;
-            Border rectButton = null!;
-            Border ellipseButton = null!;
-            Border arrowButton = null!;
-            lineButton = BuildModeToggleButton(LocalizationService.Get("Editor.ShapeLine"), new Thickness(0, 0, 8, 0), activated: () => SelectKind(ShapeKind.Line));
-            rectButton = BuildModeToggleButton(LocalizationService.Get("Editor.ShapeRectangle"), new Thickness(0), activated: () => SelectKind(ShapeKind.Rectangle));
-            ellipseButton = BuildModeToggleButton(LocalizationService.Get("Editor.ShapeEllipse"), new Thickness(0, 0, 8, 0), activated: () => SelectKind(ShapeKind.Ellipse));
-            arrowButton = BuildModeToggleButton(LocalizationService.Get("Editor.ShapeArrow"), new Thickness(0), activated: () => SelectKind(ShapeKind.Arrow));
+            ToggleButton lineButton = null!;
+            ToggleButton rectButton = null!;
+            ToggleButton ellipseButton = null!;
+            ToggleButton arrowButton = null!;
+            lineButton = BuildVectorModeToggleButton(
+                LocalizationService.Get("Editor.ShapeLine"), "Editor.Shape.Line", BuildShapePreview(ShapeKind.Line),
+                new Thickness(0, 0, 8, 0), activated: () => SelectKind(ShapeKind.Line));
+            rectButton = BuildVectorModeToggleButton(
+                LocalizationService.Get("Editor.ShapeRectangle"), "Editor.Shape.Rectangle", BuildShapePreview(ShapeKind.Rectangle),
+                new Thickness(0), activated: () => SelectKind(ShapeKind.Rectangle));
+            ellipseButton = BuildVectorModeToggleButton(
+                LocalizationService.Get("Editor.ShapeEllipse"), "Editor.Shape.Ellipse", BuildShapePreview(ShapeKind.Ellipse),
+                new Thickness(0, 0, 8, 0), activated: () => SelectKind(ShapeKind.Ellipse));
+            arrowButton = BuildVectorModeToggleButton(
+                LocalizationService.Get("Editor.ShapeArrow"), "Editor.Shape.Arrow", BuildShapePreview(ShapeKind.Arrow),
+                new Thickness(0), activated: () => SelectKind(ShapeKind.Arrow));
 
             void ApplyVisual()
             {
-                StyleModeToggleButton(lineButton, _shapeKind == ShapeKind.Line);
-                StyleModeToggleButton(rectButton, _shapeKind == ShapeKind.Rectangle);
-                StyleModeToggleButton(ellipseButton, _shapeKind == ShapeKind.Ellipse);
-                StyleModeToggleButton(arrowButton, _shapeKind == ShapeKind.Arrow);
+                 StyleVectorModeToggleButton(lineButton, _shapeKind == ShapeKind.Line);
+                 StyleVectorModeToggleButton(rectButton, _shapeKind == ShapeKind.Rectangle);
+                 StyleVectorModeToggleButton(ellipseButton, _shapeKind == ShapeKind.Ellipse);
+                 StyleVectorModeToggleButton(arrowButton, _shapeKind == ShapeKind.Arrow);
             }
 
             void SelectKind(ShapeKind kind)
@@ -2870,15 +3819,14 @@ namespace Caelum.Pages
                 Text = LocalizationService.Get("Editor.EraserModeHeader"),
                 FontSize = 13,
                 FontWeight = FontWeights.SemiBold,
-                Foreground = new SolidColorBrush(Color.FromRgb(80, 80, 80)),
                 Margin = new Thickness(0, 0, 0, 10)
             });
 
             var modeRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 14) };
-            Border pixelButton = null!;
-            Border wholeButton = null!;
-            pixelButton = BuildModeToggleButton(LocalizationService.Get("Editor.EraserPixel"), new Thickness(0, 0, 8, 0), activated: () => SelectMode(false));
-            wholeButton = BuildModeToggleButton(LocalizationService.Get("Editor.EraserStroke"), new Thickness(0), activated: () => SelectMode(true));
+            ToggleButton pixelButton = null!;
+            ToggleButton wholeButton = null!;
+            pixelButton = BuildModeToggleButton(LocalizationService.Get("Editor.EraserPixel"), new Thickness(0, 0, 8, 0), activated: () => SelectMode(false), automationId: "Editor.Eraser.Pixel");
+            wholeButton = BuildModeToggleButton(LocalizationService.Get("Editor.EraserStroke"), new Thickness(0), activated: () => SelectMode(true), automationId: "Editor.Eraser.WholeStroke");
 
             void ApplyModeVisual()
             {
@@ -2907,22 +3855,24 @@ namespace Caelum.Pages
             ApplyModeVisual();
         }
 
-        private static Border BuildModeToggleButton(
+        private static ToggleButton BuildModeToggleButton(
             string label,
             Thickness margin,
             double width = 116,
-            Action activated = null)
+            Action activated = null,
+            string automationId = null)
         {
-            var button = new Border
+            var button = new ToggleButton
             {
                 Width = width,
                 Height = 32,
+                MinWidth = 32,
+                MinHeight = 32,
                 Margin = margin,
-                CornerRadius = new CornerRadius(8),
                 BorderThickness = new Thickness(1),
                 Cursor = Cursors.Hand,
                 Focusable = true,
-                Child = new TextBlock
+                Content = new TextBlock
                 {
                     Text = label,
                     FontSize = 13,
@@ -2931,20 +3881,22 @@ namespace Caelum.Pages
                 }
             };
 
+            ApplyToolbarPopupToggleStyle(button);
+            ToolTipService.SetToolTip(button, label);
+            AutomationProperties.SetAutomationId(button, automationId ?? "Editor.Popup.Mode");
             AutomationProperties.SetName(button, label);
+            AutomationProperties.SetHelpText(button, label);
             KeyboardNavigation.SetIsTabStop(button, true);
             if (activated != null)
             {
-                button.MouseLeftButtonDown += (_, e) =>
+                button.Click += (_, e) =>
                 {
                     activated();
-                    e.Handled = true;
-                };
-                button.KeyDown += (_, e) =>
-                {
-                    if (e.Key != Key.Enter && e.Key != Key.Space)
-                        return;
-                    activated();
+                    // ToggleButton's default click behavior flips IsChecked
+                    // before this handler. Keep a mutually-exclusive mode
+                    // selected even when the user activates the already
+                    // selected option (the callback may return early).
+                    button.IsChecked = true;
                     e.Handled = true;
                 };
             }
@@ -2952,18 +3904,247 @@ namespace Caelum.Pages
             return button;
         }
 
-        private static void StyleModeToggleButton(Border button, bool active)
+        private static void ApplyToolbarPopupToggleStyle(Control button)
         {
-            button.SetResourceReference(Border.BorderBrushProperty,
+            if (Application.Current?.TryFindResource("ToolbarToggleButtonStyle") is Style toggleStyle)
+                button.Style = toggleStyle;
+            ApplyToolbarFocusVisualStyle(button);
+        }
+
+        private static void ApplyToolbarPopupButtonStyle(Button button)
+        {
+            if (Application.Current?.TryFindResource("ToolbarButtonStyle") is Style buttonStyle)
+                button.Style = buttonStyle;
+            ApplyToolbarFocusVisualStyle(button);
+        }
+
+        private static void ApplyToolbarFocusVisualStyle(Control control)
+        {
+            if (control != null && Application.Current?.TryFindResource("ToolbarFocusVisualStyle") is Style focusStyle)
+                control.FocusVisualStyle = focusStyle;
+        }
+
+        private static void StyleModeToggleButton(ToggleButton button, bool active)
+        {
+            button.IsChecked = active;
+            button.SetResourceReference(Control.BorderBrushProperty,
                 active ? "ThemeAccentBrush" : "ThemeBorderBrush");
-            button.SetResourceReference(Border.BackgroundProperty,
+            button.SetResourceReference(Control.BackgroundProperty,
                 active ? "ThemeSelectionBrush" : "ThemeSurfaceAltBrush");
-            if (button.Child is TextBlock text)
+            if (button.Content is TextBlock text)
             {
                 text.SetResourceReference(
                     TextElement.ForegroundProperty,
                     active ? "ThemeAccentBrush" : "ThemeForegroundBrush");
             }
+        }
+
+        private static ToggleButton BuildVectorModeToggleButton(
+            string label,
+            string automationId,
+            Path preview,
+            Thickness margin,
+            Action activated)
+        {
+            var button = new ToggleButton
+            {
+                Width = 56,
+                Height = 42,
+                MinWidth = 32,
+                MinHeight = 32,
+                Margin = margin,
+                Padding = new Thickness(6),
+                BorderThickness = new Thickness(1),
+                Cursor = Cursors.Hand,
+                Focusable = true,
+                Tag = preview,
+                ToolTip = label
+            };
+            ApplyToolbarPopupToggleStyle(button);
+            var CheckMark = new Path
+            {
+                Width = 10,
+                Height = 10,
+                Stretch = Stretch.Uniform,
+                Fill = Brushes.Transparent,
+                StrokeThickness = 2,
+                StrokeStartLineCap = PenLineCap.Round,
+                StrokeEndLineCap = PenLineCap.Round,
+                Data = Geometry.Parse("M2,5 L4.5,8 L9,2"),
+                HorizontalAlignment = HorizontalAlignment.Right,
+                VerticalAlignment = VerticalAlignment.Top,
+                Margin = new Thickness(0, 1, 1, 0),
+                Visibility = Visibility.Collapsed
+            };
+            CheckMark.SetResourceReference(Path.StrokeProperty, "ThemeFocusBrush");
+            button.Content = new Grid
+            {
+                Children = { preview, CheckMark }
+            };
+            ToolTipService.SetToolTip(button, label);
+            AutomationProperties.SetAutomationId(button, automationId);
+            AutomationProperties.SetName(button, label);
+            AutomationProperties.SetHelpText(button, label);
+            KeyboardNavigation.SetIsTabStop(button, true);
+            button.Click += (_, e) =>
+            {
+                activated?.Invoke();
+                button.IsChecked = true;
+                e.Handled = true;
+            };
+            return button;
+        }
+
+        private static void StyleVectorModeToggleButton(ToggleButton button, bool active)
+        {
+            button.IsChecked = active;
+            button.SetResourceReference(Control.BorderBrushProperty,
+                active ? "ThemeAccentBrush" : "ThemeBorderBrush");
+            button.SetResourceReference(Control.BackgroundProperty,
+                active ? "ThemeSelectionBrush" : "ThemeSurfaceAltBrush");
+            if (button.Tag is Path preview)
+                preview.SetResourceReference(Path.StrokeProperty,
+                    active ? "ThemeAccentBrush" : "ThemeForegroundBrush");
+            if (button.Content is Grid grid && grid.Children.Count > 1 && grid.Children[1] is Path CheckMark)
+            {
+                CheckMark.Visibility = active ? Visibility.Visible : Visibility.Collapsed;
+                CheckMark.SetResourceReference(Path.StrokeProperty, "ThemeFocusBrush");
+            }
+        }
+
+        private void UpdateHighlighterModePreviewVisuals()
+        {
+            foreach (var pair in _highlighterModePreviews)
+                ApplyHighlighterPreviewColor(pair.Key, pair.Value);
+        }
+
+        private void ApplyHighlighterPreviewColor(HighlighterApplyMode mode, Path preview)
+        {
+            if (preview == null)
+                return;
+
+            ApplyHighlighterPreviewVisual(mode, preview, _highlighterColor, _highlighterSize);
+        }
+
+        /// <summary>
+        /// Production path shared by every highlighter mode preview. Keeping
+        /// size and alpha in one helper prevents a language/theme popup rebuild
+        /// or a live slider/color change from leaving one mode stale.
+        /// </summary>
+        private static void ApplyHighlighterPreviewVisual(
+            HighlighterApplyMode mode,
+            Path preview,
+            Color color,
+            double size)
+        {
+            if (preview == null)
+                return;
+
+            preview.StrokeThickness = GetHighlighterPreviewStrokeThickness(mode, size);
+            preview.Stroke = new SolidColorBrush(GetHighlighterPreviewStrokeColor(mode, color));
+            byte fillOpacity = GetHighlighterPreviewFillOpacity(mode);
+            preview.Fill = fillOpacity == 0
+                ? Brushes.Transparent
+                : new SolidColorBrush(Color.FromArgb(fillOpacity, color.R, color.G, color.B));
+        }
+
+        private static double GetHighlighterPreviewStrokeThickness(HighlighterApplyMode mode, double size)
+        {
+            _ = mode;
+            return Math.Max(1.0, size);
+        }
+
+        private static byte GetHighlighterPreviewStrokeOpacity(HighlighterApplyMode mode)
+        {
+            return mode switch
+            {
+                HighlighterApplyMode.Freehand => FreehandHighlighterOpacity,
+                HighlighterApplyMode.TextHighlight => TextHighlightOpacity,
+                HighlighterApplyMode.AreaHighlight => AreaHighlightStrokeOpacity,
+                _ => byte.MaxValue
+            };
+        }
+
+        private static byte GetHighlighterPreviewFillOpacity(HighlighterApplyMode mode)
+        {
+            return mode == HighlighterApplyMode.AreaHighlight
+                ? AreaHighlightFillOpacity
+                : (byte)0;
+        }
+
+        private static Color GetHighlighterPreviewStrokeColor(HighlighterApplyMode mode, Color color)
+        {
+            return Color.FromArgb(GetHighlighterPreviewStrokeOpacity(mode), color.R, color.G, color.B);
+        }
+
+        private static Path BuildShapePreview(ShapeKind kind)
+        {
+            var data = kind switch
+            {
+                ShapeKind.Rectangle => "M4,4 L28,4 L28,18 L4,18 Z",
+                ShapeKind.Ellipse => "M16,4 A12,7 0 1 1 15.99,4",
+                ShapeKind.Arrow => "M4,11 L26,11 M19,5 L26,11 L19,17",
+                _ => "M4,17 L27,5"
+            };
+
+            return new Path
+            {
+                Width = 30,
+                Height = 22,
+                Stretch = Stretch.Uniform,
+                Fill = Brushes.Transparent,
+                StrokeThickness = 1.8,
+                StrokeStartLineCap = PenLineCap.Round,
+                StrokeEndLineCap = PenLineCap.Round,
+                StrokeLineJoin = PenLineJoin.Round,
+                Data = Geometry.Parse(data)
+            };
+        }
+
+        private static Path BuildSelectionShapePreview(SelectionShape shape)
+        {
+            var data = shape == SelectionShape.Rectangle
+                ? "M4,4 L28,4 L28,18 L4,18 Z"
+                : "M5,16 C7,7 10,19 13,10 C16,3 18,18 22,8 C23,6 25,7 27,5";
+
+            return new Path
+            {
+                Width = 30,
+                Height = 22,
+                Stretch = Stretch.Uniform,
+                Fill = Brushes.Transparent,
+                StrokeThickness = 1.8,
+                StrokeStartLineCap = PenLineCap.Round,
+                StrokeEndLineCap = PenLineCap.Round,
+                StrokeLineJoin = PenLineJoin.Round,
+                Data = Geometry.Parse(data)
+            };
+        }
+
+        private static Path BuildHighlighterModePreview(HighlighterApplyMode mode)
+        {
+            var data = mode switch
+            {
+                HighlighterApplyMode.TextHighlight => "M3,9 L25,9 M3,15 L25,15",
+                HighlighterApplyMode.Underline => "M3,16 L25,16",
+                HighlighterApplyMode.StrikeOut => "M3,6 L25,18",
+                HighlighterApplyMode.Squiggly => "M3,13 C6,7 8,19 11,13 S16,7 19,13 S22,19 25,13",
+                HighlighterApplyMode.AreaHighlight => "M4,5 L24,5 L24,17 L4,17 Z",
+                _ => "M3,14 C6,5 8,20 12,10 C15,4 18,17 21,8 C22,6 24,7 25,6"
+            };
+
+            return new Path
+            {
+                Width = 28,
+                Height = 22,
+                Stretch = Stretch.Uniform,
+                Fill = Brushes.Transparent,
+                StrokeThickness = 1.0,
+                StrokeStartLineCap = PenLineCap.Round,
+                StrokeEndLineCap = PenLineCap.Round,
+                StrokeLineJoin = PenLineJoin.Round,
+                Data = Geometry.Parse(data)
+            };
         }
 
         private static TextBlock ThemeSubtleHeader(TextBlock textBlock)
@@ -2998,29 +4179,36 @@ namespace Caelum.Pages
                 Text = LocalizationService.Get("Editor.HighlighterModeHeader"),
                 FontSize = 13,
                 FontWeight = FontWeights.SemiBold,
-                Foreground = new SolidColorBrush(Color.FromRgb(80, 80, 80)),
                 Margin = new Thickness(0, 0, 0, 10)
             });
 
             var row1 = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 8) };
             var row2 = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 14) };
 
-            var modes = new (HighlighterApplyMode Mode, string Label)[]
+            var modes = new (HighlighterApplyMode Mode, string Label, string AutomationId)[]
             {
-                (HighlighterApplyMode.Freehand, LocalizationService.Get("Editor.HighlighterFreehand")),
-                (HighlighterApplyMode.TextHighlight, LocalizationService.Get("Editor.HighlighterText")),
-                (HighlighterApplyMode.Underline, LocalizationService.Get("Editor.HighlighterUnderline")),
-                (HighlighterApplyMode.StrikeOut, LocalizationService.Get("Editor.HighlighterStrikeOut")),
-                (HighlighterApplyMode.Squiggly, LocalizationService.Get("Editor.HighlighterSquiggly")),
-                (HighlighterApplyMode.AreaHighlight, LocalizationService.Get("Editor.HighlighterArea")),
+                (HighlighterApplyMode.Freehand, LocalizationService.Get("Editor.HighlighterFreehand"), "Editor.Highlighter.Freehand"),
+                (HighlighterApplyMode.TextHighlight, LocalizationService.Get("Editor.HighlighterText"), "Editor.Highlighter.Text"),
+                (HighlighterApplyMode.Underline, LocalizationService.Get("Editor.HighlighterUnderline"), "Editor.Highlighter.Underline"),
+                (HighlighterApplyMode.StrikeOut, LocalizationService.Get("Editor.HighlighterStrikeOut"), "Editor.Highlighter.StrikeOut"),
+                (HighlighterApplyMode.Squiggly, LocalizationService.Get("Editor.HighlighterSquiggly"), "Editor.Highlighter.Squiggly"),
+                (HighlighterApplyMode.AreaHighlight, LocalizationService.Get("Editor.HighlighterArea"), "Editor.Highlighter.Area"),
             };
 
-            var buttons = new Dictionary<HighlighterApplyMode, Border>();
+            var buttons = new Dictionary<HighlighterApplyMode, ToggleButton>();
+            _highlighterModePreviews.Clear();
 
             void ApplyVisual()
             {
                 foreach (var pair in buttons)
-                    StyleModeToggleButton(pair.Value, pair.Key == _highlighterApplyMode);
+                {
+                    StyleVectorModeToggleButton(pair.Value, pair.Key == _highlighterApplyMode);
+                    if (pair.Value.Tag is Path preview)
+                    {
+                        _highlighterModePreviews[pair.Key] = preview;
+                        ApplyHighlighterPreviewColor(pair.Key, preview);
+                    }
+                }
             }
 
             void SelectMode(HighlighterApplyMode mode)
@@ -3040,8 +4228,11 @@ namespace Caelum.Pages
             for (int i = 0; i < modes.Length; i++)
             {
                 var mode = modes[i].Mode;
-                var button = BuildModeToggleButton(modes[i].Label,
-                    new Thickness(0, 0, i % 3 < 2 ? 6 : 0, 0), width: 82,
+                var button = BuildVectorModeToggleButton(
+                    modes[i].Label,
+                    modes[i].AutomationId,
+                    BuildHighlighterModePreview(mode),
+                    new Thickness(0, 0, i % 3 < 2 ? 6 : 0, 0),
                     activated: () => SelectMode(mode));
                 buttons[mode] = button;
                 (i < 3 ? row1 : row2).Children.Add(button);
@@ -3085,7 +4276,6 @@ namespace Caelum.Pages
             panel.Children.Add(ThemeDivider(new Border
             {
                 Height = 1,
-                Background = new SolidColorBrush(Color.FromArgb(25, 0, 0, 0)),
                 Margin = new Thickness(-16, 14, -16, 10)
             }));
 
@@ -3093,19 +4283,19 @@ namespace Caelum.Pages
             {
                 SaveSetting(s => s.EnablePressure = v);
                 ApplyToolToAllPages();
-            });
+            }, automationId: "Editor.Pen.Pressure");
 
             var inkSimRow = BuildSettingToggleRow(LocalizationService.Get("Editor.InkSimulation"), AppSettingsService.Load().InkSimulation, v =>
             {
                 SaveSetting(s => s.InkSimulation = v);
                 ApplyToolToAllPages();
-            });
+            }, automationId: "Editor.Pen.InkSimulation");
 
             var shapeRecognitionRow = BuildSettingToggleRow(LocalizationService.Get("Editor.ShapeRecognition"), AppSettingsService.Load().ShapeRecognition, v =>
             {
                 SaveSetting(s => s.ShapeRecognition = v);
                 ApplyToolToAllPages();
-            });
+            }, automationId: "Editor.Pen.ShapeRecognition");
 
             panel.Children.Add(pressureRow);
             panel.Children.Add(inkSimRow);
@@ -3128,7 +4318,6 @@ namespace Caelum.Pages
             panel.Children.Add(ThemeDivider(new Border
             {
                 Height = 1,
-                Background = new SolidColorBrush(Color.FromArgb(25, 0, 0, 0)),
                 Margin = new Thickness(-16, 14, -16, 10)
             }));
 
@@ -3137,7 +4326,6 @@ namespace Caelum.Pages
                 Text = LocalizationService.Get("Editor.SmoothingHeader"),
                 FontSize = 13,
                 FontWeight = FontWeights.SemiBold,
-                Foreground = new SolidColorBrush(Color.FromRgb(80, 80, 80)),
                 Margin = new Thickness(0, 0, 0, 10)
             }));
 
@@ -3148,7 +4336,7 @@ namespace Caelum.Pages
                 LocalizationService.Get("Editor.SmoothingMid"),
                 LocalizationService.Get("Editor.SmoothingHigh")
             };
-            var buttons = new Border[labels.Length];
+            var buttons = new ToggleButton[labels.Length];
             var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 6) };
 
             void ApplyVisual()
@@ -3168,7 +4356,7 @@ namespace Caelum.Pages
                     SaveSetting(settings => settings.StrokeSmoothing = level);
                     ApplyToolToAllPages();
                     ApplyVisual();
-                });
+                }, automationId: $"Editor.Pen.Smoothing.{i}");
                 row.Children.Add(buttons[i]);
             }
 
@@ -3181,7 +4369,7 @@ namespace Caelum.Pages
         /// boolean settings in tool popups. Follows the popup look with the
         /// #2563EB accent for the on state.
         /// </summary>
-        private static Border BuildSettingToggleRow(string label, bool initialState, Action<bool> toggled)
+        private static ToggleButton BuildSettingToggleRow(string label, bool initialState, Action<bool> toggled, string automationId = null)
         {
             var indicator = new Border
             {
@@ -3200,30 +4388,36 @@ namespace Caelum.Pages
                 Margin = new Thickness(10, 0, 0, 0)
             };
 
-            var row = new Border
+            var row = new ToggleButton
             {
                 Height = 34,
+                MinWidth = 32,
+                MinHeight = 32,
                 Margin = new Thickness(0, 0, 0, 6),
-                Background = new SolidColorBrush(Color.FromArgb(6, 0, 0, 0)),
-                CornerRadius = new CornerRadius(8),
                 Padding = new Thickness(10, 0, 10, 0),
                 Cursor = Cursors.Hand,
-                Child = new StackPanel
+                Content = new StackPanel
                 {
                     Orientation = Orientation.Horizontal,
                     Children = { indicator, text }
                 }
             };
 
+            row.Tag = indicator;
+            ApplyToolbarPopupToggleStyle(row);
             row.Focusable = true;
+            ToolTipService.SetToolTip(row, label);
+            AutomationProperties.SetAutomationId(row, automationId ?? "Editor.Popup.Setting");
             AutomationProperties.SetName(row, label);
+            AutomationProperties.SetHelpText(row, label);
             KeyboardNavigation.SetIsTabStop(row, true);
 
-            bool state = initialState;
+            row.IsChecked = initialState;
 
             void ApplyVisual()
             {
-                row.SetResourceReference(Border.BackgroundProperty,
+                bool state = row.IsChecked == true;
+                row.SetResourceReference(Control.BackgroundProperty,
                     state ? "ThemeSelectionBrush" : "ThemeSurfaceAltBrush");
                 indicator.SetResourceReference(Border.BorderBrushProperty,
                     state ? "ThemeAccentBrush" : "ThemeBorderBrush");
@@ -3238,23 +4432,10 @@ namespace Caelum.Pages
 
             ApplyVisual();
 
-            void Toggle()
+            row.Click += (s, e) =>
             {
-                state = !state;
                 ApplyVisual();
-                toggled?.Invoke(state);
-            }
-
-            row.MouseLeftButtonDown += (s, e) =>
-            {
-                Toggle();
-                e.Handled = true;
-            };
-            row.KeyDown += (s, e) =>
-            {
-                if (e.Key != Key.Enter && e.Key != Key.Space)
-                    return;
-                Toggle();
+                toggled?.Invoke(row.IsChecked == true);
                 e.Handled = true;
             };
 
@@ -3294,7 +4475,12 @@ namespace Caelum.Pages
         /// list. Hidden entirely when empty; each 16x16 rounded swatch applies
         /// its color exactly like a palette cell of the owning popup.
         /// </summary>
-        private void RefreshRecentColorsRow(StackPanel section, StackPanel row, Func<List<string>> getRecentColors, Action<Color> applyColor)
+        private void RefreshRecentColorsRow(
+            StackPanel section,
+            StackPanel row,
+            Func<List<string>> getRecentColors,
+            Action<Color> applyColor,
+            Action<Color> selectedChanged = null)
         {
             row.Children.Clear();
 
@@ -3311,23 +4497,39 @@ namespace Caelum.Pages
                     if (!TryParseRecentColor(hex, out var color))
                         continue;
 
-                    var swatch = new Border
+                    int recentIndex = row.Children.Count;
+                    var swatchVisual = new Border
                     {
-                        Width = 16,
-                        Height = 16,
+                        Width = 22,
+                        Height = 22,
                         CornerRadius = new CornerRadius(4),
                         Background = new SolidColorBrush(color),
-                        BorderBrush = new SolidColorBrush(Color.FromArgb(30, 0, 0, 0)),
                         BorderThickness = new Thickness(1),
-                        Cursor = Cursors.Hand,
+                    };
+                    swatchVisual.SetResourceReference(Border.BorderBrushProperty, "ThemeBorderBrush");
+                    var swatch = new Button
+                    {
+                        Width = 32,
+                        Height = 32,
+                        Padding = new Thickness(3),
                         Margin = new Thickness(0, 0, 6, 0),
-                        ToolTip = hex,
+                        Cursor = Cursors.Hand,
+                        Focusable = true,
+                        Content = swatchVisual,
                         Tag = color
                     };
-                    swatch.MouseLeftButtonDown += (s, e) =>
+                    ApplyToolbarPopupButtonStyle(swatch);
+                    ToolTipService.SetToolTip(swatch, hex);
+                    AutomationProperties.SetAutomationId(swatch, $"Editor.Color.Recent.{recentIndex}");
+                    AutomationProperties.SetName(swatch, hex);
+                    AutomationProperties.SetHelpText(swatch, hex);
+                    swatch.Click += (s, e) =>
                     {
-                        if (s is Border b && b.Tag is Color picked)
+                        if (s is Button b && b.Tag is Color picked)
+                        {
                             applyColor?.Invoke(picked);
+                            selectedChanged?.Invoke(picked);
+                        }
                         e.Handled = true;
                     };
                     row.Children.Add(swatch);
@@ -3376,7 +4578,6 @@ namespace Caelum.Pages
             panel.Children.Add(ThemeDivider(new Border
             {
                 Height = 1,
-                Background = new SolidColorBrush(Color.FromArgb(25, 0, 0, 0)),
                 Margin = new Thickness(-16, 14, -16, 10)
             }));
 
@@ -3385,17 +4586,16 @@ namespace Caelum.Pages
                 Text = LocalizationService.Get("Editor.PopupPreview"),
                 FontSize = 13,
                 FontWeight = FontWeights.SemiBold,
-                Foreground = new SolidColorBrush(Color.FromRgb(80, 80, 80)),
                 Margin = new Thickness(0, 0, 0, 8)
             }));
 
             var previewBorder = new Border
             {
                 Height = 60,
-                Background = new SolidColorBrush(Color.FromArgb(18, 0, 0, 0)),
                 CornerRadius = new CornerRadius(8),
                 ClipToBounds = true
             };
+            previewBorder.SetResourceReference(Border.BackgroundProperty, "ThemeSurfaceAltBrush");
 
             Line line;
             if (isHighlighter)
@@ -3404,7 +4604,7 @@ namespace Caelum.Pages
                 line = new Line
                 {
                     X1 = 8, Y1 = 30, X2 = 212, Y2 = 30,
-                    Stroke = new SolidColorBrush(Color.FromArgb(140, initialColor.R, initialColor.G, initialColor.B)),
+                    Stroke = new SolidColorBrush(GetHighlighterPreviewStrokeColor(HighlighterApplyMode.Freehand, initialColor)),
                     StrokeThickness = initialSize,
                     StrokeStartLineCap = PenLineCap.Round,
                     StrokeEndLineCap = PenLineCap.Round
@@ -3460,7 +4660,7 @@ namespace Caelum.Pages
                 Child = settingsPanel,
                 Effect = new System.Windows.Media.Effects.DropShadowEffect
                 {
-                    BlurRadius = 20, ShadowDepth = 4, Opacity = 0.12, Color = Colors.Black
+                    BlurRadius = 20, ShadowDepth = 4, Opacity = ThemeService.GetShadowOpacity(), Color = Colors.Black
                 }
             };
             settingsBorder.SetResourceReference(Border.BackgroundProperty, "ThemeSurfaceBrush");
@@ -3472,18 +4672,18 @@ namespace Caelum.Pages
                 Text = LocalizationService.Get("Editor.SelectShape"),
                 FontSize = 12,
                 FontWeight = FontWeights.SemiBold,
-                Foreground = new SolidColorBrush(Color.FromRgb(80, 80, 80)),
                 Margin = new Thickness(0, 0, 0, 8)
             }));
 
             var shapePanel = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 12) };
 
-            Button MakeShapeButton(string icon, string tooltip, SelectionShape shape)
+            ToggleButton MakeShapeButton(string tooltip, SelectionShape shape, Path preview)
             {
                 var isActive = _selectionShape == shape;
-                var btn = new Button
+                var btn = new ToggleButton
                 {
                     Width = 36, Height = 32,
+                    MinWidth = 32, MinHeight = 32,
                     Margin = new Thickness(0, 0, 6, 0),
                     Padding = new Thickness(0),
                     Cursor = Cursors.Hand,
@@ -3491,28 +4691,59 @@ namespace Caelum.Pages
                     ToolTip = tooltip,
                     Tag = shape
                 };
-                btn.Template = CreateIconButtonTemplate("#E8E8E8", "#DCDCDC");
-                btn.Content = new TextBlock
-                {
-                    Text = icon,
-                    FontFamily = new FontFamily("Segoe MDL2 Assets"),
-                    FontSize = 14,
-                    HorizontalAlignment = HorizontalAlignment.Center,
-                    VerticalAlignment = VerticalAlignment.Center
-                };
+                ApplyToolbarPopupToggleStyle(btn);
+                btn.Content = CreateSelectionToggleContent(preview);
+                string automationId = shape == SelectionShape.Rectangle
+                    ? "Editor.Select.Shape.Rectangle"
+                    : "Editor.Select.Shape.FreeForm";
+                ToolTipService.SetToolTip(btn, tooltip);
+                AutomationProperties.SetAutomationId(btn, automationId);
+                AutomationProperties.SetName(btn, tooltip);
+                AutomationProperties.SetHelpText(btn, tooltip);
+                KeyboardNavigation.SetIsTabStop(btn, true);
                 UpdateFilterButtonStyle(btn, isActive);
+                btn.Checked += (_, __) =>
+                {
+                    if (!_isUpdatingSelectionPopup)
+                        SelectShapeButton(btn);
+                };
+                btn.Unchecked += (_, __) =>
+                {
+                    if (!_isUpdatingSelectionPopup && _selectionShape == shape)
+                        btn.IsChecked = true;
+                };
                 btn.Click += (s, ev) =>
                 {
-                    _selectionShape = (SelectionShape)((Button)s).Tag;
-                    ApplyToolToAllPages();
-                    foreach (Button b in shapePanel.Children)
-                        UpdateFilterButtonStyle(b, (SelectionShape)b.Tag == _selectionShape);
+                    SelectShapeButton((ToggleButton)s);
+                    ev.Handled = true;
                 };
                 return btn;
+
+                void SelectShapeButton(ToggleButton selected)
+                {
+                    _selectionShape = (SelectionShape)selected.Tag;
+                    ApplyToolToAllPages();
+                    _isUpdatingSelectionPopup = true;
+                    try
+                    {
+                        foreach (ToggleButton b in shapePanel.Children)
+                            UpdateFilterButtonStyle(b, (SelectionShape)b.Tag == _selectionShape);
+                    }
+                    finally
+                    {
+                        _isUpdatingSelectionPopup = false;
+                    }
+                }
             }
 
-            shapePanel.Children.Add(MakeShapeButton("\uE73F", LocalizationService.Get("Editor.SelectShapeRect"), SelectionShape.Rectangle));
-            shapePanel.Children.Add(MakeShapeButton("\uED63", LocalizationService.Get("Editor.SelectShapeFree"), SelectionShape.FreeForm));
+            shapePanel.Children.Add(MakeShapeButton(
+                LocalizationService.Get("Editor.SelectShapeRect"),
+                SelectionShape.Rectangle,
+                BuildSelectionShapePreview(SelectionShape.Rectangle)));
+            shapePanel.Children.Add(MakeShapeButton(
+                LocalizationService.Get("Editor.SelectShapeFree"),
+                SelectionShape.FreeForm,
+                BuildSelectionShapePreview(SelectionShape.FreeForm)));
             settingsPanel.Children.Add(shapePanel);
 
             // ── Filter section header
@@ -3521,37 +4752,79 @@ namespace Caelum.Pages
                 Text = LocalizationService.Get("Editor.SelectFilter"),
                 FontSize = 12,
                 FontWeight = FontWeights.SemiBold,
-                Foreground = new SolidColorBrush(Color.FromRgb(80, 80, 80)),
                 Margin = new Thickness(0, 0, 0, 8)
             }));
 
             // Filter radio buttons
             var filterPanel = new StackPanel { Orientation = Orientation.Horizontal };
 
-            Button MakeFilterButton(string label, SelectionFilter filter)
+            ToggleButton MakeFilterButton(string label, SelectionFilter filter)
             {
                 var isActive = _selectionFilter == filter;
-                var btn = new Button
+                var btn = new ToggleButton
                 {
-                    Content = label,
+                    Content = CreateSelectionToggleContent(new TextBlock
+                    {
+                        Text = label,
+                        HorizontalAlignment = HorizontalAlignment.Center,
+                        VerticalAlignment = VerticalAlignment.Center,
+                        TextWrapping = TextWrapping.NoWrap
+                    }),
                     Margin = new Thickness(0, 0, 6, 0),
                     Padding = new Thickness(10, 5, 10, 5),
                     FontSize = 12,
+                    MinWidth = 32,
+                    MinHeight = 32,
                     Cursor = Cursors.Hand,
                     BorderThickness = new Thickness(1),
                     Tag = filter
                 };
-                btn.Template = CreateIconButtonTemplate("#E8E8E8", "#DCDCDC");
+                ApplyToolbarPopupToggleStyle(btn);
+                string automationId = filter switch
+                {
+                    SelectionFilter.DrawingsOnly => "Editor.Select.Filter.Drawings",
+                    SelectionFilter.TextOnly => "Editor.Select.Filter.Text",
+                    _ => "Editor.Select.Filter.Both"
+                };
+                ToolTipService.SetToolTip(btn, label);
+                AutomationProperties.SetAutomationId(btn, automationId);
+                AutomationProperties.SetName(btn, label);
+                AutomationProperties.SetHelpText(btn, label);
+                KeyboardNavigation.SetIsTabStop(btn, true);
                 UpdateFilterButtonStyle(btn, isActive);
+                btn.Checked += (_, __) =>
+                {
+                    if (!_isUpdatingSelectionPopup)
+                        SelectFilterButton(btn);
+                };
+                btn.Unchecked += (_, __) =>
+                {
+                    if (!_isUpdatingSelectionPopup && _selectionFilter == filter)
+                        btn.IsChecked = true;
+                };
                 btn.Click += (s, ev) =>
                 {
-                    _selectionFilter = (SelectionFilter)((Button)s).Tag;
-                    ApplyToolToAllPages();
-                    // Refresh all filter button styles
-                    foreach (Button b in filterPanel.Children)
-                        UpdateFilterButtonStyle(b, (SelectionFilter)b.Tag == _selectionFilter);
+                    SelectFilterButton((ToggleButton)s);
+                    ev.Handled = true;
                 };
                 return btn;
+
+                void SelectFilterButton(ToggleButton selected)
+                {
+                    _selectionFilter = (SelectionFilter)selected.Tag;
+                    ApplyToolToAllPages();
+                    _isUpdatingSelectionPopup = true;
+                    try
+                    {
+                        // Refresh all filter button styles.
+                        foreach (ToggleButton b in filterPanel.Children)
+                            UpdateFilterButtonStyle(b, (SelectionFilter)b.Tag == _selectionFilter);
+                    }
+                    finally
+                    {
+                        _isUpdatingSelectionPopup = false;
+                    }
+                }
             }
 
             filterPanel.Children.Add(MakeFilterButton(LocalizationService.Get("Editor.SelectFilterBoth"), SelectionFilter.Both));
@@ -3560,35 +4833,94 @@ namespace Caelum.Pages
 
             settingsPanel.Children.Add(filterPanel);
 
-            // Task 28: the current WPF build has no WinRT InkAnalyzer
-            // projection. Keep the action visible and fail safely without
-            // mutating the selected strokes; the spike conclusion is recorded
-            // in .ai/Task28-InkAnalysis.md.
-            var recognizeButton = new Button
-            {
-                Content = LocalizationService.Get("Editor.InkAnalysisUnavailable"),
-                Margin = new Thickness(0, 4, 0, 0),
-                Padding = new Thickness(10, 6, 10, 6),
-                Cursor = Cursors.Hand,
-                ToolTip = LocalizationService.Get("Editor.InkAnalysisTooltip")
-            };
-            recognizeButton.Click += (_, __) =>
-                GetMainWindow()?.ShowToast(LocalizationService.Get("Editor.InkAnalysisUnavailable"), "\uE783", 2600);
-            settingsPanel.Children.Add(recognizeButton);
             _selectionPopup.Child = settingsBorder;
         }
 
-        private void UpdateFilterButtonStyle(Button btn, bool isActive)
+        private static Grid CreateSelectionToggleContent(UIElement visual)
         {
+            var checkMark = new Path
+            {
+                Width = 10,
+                Height = 10,
+                Stretch = Stretch.Uniform,
+                Fill = Brushes.Transparent,
+                StrokeThickness = 2,
+                StrokeStartLineCap = PenLineCap.Round,
+                StrokeEndLineCap = PenLineCap.Round,
+                Data = Geometry.Parse("M2,5 L4.5,8 L9,2"),
+                HorizontalAlignment = HorizontalAlignment.Right,
+                VerticalAlignment = VerticalAlignment.Top,
+                Margin = new Thickness(0, 1, 1, 0),
+                Tag = "CheckMark",
+                Visibility = Visibility.Collapsed
+            };
+            checkMark.SetResourceReference(Path.StrokeProperty, "ThemeFocusBrush");
+
+            var activeBar = new Border
+            {
+                Height = 2,
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                VerticalAlignment = VerticalAlignment.Bottom,
+                Margin = new Thickness(4, 0, 4, 1),
+                Tag = "ActiveBar",
+                Visibility = Visibility.Collapsed
+            };
+            activeBar.SetResourceReference(Border.BackgroundProperty, "ThemeFocusBrush");
+
+            if (visual is FrameworkElement frameworkElement)
+            {
+                frameworkElement.HorizontalAlignment = HorizontalAlignment.Center;
+                frameworkElement.VerticalAlignment = VerticalAlignment.Center;
+                if (visual is Path preview)
+                    preview.Tag = "Preview";
+            }
+
+            return new Grid
+            {
+                Children = { visual, checkMark, activeBar }
+            };
+        }
+
+        private static void UpdateFilterButtonStyle(ToggleButton btn, bool isActive)
+        {
+            btn.IsChecked = isActive;
             btn.SetResourceReference(
-                Button.BackgroundProperty,
+                ToggleButton.BackgroundProperty,
                 isActive ? "ThemeSelectionBrush" : "ThemeSurfaceAltBrush");
             btn.SetResourceReference(
-                Button.BorderBrushProperty,
+                ToggleButton.BorderBrushProperty,
                 isActive ? "ThemeAccentBrush" : "ThemeBorderBrush");
             btn.SetResourceReference(
                 Control.ForegroundProperty,
                 isActive ? "ThemeSelectionForegroundBrush" : "ThemeForegroundBrush");
+            if (btn.Content is Grid grid)
+            {
+                foreach (var element in grid.Children)
+                {
+                    if (element is Path path && Equals(path.Tag, "CheckMark"))
+                    {
+                        path.Visibility = isActive ? Visibility.Visible : Visibility.Collapsed;
+                        path.SetResourceReference(Path.StrokeProperty, "ThemeFocusBrush");
+                    }
+                    else if (element is Border border && Equals(border.Tag, "ActiveBar"))
+                    {
+                        border.Visibility = isActive ? Visibility.Visible : Visibility.Collapsed;
+                        border.SetResourceReference(Border.BackgroundProperty, "ThemeFocusBrush");
+                    }
+                    else if (element is Path preview)
+                    {
+                        preview.SetResourceReference(
+                            Path.StrokeProperty,
+                            isActive ? "ThemeSelectionForegroundBrush" : "ThemeForegroundBrush");
+                    }
+                    else if (element is TextBlock text)
+                    {
+                        text.SetResourceReference(
+                            TextElement.ForegroundProperty,
+                            isActive ? "ThemeSelectionForegroundBrush" : "ThemeForegroundBrush");
+                    }
+                }
+            }
         }
 
         private void ScaleSelection(double factor)
@@ -3611,12 +4943,15 @@ namespace Caelum.Pages
                 return;
 
             var strokes = new List<System.Windows.Ink.Stroke>(_activeSelectionPage.SelectedStrokes);
+            var placements = strokes
+                .Select(_activeSelectionPage.CaptureStrokePlacement)
+                .ToList();
             var containers = new List<System.Windows.Controls.Grid>(_activeSelectionPage.SelectedTextContainers);
 
             foreach (var s in strokes) _activeSelectionPage.RemoveStrokeQuiet(s);
             foreach (var c in containers) _activeSelectionPage.RemoveTextContainerQuiet(c);
 
-            PushUndoAction(new ItemsRemovedAction(_activeSelectionPage, strokes, containers));
+            PushUndoAction(new ItemsRemovedAction(_activeSelectionPage, placements, containers));
 
             _activeSelectionPage.ClearSelection();
             MarkDirty();
@@ -3705,6 +5040,21 @@ namespace Caelum.Pages
                                 ImageDataBase64 = Convert.ToBase64String(imageData)
                             });
                         }
+                    }
+                    else if (_activeSelectionPage.GetOverlayData(container) is StickyNoteAnnotation sticky)
+                    {
+                        pageAnnotation.StickyNotes.Add(new StickyNoteAnnotation
+                        {
+                            Id = sticky.Id,
+                            X = Canvas.GetLeft(container),
+                            Y = Canvas.GetTop(container),
+                            Text = sticky.Text,
+                            Width = container.ActualWidth > 0 ? container.ActualWidth : container.Width,
+                            Height = container.ActualHeight > 0 ? container.ActualHeight : container.Height,
+                            R = sticky.R,
+                            G = sticky.G,
+                            B = sticky.B
+                        });
                     }
                 }
 
@@ -3795,6 +5145,16 @@ namespace Caelum.Pages
                             hasBoundingBox = true;
                             if (img.X < minX) minX = img.X;
                             if (img.Y < minY) minY = img.Y;
+                        }
+                    }
+
+                    if (pageAnnotation.StickyNotes != null)
+                    {
+                        foreach (var sticky in pageAnnotation.StickyNotes)
+                        {
+                            hasBoundingBox = true;
+                            if (sticky.X < minX) minX = sticky.X;
+                            if (sticky.Y < minY) minY = sticky.Y;
                         }
                     }
 
@@ -3907,6 +5267,30 @@ namespace Caelum.Pages
                         {
                             pastedContainers.Add(img);
                         }
+                    }
+                }
+
+                // Sticky notes keep their content, marker geometry and colour
+                // in clipboard JSON; only the position and identity change.
+                if (pageAnnotation.StickyNotes != null)
+                {
+                    foreach (var sticky in pageAnnotation.StickyNotes)
+                    {
+                        var pastedSticky = new StickyNoteAnnotation
+                        {
+                            Id = Guid.NewGuid().ToString("N"),
+                            X = sticky.X + pasteOffsetX,
+                            Y = sticky.Y + pasteOffsetY,
+                            Text = sticky.Text,
+                            Width = sticky.Width,
+                            Height = sticky.Height,
+                            R = sticky.R,
+                            G = sticky.G,
+                            B = sticky.B
+                        };
+                        var pasted = targetPage.AddStickyNote(pastedSticky);
+                        if (pasted != null)
+                            pastedContainers.Add(pasted);
                     }
                 }
 
@@ -4209,6 +5593,23 @@ namespace Caelum.Pages
                                 clonedContainers.Add(clone);
                         }
                     }
+                    else if (page.GetOverlayData(container) is StickyNoteAnnotation sticky)
+                    {
+                        var clone = page.AddStickyNote(new StickyNoteAnnotation
+                        {
+                            Id = Guid.NewGuid().ToString("N"),
+                            X = Canvas.GetLeft(container) + offsetX,
+                            Y = Canvas.GetTop(container) + offsetY,
+                            Text = sticky.Text,
+                            Width = container.ActualWidth > 0 ? container.ActualWidth : container.Width,
+                            Height = container.ActualHeight > 0 ? container.ActualHeight : container.Height,
+                            R = sticky.R,
+                            G = sticky.G,
+                            B = sticky.B
+                        });
+                        if (clone != null)
+                            clonedContainers.Add(clone);
+                    }
                 }
 
                 if (clonedStrokes.Count == 0 && clonedContainers.Count == 0)
@@ -4249,11 +5650,112 @@ namespace Caelum.Pages
             return _pageControls.FirstOrDefault();
         }
 
+        private static Border CreateColorSelectionIndicator(double size)
+        {
+            var inner = new Border
+            {
+                BorderThickness = new Thickness(2),
+                Background = Brushes.Transparent,
+                IsHitTestVisible = false
+            };
+            inner.SetResourceReference(Border.BorderBrushProperty, "ThemeSurfaceBrush");
+
+            var outer = new Border
+            {
+                Width = size,
+                Height = size,
+                BorderThickness = new Thickness(2),
+                Padding = new Thickness(2),
+                Background = Brushes.Transparent,
+                IsHitTestVisible = false,
+                Visibility = Visibility.Collapsed,
+                HorizontalAlignment = HorizontalAlignment.Left,
+                VerticalAlignment = VerticalAlignment.Top,
+                Child = inner
+            };
+            outer.SetResourceReference(Border.BorderBrushProperty, "ThemeFocusBrush");
+            return outer;
+        }
+
+        private void TrackToolPopupOpenedHandler(Popup popup, EventHandler handler)
+        {
+            if (popup == null || handler == null)
+                return;
+
+            popup.Opened += handler;
+            _toolPopupOpenedHandlers.Add((popup, handler));
+        }
+
+        private void DetachToolPopupHandlers()
+        {
+            foreach (var registration in _toolPopupOpenedHandlers)
+                registration.Popup.Opened -= registration.Handler;
+            _toolPopupOpenedHandlers.Clear();
+
+            // PopupZOrderHelper owns a separate Opened hook for each tool popup.
+            // Detach those exact delegates before CreateToolPopups replaces the
+            // instances during a localization refresh.
+            PopupZOrderHelper.UnfixPopupTopmost(_penPopup);
+            PopupZOrderHelper.UnfixPopupTopmost(_highlighterPopup);
+            PopupZOrderHelper.UnfixPopupTopmost(_eraserPopup);
+            PopupZOrderHelper.UnfixPopupTopmost(_shapePopup);
+            PopupZOrderHelper.UnfixPopupTopmost(_selectionPopup);
+            UnfixTransientUiHooks();
+        }
+
+        private void FixToolPopupZOrder()
+        {
+            _transientUiRegistry.Register(_penPopup);
+            _transientUiRegistry.Register(_highlighterPopup);
+            _transientUiRegistry.Register(_eraserPopup);
+            _transientUiRegistry.Register(_shapePopup);
+            _transientUiRegistry.Register(_selectionPopup);
+            _transientUiRegistry.Register(_textColorPopup);
+            _transientUiRegistry.Register(PdfViewerContextMenu);
+            _transientUiRegistry.Register(_textFontFamilyCombo);
+            _transientUiRegistry.Register(_textAlignmentCombo);
+            PopupZOrderHelper.FixPopupTopmost(_penPopup);
+            PopupZOrderHelper.FixPopupTopmost(_highlighterPopup);
+            PopupZOrderHelper.FixPopupTopmost(_eraserPopup);
+            PopupZOrderHelper.FixPopupTopmost(_shapePopup);
+            PopupZOrderHelper.FixPopupTopmost(_selectionPopup);
+            PopupZOrderHelper.FixPopupTopmost(_textColorPopup);
+            PopupZOrderHelper.FixContextMenuTopmost(PdfViewerContextMenu);
+            PopupZOrderHelper.FixComboBoxPopupTopmost(_textFontFamilyCombo);
+            PopupZOrderHelper.FixComboBoxPopupTopmost(_textAlignmentCombo);
+            if (_stickyNotePopup != null)
+                PopupZOrderHelper.FixPopupTopmost(_stickyNotePopup);
+            foreach (var page in _pageControls.ToList())
+                page.EnsureTransientUiHooks();
+        }
+
+        private void UnfixTransientUiHooks()
+        {
+            PopupZOrderHelper.UnfixPopupTopmost(_penPopup);
+            PopupZOrderHelper.UnfixPopupTopmost(_highlighterPopup);
+            PopupZOrderHelper.UnfixPopupTopmost(_eraserPopup);
+            PopupZOrderHelper.UnfixPopupTopmost(_shapePopup);
+            PopupZOrderHelper.UnfixPopupTopmost(_selectionPopup);
+            PopupZOrderHelper.UnfixPopupTopmost(_textColorPopup);
+            PopupZOrderHelper.UnfixPopupTopmost(_stickyNotePopup);
+            PopupZOrderHelper.UnfixComboBoxPopupTopmost(_textFontFamilyCombo);
+            PopupZOrderHelper.UnfixComboBoxPopupTopmost(_textAlignmentCombo);
+            PopupZOrderHelper.UnfixContextMenuTopmost(PdfViewerContextMenu);
+            foreach (var page in _pageControls.ToList())
+                page.UnfixTransientUiHooks();
+        }
+
+        private void EnsureTransientUiHooks()
+        {
+            FixToolPopupZOrder();
+        }
+
         private Popup BuildToolPopup(
             string sizeLabel, double min, double max, double value, double step, Action<double> sizeChanged,
             string colorLabel, Color initialColor, Action<Color> colorChanged,
             out Slider sizeSlider,
-            Func<List<string>> recentColors = null)
+            Func<List<string>> recentColors = null,
+            string sizeAutomationId = null)
         {
             var popup = new Popup { Placement = PlacementMode.Bottom, StaysOpen = true, AllowsTransparency = true };
             var panel = new StackPanel { Margin = new Thickness(16) };
@@ -4266,7 +5768,7 @@ namespace Caelum.Pages
                 {
                     BlurRadius = 20,
                     ShadowDepth = 4,
-                    Opacity = 0.12,
+                    Opacity = ThemeService.GetShadowOpacity(),
                     Color = Colors.Black
                 }
             };
@@ -4279,7 +5781,6 @@ namespace Caelum.Pages
                 Text = sizeLabel,
                 FontSize = 13,
                 FontWeight = FontWeights.SemiBold,
-                Foreground = new SolidColorBrush(Color.FromRgb(80, 80, 80)),
                 Margin = new Thickness(0, 0, 0, 10)
             });
             var slider = new Slider
@@ -4289,13 +5790,22 @@ namespace Caelum.Pages
                 Value = value,
                 TickFrequency = step,
                 Width = 240,
+                Height = 32,
+                MinHeight = 32,
+                Focusable = true,
                 IsSnapToTickEnabled = true
             };
+            ApplyToolbarFocusVisualStyle(slider);
+            ToolTipService.SetToolTip(slider, sizeLabel);
+            AutomationProperties.SetAutomationId(slider, sizeAutomationId ?? "Editor.Popup.Size");
+            AutomationProperties.SetName(slider, sizeLabel);
+            AutomationProperties.SetHelpText(slider, sizeLabel);
+            KeyboardNavigation.SetIsTabStop(slider, true);
             slider.ValueChanged += (s, e) => sizeChanged?.Invoke(e.NewValue);
             panel.Children.Add(sizeHeader);
             panel.Children.Add(slider);
-            // Task 23: expose the slider so preset applications can resync
-            // it when _penSize/_highlighterSize change outside the popup.
+            // Keep the slider available so runtime size changes can refresh the
+            // preview without rebuilding the popup.
             sizeSlider = slider;
 
             if (colorLabel != null)
@@ -4304,59 +5814,101 @@ namespace Caelum.Pages
                 var separator = ThemeDivider(new Border
                 {
                     Height = 1,
-                    Background = new SolidColorBrush(Color.FromArgb(25, 0, 0, 0)),
                     Margin = new Thickness(-16, 14, -16, 14)
                 });
                 panel.Children.Add(separator);
 
-                var colorHeader = ThemeSubtleHeader(new TextBlock
-                {
-                    Text = colorLabel,
-                    FontSize = 13,
-                    FontWeight = FontWeights.SemiBold,
-                    Foreground = new SolidColorBrush(Color.FromRgb(80, 80, 80)),
-                    Margin = new Thickness(0, 0, 0, 10)
+                    var colorHeader = ThemeSubtleHeader(new TextBlock
+                    {
+                        Text = colorLabel,
+                        FontSize = 13,
+                        FontWeight = FontWeights.SemiBold,
+                        Margin = new Thickness(0, 0, 0, 10)
                 });
                 panel.Children.Add(colorHeader);
+
+                StackPanel recentRow = null;
+                Grid paletteGrid = null;
+                Border selectionIndicator = null;
+                Color selectedColor = initialColor;
+
+                void UpdateColorMarkers(Color selected)
+                {
+                    selectedColor = selected;
+
+                    if (recentRow != null)
+                    {
+                        foreach (var swatch in recentRow.Children.OfType<Button>())
+                        {
+                            if (swatch.Content is not Border visual)
+                                continue;
+
+                            bool isSelected = swatch.Tag is Color swatchColor && swatchColor == selected;
+                            visual.BorderThickness = isSelected ? new Thickness(2) : new Thickness(1);
+                            visual.SetResourceReference(
+                                Border.BorderBrushProperty,
+                                isSelected ? "ThemeFocusBrush" : "ThemeBorderBrush");
+                        }
+                    }
+
+                    if (paletteGrid == null || selectionIndicator == null)
+                        return;
+
+                    selectionIndicator.Visibility = Visibility.Collapsed;
+                    foreach (var element in paletteGrid.Children)
+                    {
+                        if (element is Button cell && cell.Tag is Color cellColor && cellColor == selected)
+                        {
+                            selectionIndicator.Margin = cell.Margin;
+                            selectionIndicator.Visibility = Visibility.Visible;
+                            break;
+                        }
+                    }
+                }
+
+                void ApplyPickedColor(Color picked)
+                {
+                    UpdateColorMarkers(picked);
+                    colorChanged?.Invoke(picked);
+                }
 
                 // Task 14: "最近 Recent" swatch row above the palette (hidden
                 // while empty); repopulated on every popup open.
                 if (recentColors != null)
                 {
                     var recentSection = new StackPanel { Margin = new Thickness(0, 0, 0, 12), Visibility = Visibility.Collapsed };
-                    var recentRow = new StackPanel { Orientation = Orientation.Horizontal };
+                    recentRow = new StackPanel { Orientation = Orientation.Horizontal };
                     recentSection.Children.Add(ThemeSubtleHeader(new TextBlock
                     {
                         Text = LocalizationService.Get("Editor.Recent"),
                         FontSize = 13,
                         FontWeight = FontWeights.SemiBold,
-                        Foreground = new SolidColorBrush(Color.FromRgb(80, 80, 80)),
                         Margin = new Thickness(0, 0, 0, 8)
                     }));
                     recentSection.Children.Add(recentRow);
                     panel.Children.Add(recentSection);
-                    popup.Opened += (s, e) => RefreshRecentColorsRow(recentSection, recentRow, recentColors, colorChanged);
+                    EventHandler refreshRecentColors = (s, e) =>
+                    {
+                        RefreshRecentColorsRow(
+                            recentSection,
+                            recentRow,
+                            recentColors,
+                            ApplyPickedColor,
+                            UpdateColorMarkers);
+                        UpdateColorMarkers(selectedColor);
+                    };
+                    TrackToolPopupOpenedHandler(popup, refreshRecentColors);
                 }
 
                 // HSV color palette grid
                 int cols = 12;
                 int rows = 8;
-                double cellSize = 20;
-                var paletteGrid = new Grid { Width = cols * cellSize, Height = rows * cellSize, ClipToBounds = true };
+                double cellSize = 32;
+                paletteGrid = new Grid { Width = cols * cellSize, Height = rows * cellSize, ClipToBounds = true };
 
-                // Selection indicator border (drawn on top of palette)
-                var selectionIndicator = new Border
-                {
-                    Width = cellSize,
-                    Height = cellSize,
-                    BorderBrush = Brushes.White,
-                    BorderThickness = new Thickness(2),
-                    Background = Brushes.Transparent,
-                    IsHitTestVisible = false,
-                    Visibility = Visibility.Collapsed,
-                    HorizontalAlignment = HorizontalAlignment.Left,
-                    VerticalAlignment = VerticalAlignment.Top
-                };
+                // Two theme-driven rings keep a white or black swatch visible
+                // in light, dark and high-contrast palettes.
+                selectionIndicator = CreateColorSelectionIndicator(cellSize);
 
                 for (int row = 0; row < rows; row++)
                 {
@@ -4388,25 +5940,43 @@ namespace Caelum.Pages
                             cellColor = HsvToColor(hue, saturation, val);
                         }
 
-                        var cell = new Border
+                        var cellVisual = new Border
+                        {
+                            Width = cellSize - 6,
+                            Height = cellSize - 6,
+                            Background = new SolidColorBrush(cellColor),
+                            CornerRadius = new CornerRadius(4),
+                            BorderThickness = new Thickness(1)
+                        };
+                        cellVisual.SetResourceReference(Border.BorderBrushProperty, "ThemeBorderBrush");
+                        var cell = new Button
                         {
                             Width = cellSize,
                             Height = cellSize,
-                            Background = new SolidColorBrush(cellColor),
+                            Padding = new Thickness(3),
+                            Background = Brushes.Transparent,
+                            BorderThickness = new Thickness(0),
+                            HorizontalContentAlignment = HorizontalAlignment.Center,
+                            VerticalContentAlignment = VerticalAlignment.Center,
                             HorizontalAlignment = HorizontalAlignment.Left,
                             VerticalAlignment = VerticalAlignment.Top,
                             Margin = new Thickness(col * cellSize, row * cellSize, 0, 0),
                             Cursor = Cursors.Hand,
+                            Focusable = true,
+                            Content = cellVisual,
                             Tag = cellColor
                         };
+                        ApplyToolbarPopupButtonStyle(cell);
+                        string cellLabel = $"#{cellColor.R:X2}{cellColor.G:X2}{cellColor.B:X2}";
+                        ToolTipService.SetToolTip(cell, cellLabel);
+                        AutomationProperties.SetAutomationId(cell, $"Editor.Palette.Color.{row}.{col}");
+                        AutomationProperties.SetName(cell, cellLabel);
+                        AutomationProperties.SetHelpText(cell, cellLabel);
 
-                        cell.MouseLeftButtonDown += (s, e) =>
+                        cell.Click += (s, e) =>
                         {
-                            var b = s as Border;
-                            var picked = (Color)b.Tag;
-                            selectionIndicator.Margin = b.Margin;
-                            selectionIndicator.Visibility = Visibility.Visible;
-                            colorChanged?.Invoke(picked);
+                            if (s is Button b && b.Tag is Color picked)
+                                ApplyPickedColor(picked);
                             e.Handled = true;
                         };
 
@@ -4414,18 +5984,8 @@ namespace Caelum.Pages
                     }
                 }
 
-                // Place selection indicator on initial color if found
-                foreach (Border cell in paletteGrid.Children)
-                {
-                    if (cell.Tag is Color c && c == initialColor)
-                    {
-                        selectionIndicator.Margin = cell.Margin;
-                        selectionIndicator.Visibility = Visibility.Visible;
-                        break;
-                    }
-                }
-
                 paletteGrid.Children.Add(selectionIndicator);
+                UpdateColorMarkers(initialColor);
                 panel.Children.Add(paletteGrid);
             }
 
@@ -4455,97 +6015,162 @@ namespace Caelum.Pages
         {
             _pdfSearchCts?.Cancel();
             _pdfSearchCts = new CancellationTokenSource();
+            using var operationLease = CaptureDocumentOperationLease(
+                cancellationToken: _pdfSearchCts.Token);
             try
             {
-                await RunPdfSearchAsync(PdfSearchTextBox.Text?.Trim() ?? string.Empty, _pdfSearchCts.Token);
+                await RunPdfSearchAsync(
+                    PdfSearchTextBox.Text?.Trim() ?? string.Empty,
+                    operationLease.Token,
+                    operationLease);
             }
             catch (OperationCanceledException)
             {
             }
+            catch (Exception ex)
+            {
+                if (ValidateDocumentOperationLease(operationLease))
+                    System.Diagnostics.Debug.WriteLine($"[PdfSearch] Failed to search document: {ex}");
+            }
         }
 
-        private async Task RunPdfSearchAsync(string query, CancellationToken cancellationToken)
+        private async Task RunPdfSearchAsync(
+            string query,
+            CancellationToken cancellationToken,
+            DocumentOperationLease operationLease = null)
         {
-            _pdfSearchResults.Clear();
-            PdfSearchResultsListBox.Items.Clear();
-            if (string.IsNullOrWhiteSpace(query))
+            bool ownsLease = operationLease == null;
+            operationLease ??= CaptureDocumentOperationLease(cancellationToken: cancellationToken);
+            try
             {
-                PdfSearchStatusTextBlock.Text = string.Empty;
-                return;
-            }
-
-            PdfSearchStatusTextBlock.Text = LocalizationService.Get("Editor.Searching");
-            for (int pageIndex = 0; pageIndex < _pageControls.Count; pageIndex++)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                var info = await _pdfService.GetPageTextInfoAsync(pageIndex, cancellationToken);
-                string text = info.Text ?? string.Empty;
-                int offset = 0;
-                while (offset < text.Length)
+                if (!ValidateDocumentOperationLease(operationLease))
+                    return;
+                _pdfSearchResults.Clear();
+                PdfSearchResultsListBox.Items.Clear();
+                if (string.IsNullOrWhiteSpace(query))
                 {
-                    int hit = text.IndexOf(query, offset, StringComparison.OrdinalIgnoreCase);
-                    if (hit < 0)
-                        break;
-
-                    int snippetStart = Math.Max(0, hit - 28);
-                    int snippetLength = Math.Min(text.Length - snippetStart, query.Length + 56);
-                    string snippet = text.Substring(snippetStart, snippetLength).Replace('\r', ' ').Replace('\n', ' ');
-                    _pdfSearchResults.Add(new PdfSearchResult
-                    {
-                        PageIndex = pageIndex,
-                        StartOffset = hit,
-                        Length = query.Length,
-                        DisplayText = $"{LocalizationService.Format("Editor.PageNumber", pageIndex + 1)}  {snippet}"
-                    });
-                    offset = hit + Math.Max(1, query.Length);
+                    PdfSearchStatusTextBlock.Text = string.Empty;
+                    return;
                 }
-            }
 
-            cancellationToken.ThrowIfCancellationRequested();
-            foreach (var result in _pdfSearchResults)
-                PdfSearchResultsListBox.Items.Add(new ListBoxItem { Content = result.DisplayText, Tag = result });
-            PdfSearchStatusTextBlock.Text = LocalizationService.Format("Editor.SearchResults", _pdfSearchResults.Count);
-            if (_pdfSearchResults.Count > 0)
-                PdfSearchResultsListBox.SelectedIndex = 0;
+                PdfSearchStatusTextBlock.Text = LocalizationService.Get("Editor.Searching");
+                for (int pageIndex = 0; pageIndex < _pageControls.Count; pageIndex++)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var info = await _pdfService.GetPageTextInfoAsync(pageIndex, cancellationToken);
+                    if (!ValidateDocumentOperationLease(operationLease))
+                        return;
+                    string text = info.Text ?? string.Empty;
+                    int offset = 0;
+                    while (offset < text.Length)
+                    {
+                        int hit = text.IndexOf(query, offset, StringComparison.OrdinalIgnoreCase);
+                        if (hit < 0)
+                            break;
+
+                        int snippetStart = Math.Max(0, hit - 28);
+                        int snippetLength = Math.Min(text.Length - snippetStart, query.Length + 56);
+                        string snippet = text.Substring(snippetStart, snippetLength).Replace('\r', ' ').Replace('\n', ' ');
+                        _pdfSearchResults.Add(new PdfSearchResult
+                        {
+                            PageIndex = pageIndex,
+                            StartOffset = hit,
+                            Length = query.Length,
+                            DisplayText = $"{LocalizationService.Format("Editor.PageNumber", pageIndex + 1)}  {snippet}"
+                        });
+                        offset = hit + Math.Max(1, query.Length);
+                    }
+                }
+
+                cancellationToken.ThrowIfCancellationRequested();
+                if (!ValidateDocumentOperationLease(operationLease))
+                    return;
+                foreach (var result in _pdfSearchResults)
+                    PdfSearchResultsListBox.Items.Add(new ListBoxItem { Content = result.DisplayText, Tag = result });
+                PdfSearchStatusTextBlock.Text = LocalizationService.Format("Editor.SearchResults", _pdfSearchResults.Count);
+                if (_pdfSearchResults.Count > 0)
+                    PdfSearchResultsListBox.SelectedIndex = 0;
+            }
+            finally
+            {
+                if (ownsLease)
+                    operationLease.Dispose();
+            }
         }
 
         private async void PdfSearchResultsListBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
             if (PdfSearchResultsListBox.SelectedItem is ListBoxItem item && item.Tag is PdfSearchResult result)
-                await JumpToPdfSearchResultAsync(result);
+            {
+                using var operationLease = CaptureDocumentOperationLease(result);
+                await JumpToPdfSearchResultAsync(result, operationLease);
+            }
         }
 
-        private async Task JumpToPdfSearchResultAsync(PdfSearchResult result)
+        private async Task JumpToPdfSearchResultAsync(
+            PdfSearchResult result,
+            DocumentOperationLease operationLease = null)
         {
-            if (result == null || result.PageIndex < 0 || result.PageIndex >= _pageControls.Count)
-                return;
-            JumpToPage(result.PageIndex);
-            var info = await _pdfService.GetPageTextInfoAsync(result.PageIndex);
-            var page = _pageControls[result.PageIndex];
-            foreach (var other in _pageControls)
+            bool ownsLease = operationLease == null;
+            operationLease ??= CaptureDocumentOperationLease(result);
+            try
             {
-                if (!ReferenceEquals(other, page))
-                    other.ClearPdfTextSelection();
+                if (!ValidateDocumentOperationLease(operationLease, result))
+                    return;
+                if (result == null || !_pdfSearchResults.Contains(result) ||
+                    result.PageIndex < 0 || result.PageIndex >= _pageControls.Count)
+                    return;
+                JumpToPage(result.PageIndex);
+                var info = await _pdfService.GetPageTextInfoAsync(result.PageIndex, operationLease.Token);
+                if (!ValidateDocumentOperationLease(operationLease, result) || !_pdfSearchResults.Contains(result))
+                    return;
+                var page = _pageControls[result.PageIndex];
+                foreach (var other in _pageControls)
+                {
+                    if (!ReferenceEquals(other, page))
+                        other.ClearPdfTextSelection();
+                }
+                page.SetPdfTextSelectionRects(BuildPdfTextSelectionRects(info, result.StartOffset, result.StartOffset + result.Length - 1));
             }
-            page.SetPdfTextSelectionRects(BuildPdfTextSelectionRects(info, result.StartOffset, result.StartOffset + result.Length - 1));
+            catch (OperationCanceledException)
+            {
+            }
+            catch (Exception ex)
+            {
+                // Search results are transient models. A replacement load or
+                // closed search surface must not surface an old read failure.
+                if (ValidateDocumentOperationLease(operationLease, result) &&
+                    _pdfSearchResults.Contains(result))
+                    System.Diagnostics.Debug.WriteLine($"[PdfSearchSelection] Failed to select result: {ex}");
+            }
+            finally
+            {
+                if (ownsLease)
+                    operationLease.Dispose();
+            }
         }
 
         private async Task MovePdfSearchSelectionAsync(bool backwards)
         {
+            using var operationLease = CaptureDocumentOperationLease();
+            if (!ValidateDocumentOperationLease(operationLease))
+                return;
             if (PdfSearchPanel.Visibility != Visibility.Visible || _pdfSearchResults.Count == 0)
                 return;
             int current = PdfSearchResultsListBox.SelectedIndex;
             int next = (current + (backwards ? -1 : 1) + _pdfSearchResults.Count) % _pdfSearchResults.Count;
             PdfSearchResultsListBox.SelectedIndex = next;
-            await JumpToPdfSearchResultAsync(_pdfSearchResults[next]);
+            if (!ValidateDocumentOperationLease(operationLease))
+                return;
+            await JumpToPdfSearchResultAsync(_pdfSearchResults[next], operationLease);
         }
 
         private async void PdfSearchTextBox_KeyDown(object sender, KeyEventArgs e)
         {
             if (e.Key == Key.Enter)
             {
-                await MovePdfSearchSelectionAsync(Keyboard.Modifiers.HasFlag(ModifierKeys.Shift));
                 e.Handled = true;
+                await MovePdfSearchSelectionAsync(Keyboard.Modifiers.HasFlag(ModifierKeys.Shift));
             }
             else if (e.Key == Key.Escape)
             {
@@ -4711,7 +6336,7 @@ namespace Caelum.Pages
         {
             if (ShouldClosePopupOnPointerDown(e.OriginalSource as DependencyObject, out bool consumePointerEvent))
             {
-                CloseToolPopups();
+                CloseTransientUi("outside click");
                 e.Handled = consumePointerEvent;
             }
         }
@@ -4720,7 +6345,7 @@ namespace Caelum.Pages
         {
             if (ShouldClosePopupOnPointerDown(e.OriginalSource as DependencyObject, out bool consumePointerEvent))
             {
-                CloseToolPopups();
+                CloseTransientUi("outside click");
                 e.Handled = consumePointerEvent;
             }
         }
@@ -4730,7 +6355,11 @@ namespace Caelum.Pages
             consumePointerEvent = false;
             if (originalSource == null) return false;
 
-            var popups = new[] { _penPopup, _highlighterPopup, _eraserPopup, _shapePopup, _selectionPopup };
+            var popups = new[]
+            {
+                _penPopup, _highlighterPopup, _eraserPopup, _shapePopup,
+                _selectionPopup, _textColorPopup, _stickyNotePopup
+            };
             bool anyPopupOpen = false;
             foreach (var popup in popups)
             {
@@ -4744,7 +6373,7 @@ namespace Caelum.Pages
                 }
             }
 
-            if (!anyPopupOpen) return false;
+            if (!anyPopupOpen && !_transientUiRegistry.HasOpenSurface()) return false;
 
             if (IsSourceInToolbar(originalSource))
             {
@@ -4827,6 +6456,56 @@ namespace Caelum.Pages
                 _selectionPopup.IsOpen = false;
         }
 
+        /// <summary>
+        /// Closes every editor-owned transient surface. This operation is
+        /// idempotent and intentionally excludes document-save dialogs and
+        /// ordinary text edit sessions. Sticky Note editing follows Cancel,
+        /// so switching apps can never commit half-written popup text.
+        /// </summary>
+        public void CloseTransientUi(string reason = null)
+        {
+            if (!Dispatcher.CheckAccess())
+            {
+                _ = Dispatcher.BeginInvoke(
+                    System.Windows.Threading.DispatcherPriority.Input,
+                    new Action(() => CloseTransientUi(reason)));
+                return;
+            }
+
+            // Every close boundary is also a gesture boundary.  Restore any
+            // in-flight text geometry and page selection snapshot before the
+            // popup registry is swept, so capture-loss callbacks cannot leave
+            // a stale transaction behind.
+            CancelInteraction(reason);
+            _pdfSearchCts?.Cancel();
+            ClosePdfSearch();
+            CancelStickyNoteEdit();
+            CloseToolPopups();
+            if (_textColorPopup != null)
+                _textColorPopup.IsOpen = false;
+            if (_stickyNotePopup != null)
+                _stickyNotePopup.IsOpen = false;
+            if (PdfViewerContextMenu != null)
+                PdfViewerContextMenu.IsOpen = false;
+            // Sticky marker menus are owned by the page control rather than
+            // the editor's toolbar registry. Sweep those live owners too so a
+            // right-click menu cannot survive tab switching or Alt-Tab.
+            foreach (var page in _pageControls.ToList())
+            {
+                foreach (var container in page.GetOverlayContainers())
+                {
+                    if (container.ContextMenu != null)
+                        container.ContextMenu.IsOpen = false;
+                }
+            }
+            _transientUiRegistry.CloseAll();
+            // Release every exact PopupZOrderHelper delegate before the close
+            // barrier returns. Live controls stay reusable because the paired
+            // ensure path is idempotent and installs one fresh hook only.
+            UnfixTransientUiHooks();
+            EnsureTransientUiHooks();
+        }
+
         private void ToggleToolButton(ToolType tool, ToggleButton button, Popup popup = null)
         {
             if (_isUpdatingToolState) return;
@@ -4865,10 +6544,24 @@ namespace Caelum.Pages
 
         private async Task LoadPdf(string filePath)
         {
+            CloseTransientUi("load");
+            CancelRenderWork();
+            _thumbnailLoadCts?.Cancel();
+            _thumbnailLoadCts?.Dispose();
+            _thumbnailLoadCts = null;
+            _thumbnailPagesLoading.Clear();
+            _thumbnailPageLoadSessions.Clear();
+            _isRefreshingThumbnails = false;
             CancelActiveLoad();
             _loadCts = new CancellationTokenSource();
-            var token = _loadCts.Token;
             var sessionId = Interlocked.Increment(ref _loadSessionId);
+            _documentOperationSession.Begin(sessionId, filePath, _pdfService);
+            var loadLease = CaptureDocumentOperationLease(
+                sessionId,
+                filePath,
+                cancellationToken: _loadCts.Token);
+            var token = loadLease.Token;
+            _sidebarLoadSessionGate.Begin(sessionId, filePath);
 
             ShowLoadingOverlay();
             DetachAllPageControlEvents();
@@ -4882,7 +6575,8 @@ namespace Caelum.Pages
             _pageDeleteButtons.Clear();
             _pageInsertButtons.Clear();
             DeselectTextBox();
-            _isDirty = false;
+            _documentSaveCoordinator.Reset();
+            SyncDirtyStateMirror();
             _lastRenderedDpiScale = 1.0;
             _pagesRenderedAtScale.Clear();
             _pagesInitiallyRendered.Clear();
@@ -4894,7 +6588,11 @@ namespace Caelum.Pages
             try
             {
                 await _pdfService.LoadPdfAsync(filePath, token);
+                if (!ValidateDocumentOperationLease(loadLease))
+                    return;
                 await LoadSelectablePdfDocumentAsync(filePath, token);
+                if (!ValidateDocumentOperationLease(loadLease))
+                    return;
                 RecentFilesService.UpdateMetadata(filePath, _pdfService.PageCount, File.GetLastWriteTimeUtc(filePath));
 
                 int pageCount = _pdfService.PageCount;
@@ -4903,6 +6601,8 @@ namespace Caelum.Pages
                 for (int i = 0; i < pageCount; i++)
                 {
                     token.ThrowIfCancellationRequested();
+                    if (!ValidateDocumentOperationLease(loadLease))
+                        return;
 
                     var (w, h) = _pdfService.GetPageSizeInDips(i);
                     if (w <= 0 || h <= 0)
@@ -4922,6 +6622,7 @@ namespace Caelum.Pages
                     // and assistive tooling to distinguish page bounds.
                     AutomationProperties.SetAutomationId(pageControl, $"PdfPageControl.{i}");
                     pageControl.SetHostActive(_isHostActive);
+                    pageControl.SetDocumentInputEnabled(_isHostActive && !_documentInteractionBlocked && !_resourcesReleased);
 
                     pageControl.TextOverlayPointerPressed += PageControl_TextOverlayPointerPressed;
                     pageControl.BackgroundPointerPressed += PageControl_BackgroundPointerPressed;
@@ -4942,6 +6643,9 @@ namespace Caelum.Pages
                     pageControl.ImagesChanged += PageControl_ImagesChanged;
                     pageControl.AreaHighlightCreated += PageControl_AreaHighlightCreated;
                     pageControl.StickyNoteActivated += PageControl_StickyNoteActivated;
+                    pageControl.StickyNoteMoved += PageControl_StickyNoteMoved;
+                    pageControl.StickyNoteDeleteRequested += PageControl_StickyNoteDeleteRequested;
+                    pageControl.StickyNoteContextMenuCreated += PageControl_StickyNoteContextMenuCreated;
                     pageControl.HiddenInkCreated += PageControl_HiddenInkCreated;
                     pageControl.HiddenInkRemoved += PageControl_HiddenInkRemoved;
                     pageControl.HiddenInksRemoved += PageControl_HiddenInksRemoved;
@@ -4994,18 +6698,39 @@ namespace Caelum.Pages
                 {
                     token.ThrowIfCancellationRequested();
                     await RenderPageInitialAsync(page, token);
+                    if (!ValidateDocumentOperationLease(loadLease))
+                        return;
                 }
                 TrimPageBitmapWorkingSet(visiblePages);
 
                 if (!string.IsNullOrEmpty(_currentPdfPath))
-                    await LoadAnnotationsFromPdfServiceAsync();
+                {
+                    await LoadAnnotationsFromPdfServiceAsync(loadLease);
+                    if (!ValidateDocumentOperationLease(loadLease))
+                        return;
+                }
 
+                if (!ValidateDocumentOperationLease(loadLease))
+                    return;
                 UpdatePageNumberIndicator();
                 SyncSelectableViewerFromCustomView();
-                await RefreshDocumentSidebarAsync(token);
+                await RefreshDocumentSidebarAsync(token, sessionId, filePath, loadLease);
+                if (!ValidateDocumentOperationLease(loadLease))
+                    return;
 
                 if (_promptSaveAsAfterLoad && !_hasPromptedForSaveAs)
-                    await PromptSaveAsForDraftAsync();
+                {
+                    var refreshedLoadLease = await PromptSaveAsForDraftAsync(loadLease);
+                    if (refreshedLoadLease != null)
+                    {
+                        loadLease.Dispose();
+                        loadLease = refreshedLoadLease;
+                    }
+                    if (!ValidateDocumentOperationLease(loadLease))
+                        return;
+                }
+
+                _completedLoadSessionId = sessionId;
             }
             catch (OperationCanceledException)
             {
@@ -5016,7 +6741,7 @@ namespace Caelum.Pages
                 if (ex.InnerException != null)
                     errorMsg += $"\n\n{LocalizationService.Format("Editor.ErrorDetails", ex.InnerException.Message)}";
 
-                if (sessionId == _loadSessionId)
+                if (ValidateDocumentOperationLease(loadLease))
                 {
                     var mw = GetMainWindow();
                     if (mw != null)
@@ -5027,113 +6752,279 @@ namespace Caelum.Pages
             }
             finally
             {
+                loadLease.Dispose();
                 if (sessionId == _loadSessionId)
                     HideLoadingOverlay();
             }
         }
 
-        private async Task RefreshDocumentSidebarAsync(CancellationToken cancellationToken)
+        /// <summary>
+        /// Reloads as part of a live structural/undo transaction. The reload
+        /// necessarily rotates the document session, so the returned lease is
+        /// the only lease allowed to publish the transaction's post-reload
+        /// focus/bookmark/undo state. A competing load leaves no replacement
+        /// lease and the caller must silently abort.
+        /// </summary>
+        private async Task<DocumentOperationLease> ReloadDocumentForOperationAsync(
+            string filePath,
+            DocumentOperationLease operationLease)
         {
-            if (ThumbnailListBox == null || _pdfService == null)
-                return;
+            if (!ValidateDocumentOperationLease(operationLease))
+                return null;
 
-            _thumbnailLoadCts?.Cancel();
-            _thumbnailLoadCts?.Dispose();
-            _thumbnailLoadCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            _thumbnailPagesLoading.Clear();
-            ClearThumbnailCache();
-            _isRefreshingThumbnails = true;
+            int previousSessionId = _loadSessionId;
             try
             {
-                ThumbnailListBox.Items.Clear();
+                await LoadPdf(filePath);
+            }
+            finally
+            {
+                // LoadPdf begins the replacement session and cancels this
+                // pre-reload lease. It must not remain the owner of an
+                // operation while callers publish only the fresh lease below.
+                operationLease.Dispose();
+            }
+
+            int expectedSessionId = previousSessionId + 2;
+            if (_completedLoadSessionId != expectedSessionId ||
+                _loadSessionId != expectedSessionId ||
+                !string.Equals(
+                    DocumentOperationSession.NormalizePath(filePath),
+                    DocumentOperationSession.NormalizePath(_currentPdfPath),
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return null;
+            }
+
+            var refreshedLease = CaptureDocumentOperationLease(
+                expectedSessionId,
+                filePath,
+                _pdfService);
+            return ValidateDocumentOperationLease(refreshedLease)
+                ? refreshedLease
+                : null;
+        }
+
+        private bool IsSidebarLoadCurrent(int sessionId, string filePath)
+        {
+            if (sessionId != _loadSessionId)
+                return false;
+            if (!string.Equals(filePath, _currentPdfPath, StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(
+                        DocumentOperationSession.NormalizePath(filePath),
+                        DocumentOperationSession.NormalizePath(_currentPdfPath),
+                        StringComparison.OrdinalIgnoreCase))
+                return false;
+            return _sidebarLoadSessionGate.IsCurrent(sessionId, filePath);
+        }
+
+        private async Task RefreshDocumentSidebarAsync(
+            CancellationToken cancellationToken,
+            int sessionId,
+            string filePath,
+            DocumentOperationLease operationLease = null)
+        {
+            bool ownsLease = operationLease == null;
+            operationLease ??= CaptureDocumentOperationLease(
+                sessionId,
+                filePath,
+                cancellationToken: cancellationToken);
+
+            try
+            {
+                if (ThumbnailListBox == null || _pdfService == null ||
+                    !IsSidebarLoadCurrent(sessionId, filePath) ||
+                    !ValidateDocumentOperationLease(operationLease))
+                    return;
+
+                _thumbnailLoadCts?.Cancel();
+                _thumbnailLoadCts?.Dispose();
+                _thumbnailLoadCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                _thumbnailPagesLoading.Clear();
+                _thumbnailPageLoadSessions.Clear();
+                ClearThumbnailCache();
+                _isRefreshingThumbnails = true;
+                _sidebarPageItems.Clear();
                 for (int pageIndex = 0; pageIndex < _pageControls.Count; pageIndex++)
                 {
-                    var image = new Image
-                    {
-                        Width = 132,
-                        Height = 170,
-                        Stretch = Stretch.Uniform,
-                        Margin = new Thickness(4)
-                    };
-                    var panel = new StackPanel();
-                    panel.Children.Add(image);
-                    panel.Children.Add(new TextBlock
-                    {
-                Text = LocalizationService.Format("Editor.PageNumber", pageIndex + 1),
-                        HorizontalAlignment = HorizontalAlignment.Center,
-                        Margin = new Thickness(0, 2, 0, 4),
-                        Foreground = (Brush)FindResource("ThemeSubtleForegroundBrush")
-                    });
-
-                    var item = new ListBoxItem { Content = panel, Tag = pageIndex, HorizontalContentAlignment = HorizontalAlignment.Stretch };
-                    item.ContextMenu = BuildThumbnailContextMenu(pageIndex);
-                    item.Loaded += ThumbnailListBoxItem_Loaded;
-                    item.Unloaded += ThumbnailListBoxItem_Unloaded;
-                    ThumbnailListBox.Items.Add(item);
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (!ValidateDocumentOperationLease(operationLease))
+                        return;
+                    _sidebarPageItems.Add(new SidebarPageItem(
+                        pageIndex,
+                        LocalizationService.Format("Editor.PageNumber", pageIndex + 1)));
                 }
 
                 UpdateThumbnailSelection();
+                if (PagesEmptyState != null)
+                    PagesEmptyState.Visibility = _pageControls.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+                if (!IsSidebarLoadCurrent(sessionId, filePath) ||
+                    !ValidateDocumentOperationLease(operationLease))
+                    return;
+
+                RefreshBookmarks(sessionId, filePath, operationLease);
+                await RefreshOutlineCoreAsync(cancellationToken, sessionId, filePath, operationLease);
             }
             catch (OperationCanceledException)
             {
             }
             finally
             {
-                _isRefreshingThumbnails = false;
+                if (ValidateDocumentOperationLease(operationLease) &&
+                    IsSidebarLoadCurrent(sessionId, filePath))
+                    _isRefreshingThumbnails = false;
+                if (ownsLease)
+                    operationLease.Dispose();
             }
-
-            RefreshBookmarks();
-            await RefreshOutlineAsync(cancellationToken);
         }
 
         private async void ThumbnailListBoxItem_Loaded(object sender, RoutedEventArgs e)
         {
-            if (sender is not ListBoxItem item || item.Tag is not int pageIndex ||
-                item.Content is not StackPanel panel ||
-                panel.Children.OfType<Image>().FirstOrDefault() is not Image image ||
-                image.Source != null || _thumbnailPagesLoading.Contains(pageIndex) ||
-                !_isHostActive || _resourcesReleased)
+            if (sender is not ListBoxItem item || item.DataContext is not SidebarPageItem model ||
+                model.Thumbnail != null || !_isHostActive || _resourcesReleased)
                 return;
 
-            if (TryGetCachedThumbnail(pageIndex, out var cached))
+            int sessionId = _loadSessionId;
+            string filePath = _currentPdfPath;
+            if (_thumbnailPageLoadSessions.TryGetValue(model.PageIndex, out int loadingSessionId) &&
+                loadingSessionId == sessionId)
+                return;
+            var externalToken = _thumbnailLoadCts?.Token ?? CancellationToken.None;
+            using var operationLease = CaptureDocumentOperationLease(
+                sessionId,
+                filePath,
+                model,
+                externalToken);
+            if (!ValidateDocumentOperationLease(operationLease, model))
+                return;
+
+            if (TryGetCachedThumbnail(model.PageIndex, out var cached))
             {
-                image.Source = cached;
+                model.Thumbnail = cached;
                 return;
             }
 
-            _thumbnailPagesLoading.Add(pageIndex);
+            _thumbnailPagesLoading.Add(model.PageIndex);
+            _thumbnailPageLoadSessions[model.PageIndex] = sessionId;
             try
             {
-                var token = _thumbnailLoadCts?.Token ?? CancellationToken.None;
-                var bitmap = await _pdfService.RenderPageBitmapSourceAsync(pageIndex, 0.22, token);
+                var token = operationLease.Token;
+                var bitmap = await _pdfService.RenderPageBitmapSourceAsync(model.PageIndex, 0.22, token);
                 token.ThrowIfCancellationRequested();
-                if (!_isHostActive || _resourcesReleased)
+                bool liveModel = ReferenceEquals(item.DataContext, model) && _sidebarPageItems.Contains(model);
+                if (!ValidateDocumentOperationLease(operationLease, model) || !_isHostActive || _resourcesReleased || !liveModel)
                     return;
-                CacheThumbnail(pageIndex, bitmap);
-                image.Source = bitmap;
+                CacheThumbnail(model.PageIndex, bitmap);
+                if (ValidateDocumentOperationLease(operationLease, model) &&
+                    ReferenceEquals(item.DataContext, model) && _sidebarPageItems.Contains(model))
+                    model.Thumbnail = bitmap;
             }
             catch (OperationCanceledException)
             {
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[Thumbnail] Failed to render page {pageIndex}: {ex}");
+                // A recycled sidebar item can outlive the document that
+                // started its render. Stale failures are intentionally silent:
+                // never report an old PDF error against the replacement model.
+                if (ValidateDocumentOperationLease(operationLease, model) &&
+                    ReferenceEquals(item.DataContext, model) && _sidebarPageItems.Contains(model))
+                    System.Diagnostics.Debug.WriteLine($"[Thumbnail] Failed to render page {model.PageIndex}: {ex}");
             }
             finally
             {
-                _thumbnailPagesLoading.Remove(pageIndex);
+                if (_thumbnailPageLoadSessions.TryGetValue(model.PageIndex, out int ownedSessionId) &&
+                    ownedSessionId == sessionId)
+                {
+                    _thumbnailPageLoadSessions.Remove(model.PageIndex);
+                    _thumbnailPagesLoading.Remove(model.PageIndex);
+                }
             }
         }
 
         private void ThumbnailListBoxItem_Unloaded(object sender, RoutedEventArgs e)
         {
-            if (sender is not ListBoxItem item || item.Tag is not int pageIndex ||
-                item.Content is not StackPanel panel ||
-                panel.Children.OfType<Image>().FirstOrDefault() is not Image image)
+            if (sender is not ListBoxItem item || item.DataContext is not SidebarPageItem model)
                 return;
 
-            if (!_thumbnailCache.ContainsKey(pageIndex))
-                image.Source = null;
+            if (!_thumbnailCache.ContainsKey(model.PageIndex))
+                model.Thumbnail = null;
+        }
+
+        private void SidebarListBoxItem_Loaded(object sender, RoutedEventArgs e)
+        {
+            if (sender is not ListBoxItem item)
+                return;
+
+            item.DataContextChanged -= SidebarListBoxItem_DataContextChanged;
+            item.DataContextChanged += SidebarListBoxItem_DataContextChanged;
+            ClearSidebarListBoxItemContextMenu(item);
+            KeyboardNavigation.SetIsTabStop(item, true);
+            item.MinHeight = Math.Max(32, item.MinHeight);
+            if (item.DataContext is SidebarPageItem page)
+            {
+                string label = page.PageLabel;
+                item.Tag = page.PageIndex;
+                SetSidebarItemMetadata(item, $"Editor.Sidebar.Page.{page.PageIndex + 1}", label,
+                    LocalizationService.Format("Editor.PageNumber", page.PageIndex + 1));
+                ThumbnailListBoxItem_Loaded(item, e);
+            }
+            else if (item.DataContext is SidebarBookmarkItem bookmark)
+            {
+                item.Tag = bookmark.PageIndex;
+                SetSidebarItemMetadata(item, $"Editor.Sidebar.Bookmark.{bookmark.PageIndex + 1}",
+                    bookmark.Label, LocalizationService.Format("Editor.PageNumber", bookmark.PageIndex + 1));
+            }
+        }
+
+        private void SidebarListBoxItem_Unloaded(object sender, RoutedEventArgs e)
+        {
+            if (sender is not ListBoxItem item)
+                return;
+
+            item.DataContextChanged -= SidebarListBoxItem_DataContextChanged;
+            ClearSidebarListBoxItemContextMenu(item);
+        }
+
+        private void SidebarListBoxItem_DataContextChanged(object sender, DependencyPropertyChangedEventArgs e)
+        {
+            if (sender is ListBoxItem item)
+                ClearSidebarListBoxItemContextMenu(item);
+        }
+
+        private void ClearSidebarListBoxItemContextMenu(ListBoxItem item)
+        {
+            if (item?.ContextMenu == null)
+                return;
+
+            var menu = item.ContextMenu;
+            menu.IsOpen = false;
+            PopupZOrderHelper.UnfixContextMenuTopmost(menu);
+            foreach (var menuItem in menu.Items.OfType<MenuItem>().ToList())
+            {
+                menuItem.Click -= ThumbnailContextMenu_InsertPage_Click;
+                menuItem.Click -= ThumbnailContextMenu_DuplicatePage_Click;
+                menuItem.Click -= ThumbnailContextMenu_DeletePage_Click;
+                menuItem.Click -= BookmarkContextMenu_Remove_Click;
+            }
+            menu.Items.Clear();
+            _sidebarContextMenuBindings.Remove(menu);
+            menu.Tag = null;
+            menu.PlacementTarget = null;
+            item.ContextMenu = null;
+        }
+
+        private static void SetSidebarItemMetadata(ListBoxItem item, string automationId, string name, string help)
+        {
+            AutomationProperties.SetAutomationId(item, automationId);
+            AutomationProperties.SetName(item, name ?? string.Empty);
+            AutomationProperties.SetHelpText(item, help ?? name ?? string.Empty);
+            ToolTipService.SetToolTip(item, name ?? string.Empty);
+        }
+
+        private static bool HasSidebarSelectionItemPattern(AutomationPeer peer)
+        {
+            return peer?.GetPattern(PatternInterface.SelectionItem) is ISelectionItemProvider;
         }
 
         private bool TryGetCachedThumbnail(int pageIndex, out BitmapSource bitmap)
@@ -5162,14 +7053,9 @@ namespace Caelum.Pages
                 if (!_thumbnailCache.Remove(evictedPage, out var evictedBitmap))
                     continue;
 
-                if (evictedPage < ThumbnailListBox.Items.Count &&
-                    ThumbnailListBox.Items[evictedPage] is ListBoxItem evictedItem &&
-                    evictedItem.Content is StackPanel evictedPanel &&
-                    evictedPanel.Children.OfType<Image>().FirstOrDefault() is Image evictedImage &&
-                    ReferenceEquals(evictedImage.Source, evictedBitmap))
-                {
-                    evictedImage.Source = null;
-                }
+                var evictedModel = _sidebarPageItems.FirstOrDefault(page => page.PageIndex == evictedPage);
+                if (evictedModel != null && ReferenceEquals(evictedModel.Thumbnail, evictedBitmap))
+                    evictedModel.Thumbnail = null;
             }
         }
 
@@ -5177,17 +7063,8 @@ namespace Caelum.Pages
         {
             _thumbnailCache.Clear();
             _thumbnailCacheLru.Clear();
-            if (ThumbnailListBox == null)
-                return;
-
-            foreach (var item in ThumbnailListBox.Items.OfType<ListBoxItem>())
-            {
-                if (item.Content is StackPanel panel &&
-                    panel.Children.OfType<Image>().FirstOrDefault() is Image image)
-                {
-                    image.Source = null;
-                }
-            }
+            foreach (var model in _sidebarPageItems)
+                model.Thumbnail = null;
         }
 
         private void LoadVisibleThumbnails()
@@ -5195,25 +7072,133 @@ namespace Caelum.Pages
             if (ThumbnailListBox == null)
                 return;
 
-            foreach (var item in ThumbnailListBox.Items.OfType<ListBoxItem>().Where(item => item.IsLoaded))
-                ThumbnailListBoxItem_Loaded(item, new RoutedEventArgs(FrameworkElement.LoadedEvent, item));
+            for (int index = 0; index < ThumbnailListBox.Items.Count; index++)
+            {
+                if (ThumbnailListBox.ItemContainerGenerator.ContainerFromIndex(index) is ListBoxItem item && item.IsLoaded)
+                    ThumbnailListBoxItem_Loaded(item, new RoutedEventArgs(FrameworkElement.LoadedEvent, item));
+            }
         }
 
-        private ContextMenu BuildThumbnailContextMenu(int pageIndex)
+        private ContextMenu BuildThumbnailContextMenu(SidebarPageItem model)
         {
-            var menu = new ContextMenu();
+            var binding = new ContextMenuOperationBinding(model, _loadSessionId, _currentPdfPath);
+            var menu = new ContextMenu
+            {
+                // Keep Tag compatible with existing callers/UIA probes while
+                // the weak table retains the full session/path lease binding.
+                Tag = model
+            };
+            _sidebarContextMenuBindings.Add(menu, binding);
+            menu.SetResourceReference(Control.BackgroundProperty, "ThemeSurfaceBrush");
+            menu.SetResourceReference(Control.ForegroundProperty, "ThemeTextBrush");
+            menu.SetResourceReference(UIElement.OpacityProperty, "ThemeSurfaceOpacity");
             var insert = new MenuItem { Header = LocalizationService.Get("Editor.InsertBlankPageBefore") };
-            insert.Click += async (_, __) => await InsertPageAtAsync(pageIndex);
+            insert.CommandParameter = model;
+            insert.Click += ThumbnailContextMenu_InsertPage_Click;
             var duplicate = new MenuItem { Header = LocalizationService.Get("Editor.DuplicatePage") };
-            duplicate.Click += async (_, __) => await DuplicatePageAtAsync(pageIndex);
+            duplicate.CommandParameter = model;
+            duplicate.Click += ThumbnailContextMenu_DuplicatePage_Click;
             var delete = new MenuItem { Header = LocalizationService.Get("Editor.DeletePage") };
-            delete.Click += async (_, __) => await DeletePageAtAsync(pageIndex);
+            delete.CommandParameter = model;
+            delete.Click += ThumbnailContextMenu_DeletePage_Click;
+            insert.SetResourceReference(Control.ForegroundProperty, "ThemeTextBrush");
+            duplicate.SetResourceReference(Control.ForegroundProperty, "ThemeTextBrush");
+            delete.SetResourceReference(Control.ForegroundProperty, "ThemeDangerBrush");
             menu.Items.Add(insert);
             menu.Items.Add(duplicate);
             menu.Items.Add(new Separator());
             menu.Items.Add(delete);
+            _transientUiRegistry.Register(menu);
             PopupZOrderHelper.FixContextMenuTopmost(menu);
             return menu;
+        }
+
+        private async void ThumbnailContextMenu_InsertPage_Click(object sender, RoutedEventArgs e)
+        {
+            if (TryCaptureSidebarContextMenuModel<SidebarPageItem>(sender, out var model, out var operationLease))
+            {
+                using (operationLease)
+                await InsertPageAtAsync(model.PageIndex, operationLease);
+            }
+        }
+
+        private async void ThumbnailContextMenu_DuplicatePage_Click(object sender, RoutedEventArgs e)
+        {
+            if (TryCaptureSidebarContextMenuModel<SidebarPageItem>(sender, out var model, out var operationLease))
+            {
+                using (operationLease)
+                await DuplicatePageAtAsync(model.PageIndex, operationLease);
+            }
+        }
+
+        private async void ThumbnailContextMenu_DeletePage_Click(object sender, RoutedEventArgs e)
+        {
+            if (TryCaptureSidebarContextMenuModel<SidebarPageItem>(sender, out var model, out var operationLease))
+            {
+                using (operationLease)
+                await DeletePageAtAsync(model.PageIndex, operationLease);
+            }
+        }
+
+        private bool TryCaptureSidebarContextMenuModel<T>(
+            object source,
+            out T model,
+            out DocumentOperationLease operationLease)
+            where T : class
+        {
+            model = null;
+            operationLease = null;
+            if (!_isHostActive || _resourcesReleased || _documentInteractionBlocked)
+                return false;
+            var menuItem = source as MenuItem;
+            var menu = FindAncestor<ContextMenu>(source as DependencyObject) ?? menuItem?.Parent as ContextMenu;
+            if (menu == null || !_sidebarContextMenuBindings.TryGetValue(menu, out var binding) ||
+                binding.Model is not T boundModel ||
+                menu.PlacementTarget is not ListBoxItem item ||
+                !ReferenceEquals(item.DataContext, boundModel))
+                return false;
+
+            if (boundModel is SidebarPageItem page && !_sidebarPageItems.Contains(page))
+                return false;
+            if (boundModel is SidebarBookmarkItem bookmark && !_sidebarBookmarkItems.Contains(bookmark))
+                return false;
+
+            operationLease = CaptureDocumentOperationLease(
+                binding.SessionId,
+                binding.FilePath,
+                _pdfService);
+            if (!ValidateDocumentOperationLease(operationLease))
+            {
+                operationLease.Dispose();
+                operationLease = null;
+                return false;
+            }
+
+            model = boundModel;
+            return true;
+        }
+
+        // Compatibility shim for existing STA/UIA probes that resolve the
+        // current model without needing to own an async lease. Production
+        // async handlers use TryCaptureSidebarContextMenuModel above.
+        private bool TryGetCurrentSidebarContextMenuModel<T>(
+            object source,
+            out T model)
+            where T : class
+        {
+            model = null;
+            if (!_isHostActive || _resourcesReleased || _documentInteractionBlocked)
+                return false;
+            var menuItem = source as MenuItem;
+            var menu = FindAncestor<ContextMenu>(source as DependencyObject) ?? menuItem?.Parent as ContextMenu;
+            if (menu == null || !_sidebarContextMenuBindings.TryGetValue(menu, out var binding) ||
+                binding.Model is not T boundModel ||
+                menu.PlacementTarget is not ListBoxItem item ||
+                !ReferenceEquals(item.DataContext, boundModel))
+                return false;
+
+            model = boundModel;
+            return true;
         }
 
         private static void RefreshThumbnailContextMenu(ContextMenu menu)
@@ -5232,17 +7217,35 @@ namespace Caelum.Pages
 
         private void ThumbnailListBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
-            if (_isRefreshingThumbnails || ThumbnailListBox.SelectedItem is not ListBoxItem item || item.Tag is not int pageIndex)
+            if (_isRefreshingThumbnails || _isSynchronizingThumbnailSelection ||
+                ThumbnailListBox.SelectedItem is not SidebarPageItem item)
                 return;
-            JumpToPage(pageIndex);
+            JumpToPage(item.PageIndex);
+        }
+
+        private void ThumbnailListBox_ContextMenuOpening(object sender, ContextMenuEventArgs e)
+        {
+            if (FindAncestor<ListBoxItem>(e.OriginalSource as DependencyObject) is not ListBoxItem item ||
+                item.DataContext is not SidebarPageItem page)
+            {
+                e.Handled = true;
+                return;
+            }
+
+            ClearSidebarListBoxItemContextMenu(item);
+            item.ContextMenu = BuildThumbnailContextMenu(page);
+            item.ContextMenu.PlacementTarget = item;
         }
 
         private void ThumbnailListBox_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
         {
-            if (FindAncestor<ListBoxItem>(e.OriginalSource as DependencyObject) is ListBoxItem item && item.Tag is int pageIndex)
+            if (FindAncestor<ListBoxItem>(e.OriginalSource as DependencyObject) is ListBoxItem item &&
+                item.DataContext is SidebarPageItem page)
             {
                 _thumbnailDragStartPoint = e.GetPosition(ThumbnailListBox);
-                _thumbnailDragIndex = pageIndex;
+                _thumbnailDragIndex = page.PageIndex;
+                _thumbnailDragSessionId = _loadSessionId;
+                _thumbnailDragPath = _currentPdfPath;
             }
         }
 
@@ -5258,66 +7261,158 @@ namespace Caelum.Pages
 
             int sourceIndex = _thumbnailDragIndex;
             _thumbnailDragIndex = -1;
+            _thumbnailDragSessionId = -1;
             DragDrop.DoDragDrop(ThumbnailListBox, new DataObject(typeof(int), sourceIndex), DragDropEffects.Move);
         }
 
         private async void ThumbnailListBox_Drop(object sender, DragEventArgs e)
         {
-            if (!e.Data.GetDataPresent(typeof(int)) || string.IsNullOrWhiteSpace(_currentPdfPath))
+            e.Handled = true;
+            int dragSessionId = _thumbnailDragSessionId;
+            string dragPath = _thumbnailDragPath;
+            _thumbnailDragSessionId = -1;
+            _thumbnailDragPath = null;
+            if (dragSessionId < 0)
                 return;
 
-            int fromIndex = (int)e.Data.GetData(typeof(int));
-            var targetItem = FindAncestor<ListBoxItem>(e.OriginalSource as DependencyObject);
-            int toIndex = targetItem?.Tag is int target ? target : _pageControls.Count - 1;
-            if (fromIndex == toIndex || fromIndex < 0 || toIndex < 0)
-                return;
-
-            try
+            DocumentOperationLease currentLease = CaptureDocumentOperationLease(
+                dragSessionId,
+                dragPath,
+                _pdfService);
+            if (!ValidateDocumentOperationLease(currentLease))
             {
-                if (_isDirty && !await AutoSaveAsync())
-                    return;
-
-                byte[] before = await File.ReadAllBytesAsync(_currentPdfPath);
-                int focusBefore = GetCurrentPageIndex();
-                var beforeBookmarks = PageBookmarkService.Load(_currentPdfPath).ToList();
-                await _pdfService.ReorderPagesAsync(_currentPdfPath, fromIndex, toIndex);
-                byte[] after = await File.ReadAllBytesAsync(_currentPdfPath);
-                await LoadPdf(_currentPdfPath);
-                int focused = Math.Max(0, Math.Min(toIndex, _pageControls.Count - 1));
-                JumpToPage(focused);
-                var afterBookmarks = PageBookmarkService.ApplyPageMove(_currentPdfPath, fromIndex, toIndex).ToList();
-                RefreshBookmarks();
-                PushUndoAction(new DocumentSnapshotAction(this, before, after, focusBefore, focused, beforeBookmarks, afterBookmarks));
+                currentLease.Dispose();
+                return;
             }
-            catch (Exception ex)
+
+            if (!TryBeginDocumentEdit(out var editLease))
             {
-                GetMainWindow()?.ShowToast(LocalizationService.Format("Editor.PageReorderFailed", ex.Message), "\uE783", 3500);
+                currentLease.Dispose();
+                return;
+            }
+
+            using (editLease)
+            {
+                try
+                {
+                    if (!e.Data.GetDataPresent(typeof(int)) || string.IsNullOrWhiteSpace(_currentPdfPath))
+                        return;
+
+                    int fromIndex = (int)e.Data.GetData(typeof(int));
+                    var targetItem = FindAncestor<ListBoxItem>(e.OriginalSource as DependencyObject);
+                    int toIndex = targetItem?.DataContext is SidebarPageItem target
+                        ? target.PageIndex : _pageControls.Count - 1;
+                    if (fromIndex == toIndex || fromIndex < 0 || toIndex < 0)
+                        return;
+
+                    string filePath = _currentPdfPath;
+                    if (!ValidateDocumentOperationLease(currentLease))
+                        return;
+                    if (_documentSaveCoordinator.IsDirty &&
+                        (!await AutoSaveAsync(currentLease) || !ValidateDocumentOperationLease(currentLease)))
+                        return;
+
+                    byte[] before = await File.ReadAllBytesAsync(filePath, currentLease.Token);
+                    if (!ValidateDocumentOperationLease(currentLease))
+                        return;
+                    int focusBefore = GetCurrentPageIndex();
+                    var beforeBookmarks = PageBookmarkService.Load(filePath).ToList();
+                    await _pdfService.ReorderPagesAsync(filePath, fromIndex, toIndex);
+                    if (!ValidateDocumentOperationLease(currentLease))
+                        return;
+                    byte[] after = await File.ReadAllBytesAsync(filePath, currentLease.Token);
+                    if (!ValidateDocumentOperationLease(currentLease))
+                        return;
+                    currentLease = await ReloadDocumentForOperationAsync(filePath, currentLease);
+                    if (currentLease == null)
+                        return;
+                    int focused = Math.Max(0, Math.Min(toIndex, _pageControls.Count - 1));
+                    if (!ValidateDocumentOperationLease(currentLease))
+                        return;
+                    JumpToPage(focused);
+                    var afterBookmarks = PageBookmarkService.ApplyPageMove(filePath, fromIndex, toIndex).ToList();
+                    RefreshBookmarks(_loadSessionId, filePath, currentLease);
+                    if (!ValidateDocumentOperationLease(currentLease))
+                        return;
+                    PushUndoAction(new DocumentSnapshotAction(this, before, after, focusBefore, focused, beforeBookmarks, afterBookmarks));
+                }
+                catch (OperationCanceledException)
+                {
+                }
+                catch (Exception ex)
+                {
+                    if (ValidateDocumentOperationLease(currentLease))
+                        GetMainWindow()?.ShowToast(LocalizationService.Format("Editor.PageReorderFailed", ex.Message), "\uE783", 3500);
+                }
+                finally
+                {
+                    currentLease?.Dispose();
+                }
             }
         }
 
-        private async Task DuplicatePageAtAsync(int pageIndex)
+        private async Task DuplicatePageAtAsync(
+            int pageIndex,
+            DocumentOperationLease operationLease = null)
         {
-            if (string.IsNullOrWhiteSpace(_currentPdfPath))
+            if (!TryBeginDocumentEdit(out var editLease))
                 return;
-            try
+            using (editLease)
             {
-                if (_isDirty && !await AutoSaveAsync())
+                if (string.IsNullOrWhiteSpace(_currentPdfPath))
+                {
+                    if (operationLease == null)
+                        GetMainWindow()?.ShowToast(LocalizationService.Get("Editor.NoDocumentLoaded"), "\uE783");
                     return;
-                byte[] before = await File.ReadAllBytesAsync(_currentPdfPath);
-                int focusBefore = GetCurrentPageIndex();
-                var beforeBookmarks = PageBookmarkService.Load(_currentPdfPath).ToList();
-                await _pdfService.DuplicatePageAsync(_currentPdfPath, pageIndex);
-                byte[] after = await File.ReadAllBytesAsync(_currentPdfPath);
-                await LoadPdf(_currentPdfPath);
-                int focused = Math.Max(0, Math.Min(pageIndex + 1, _pageControls.Count - 1));
-                JumpToPage(focused);
-                var afterBookmarks = PageBookmarkService.ApplyPageInsert(_currentPdfPath, pageIndex + 1).ToList();
-                RefreshBookmarks();
-                PushUndoAction(new DocumentSnapshotAction(this, before, after, focusBefore, focused, beforeBookmarks, afterBookmarks));
-            }
-            catch (Exception ex)
-            {
-                GetMainWindow()?.ShowToast(LocalizationService.Format("Editor.PageDuplicateFailed", ex.Message), "\uE783", 3500);
+                }
+
+                string filePath = _currentPdfPath;
+                DocumentOperationLease currentLease = operationLease ?? CaptureDocumentOperationLease(_pdfService);
+                try
+                {
+                    if (!ValidateDocumentOperationLease(currentLease))
+                        return;
+                    if (_documentSaveCoordinator.IsDirty &&
+                        (!await AutoSaveAsync(currentLease) || !ValidateDocumentOperationLease(currentLease)))
+                        return;
+
+                    byte[] before = await File.ReadAllBytesAsync(filePath, currentLease.Token);
+                    if (!ValidateDocumentOperationLease(currentLease))
+                        return;
+                    int focusBefore = GetCurrentPageIndex();
+                    var beforeBookmarks = PageBookmarkService.Load(filePath).ToList();
+                    await _pdfService.DuplicatePageAsync(filePath, pageIndex);
+                    if (!ValidateDocumentOperationLease(currentLease))
+                        return;
+                    byte[] after = await File.ReadAllBytesAsync(filePath, currentLease.Token);
+                    if (!ValidateDocumentOperationLease(currentLease))
+                        return;
+
+                    currentLease = await ReloadDocumentForOperationAsync(filePath, currentLease);
+                    if (currentLease == null)
+                        return;
+                    int focused = Math.Max(0, Math.Min(pageIndex + 1, _pageControls.Count - 1));
+                    if (!ValidateDocumentOperationLease(currentLease))
+                        return;
+                    JumpToPage(focused);
+                    var afterBookmarks = PageBookmarkService.ApplyPageInsert(filePath, pageIndex + 1).ToList();
+                    RefreshBookmarks(_loadSessionId, filePath, currentLease);
+                    if (!ValidateDocumentOperationLease(currentLease))
+                        return;
+                    PushUndoAction(new DocumentSnapshotAction(this, before, after, focusBefore, focused, beforeBookmarks, afterBookmarks));
+                }
+                catch (OperationCanceledException)
+                {
+                }
+                catch (Exception ex)
+                {
+                    if (ValidateDocumentOperationLease(currentLease))
+                        GetMainWindow()?.ShowToast(LocalizationService.Format("Editor.PageDuplicateFailed", ex.Message), "\uE783", 3500);
+                }
+                finally
+                {
+                    currentLease?.Dispose();
+                }
             }
         }
 
@@ -5327,34 +7422,95 @@ namespace Caelum.Pages
                 return;
             int current = GetCurrentPageIndex();
             if (current >= 0 && current < ThumbnailListBox.Items.Count)
-                ThumbnailListBox.SelectedIndex = current;
+            {
+                _isSynchronizingThumbnailSelection = true;
+                try
+                {
+                    ThumbnailListBox.SelectedIndex = current;
+                }
+                finally
+                {
+                    _isSynchronizingThumbnailSelection = false;
+                }
+            }
         }
 
         private void RefreshBookmarks()
         {
-            if (BookmarksListBox == null)
+            RefreshBookmarks(_loadSessionId, _currentPdfPath, null);
+        }
+
+        private void RefreshBookmarks(
+            int sessionId,
+            string filePath,
+            DocumentOperationLease operationLease = null)
+        {
+            if (BookmarksListBox == null || !IsSidebarLoadCurrent(sessionId, filePath) ||
+                (operationLease != null && !ValidateDocumentOperationLease(operationLease)))
                 return;
-            BookmarksListBox.Items.Clear();
-            foreach (var bookmark in PageBookmarkService.Load(_currentPdfPath))
+
+            _sidebarBookmarkItems.Clear();
+            foreach (var bookmark in PageBookmarkService.Load(filePath ?? string.Empty))
             {
-                var item = new ListBoxItem
-                {
-                    Tag = bookmark.PageIndex,
-                    Content = PageBookmarkService.GetDisplayLabel(bookmark)
-                };
-                var removeMenu = new ContextMenu();
-                var removeItem = new MenuItem { Header = LocalizationService.Get("Editor.RemoveBookmark") };
-                removeItem.Click += (_, __) =>
-                {
-                    PageBookmarkService.Toggle(_currentPdfPath, bookmark.PageIndex);
-                    RefreshBookmarks();
-                };
-                removeMenu.Items.Add(removeItem);
-                PopupZOrderHelper.FixContextMenuTopmost(removeMenu);
-                item.ContextMenu = removeMenu;
-                BookmarksListBox.Items.Add(item);
+                _sidebarBookmarkItems.Add(new SidebarBookmarkItem(
+                    bookmark.PageIndex,
+                    PageBookmarkService.GetDisplayLabel(bookmark)));
             }
+            if (BookmarksEmptyState != null)
+                BookmarksEmptyState.Visibility = _sidebarBookmarkItems.Count == 0
+                    ? Visibility.Visible : Visibility.Collapsed;
             UpdateBookmarkButton();
+        }
+
+        private void BookmarksListBox_ContextMenuOpening(object sender, ContextMenuEventArgs e)
+        {
+            if (FindAncestor<ListBoxItem>(e.OriginalSource as DependencyObject) is not ListBoxItem item ||
+                item.DataContext is not SidebarBookmarkItem bookmark)
+            {
+                e.Handled = true;
+                return;
+            }
+
+            ClearSidebarListBoxItemContextMenu(item);
+            item.ContextMenu = BuildBookmarkContextMenu(bookmark);
+            item.ContextMenu.PlacementTarget = item;
+        }
+
+        private ContextMenu BuildBookmarkContextMenu(SidebarBookmarkItem model)
+        {
+            var binding = new ContextMenuOperationBinding(model, _loadSessionId, _currentPdfPath);
+            var menu = new ContextMenu
+            {
+                Tag = model
+            };
+            _sidebarContextMenuBindings.Add(menu, binding);
+            var removeItem = new MenuItem { Header = LocalizationService.Get("Editor.RemoveBookmark") };
+            removeItem.CommandParameter = model;
+            removeItem.Click += BookmarkContextMenu_Remove_Click;
+            menu.Items.Add(removeItem);
+            _transientUiRegistry.Register(menu);
+            PopupZOrderHelper.FixContextMenuTopmost(menu);
+            return menu;
+        }
+
+        private void BookmarkContextMenu_Remove_Click(object sender, RoutedEventArgs e)
+        {
+            if (!TryCaptureSidebarContextMenuModel<SidebarBookmarkItem>(sender, out var model, out var operationLease) ||
+                string.IsNullOrWhiteSpace(_currentPdfPath))
+                return;
+
+            using (operationLease)
+            {
+                string filePath = _currentPdfPath;
+                PageBookmarkService.Toggle(filePath, model.PageIndex);
+                RefreshBookmarks(_loadSessionId, filePath, operationLease);
+            }
+        }
+
+        private static void RefreshBookmarkContextMenu(ContextMenu menu)
+        {
+            if (menu?.Items.OfType<MenuItem>().FirstOrDefault() is MenuItem removeItem)
+                removeItem.Header = LocalizationService.Get("Editor.RemoveBookmark");
         }
 
         private void UpdateBookmarkButton()
@@ -5362,9 +7518,18 @@ namespace Caelum.Pages
             if (BookmarkToggleButton == null)
                 return;
             bool bookmarked = PageBookmarkService.Load(_currentPdfPath).Any(bookmark => bookmark.PageIndex == GetCurrentPageIndex());
+            BookmarkToggleButton.IsChecked = bookmarked;
             BookmarkToggleButton.Content = bookmarked
                 ? $"★ {LocalizationService.Get("Editor.UnbookmarkCurrentPage")}"
                 : $"☆ {LocalizationService.Get("Editor.BookmarkCurrentPage")}";
+            ApplyStateAwareSidebarMetadata();
+            SetAutomationId(BookmarkToggleButton, "Editor.Sidebar.BookmarkToggle");
+        }
+
+        private static void SetAutomationId(DependencyObject control, string automationId)
+        {
+            if (control != null)
+                AutomationProperties.SetAutomationId(control, automationId);
         }
 
         private void BookmarkToggleButton_Click(object sender, RoutedEventArgs e)
@@ -5375,67 +7540,383 @@ namespace Caelum.Pages
             RefreshBookmarks();
         }
 
+        private void SidebarPagesButton_Click(object sender, RoutedEventArgs e)
+        {
+            SetSidebarTab(SidebarTab.Pages);
+        }
+
+        private void SidebarOutlineButton_Click(object sender, RoutedEventArgs e)
+        {
+            SetSidebarTab(SidebarTab.Outline);
+        }
+
+        private void SidebarBookmarksButton_Click(object sender, RoutedEventArgs e)
+        {
+            SetSidebarTab(SidebarTab.Bookmarks);
+        }
+
+        private void SetSidebarTab(SidebarTab tab)
+        {
+            _sidebarTab = tab;
+            if (PagesSidebarContent == null || OutlineSidebarContent == null || BookmarksSidebarContent == null)
+                return;
+
+            PagesSidebarContent.Visibility = tab == SidebarTab.Pages && !_sidebarCollapsed
+                ? Visibility.Visible : Visibility.Collapsed;
+            OutlineSidebarContent.Visibility = tab == SidebarTab.Outline && !_sidebarCollapsed
+                ? Visibility.Visible : Visibility.Collapsed;
+            BookmarksSidebarContent.Visibility = tab == SidebarTab.Bookmarks && !_sidebarCollapsed
+                ? Visibility.Visible : Visibility.Collapsed;
+
+            ApplySidebarButtonState(SidebarPagesButton, tab == SidebarTab.Pages, LocalizationService.Get("Editor.PagesTab"));
+            ApplySidebarButtonState(SidebarOutlineButton, tab == SidebarTab.Outline, LocalizationService.Get("Editor.OutlineTab"));
+            ApplySidebarButtonState(SidebarBookmarksButton, tab == SidebarTab.Bookmarks, LocalizationService.Get("Editor.BookmarksTab"));
+        }
+
+        private void ApplySidebarButtonState(Button button, bool selected, string label)
+        {
+            if (button == null)
+                return;
+
+            // Selection is a live style expression.  Clearing the local values
+            // lets the Tag trigger re-resolve theme/high-contrast resources.
+            button.ClearValue(Button.BackgroundProperty);
+            button.ClearValue(Button.BorderBrushProperty);
+            button.ClearValue(Button.BorderThicknessProperty);
+            button.ClearValue(Button.FontWeightProperty);
+            button.SetResourceReference(Button.ForegroundProperty, "ThemeForegroundBrush");
+            button.Tag = selected ? "Selected" : null;
+            AutomationProperties.SetName(button, label);
+            AutomationProperties.SetHelpText(button, label);
+            AutomationProperties.SetItemStatus(button, selected ? LocalizationService.Get("Editor.SidebarSelected") : string.Empty);
+            ToolTipService.SetToolTip(button, label);
+        }
+
         private void SidebarCollapseButton_Click(object sender, RoutedEventArgs e)
         {
-            bool isCollapsed = DocumentSidebarTabs.Visibility == Visibility.Collapsed;
-            DocumentSidebarTabs.Visibility = isCollapsed ? Visibility.Visible : Visibility.Collapsed;
-            DocumentSidebar.Width = isCollapsed ? 184 : 38;
-            SidebarCollapseButton.Content = isCollapsed
-                ? $"‹  {LocalizationService.Get("Editor.SidebarCollapse")}"
-                : $"›  {LocalizationService.Get("Editor.SidebarExpand")}";
+            SetSidebarCollapsed(!_sidebarCollapsed);
+        }
+
+        private void SetSidebarCollapsed(bool collapsed)
+        {
+            _sidebarCollapsed = collapsed;
+            if (SidebarContentHost != null)
+                SidebarContentHost.Visibility = _sidebarCollapsed ? Visibility.Collapsed : Visibility.Visible;
+            if (SidebarNavBar != null)
+                SidebarNavBar.Visibility = _sidebarCollapsed ? Visibility.Collapsed : Visibility.Visible;
+            if (SidebarTitleLabel != null)
+                SidebarTitleLabel.Visibility = _sidebarCollapsed ? Visibility.Collapsed : Visibility.Visible;
+            if (SidebarPagesLabel != null)
+                SidebarPagesLabel.Visibility = _sidebarCollapsed ? Visibility.Collapsed : Visibility.Visible;
+            if (SidebarOutlineLabel != null)
+                SidebarOutlineLabel.Visibility = _sidebarCollapsed ? Visibility.Collapsed : Visibility.Visible;
+            if (SidebarBookmarksLabel != null)
+                SidebarBookmarksLabel.Visibility = _sidebarCollapsed ? Visibility.Collapsed : Visibility.Visible;
+            if (SidebarResizeThumb != null)
+                SidebarResizeThumb.Visibility = _sidebarCollapsed ? Visibility.Collapsed : Visibility.Visible;
+            if (SidebarHeaderGrid != null)
+                SidebarHeaderGrid.Margin = _sidebarCollapsed
+                    ? new Thickness(3)
+                    : new Thickness(8, 8, 8, 2);
+
+            if (DocumentSidebar != null)
+            {
+                if (_sidebarCollapsed)
+                {
+                    _sidebarExpandedWidth = Math.Max(SidebarMinWidth, Math.Min(SidebarMaxWidth, DocumentSidebar.Width));
+                    // The expanded rail has a usable 154 DIP minimum, but that
+                    // minimum must not prevent the compact collapsed affordance
+                    // from actually shrinking to its icon-only width.
+                    DocumentSidebar.MinWidth = SidebarCollapsedWidth;
+                }
+                else
+                {
+                    DocumentSidebar.MinWidth = SidebarMinWidth;
+                }
+                DocumentSidebar.Width = _sidebarCollapsed
+                    ? SidebarCollapsedWidth
+                    : Math.Max(SidebarMinWidth, Math.Min(SidebarMaxWidth, _sidebarExpandedWidth));
+            }
+
+            if (SidebarCollapseIcon != null)
+            {
+                SidebarCollapseIcon.Data = Geometry.Parse(_sidebarCollapsed
+                    ? "M6,3 L14,7 L6,11"
+                    : "M14,3 L6,7 L14,11");
+            }
+
+            // ApplyStateAwareSidebarMetadata resolves Editor.SidebarExpand /
+            // Editor.SidebarCollapse after every state transition.
+            ApplyStateAwareSidebarMetadata();
+            SetSidebarTab(_sidebarTab);
+            if (SidebarResizeThumb != null)
+            {
+                _isApplyingSidebarResizeValue = true;
+                try
+                {
+                    SidebarResizeThumb.Value = DocumentSidebar?.Width ?? SidebarCollapsedWidth;
+                }
+                finally
+                {
+                    _isApplyingSidebarResizeValue = false;
+                }
+            }
+        }
+
+        private void SidebarResizeThumb_DragDelta(object sender, DragDeltaEventArgs e)
+        {
+            if (_sidebarCollapsed || DocumentSidebar == null)
+                return;
+
+            DocumentSidebar.Width = Math.Max(
+                SidebarMinWidth,
+                Math.Min(SidebarMaxWidth, DocumentSidebar.Width + e.HorizontalChange));
+            _sidebarExpandedWidth = DocumentSidebar.Width;
+            if (SidebarResizeThumb != null)
+                SidebarResizeThumb.Value = DocumentSidebar.Width;
+        }
+
+        private void SidebarResizeThumb_ValueChanged(object sender, EventArgs e)
+        {
+            if (_isApplyingSidebarResizeValue || _sidebarCollapsed || DocumentSidebar == null)
+                return;
+            SetSidebarWidthFromInput(SidebarResizeThumb.Value);
+        }
+
+        private void SetSidebarWidthFromInput(double value)
+        {
+            if (_sidebarCollapsed || DocumentSidebar == null)
+                return;
+            double width = Math.Max(SidebarMinWidth, Math.Min(SidebarMaxWidth, value));
+            DocumentSidebar.Width = width;
+            _sidebarExpandedWidth = width;
+            _isApplyingSidebarResizeValue = true;
+            try
+            {
+                SidebarResizeThumb.Value = width;
+            }
+            finally
+            {
+                _isApplyingSidebarResizeValue = false;
+            }
+        }
+
+        private void SidebarResizeThumb_KeyDown(object sender, KeyEventArgs e)
+        {
+            if (_sidebarCollapsed || SidebarResizeThumb == null)
+                return;
+
+            double step = (Keyboard.Modifiers & ModifierKeys.Shift) != 0
+                ? SidebarResizeLargeStep : SidebarResizeStep;
+            double value = SidebarResizeThumb.Value;
+            switch (e.Key)
+            {
+                case Key.Left:
+                case Key.Down:
+                    SetSidebarWidthFromInput(value - step);
+                    e.Handled = true;
+                    break;
+                case Key.Right:
+                case Key.Up:
+                    SetSidebarWidthFromInput(value + step);
+                    e.Handled = true;
+                    break;
+                case Key.Home:
+                    SetSidebarWidthFromInput(SidebarMinWidth);
+                    e.Handled = true;
+                    break;
+                case Key.End:
+                    SetSidebarWidthFromInput(SidebarMaxWidth);
+                    e.Handled = true;
+                    break;
+            }
+        }
+
+        private void EditorPage_SizeChanged(object sender, SizeChangedEventArgs e)
+        {
+            if (ToolbarBorder != null)
+                ToolbarBorder.MaxWidth = Math.Max(220, ActualWidth - 24);
+            if (ToolbarItemsScrollViewer != null)
+            {
+                ToolbarItemsScrollViewer.MaxWidth = Math.Max(220, ActualWidth - 24);
+                SetToolbarMetadata(ToolbarItemsScrollViewer, "Editor.ToolbarOverflow",
+                    LocalizationService.Get("Editor.ToolbarScroll"));
+            }
+            AutoCollapseSidebarForNarrowLayout();
+        }
+
+        private void AutoCollapseSidebarForNarrowLayout()
+        {
+            if (ActualWidth > 0 && ActualWidth <= 375 && !_sidebarCollapsed)
+                SetSidebarCollapsed(true);
         }
 
         private void BookmarksListBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
-            if (BookmarksListBox.SelectedItem is ListBoxItem item && item.Tag is int pageIndex)
-                JumpToPage(pageIndex);
+            if (BookmarksListBox.SelectedItem is SidebarBookmarkItem item && _sidebarBookmarkItems.Contains(item))
+                JumpToPage(item.PageIndex);
         }
 
-        private async Task RefreshOutlineAsync(CancellationToken cancellationToken)
+        private void OutlineTreeView_SelectedItemChanged(object sender, RoutedPropertyChangedEventArgs<object> e)
         {
-            if (OutlineTreeView == null)
+            if (e.NewValue is SidebarOutlineItem item && _sidebarOutlineItems.Contains(item) && item.PageIndex >= 0)
+                JumpToPage(item.PageIndex);
+        }
+
+        private void OutlineInvokeButton_Loaded(object sender, RoutedEventArgs e)
+        {
+            if (sender is not Button button || button.DataContext is not SidebarOutlineItem model)
                 return;
-            OutlineTreeView.Items.Clear();
-            IReadOnlyList<PdfService.PdfOutlineEntry> outline;
+
+            string label = LocalizationService.Format("Editor.PageNumber", model.PageIndex + 1);
+            SetToolbarMetadata(button, $"{model.AutomationId}.Invoke", label);
+            button.MinWidth = Math.Max(32, button.MinWidth);
+            button.MinHeight = Math.Max(32, button.MinHeight);
+        }
+
+        private void OutlineInvokeButton_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is Button button && button.DataContext is SidebarOutlineItem model &&
+                _sidebarOutlineItems.Contains(model) && model.PageIndex >= 0)
+                JumpToPage(model.PageIndex);
+            e.Handled = true;
+        }
+
+        // Three-argument compatibility entry point retained for the existing
+        // STA/sidebar probes; asynchronous production callers use the core
+        // overload so they can transfer an already-captured document lease.
+        private Task RefreshOutlineAsync(
+            CancellationToken cancellationToken,
+            int sessionId,
+            string filePath)
+        {
+            return RefreshOutlineCoreAsync(cancellationToken, sessionId, filePath);
+        }
+
+        private async Task RefreshOutlineCoreAsync(
+            CancellationToken cancellationToken,
+            int sessionId,
+            string filePath,
+            DocumentOperationLease operationLease = null)
+        {
+            bool ownsLease = operationLease == null;
+            operationLease ??= CaptureDocumentOperationLease(
+                sessionId,
+                filePath,
+                cancellationToken: cancellationToken);
+
+            if (OutlineTreeView == null || !IsSidebarLoadCurrent(sessionId, filePath) ||
+                !ValidateDocumentOperationLease(operationLease))
+            {
+                if (ownsLease)
+                    operationLease.Dispose();
+                return;
+            }
+
             try
             {
-                outline = await _pdfService.GetOutlineAsync(cancellationToken);
-            }
-            catch (OperationCanceledException)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"[Outline] Failed to read outline: {ex}");
-                outline = Array.Empty<PdfService.PdfOutlineEntry>();
-            }
-            if (outline.Count == 0)
-            {
-                for (int i = 0; i < _pageControls.Count; i++)
-                OutlineTreeView.Items.Add(new TreeViewItem
+                IReadOnlyList<PdfService.PdfOutlineEntry> outline;
+                try
                 {
-                    Header = LocalizationService.Format("Editor.PageNumber", i + 1),
-                    Tag = i
-                });
-                return;
-            }
+                    // The completion source gives the async boundary an explicit
+                    // continuation that can be rejected after a newer document
+                    // session begins (including deterministic TCS tests).
+                    var completion = new TaskCompletionSource<IReadOnlyList<PdfService.PdfOutlineEntry>>(
+                        TaskCreationOptions.RunContinuationsAsynchronously);
+                    try
+                    {
+                        completion.SetResult(await _pdfService.GetOutlineAsync(cancellationToken));
+                    }
+                    catch (Exception ex)
+                    {
+                        completion.SetException(ex);
+                    }
 
-            foreach (var entry in outline)
-                OutlineTreeView.Items.Add(BuildOutlineTreeItem(entry));
+                    outline = await completion.Task;
+                    if (!ValidateDocumentOperationLease(operationLease))
+                        return;
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    // A late outline read must not report an old document
+                    // failure after a replacement document has taken over.
+                    if (!ValidateDocumentOperationLease(operationLease))
+                        return;
+                    System.Diagnostics.Debug.WriteLine($"[Outline] Failed to read outline: {ex}");
+                    outline = Array.Empty<PdfService.PdfOutlineEntry>();
+                }
+
+                if (!IsSidebarLoadCurrent(sessionId, filePath) ||
+                    !ValidateDocumentOperationLease(operationLease))
+                    return;
+
+                _sidebarOutlineItems.Clear();
+                if (outline.Count == 0)
+                {
+                    for (int i = 0; i < _pageControls.Count; i++)
+                    {
+                        string label = LocalizationService.Format("Editor.PageNumber", i + 1);
+                        _sidebarOutlineItems.Add(new SidebarOutlineItem(
+                            i, label, $"Editor.Sidebar.Outline.Page.{i + 1}"));
+                    }
+                    if (OutlineEmptyState != null)
+                        OutlineEmptyState.Visibility = _pageControls.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+                    return;
+                }
+
+                for (int index = 0; index < outline.Count; index++)
+                {
+                    if (!ValidateDocumentOperationLease(operationLease))
+                        return;
+                    _sidebarOutlineItems.Add(BuildOutlineModel(outline[index], (index + 1).ToString()));
+                }
+                if (OutlineEmptyState != null)
+                    OutlineEmptyState.Visibility = Visibility.Collapsed;
+            }
+            finally
+            {
+                if (ownsLease)
+                    operationLease.Dispose();
+            }
         }
 
-        private TreeViewItem BuildOutlineTreeItem(PdfService.PdfOutlineEntry entry)
+        private SidebarOutlineItem BuildOutlineModel(PdfService.PdfOutlineEntry entry, string automationPath)
         {
-            var item = new TreeViewItem { Header = entry.Title, Tag = entry.PageIndex };
-            item.Selected += (_, __) =>
-            {
-                if (item.Tag is int pageIndex && pageIndex >= 0)
-                    JumpToPage(pageIndex);
-            };
-            foreach (var child in entry.Children)
-                item.Items.Add(BuildOutlineTreeItem(child));
+            string title = string.IsNullOrWhiteSpace(entry.Title)
+                ? LocalizationService.Format("Editor.PageNumber", entry.PageIndex + 1)
+                : entry.Title;
+            var item = new SidebarOutlineItem(
+                entry.PageIndex,
+                title,
+                $"Editor.Sidebar.Outline.{automationPath}");
+            for (int index = 0; index < entry.Children.Count; index++)
+                item.Children.Add(BuildOutlineModel(entry.Children[index], $"{automationPath}.{index + 1}"));
             return item;
+        }
+
+        private void OutlineTreeViewItem_Loaded(object sender, RoutedEventArgs e)
+        {
+            if (sender is not TreeViewItem item || item.DataContext is not SidebarOutlineItem model)
+                return;
+
+            item.Tag = model.PageIndex;
+            item.MinHeight = Math.Max(32, item.MinHeight);
+            KeyboardNavigation.SetIsTabStop(item, true);
+            AutomationProperties.SetAutomationId(item, model.AutomationId);
+            AutomationProperties.SetName(item, model.Title);
+            AutomationProperties.SetHelpText(item,
+                LocalizationService.Format("Editor.PageNumber", model.PageIndex + 1));
+            ToolTipService.SetToolTip(item, model.Title);
+            if (item is SidebarOutlineTreeViewItem outlineItem)
+                outlineItem.InvokeAction = () =>
+                {
+                    if (_sidebarOutlineItems.Contains(model))
+                        JumpToPage(model.PageIndex);
+                };
         }
 
         private FrameworkElement CreatePageHost(PdfPageControl pageControl)
@@ -5457,14 +7938,19 @@ namespace Caelum.Pages
                 Margin = new Thickness(0, 14, 14, 0),
                 MinHeight = 34,
                 Padding = new Thickness(10, 6, 10, 6),
-                Background = new SolidColorBrush(Color.FromArgb(245, 255, 255, 255)),
-                BorderBrush = new SolidColorBrush(Color.FromRgb(252, 165, 165)),
+                Background = Brushes.Transparent,
+                BorderBrush = Brushes.Transparent,
                 BorderThickness = new Thickness(1),
                 Cursor = Cursors.Hand,
                 Visibility = Visibility.Hidden,
                 ToolTip = LocalizationService.Get("Editor.DeletePageTooltip"),
-                Template = CreatePageChromeButtonTemplate("#FEE2E2", "#FECACA")
+                Template = CreatePageChromeButtonTemplate(
+                    "ThemeControlHoverBrush", "ThemeControlPressedBrush")
             };
+            deleteButton.SetResourceReference(Control.BackgroundProperty, "ThemeControlBrush");
+            deleteButton.SetResourceReference(Control.BorderBrushProperty, "ThemeDangerBrush");
+            deleteButton.SetResourceReference(Control.ForegroundProperty, "ThemeDangerBrush");
+            deleteButton.SetResourceReference(Control.FocusVisualStyleProperty, "SettingsFocusVisualStyle");
 
             deleteButton.Content = new StackPanel
             {
@@ -5476,7 +7962,6 @@ namespace Caelum.Pages
                         Text = "\uE74D",
                         FontFamily = new FontFamily("Segoe MDL2 Assets"),
                         FontSize = 11,
-                        Foreground = new SolidColorBrush(Color.FromRgb(185, 28, 28)),
                         VerticalAlignment = VerticalAlignment.Center
                     },
                     new TextBlock
@@ -5485,16 +7970,18 @@ namespace Caelum.Pages
                         Margin = new Thickness(6, 0, 0, 0),
                         FontSize = 12,
                         FontWeight = FontWeights.SemiBold,
-                        Foreground = new SolidColorBrush(Color.FromRgb(127, 29, 29)),
                         VerticalAlignment = VerticalAlignment.Center
                     }
                 }
             };
+            foreach (var label in ((StackPanel)deleteButton.Content).Children.OfType<TextBlock>())
+                label.SetResourceReference(TextBlock.ForegroundProperty, "ThemeDangerBrush");
 
             deleteButton.Click += async (sender, args) =>
             {
                 args.Handled = true;
-                await DeletePageAtAsync(pageControl.PageIndex);
+                using var operationLease = CaptureDocumentOperationLease(_pdfService);
+                await DeletePageAtAsync(pageControl.PageIndex, operationLease);
             };
 
             host.MouseEnter += (_, __) =>
@@ -5533,38 +8020,48 @@ namespace Caelum.Pages
                 Width = 150,
                 Height = 2,
                 CornerRadius = new CornerRadius(1),
-                Background = new SolidColorBrush(Color.FromRgb(191, 219, 254)),
+                Background = Brushes.Transparent,
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center,
                 Visibility = Visibility.Collapsed
             };
+            guideLine.SetResourceReference(Border.BackgroundProperty, "ThemeAccentBrush");
 
             var insertButton = new Button
             {
                 Width = 78,
                 Height = 32,
-                Background = new SolidColorBrush(Color.FromArgb(250, 255, 255, 255)),
-                BorderBrush = new SolidColorBrush(Color.FromRgb(147, 197, 253)),
+                Background = Brushes.Transparent,
+                BorderBrush = Brushes.Transparent,
                 BorderThickness = new Thickness(1),
                 Cursor = Cursors.Hand,
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center,
                 Visibility = Visibility.Collapsed,
                 ToolTip = LocalizationService.Get("Editor.InsertPageHereTooltip"),
-                Template = CreatePageChromeButtonTemplate("#EFF6FF", "#DBEAFE")
+                Template = CreatePageChromeButtonTemplate(
+                    "ThemeSelectionBrush", "ThemeControlHoverBrush")
             };
+            insertButton.SetResourceReference(Control.BackgroundProperty, "ThemeControlBrush");
+            insertButton.SetResourceReference(Control.BorderBrushProperty, "ThemeAccentBrush");
+            insertButton.SetResourceReference(Control.ForegroundProperty, "ThemeAccentBrush");
+            insertButton.SetResourceReference(Control.FocusVisualStyleProperty, "SettingsFocusVisualStyle");
 
             insertButton.Content = new TextBlock
             {
                 Text = "\uE710",
                 FontFamily = new FontFamily("Segoe MDL2 Assets"),
                 FontSize = 16,
-                Foreground = new SolidColorBrush(Color.FromRgb(37, 99, 235)),
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center
             };
+            ((TextBlock)insertButton.Content).SetResourceReference(TextBlock.ForegroundProperty, "ThemeAccentBrush");
 
-            insertButton.Click += async (_, __) => await InsertPageAtAsync(insertIndex);
+            insertButton.Click += async (_, __) =>
+            {
+                using var operationLease = CaptureDocumentOperationLease(_pdfService);
+                await InsertPageAtAsync(insertIndex, operationLease);
+            };
 
             zone.MouseEnter += (_, __) =>
             {
@@ -5609,137 +8106,251 @@ namespace Caelum.Pages
                 button.ToolTip = LocalizationService.Get("Editor.InsertPageHereTooltip");
         }
 
-        private async Task InsertPageAtAsync(int insertIndex)
+        private async Task InsertPageAtAsync(
+            int insertIndex,
+            DocumentOperationLease operationLease = null)
         {
-            if (string.IsNullOrWhiteSpace(_currentPdfPath))
-            {
-                GetMainWindow()?.ShowToast(LocalizationService.Get("Editor.NoDocumentLoaded"), "\uE783");
+            if (!TryBeginDocumentEdit(out var editLease))
                 return;
-            }
-
-            var owner = GetMainWindow();
-            var picker = new PageTemplatePickerWindow();
-            if (owner != null)
-                picker.Owner = owner;
-
-            if (picker.ShowDialog() != true)
-                return;
-
-            try
+            using (editLease)
             {
-                if (_isDirty && !await AutoSaveAsync())
+                if (string.IsNullOrWhiteSpace(_currentPdfPath))
+                {
+                    if (operationLease == null)
+                        GetMainWindow()?.ShowToast(LocalizationService.Get("Editor.NoDocumentLoaded"), "\uE783");
                     return;
+                }
 
-                byte[] beforeBytes = await File.ReadAllBytesAsync(_currentPdfPath);
-                int undoFocusIndex = Math.Max(0, Math.Min(insertIndex, Math.Max(_pageControls.Count - 1, 0)));
-                var beforeBookmarks = PageBookmarkService.Load(_currentPdfPath).ToList();
+                string filePath = _currentPdfPath;
+                DocumentOperationLease currentLease = operationLease ?? CaptureDocumentOperationLease(_pdfService);
+                var owner = GetMainWindow();
+                var picker = new PageTemplatePickerWindow();
+                if (owner != null)
+                    picker.Owner = owner;
 
-                await _pdfService.InsertPageAsync(_currentPdfPath, insertIndex, picker.SelectedTemplate);
+                if (picker.ShowDialog() != true)
+                {
+                    currentLease.Dispose();
+                    return;
+                }
 
-                byte[] afterBytes = await File.ReadAllBytesAsync(_currentPdfPath);
-                await LoadPdf(_currentPdfPath);
+                try
+                {
+                    if (!ValidateDocumentOperationLease(currentLease))
+                        return;
+                    if (_documentSaveCoordinator.IsDirty &&
+                        (!await AutoSaveAsync(currentLease) || !ValidateDocumentOperationLease(currentLease)))
+                        return;
 
-                int insertedPageIndex = Math.Max(0, Math.Min(insertIndex, _pageControls.Count - 1));
-                JumpToPage(insertedPageIndex);
-                RecentFilesService.UpdateMetadata(_currentPdfPath, _pageControls.Count, File.GetLastWriteTimeUtc(_currentPdfPath));
-                var afterBookmarks = PageBookmarkService.ApplyPageInsert(_currentPdfPath, insertedPageIndex).ToList();
-                RefreshBookmarks();
-                PushUndoAction(new DocumentSnapshotAction(this, beforeBytes, afterBytes, undoFocusIndex, insertedPageIndex, beforeBookmarks, afterBookmarks));
-                GetMainWindow()?.ShowToast(LocalizationService.Get("Editor.PageAdded"), "\uE710");
-            }
-            catch (Exception ex)
-            {
-                var mw = GetMainWindow();
-                if (mw != null)
-                    await DialogService.ShowErrorAsync(mw, LocalizationService.Get("Common.Error"), LocalizationService.Format("Editor.AddPageFailed", ex.Message));
-                else
-                    MessageBox.Show(LocalizationService.Format("Editor.AddPageFailed", ex.Message), LocalizationService.Get("Common.Error"), MessageBoxButton.OK, MessageBoxImage.Error);
+                    byte[] beforeBytes = await File.ReadAllBytesAsync(filePath, currentLease.Token);
+                    if (!ValidateDocumentOperationLease(currentLease))
+                        return;
+                    int undoFocusIndex = Math.Max(0, Math.Min(insertIndex, Math.Max(_pageControls.Count - 1, 0)));
+                    var beforeBookmarks = PageBookmarkService.Load(filePath).ToList();
+
+                    await _pdfService.InsertPageAsync(filePath, insertIndex, picker.SelectedTemplate);
+                    if (!ValidateDocumentOperationLease(currentLease))
+                        return;
+
+                    byte[] afterBytes = await File.ReadAllBytesAsync(filePath, currentLease.Token);
+                    if (!ValidateDocumentOperationLease(currentLease))
+                        return;
+                    currentLease = await ReloadDocumentForOperationAsync(filePath, currentLease);
+                    if (currentLease == null)
+                        return;
+
+                    int insertedPageIndex = Math.Max(0, Math.Min(insertIndex, _pageControls.Count - 1));
+                    if (!ValidateDocumentOperationLease(currentLease))
+                        return;
+                    JumpToPage(insertedPageIndex);
+                    RecentFilesService.UpdateMetadata(filePath, _pageControls.Count, File.GetLastWriteTimeUtc(filePath));
+                    var afterBookmarks = PageBookmarkService.ApplyPageInsert(filePath, insertedPageIndex).ToList();
+                    RefreshBookmarks(_loadSessionId, filePath, currentLease);
+                    if (!ValidateDocumentOperationLease(currentLease))
+                        return;
+                    PushUndoAction(new DocumentSnapshotAction(this, beforeBytes, afterBytes, undoFocusIndex, insertedPageIndex, beforeBookmarks, afterBookmarks));
+                    if (!ValidateDocumentOperationLease(currentLease))
+                        return;
+                    GetMainWindow()?.ShowToast(LocalizationService.Get("Editor.PageAdded"), "\uE710");
+                }
+                catch (OperationCanceledException)
+                {
+                }
+                catch (Exception ex)
+                {
+                    if (!ValidateDocumentOperationLease(currentLease))
+                        return;
+                    var mw = GetMainWindow();
+                    if (mw != null)
+                        await DialogService.ShowErrorAsync(mw, LocalizationService.Get("Common.Error"), LocalizationService.Format("Editor.AddPageFailed", ex.Message));
+                    else
+                        MessageBox.Show(LocalizationService.Format("Editor.AddPageFailed", ex.Message), LocalizationService.Get("Common.Error"), MessageBoxButton.OK, MessageBoxImage.Error);
+                }
+                finally
+                {
+                    currentLease?.Dispose();
+                }
             }
         }
 
-        private async Task DeletePageAtAsync(int pageIndex)
+        private async Task DeletePageAtAsync(
+            int pageIndex,
+            DocumentOperationLease operationLease = null)
         {
-            if (string.IsNullOrWhiteSpace(_currentPdfPath))
-            {
-                GetMainWindow()?.ShowToast(LocalizationService.Get("Editor.NoDocumentLoaded"), "\uE783");
+            if (!TryBeginDocumentEdit(out var editLease))
                 return;
-            }
-
-            if (_pageControls.Count <= 1)
+            using (editLease)
             {
-                GetMainWindow()?.ShowToast(LocalizationService.Get("Editor.PageDeleteBlocked"), "\uE783");
-                return;
-            }
-
-            try
-            {
-                if (_isDirty && !await AutoSaveAsync())
+                if (string.IsNullOrWhiteSpace(_currentPdfPath))
+                {
+                    if (operationLease == null)
+                        GetMainWindow()?.ShowToast(LocalizationService.Get("Editor.NoDocumentLoaded"), "\uE783");
                     return;
+                }
 
-                byte[] beforeBytes = await File.ReadAllBytesAsync(_currentPdfPath);
-                var beforeBookmarks = PageBookmarkService.Load(_currentPdfPath).ToList();
-                await _pdfService.DeletePageAsync(_currentPdfPath, pageIndex);
+                if (_pageControls.Count <= 1)
+                {
+                    if (operationLease == null)
+                        GetMainWindow()?.ShowToast(LocalizationService.Get("Editor.PageDeleteBlocked"), "\uE783");
+                    return;
+                }
 
-                byte[] afterBytes = await File.ReadAllBytesAsync(_currentPdfPath);
-                await LoadPdf(_currentPdfPath);
+                string filePath = _currentPdfPath;
+                DocumentOperationLease currentLease = operationLease ?? CaptureDocumentOperationLease(_pdfService);
+                try
+                {
+                    if (!ValidateDocumentOperationLease(currentLease))
+                        return;
+                    if (_documentSaveCoordinator.IsDirty &&
+                        (!await AutoSaveAsync(currentLease) || !ValidateDocumentOperationLease(currentLease)))
+                        return;
 
-                int focusAfterDelete = Math.Max(0, Math.Min(pageIndex, _pageControls.Count - 1));
-                JumpToPage(focusAfterDelete);
-                RecentFilesService.UpdateMetadata(_currentPdfPath, _pageControls.Count, File.GetLastWriteTimeUtc(_currentPdfPath));
-                var afterBookmarks = PageBookmarkService.ApplyPageDelete(_currentPdfPath, pageIndex).ToList();
-                RefreshBookmarks();
-                PushUndoAction(new DocumentSnapshotAction(this, beforeBytes, afterBytes, pageIndex, focusAfterDelete, beforeBookmarks, afterBookmarks));
-                GetMainWindow()?.ShowToast(LocalizationService.Get("Editor.PageDeleted"), "\uE74D");
-            }
-            catch (InvalidOperationException)
-            {
-                GetMainWindow()?.ShowToast(LocalizationService.Get("Editor.PageDeleteBlocked"), "\uE783");
-            }
-            catch (Exception ex)
-            {
-                var mw = GetMainWindow();
-                if (mw != null)
-                    await DialogService.ShowErrorAsync(mw, LocalizationService.Get("Common.Error"), LocalizationService.Format("Editor.DeletePageFailed", ex.Message));
-                else
-                    MessageBox.Show(LocalizationService.Format("Editor.DeletePageFailed", ex.Message), LocalizationService.Get("Common.Error"), MessageBoxButton.OK, MessageBoxImage.Error);
+                    byte[] beforeBytes = await File.ReadAllBytesAsync(filePath, currentLease.Token);
+                    if (!ValidateDocumentOperationLease(currentLease))
+                        return;
+                    var beforeBookmarks = PageBookmarkService.Load(filePath).ToList();
+                    await _pdfService.DeletePageAsync(filePath, pageIndex);
+                    if (!ValidateDocumentOperationLease(currentLease))
+                        return;
+
+                    byte[] afterBytes = await File.ReadAllBytesAsync(filePath, currentLease.Token);
+                    if (!ValidateDocumentOperationLease(currentLease))
+                        return;
+                    currentLease = await ReloadDocumentForOperationAsync(filePath, currentLease);
+                    if (currentLease == null)
+                        return;
+
+                    int focusAfterDelete = Math.Max(0, Math.Min(pageIndex, _pageControls.Count - 1));
+                    if (!ValidateDocumentOperationLease(currentLease))
+                        return;
+                    JumpToPage(focusAfterDelete);
+                    RecentFilesService.UpdateMetadata(filePath, _pageControls.Count, File.GetLastWriteTimeUtc(filePath));
+                    var afterBookmarks = PageBookmarkService.ApplyPageDelete(filePath, pageIndex).ToList();
+                    RefreshBookmarks(_loadSessionId, filePath, currentLease);
+                    if (!ValidateDocumentOperationLease(currentLease))
+                        return;
+                    PushUndoAction(new DocumentSnapshotAction(this, beforeBytes, afterBytes, pageIndex, focusAfterDelete, beforeBookmarks, afterBookmarks));
+                    if (!ValidateDocumentOperationLease(currentLease))
+                        return;
+                    GetMainWindow()?.ShowToast(LocalizationService.Get("Editor.PageDeleted"), "\uE74D");
+                }
+                catch (OperationCanceledException)
+                {
+                }
+                catch (InvalidOperationException)
+                {
+                    if (ValidateDocumentOperationLease(currentLease))
+                        GetMainWindow()?.ShowToast(LocalizationService.Get("Editor.PageDeleteBlocked"), "\uE783");
+                }
+                catch (Exception ex)
+                {
+                    if (!ValidateDocumentOperationLease(currentLease))
+                        return;
+                    var mw = GetMainWindow();
+                    if (mw != null)
+                        await DialogService.ShowErrorAsync(mw, LocalizationService.Get("Common.Error"), LocalizationService.Format("Editor.DeletePageFailed", ex.Message));
+                    else
+                        MessageBox.Show(LocalizationService.Format("Editor.DeletePageFailed", ex.Message), LocalizationService.Get("Common.Error"), MessageBoxButton.OK, MessageBoxImage.Error);
+                }
+                finally
+                {
+                    currentLease?.Dispose();
+                }
             }
         }
 
-        private async Task ApplyDocumentSnapshotAsync(byte[] snapshotBytes, int focusPageIndex)
+        private async Task<DocumentOperationLease> ApplyDocumentSnapshotAsync(
+            byte[] snapshotBytes,
+            int focusPageIndex,
+            DocumentOperationLease operationLease)
         {
-            if (string.IsNullOrWhiteSpace(_currentPdfPath))
-                return;
+            if (string.IsNullOrWhiteSpace(_currentPdfPath) ||
+                !ValidateDocumentOperationLease(operationLease))
+                return null;
 
-            await WriteDocumentBytesAsync(_currentPdfPath, snapshotBytes);
-            await LoadPdf(_currentPdfPath);
+            string filePath = _currentPdfPath;
+            await WriteDocumentBytesAsync(filePath, snapshotBytes, operationLease.Token);
+            if (!ValidateDocumentOperationLease(operationLease))
+                return null;
+
+            var refreshedLease = await ReloadDocumentForOperationAsync(filePath, operationLease);
+            if (refreshedLease == null)
+                return null;
 
             if (_pageControls.Count > 0)
+            {
+                if (!ValidateDocumentOperationLease(refreshedLease))
+                {
+                    refreshedLease.Dispose();
+                    return null;
+                }
                 JumpToPage(Math.Max(0, Math.Min(focusPageIndex, _pageControls.Count - 1)));
+            }
 
-            RecentFilesService.UpdateMetadata(_currentPdfPath, _pageControls.Count, File.GetLastWriteTimeUtc(_currentPdfPath));
+            if (!ValidateDocumentOperationLease(refreshedLease))
+            {
+                refreshedLease.Dispose();
+                return null;
+            }
+            RecentFilesService.UpdateMetadata(filePath, _pageControls.Count, File.GetLastWriteTimeUtc(filePath));
+            return refreshedLease;
         }
 
-        private static async Task WriteDocumentBytesAsync(string filePath, byte[] snapshotBytes)
+        private static Task WriteDocumentBytesAsync(
+            string filePath,
+            byte[] snapshotBytes,
+            CancellationToken cancellationToken = default)
         {
-            string tempPath = System.IO.Path.Combine(
-                System.IO.Path.GetDirectoryName(filePath) ?? string.Empty,
-                $"{System.IO.Path.GetFileName(filePath)}.{Guid.NewGuid():N}.snapshot");
+            // DocumentSnapshotAction is an editor-owned structural write, so
+            // it must use the same process-wide PDF path lease as PdfService
+            // saves before replacing bytes. The subsequent LoadPdfAsync also
+            // joins that lease for its native reload.
+            return PdfSaveCoordinator.RunExclusiveAsync(
+                filePath,
+                () => WriteDocumentBytesCoreAsync(filePath, snapshotBytes, cancellationToken));
+        }
+
+        private static async Task WriteDocumentBytesCoreAsync(
+            string filePath,
+            byte[] snapshotBytes,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            string tempPath = PdfAtomicFile.CreateTempPath(filePath);
 
             try
             {
-                await File.WriteAllBytesAsync(tempPath, snapshotBytes);
-                File.Copy(tempPath, filePath, true);
+                await using (var output = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None))
+                {
+                    await output.WriteAsync(snapshotBytes ?? Array.Empty<byte>(), cancellationToken);
+                    output.Flush(true);
+                }
+                cancellationToken.ThrowIfCancellationRequested();
+                PdfAtomicFile.Replace(tempPath, filePath);
             }
             finally
             {
-                try
-                {
-                    if (File.Exists(tempPath))
-                        File.Delete(tempPath);
-                }
-                catch
-                {
-                }
+                PdfAtomicFile.TryDelete(tempPath);
             }
         }
 
@@ -5828,10 +8439,13 @@ namespace Caelum.Pages
                     page, targetPage,
                     e.DeltaX, e.DeltaY,
                     adjustX, adjustY,
-                    e.SelectedStrokes, e.SelectedTextContainers);
+                    e.SelectedStrokes
+                        .Select(page.CaptureStrokePlacement)
+                        .ToList(),
+                    e.SelectedTextContainers);
 
-                moveAction.ExecuteInitialTransfer();
-                PushUndoAction(moveAction);
+                if (moveAction.ExecuteInitialTransfer())
+                    PushUndoAction(moveAction);
             }
             else
             {
@@ -5974,7 +8588,23 @@ namespace Caelum.Pages
 
         private void UpdateToolIconColors()
         {
-            PenIcon.Foreground = new SolidColorBrush(_penColor);
+            PenIconContrast?.SetResourceReference(Path.StrokeProperty, "ThemeFocusBrush");
+            if (PenIcon != null)
+                PenIcon.Stroke = new SolidColorBrush(_penColor);
+            PenIconBackplate?.SetResourceReference(Border.BackgroundProperty, "ThemeSurfaceBrush");
+            PenIconBackplate?.SetResourceReference(Border.BorderBrushProperty, "ThemeFocusBrush");
+            if (HighlighterIcon != null)
+            {
+                // Match the actual freehand highlighter alpha used by the page
+                // control and the live popup preview while preserving the user's
+                // selected RGB color.
+                var highlighterBrush = new SolidColorBrush(
+                    GetHighlighterPreviewStrokeColor(HighlighterApplyMode.Freehand, _highlighterColor));
+                HighlighterIcon.Fill = highlighterBrush;
+                HighlighterIcon.Stroke = highlighterBrush;
+            }
+
+            UpdateHighlighterModePreviewVisuals();
         }
 
         // Task 15: pen-only drawing (palm rejection) toolbar toggle.
@@ -5992,67 +8622,26 @@ namespace Caelum.Pages
 
         private void UpdatePenOnlyButtonVisual()
         {
-            // Distinct checked tint: blue pen icon while pen-only drawing
-            // is active, neutral gray otherwise.
-            PenOnlyIcon.Foreground = new SolidColorBrush(
+            // Distinct checked tint uses theme resources so it remains
+            // legible in light, dark and high-contrast palettes.
+            PenOnlyIcon.SetResourceReference(
+                Path.StrokeProperty,
                 PenOnlyButton.IsChecked == true
-                    ? Color.FromRgb(0x00, 0x78, 0xD4)
-                    : Color.FromRgb(0x55, 0x55, 0x55));
+                    ? "ThemeAccentBrush"
+                    : "ThemeForegroundBrush");
         }
 
-        #region Task 23: pen preset slots
+        #region Legacy pen preset JSON compatibility
 
-        /// <summary>
-        /// Task 23: builds the 3 preset slot circles into
-        /// <see cref="PresetSlotsPanel"/> (XAML placeholder between the
-        /// Highlighter and Eraser buttons) and fills the 3 default presets
-        /// on first use (empty persisted list). Defaults are filled HERE on
-        /// load — AppSettingsService.Sanitize only deep-copies (spec).
-        /// </summary>
+        // The toolbar no longer creates visible preset slots, but retain the
+        // old private entry points so legacy settings can still be read and
+        // written by the existing AppSettingsService contract. This method is
+        // deliberately read-only: it never fills or resets an empty list.
         private void InitializePenPresetSlots()
         {
-            var settings = AppSettingsService.Load();
-            if (settings.PenPresets == null || settings.PenPresets.Count == 0)
-            {
-                settings.PenPresets = BuildDefaultPenPresets();
-                AppSettingsService.Save(settings);
-            }
-
-            for (int i = 0; i < PenPresetSlotCount; i++)
-            {
-                int slotIndex = i;
-                var slot = new Border
-                {
-                    Width = 22,
-                    Height = 22,
-                    VerticalAlignment = VerticalAlignment.Center,
-                    CornerRadius = new CornerRadius(11),
-                    BorderThickness = new Thickness(1),
-                    Cursor = Cursors.Hand,
-                    Margin = new Thickness(0, 0, i < PenPresetSlotCount - 1 ? 6 : 0, 0),
-                    Child = new TextBlock
-                    {
-                        Text = "P",
-                        FontSize = 9,
-                        FontWeight = FontWeights.Bold,
-                        HorizontalAlignment = HorizontalAlignment.Center,
-                        VerticalAlignment = VerticalAlignment.Center
-                    }
-                };
-
-                // Left-click applies the preset; right-click captures the
-                // current Pen/Highlighter state into the slot.
-                slot.MouseLeftButtonUp += (s, e) => { ApplyPenPreset(slotIndex); e.Handled = true; };
-                slot.MouseRightButtonUp += (s, e) => { CapturePenPreset(slotIndex); e.Handled = true; };
-
-                _presetSlots[i] = slot;
-                PresetSlotsPanel.Children.Add(slot);
-            }
-
-            UpdatePresetSlotVisuals();
+            _ = AppSettingsService.Load().PenPresets;
         }
 
-        /// <summary>Task 23: first-use defaults — Pen black 2, Highlighter yellow 8, Pen red 3.</summary>
         private static List<PenPreset> BuildDefaultPenPresets()
         {
             return new List<PenPreset>
@@ -6063,153 +8652,8 @@ namespace Caelum.Pages
             };
         }
 
-        /// <summary>
-        /// Task 23: exactly <see cref="PenPresetSlotCount"/> presets from the
-        /// persisted list, padding missing/null entries with the defaults
-        /// (hand-trimmed settings.json stays UI-safe; capture persists the
-        /// normalized list).
-        /// </summary>
-        private static List<PenPreset> NormalizePenPresets(List<PenPreset> presets)
-        {
-            var defaults = BuildDefaultPenPresets();
-            var result = new List<PenPreset>(PenPresetSlotCount);
-            for (int i = 0; i < PenPresetSlotCount; i++)
-                result.Add(i < presets?.Count && presets[i] != null ? presets[i] : defaults[i]);
-            return result;
-        }
-
-        /// <summary>
-        /// Task 23: applies a preset slot — switches the active tool to the
-        /// preset's (Pen/Highlighter), loads its color/size into the session
-        /// fields and re-applies to all pages immediately. The popup size
-        /// sliders + preview lines are resynced so reopening a popup shows
-        /// the applied state.
-        /// </summary>
-        private void ApplyPenPreset(int slotIndex)
-        {
-            var preset = NormalizePenPresets(AppSettingsService.Load().PenPresets)[slotIndex];
-            bool isHighlighter = string.Equals(preset.Tool, "Highlighter", StringComparison.OrdinalIgnoreCase);
-            var color = TryParseRecentColor(preset.ColorHex, out var parsed) ? parsed : (isHighlighter ? Colors.Yellow : Colors.Black);
-
-            if (isHighlighter)
-            {
-                _highlighterColor = color;
-                _highlighterSize = preset.Size;
-            }
-            else
-            {
-                _penColor = color;
-                _penSize = preset.Size;
-            }
-
-            CloseToolPopups();
-            var tool = isHighlighter ? ToolType.Highlighter : ToolType.Pen;
-            if (_currentTool != tool)
-                ActivateTool(tool); // button states + ApplyToolToAllPages
-            else
-                ApplyToolToAllPages();
-            UpdateToolIconColors();
-            UpdatePresetSlotVisuals();
-
-            // Resync the popups' size slider + preview line so they reflect
-            // the applied preset (setting slider.Value re-fires the popup's
-            // own size-changed handler — idempotent for the same value).
-            if (_penPopupSizeSlider != null)
-                _penPopupSizeSlider.Value = _penSize;
-            if (_penPopupSizePreview != null)
-                _penPopupSizePreview.Stroke = new SolidColorBrush(_penColor);
-            if (_highlighterPopupSizeSlider != null)
-                _highlighterPopupSizeSlider.Value = _highlighterSize;
-            if (_highlighterPopupSizePreview != null)
-                _highlighterPopupSizePreview.Stroke = new SolidColorBrush(Color.FromArgb(140, _highlighterColor.R, _highlighterColor.G, _highlighterColor.B));
-        }
-
-        /// <summary>
-        /// Task 23: captures the CURRENT Pen/Highlighter tool state (tool
-        /// kind, color, size) into a preset slot and persists it. Capturing
-        /// from any other tool is rejected with a toast hint.
-        /// </summary>
-        private void CapturePenPreset(int slotIndex)
-        {
-            if (_currentTool != ToolType.Pen && _currentTool != ToolType.Highlighter)
-            {
-            GetMainWindow()?.ShowToast(LocalizationService.Get("Editor.SelectPenFirst"), "\uED63", 1500);
-                return;
-            }
-
-            bool isHighlighter = _currentTool == ToolType.Highlighter;
-            var color = isHighlighter ? _highlighterColor : _penColor;
-            var captured = new PenPreset
-            {
-                Tool = isHighlighter ? "Highlighter" : "Pen",
-                ColorHex = $"#{color.R:X2}{color.G:X2}{color.B:X2}",
-                Size = isHighlighter ? _highlighterSize : _penSize
-            };
-
-            SaveSetting(s =>
-            {
-                var presets = NormalizePenPresets(s.PenPresets);
-                presets[slotIndex] = captured;
-                s.PenPresets = presets;
-            });
-
-            UpdatePresetSlotVisuals();
-            GetMainWindow()?.ShowToast(LocalizationService.Format("Editor.PresetSaved", slotIndex + 1), "\uE74E", 1500);
-        }
-
-        /// <summary>
-        /// Task 23: refreshes every slot circle — preset color fill, P/H
-        /// tool letter (contrast-aware) and the accent ring on the slot
-        /// matching the CURRENT tool + color + size. Called from
-        /// ApplyToolToAllPages so every state change path stays in sync.
-        /// </summary>
-        private void UpdatePresetSlotVisuals()
-        {
-            var presets = NormalizePenPresets(AppSettingsService.Load().PenPresets);
-            for (int i = 0; i < PenPresetSlotCount; i++)
-            {
-                var slot = _presetSlots[i];
-                if (slot == null)
-                    continue;
-
-                var preset = presets[i];
-                bool isHighlighter = string.Equals(preset.Tool, "Highlighter", StringComparison.OrdinalIgnoreCase);
-                var color = TryParseRecentColor(preset.ColorHex, out var parsed)
-                    ? parsed
-                    : (isHighlighter ? Colors.Yellow : Colors.Black);
-
-                bool isActive = isHighlighter
-                    ? _currentTool == ToolType.Highlighter && _highlighterColor == color && Math.Abs(_highlighterSize - preset.Size) < 0.001
-                    : _currentTool == ToolType.Pen && _penColor == color && Math.Abs(_penSize - preset.Size) < 0.001;
-
-                slot.Background = new SolidColorBrush(color);
-                slot.BorderBrush = new SolidColorBrush(isActive
-                    ? Color.FromRgb(0x25, 0x63, 0xEB)
-                    : Color.FromArgb(60, 0, 0, 0));
-                slot.BorderThickness = new Thickness(isActive ? 2 : 1);
-
-                if (slot.Child is TextBlock letter)
-                {
-                    letter.Text = isHighlighter ? "H" : "P";
-                    double luminance = 0.299 * color.R + 0.587 * color.G + 0.114 * color.B;
-                    letter.Foreground = new SolidColorBrush(luminance > 140 ? Colors.Black : Colors.White);
-                }
-
-                var toolName = isHighlighter
-                    ? LocalizationService.Get("Editor.ModeHighlighter")
-                    : LocalizationService.Get("Editor.ModePen");
-                slot.ToolTip = LocalizationService.Format(
-                    "Editor.PresetTooltip",
-                    i + 1,
-                    toolName,
-                    preset.ColorHex,
-                    preset.Size.ToString("0.##", LocalizationService.CurrentCulture),
-                    LocalizationService.Get("Editor.PresetClickApply"),
-                    LocalizationService.Get("Editor.PresetRightClickSave"));
-            }
-        }
-
         #endregion
+
 
         #region Task 22: on-screen ruler
 
@@ -6226,10 +8670,9 @@ namespace Caelum.Pages
         {
             _rulerVisible = visible;
             RulerToolButton.IsChecked = visible;
-            RulerIcon.Foreground = new SolidColorBrush(
-                visible
-                    ? Color.FromRgb(0x00, 0x78, 0xD4)
-                    : Color.FromRgb(0x55, 0x55, 0x55));
+            RulerIcon?.SetResourceReference(
+                Path.StrokeProperty,
+                visible ? "ThemeAccentBrush" : "ThemeForegroundBrush");
 
             if (visible)
             {
@@ -6271,43 +8714,54 @@ namespace Caelum.Pages
                 Cursor = Cursors.SizeAll
             };
 
-            // Semi-transparent body.
-            ruler.Children.Add(new Rectangle
+            // Semi-transparent body. Keep the ruler itself in application
+            // chrome resources; only PDF/page annotations retain content
+            // colours.
+            var rulerBody = new Rectangle
             {
-                Fill = new SolidColorBrush(Color.FromArgb(0x33, 0x00, 0x00, 0x00)),
-                Stroke = new SolidColorBrush(Color.FromArgb(0x66, 0x66, 0x66, 0x66)),
+                Fill = Brushes.Transparent,
+                Stroke = Brushes.Transparent,
                 StrokeThickness = 1,
                 RadiusX = 6,
                 RadiusY = 6,
                 IsHitTestVisible = false
-            });
+            };
+            rulerBody.SetResourceReference(System.Windows.Shapes.Shape.FillProperty, "ThemeToolbarBrush");
+            rulerBody.SetResourceReference(System.Windows.Shapes.Shape.StrokeProperty, "ThemeBorderBrush");
+            rulerBody.Opacity = 0.92;
+            ruler.Children.Add(rulerBody);
 
             // Tick marks along the top edge: minor every 10px, major every
             // 50px (labels intentionally skipped in v1).
-            var tickBrush = new SolidColorBrush(Color.FromArgb(0x99, 0x33, 0x33, 0x33));
             for (double x = 10; x < RulerLength; x += 10)
             {
                 bool major = Math.Abs(x % 50) < 0.01;
-                ruler.Children.Add(new Line
+                var tick = new Line
                 {
                     X1 = x, Y1 = 0,
                     X2 = x, Y2 = major ? 12 : 6,
-                    Stroke = tickBrush,
+                    Stroke = Brushes.Transparent,
                     StrokeThickness = 1,
                     IsHitTestVisible = false
-                });
+                };
+                tick.SetResourceReference(System.Windows.Shapes.Shape.StrokeProperty, "ThemeSubtleTextBrush");
+                tick.Opacity = 0.72;
+                ruler.Children.Add(tick);
             }
 
             // Centre rotation handle dot.
-            ruler.Children.Add(new Ellipse
+            var rulerCenterDot = new Ellipse
             {
                 Width = 8,
                 Height = 8,
-                Fill = new SolidColorBrush(Color.FromArgb(0xAA, 0x00, 0x78, 0xD4)),
+                Fill = Brushes.Transparent,
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center,
                 IsHitTestVisible = false
-            });
+            };
+            rulerCenterDot.SetResourceReference(System.Windows.Shapes.Shape.FillProperty, "ThemeAccentBrush");
+            rulerCenterDot.Opacity = 0.82;
+            ruler.Children.Add(rulerCenterDot);
 
             // Transparent end-cap zones: hitting them starts a rotation
             // drag instead of a move (they sit above the body in z-order).
@@ -6542,6 +8996,7 @@ namespace Caelum.Pages
             }
 
             _penSize = Math.Max(0.5, Math.Min(24, _applicationSettings.DefaultPenSize));
+            UpdateToolIconColors();
             if (_autoSaveTimer != null)
                 _autoSaveTimer.Interval = TimeSpan.FromSeconds(Math.Max(15, _applicationSettings.AutoSaveIntervalSeconds));
 
@@ -6562,17 +9017,55 @@ namespace Caelum.Pages
         }
 
         /// <summary>
+        /// True while this editor owns a text drag/resize transaction. Ordinary
+        /// TextBox focus/edit sessions intentionally do not count as transient
+        /// interactions and are never cancelled by this boundary.
+        /// </summary>
+        public bool HasActiveInteraction =>
+            _draggedContainer != null
+            || _dragArmed
+            || _isDragging
+            || _resizingTextContainer != null;
+
+        /// <summary>
+        /// Cancels editor-owned text gestures and then delegates the same
+        /// idempotent boundary to every live page. Only a normal pointer/stylus
+        /// release is allowed to publish an undo action or dirty state.
+        /// </summary>
+        public void CancelInteraction(string reason = null)
+        {
+            CancelTextBoxDrag(restoreBounds: true);
+            CancelTextResize(restoreBounds: true);
+            _thumbnailDragIndex = -1;
+            _thumbnailDragSessionId = -1;
+            _thumbnailDragPath = null;
+            InteractionCancellation.CancelAll(_pageControls, reason);
+        }
+
+        /// <summary>
         /// Pauses native rendering and releases display-only bitmaps when this
         /// editor is behind another tab. Annotation state remains in memory.
         /// </summary>
         public void SetHostActive(bool isActive)
         {
-            if (_resourcesReleased || _isHostActive == isActive)
+            if (!isActive)
+            {
+                CloseTransientUi("inactive editor");
+                _documentOperationSession.Cancel();
+            }
+            else
+                EnsureTransientUiHooks();
+            if (_resourcesReleased || (isActive && !_releaseState.CanResumeInteraction) || _isHostActive == isActive)
                 return;
 
+            if (isActive)
+                _documentOperationSession.Begin(_loadSessionId, _currentPdfPath, _pdfService);
             _isHostActive = isActive;
             foreach (var page in _pageControls)
+            {
                 page.SetHostActive(isActive);
+                page.SetDocumentInputEnabled(isActive && !_documentInteractionBlocked);
+            }
 
             if (!isActive)
             {
@@ -6581,6 +9074,8 @@ namespace Caelum.Pages
                 _thumbnailLoadCts?.Dispose();
                 _thumbnailLoadCts = null;
                 _thumbnailPagesLoading.Clear();
+                _thumbnailPageLoadSessions.Clear();
+                _isRefreshingThumbnails = false;
                 CancelSmoothScroll();
 
                 foreach (var page in _pageControls)
@@ -6594,6 +9089,80 @@ namespace Caelum.Pages
             _thumbnailLoadCts = new CancellationTokenSource();
             LoadVisibleThumbnails();
             _ = RenderVisibleWorkingSetAsync();
+        }
+
+        private void SetDocumentInteractionBlocked(bool blocked)
+        {
+            bool effectiveBlocked = blocked || !_releaseState.CanResumeInteraction;
+            _documentInteractionBlocked = effectiveBlocked;
+            // Disable the complete editor command/input subtree, not only the
+            // page controls.  Toolbar commands and routed keyboard handlers
+            // can otherwise still mutate the model while close/navigation is
+            // waiting for the final persistence barrier. Popup editors are
+            // committed explicitly by the close/navigation protocol above.
+            IsEnabled = !effectiveBlocked;
+            foreach (var page in _pageControls)
+                page.SetDocumentInputEnabled(!effectiveBlocked && _isHostActive && !_resourcesReleased);
+        }
+
+        private async Task BeginDocumentInteractionBlockAsync(
+            CancellationToken cancellationToken,
+            DocumentOperationLease operationLease = null)
+        {
+            if (operationLease != null && !ValidateDocumentOperationLease(operationLease))
+                throw new OperationCanceledException(operationLease.Token);
+
+            _editAdmission.BeginClose();
+            SetDocumentInteractionBlocked(true);
+            await _editAdmission.WaitForQuiescenceAsync(cancellationToken)
+                .ConfigureAwait(true);
+            if (operationLease != null && !ValidateDocumentOperationLease(operationLease))
+                throw new OperationCanceledException(operationLease.Token);
+
+            // WPF input routed before IsEnabled was flipped can still be in
+            // the dispatcher queue and may mutate the live model before its
+            // event callback calls MarkDirty/PushUndoAction.  Let already
+            // queued input callbacks drain before the final generation check;
+            // this is an async dispatcher barrier, never a UI-thread wait.
+                await Dispatcher.InvokeAsync(
+                        () => { },
+                        System.Windows.Threading.DispatcherPriority.Input)
+                .Task
+                .WaitAsync(cancellationToken)
+                .ConfigureAwait(true);
+            if (operationLease != null && !ValidateDocumentOperationLease(operationLease))
+                throw new OperationCanceledException(operationLease.Token);
+        }
+
+        private bool TryBeginDocumentEdit(out IDisposable lease)
+        {
+            lease = null;
+            if (_resourcesReleased || _documentInteractionBlocked || !_releaseState.CanResumeInteraction)
+                return false;
+
+            return _editAdmission.TryEnter(out lease);
+        }
+
+        /// <summary>
+        /// Reopens a document that was safely persisted for navigation and is
+        /// now the active frame again. Navigation preparation deliberately
+        /// leaves the editor blocked while it is in the back stack; rendering
+        /// activation alone must not silently reopen model mutations.
+        /// </summary>
+        public void ResumeDocumentInteraction()
+        {
+            if (_resourcesReleased || !_releaseState.CanResumeInteraction)
+                return;
+
+            // Navigation uses the same final-generation close state as tab
+            // closing. Reopen both state machines when the editor becomes
+            // active again; otherwise the coordinator would keep
+            // `_closeCompleted` and silently discard the first edit after
+            // returning through the frame journal.
+            _documentSaveCoordinator.CancelCloseRequest();
+            _editAdmission.CancelClose();
+            SetDocumentInteractionBlocked(false);
+            EnsureAutoSaveTimer();
         }
 
         private async Task RenderVisibleWorkingSetAsync()
@@ -6642,48 +9211,348 @@ namespace Caelum.Pages
             _scrollReRenderCts = null;
         }
 
-        /// <summary>Final tab-close cleanup for timers, hooks, bitmaps and the native PDF document.</summary>
-        public async Task ReleaseResourcesAsync()
+        /// <summary>
+        /// Persists the newest generation before a navigation transition. A
+        /// failed save keeps the editor alive and restarts its timer.
+        /// </summary>
+        public Task<bool> PrepareForNavigationAsync(CancellationToken cancellationToken = default)
         {
-            if (_resourcesReleased)
-                return;
-
-            SetHostActive(false);
-            _resourcesReleased = true;
-            CancelActiveLoad();
-            CancelRenderWork();
-
-            _thumbnailLoadCts?.Cancel();
-            _thumbnailLoadCts?.Dispose();
-            _thumbnailLoadCts = null;
-            _pdfSearchCts?.Cancel();
-            _pdfSearchCts?.Dispose();
-            _pdfSearchCts = null;
-
-            _autoSaveTimer?.Stop();
-            if (_autoSaveTimer != null)
-                _autoSaveTimer.Tick -= AutoSaveTimer_Tick;
-            _autoSaveTimer = null;
-
-            _zoomRenderDebounceTimer.Stop();
-            _zoomRenderDebounceTimer.Tick -= ZoomRenderDebounceTimer_Tick;
-            _scrollRenderDebounceTimer.Stop();
-            _scrollRenderDebounceTimer.Tick -= ScrollRenderDebounceTimer_Tick;
-
-            if (_languageChangedSubscribed)
+            lock (_lifecycleGate)
             {
-                LocalizationService.LanguageChanged -= EditorPage_LanguageChanged;
-                _languageChangedSubscribed = false;
+                if (_resourcesReleased)
+                    return Task.FromResult(true);
+                if (!_releaseState.CanResumeInteraction)
+                    return Task.FromResult(false);
+                if (_closePreparationInFlight != null)
+                    return Task.FromResult(false);
+                if (_navigationPreparationInFlight != null)
+                    return _navigationPreparationInFlight;
+
+                var task = PrepareForNavigationCoreAsync(cancellationToken);
+                _navigationPreparationInFlight = task;
+                if (task.IsCompleted)
+                    _navigationPreparationInFlight = null;
+                return task;
+            }
+        }
+
+        private async Task<bool> PrepareForNavigationCoreAsync(CancellationToken cancellationToken)
+        {
+            using var operationLease = CaptureDocumentOperationLease(_pdfService);
+            bool succeeded = false;
+            try
+            {
+                if (!ValidateDocumentOperationLease(operationLease))
+                    return false;
+                // TextBox.TextChanged mutates the live model before the focus
+                // event commits its undo action.  Flush that session before
+                // the coordinator captures a generation.
+                CommitTextEditSession();
+                CloseTransientUi("navigation");
+                // Sticky-note editing lives in a Popup and therefore is not
+                // covered by disabling the EditorPage subtree. The transient
+                // contract is Cancel; the compatibility shim is now a no-op.
+                CommitStickyNoteEdit();
+                await BeginDocumentInteractionBlockAsync(cancellationToken, operationLease).ConfigureAwait(true);
+                if (!ValidateDocumentOperationLease(operationLease))
+                    return false;
+                // A queued Popup activation can run at the dispatcher barrier
+                // after the first flush. Close/cancel once more so a detached
+                // Sticky Note editor cannot remain interactive during save.
+                CloseTransientUi("navigation barrier");
+                CommitStickyNoteEdit();
+                _autoSaveTimer?.Stop();
+
+                cancellationToken.ThrowIfCancellationRequested();
+                await _documentSaveCoordinator.SaveUntilCleanAsync(
+                    generation => SaveCurrentDocumentCoreAsync(generation, operationLease),
+                    // Navigation has the same atomic admission requirement
+                    // as final close: a queued model callback must either be
+                    // retained for a retry or be rejected after the clean
+                    // generation is completed. ResumeDocumentInteraction()
+                    // reopens this request when the frame becomes active.
+                    finalClose: true,
+                    cancellationToken).ConfigureAwait(true);
+                if (!ValidateDocumentOperationLease(operationLease))
+                    return false;
+                SyncDirtyStateMirror();
+                succeeded = !_documentSaveCoordinator.IsDirty;
+                return succeeded;
+            }
+            catch (OperationCanceledException ex)
+            {
+                if (!ValidateDocumentOperationLease(operationLease))
+                    return false;
+                SyncDirtyStateMirror();
+                GetMainWindow()?.ShowToast(
+                    LocalizationService.Format("Editor.AutoSaveFailed", ex.Message),
+                    "\uE783",
+                    3500);
+                return false;
+            }
+            catch (Exception ex)
+            {
+                if (!ValidateDocumentOperationLease(operationLease))
+                    return false;
+                SyncDirtyStateMirror();
+                GetMainWindow()?.ShowToast(
+                    LocalizationService.Format("Editor.AutoSaveFailed", ex.Message),
+                    "\uE783",
+                    3500);
+                return false;
+            }
+            finally
+            {
+                if (!succeeded && ValidateDocumentOperationLease(operationLease))
+                {
+                    _editAdmission.CancelClose();
+                    SetDocumentInteractionBlocked(false);
+                    EnsureAutoSaveTimer();
+                }
+
+                lock (_lifecycleGate)
+                {
+                    _navigationPreparationInFlight = null;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Final close protocol: stop timer, join/coalesce any active save,
+        /// retry a generation mismatch, and only report success once the
+        /// newest snapshot is persisted. Callers must not release resources
+        /// or remove a tab when this returns false.
+        /// </summary>
+        public Task<bool> PrepareForCloseAsync(CancellationToken cancellationToken = default)
+        {
+            lock (_lifecycleGate)
+            {
+                if (_resourcesReleased)
+                    return Task.FromResult(true);
+                if (!_releaseState.CanResumeInteraction
+                    && !_releaseState.IsReleaseInFlight
+                    && !_releaseState.HasFailed)
+                    return Task.FromResult(false);
+                if (_closePreparationInFlight != null)
+                    return _closePreparationInFlight;
+                if (_navigationPreparationInFlight != null)
+                    return Task.FromResult(false);
+
+                var task = PrepareForCloseCoreAsync(cancellationToken);
+                _closePreparationInFlight = task;
+                if (task.IsCompleted)
+                    _closePreparationInFlight = null;
+                return task;
+            }
+        }
+
+        private async Task<bool> PrepareForCloseCoreAsync(CancellationToken cancellationToken)
+        {
+            using var operationLease = CaptureDocumentOperationLease(_pdfService);
+            bool succeeded = false;
+            try
+            {
+                if (!ValidateDocumentOperationLease(operationLease))
+                    return false;
+                CommitTextEditSession();
+                CloseTransientUi("release");
+                // Popup content does not inherit the page's IsEnabled state;
+                // keep the historical compatibility call after cancellation.
+                CommitStickyNoteEdit();
+                await BeginDocumentInteractionBlockAsync(cancellationToken, operationLease).ConfigureAwait(true);
+                if (!ValidateDocumentOperationLease(operationLease))
+                    return false;
+                // The input barrier may have delivered a queued activation;
+                // close/cancel any Popup created by that callback too.
+                CloseTransientUi("release barrier");
+                CommitStickyNoteEdit();
+                _autoSaveTimer?.Stop();
+                await _documentSaveCoordinator.SaveUntilCleanAsync(
+                    generation => SaveCurrentDocumentCoreAsync(generation, operationLease),
+                    finalClose: true,
+                    cancellationToken).ConfigureAwait(true);
+                if (!ValidateDocumentOperationLease(operationLease))
+                    return false;
+                SyncDirtyStateMirror();
+                succeeded = !_documentSaveCoordinator.IsDirty;
+                if (succeeded)
+                    _editAdmission.CompleteClose();
+                return succeeded;
+            }
+            catch (OperationCanceledException ex)
+            {
+                if (!ValidateDocumentOperationLease(operationLease))
+                    return false;
+                SyncDirtyStateMirror();
+                GetMainWindow()?.ShowToast(
+                    LocalizationService.Format("Editor.AutoSaveFailed", ex.Message),
+                    "\uE783",
+                    3500);
+                return false;
+            }
+            catch (Exception ex)
+            {
+                if (!ValidateDocumentOperationLease(operationLease))
+                    return false;
+                SyncDirtyStateMirror();
+                var mw = GetMainWindow();
+                if (mw != null)
+                    await DialogService.ShowErrorAsync(
+                        mw,
+                        LocalizationService.Get("Common.Error"),
+                        LocalizationService.Format("Editor.SaveFailed", ex.Message));
+                else
+                    MessageBox.Show(
+                        LocalizationService.Format("Editor.SaveFailed", ex.Message),
+                        LocalizationService.Get("Common.Error"),
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Error);
+                return false;
+            }
+            finally
+            {
+                if (!succeeded && _releaseState.CanResumeInteraction)
+                {
+                    if (ValidateDocumentOperationLease(operationLease))
+                    {
+                        _documentSaveCoordinator.CancelCloseRequest();
+                        _editAdmission.CancelClose();
+                        SetDocumentInteractionBlocked(false);
+                        EnsureAutoSaveTimer();
+                    }
+                }
+
+                lock (_lifecycleGate)
+                {
+                    _closePreparationInFlight = null;
+                }
+            }
+        }
+
+        /// <summary>Resume editing after a failed/non-destructive close attempt.</summary>
+        public void CancelClosePreparation()
+        {
+            if (!_releaseState.CanResumeInteraction)
+            {
+                // A timed-out/failed native release owns the editor until its
+                // tracked task settles and a retry succeeds.  Re-entry must
+                // not detach/rebind events or admit late model mutations.
+                SetDocumentInteractionBlocked(true);
+                return;
             }
 
-            _penService?.Dispose();
-            _penService = null;
-            RemoveHorizontalWheelHook();
-            PdfScrollViewer.ScrollChanged -= PdfScrollViewer_ScrollChanged;
-            DetachAllPageControlEvents();
-            DisposeSelectablePdfDocument();
-            ClearThumbnailCache();
-            await _pdfService.DisposeAsync();
+            _documentSaveCoordinator.CancelCloseRequest();
+            _editAdmission.CancelClose();
+            SetDocumentInteractionBlocked(false);
+            SyncDirtyStateMirror();
+            EnsureAutoSaveTimer();
+        }
+
+        /// <summary>Final tab-close cleanup for timers, hooks, bitmaps and the native PDF document.</summary>
+        public Task<bool> ReleaseResourcesAsync()
+        {
+            lock (_lifecycleGate)
+            {
+                if (_resourcesReleased)
+                    return Task.FromResult(true);
+                if (_releaseResourcesInFlight != null)
+                    return _releaseResourcesInFlight;
+                if (!_releaseState.TryBeginRelease())
+                    return Task.FromResult(false);
+
+                var task = ReleaseResourcesCoreAsync();
+                _releaseResourcesInFlight = task;
+                if (task.IsCompleted)
+                    _releaseResourcesInFlight = null;
+                return task;
+            }
+        }
+
+        private async Task<bool> ReleaseResourcesCoreAsync()
+        {
+            bool cleanupStarted = false;
+            try
+            {
+                CloseTransientUi("release");
+                if (!await PrepareForCloseAsync().ConfigureAwait(true))
+                {
+                    _releaseState.ResetAfterPreReleaseFailure();
+                    CancelClosePreparation();
+                    return false;
+                }
+
+                _releaseState.MarkCleanupStarted();
+                cleanupStarted = true;
+                SetHostActive(false);
+                CancelActiveLoad();
+                CancelRenderWork();
+
+                _thumbnailLoadCts?.Cancel();
+                _thumbnailLoadCts?.Dispose();
+                _thumbnailLoadCts = null;
+                _pdfSearchCts?.Cancel();
+                _pdfSearchCts?.Dispose();
+                _pdfSearchCts = null;
+
+                _autoSaveTimer?.Stop();
+                if (_autoSaveTimer != null)
+                    _autoSaveTimer.Tick -= AutoSaveTimer_Tick;
+                _autoSaveTimer = null;
+
+                _zoomRenderDebounceTimer.Stop();
+                _zoomRenderDebounceTimer.Tick -= ZoomRenderDebounceTimer_Tick;
+                _scrollRenderDebounceTimer.Stop();
+                _scrollRenderDebounceTimer.Tick -= ScrollRenderDebounceTimer_Tick;
+
+                if (_languageChangedSubscribed)
+                {
+                    LocalizationService.LanguageChanged -= EditorPage_LanguageChanged;
+                    _languageChangedSubscribed = false;
+                }
+
+                _penService?.Dispose();
+                _penService = null;
+                RemoveHorizontalWheelHook();
+                PdfScrollViewer.ScrollChanged -= PdfScrollViewer_ScrollChanged;
+                DetachAllPageControlEvents();
+                DetachToolPopupHandlers();
+                DisposeSelectablePdfDocument();
+                ClearThumbnailCache();
+                await _pdfService.DisposeAsync().ConfigureAwait(true);
+
+                // Mark released only after every resource owner has completed.
+                // A failure leaves the editor/tab recoverable for a retry.
+                _resourcesReleased = true;
+                _releaseState.MarkSucceeded();
+                SetDocumentInteractionBlocked(true);
+                return true;
+            }
+            catch
+            {
+                _resourcesReleased = false;
+                if (cleanupStarted)
+                {
+                    // Keep the editor non-interactive until a later explicit
+                    // retry completes.  In particular, a timeout/catch must
+                    // not make ActivateTab resume a service whose events or
+                    // native owners were only partially released.
+                    _releaseState.MarkFailed();
+                    SetDocumentInteractionBlocked(true);
+                }
+                else
+                {
+                    _releaseState.ResetAfterPreReleaseFailure();
+                    CancelClosePreparation();
+                }
+                throw;
+            }
+            finally
+            {
+                lock (_lifecycleGate)
+                {
+                    _releaseResourcesInFlight = null;
+                }
+            }
         }
 
         private void ApplyToolToAllPages(AppSettings settings = null)
@@ -6695,10 +9564,6 @@ namespace Caelum.Pages
             // ActivateTool(None)) and propagate to every page below.
             PenOnlyButton.IsChecked = settings.PenOnlyMode;
             UpdatePenOnlyButtonVisual();
-
-            // Task 23: preset slot active rings follow the current tool,
-            // color and size (every state-change path funnels through here).
-            UpdatePresetSlotVisuals();
 
             // Task 24: stroke smoothing level (clamped defensively; Sanitize
             // already bounds it, hand-rolled AppSettings instances may not).
@@ -6735,14 +9600,21 @@ namespace Caelum.Pages
                         break;
                     case ToolType.Highlighter:
                         page.SetInputMode(CustomInkInputProcessingMode.Inking);
-                        atts.Color = _highlighterColor;
+                        atts.Color = Color.FromArgb(
+                            FreehandHighlighterOpacity,
+                            _highlighterColor.R,
+                            _highlighterColor.G,
+                            _highlighterColor.B);
                         atts.Width = _highlighterSize;
                         atts.Height = _highlighterSize;
                         atts.IsHighlighter = true;
                         page.SetInkAttributes(atts);
                         break;
                     case ToolType.HiddenInk:
-                        page.HiddenInkMaskColor = Colors.White;
+                        // New masks use a neutral gray cover. Existing masks
+                        // loaded from annotations retain their serialized
+                        // color; this assignment only configures new input.
+                        page.HiddenInkMaskColor = Color.FromRgb(199, 205, 212);
                         page.HiddenInkSize = 28.0;
                         page.HiddenInkRevealDurationMs = HiddenInkRevealState.DefaultRevealDurationMs;
                         atts.Color = page.HiddenInkMaskColor;
@@ -6768,6 +9640,7 @@ namespace Caelum.Pages
                         break;
                     case ToolType.AreaHighlight:
                         page.AreaHighlightColor = _highlighterColor;
+                        page.AreaHighlightOpacity = AreaHighlightFillOpacity;
                         page.SetInputMode(CustomInkInputProcessingMode.AreaHighlight);
                         break;
                     case ToolType.StickyNote:
@@ -6787,17 +9660,23 @@ namespace Caelum.Pages
 
         private void UpdatePageNumberIndicator()
         {
-            if (PageNumberLabel == null || PageCountText == null) return;
+            if (PageNumberTextBox == null || PageCountText == null) return;
 
             if (_pageControls.Count == 0)
             {
-                PageNumberLabel.Text = "0";
+                if (!_isPageJumpEditing)
+                    SetPageJumpText("1");
+                if (PageNumberLabel != null)
+                    PageNumberLabel.Text = "1";
                 PageCountText.Text = "/ 0";
                 return;
             }
 
             int currentPageNumber = GetCurrentPageIndex() + 1;
-            PageNumberLabel.Text = currentPageNumber.ToString();
+            if (!_isPageJumpEditing)
+                SetPageJumpText(currentPageNumber.ToString());
+            if (PageNumberLabel != null)
+                PageNumberLabel.Text = currentPageNumber.ToString();
             PageCountText.Text = $"/ {_pageControls.Count}";
             UpdateThumbnailSelection();
             UpdateBookmarkButton();
@@ -6829,11 +9708,17 @@ namespace Caelum.Pages
 
         private async void Back_Click(object sender, RoutedEventArgs e)
         {
-            if (_isDirty && !string.IsNullOrEmpty(_currentPdfPath))
-            {
-                await AutoSaveAsync();
-            GetMainWindow()?.ShowToast(LocalizationService.Get("Editor.AutoSaved"));
-            }
+            using var operationLease = CaptureDocumentOperationLease(_pdfService);
+            if (!ValidateDocumentOperationLease(operationLease))
+                return;
+            bool wasDirty = IsDirty;
+            if (!await PrepareForNavigationAsync())
+                return;
+            if (!ValidateDocumentOperationLease(operationLease))
+                return;
+
+            if (wasDirty)
+                GetMainWindow()?.ShowToast(LocalizationService.Get("Editor.AutoSaved"));
             NavigateBackCore();
         }
 
@@ -6852,8 +9737,12 @@ namespace Caelum.Pages
 
         private void VersionHistory_Click(object sender, RoutedEventArgs e)
         {
-            if (string.IsNullOrEmpty(_currentPdfPath)) return;
+            if (string.IsNullOrEmpty(_currentPdfPath) || !_isHostActive ||
+                _resourcesReleased || _documentInteractionBlocked)
+                return;
 
+            int menuSessionId = _loadSessionId;
+            string menuPath = _currentPdfPath;
             var versions = Services.VersionControlService.GetVersions(_currentPdfPath);
             if (versions.Count == 0)
             {
@@ -6873,28 +9762,58 @@ namespace Caelum.Pages
                 var item = new MenuItem { Header = dt.ToString("yyyy-MM-dd HH:mm:ss") };
                 item.Click += async (s, args) =>
                 {
+                    using var operationLease = CaptureDocumentOperationLease(
+                        menuSessionId,
+                        menuPath,
+                        _pdfService);
+                    if (!ValidateDocumentOperationLease(operationLease) ||
+                        !TryBeginDocumentEdit(out var editLease))
+                        return;
+
+                    using (editLease)
                     try
                     {
-                        var data = await Services.VersionControlService.LoadVersionAsync(vFile);
-                        if (data != null)
-                        {
+                        var data = await Services.VersionControlService.LoadVersionAsync(vFile, operationLease.Token);
+                        if (data == null || !ValidateDocumentOperationLease(operationLease))
+                            return;
+
                             // 恢复前先把当前注释快照为新版本（最新），使恢复可逆
                             var current = CollectAnnotations();
-                            await Services.VersionControlService.SaveVersionAsync(_currentPdfPath, current);
+                            if (!ValidateDocumentOperationLease(operationLease))
+                                return;
+                            await Services.VersionControlService.SaveVersionAsync(menuPath, current, operationLease.Token);
+                            if (!ValidateDocumentOperationLease(operationLease))
+                                return;
 
                             ClearAllAnnotations();
+                            if (!ValidateDocumentOperationLease(operationLease))
+                                return;
                             // A restored snapshot is a new document state;
                             // actions from the previous snapshot must not be
                             // able to reinsert its annotations via Ctrl+Z.
                             ClearUndoRedoHistory();
+                            if (!ValidateDocumentOperationLease(operationLease))
+                                return;
                             _pdfService.ExtractedAnnotations = data;
-                            await LoadAnnotationsFromPdfServiceAsync();
+                            await LoadAnnotationsFromPdfServiceAsync(operationLease);
+                            if (!ValidateDocumentOperationLease(operationLease))
+                                return;
+                            if (!ValidateDocumentOperationLease(operationLease))
+                                return;
             GetMainWindow()?.ShowToast(LocalizationService.Format("Editor.RestoredVersion", dt.ToString("g", LocalizationService.CurrentCulture)));
+                            if (!ValidateDocumentOperationLease(operationLease))
+                                return;
                             MarkDirty();
-                        }
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        // A reload/tab release intentionally cancels old menu
+                        // continuations without surfacing an error in the new doc.
                     }
                     catch (Exception ex)
                     {
+                        if (!ValidateDocumentOperationLease(operationLease))
+                            return;
             GetMainWindow()?.ShowToast(LocalizationService.Get("Editor.VersionLoadFailed"));
                         Console.WriteLine($"[VersionHistory] Error: {ex.Message}");
                     }
@@ -6902,6 +9821,7 @@ namespace Caelum.Pages
                 menu.Items.Add(item);
             }
 
+            _transientUiRegistry.Register(menu);
             PopupZOrderHelper.FixContextMenuTopmost(menu);
             menu.PlacementTarget = VersionHistoryButton;
             menu.IsOpen = true;
@@ -6909,27 +9829,109 @@ namespace Caelum.Pages
 
         private async void PrintPdf_Click(object sender, RoutedEventArgs e)
         {
-            await PrintPdfAsync();
+            using var operationLease = CaptureDocumentOperationLease(_pdfService);
+            await PrintPdfAsync(operationLease);
         }
 
         private void PdfScrollViewer_PreviewMouseRightButtonUp(object sender, MouseButtonEventArgs e)
         {
         }
 
-        private async void ContextMenu_PrintClick(object sender, RoutedEventArgs e)
+        private void PdfViewerContextMenu_Opened(object sender, RoutedEventArgs e)
         {
-            await PrintPdfAsync();
+            if (sender is ContextMenu menu)
+            {
+                // Bind the menu instance to the document that was active when
+                // it opened.  CloseTransientUi intentionally leaves this tag
+                // intact so a deferred routed Click can still be rejected as
+                // stale after a load/tab transition.
+                menu.Tag = new ContextMenuOperationBinding(null, _loadSessionId, _currentPdfPath);
+            }
         }
 
-        private async void ExportCurrentPagePng1x_Click(object sender, RoutedEventArgs e) => await ExportPngAsync(false, 1.0);
-        private async void ExportCurrentPagePng2x_Click(object sender, RoutedEventArgs e) => await ExportPngAsync(false, 2.0);
-        private async void ExportAllPagesPng1x_Click(object sender, RoutedEventArgs e) => await ExportPngAsync(true, 1.0);
-        private async void ExportAllPagesPng2x_Click(object sender, RoutedEventArgs e) => await ExportPngAsync(true, 2.0);
-
-        private async Task ExportPngAsync(bool allPages, double dpiScale)
+        private bool TryCapturePdfContextMenuLease(out DocumentOperationLease operationLease)
         {
-            if (string.IsNullOrWhiteSpace(_currentPdfPath) || _pageControls.Count == 0)
+            operationLease = null;
+            if (!_isHostActive || _resourcesReleased || _documentInteractionBlocked)
+                return false;
+            if (PdfViewerContextMenu?.Tag is not ContextMenuOperationBinding binding)
+                return false;
+
+            operationLease = CaptureDocumentOperationLease(
+                binding.SessionId,
+                binding.FilePath,
+                _pdfService);
+            if (!ValidateDocumentOperationLease(operationLease))
+            {
+                operationLease.Dispose();
+                operationLease = null;
+                return false;
+            }
+
+            return true;
+        }
+
+        private async void ContextMenu_PrintClick(object sender, RoutedEventArgs e)
+        {
+            e.Handled = true;
+            if (!TryCapturePdfContextMenuLease(out var operationLease))
                 return;
+            using (operationLease)
+                await PrintPdfAsync(operationLease);
+        }
+
+        private async void ExportCurrentPagePng1x_Click(object sender, RoutedEventArgs e)
+        {
+            e.Handled = true;
+            if (!TryCapturePdfContextMenuLease(out var operationLease))
+                return;
+            using (operationLease)
+                await ExportPngAsync(false, 1.0, operationLease);
+        }
+
+        private async void ExportCurrentPagePng2x_Click(object sender, RoutedEventArgs e)
+        {
+            e.Handled = true;
+            if (!TryCapturePdfContextMenuLease(out var operationLease))
+                return;
+            using (operationLease)
+                await ExportPngAsync(false, 2.0, operationLease);
+        }
+
+        private async void ExportAllPagesPng1x_Click(object sender, RoutedEventArgs e)
+        {
+            e.Handled = true;
+            if (!TryCapturePdfContextMenuLease(out var operationLease))
+                return;
+            using (operationLease)
+                await ExportPngAsync(true, 1.0, operationLease);
+        }
+
+        private async void ExportAllPagesPng2x_Click(object sender, RoutedEventArgs e)
+        {
+            e.Handled = true;
+            if (!TryCapturePdfContextMenuLease(out var operationLease))
+                return;
+            using (operationLease)
+                await ExportPngAsync(true, 2.0, operationLease);
+        }
+
+        private async Task ExportPngAsync(
+            bool allPages,
+            double dpiScale,
+            DocumentOperationLease operationLease = null)
+        {
+            bool ownsLease = operationLease == null;
+            operationLease ??= CaptureDocumentOperationLease(_pdfService);
+            if (string.IsNullOrWhiteSpace(_currentPdfPath) || _pageControls.Count == 0 ||
+                !ValidateDocumentOperationLease(operationLease))
+            {
+                if (ownsLease)
+                    operationLease.Dispose();
+                return;
+            }
+
+            string filePath = _currentPdfPath;
 
             try
             {
@@ -6963,12 +9965,18 @@ namespace Caelum.Pages
                     folder = System.IO.Path.GetDirectoryName(singlePath);
                 }
 
-                var pages = await BuildPrintablePagesAsync(true, dpiScale);
+                if (!ValidateDocumentOperationLease(operationLease))
+                    return;
+                var pages = await BuildPrintablePagesAsync(true, dpiScale, operationLease, filePath);
+                if (!ValidateDocumentOperationLease(operationLease))
+                    return;
                 IEnumerable<int> indexes = allPages
                     ? Enumerable.Range(0, pages.Count)
                     : new[] { Math.Max(0, Math.Min(GetCurrentPageIndex(), pages.Count - 1)) };
                 foreach (int index in indexes)
                 {
+                    if (!ValidateDocumentOperationLease(operationLease))
+                        return;
                     string outputPath = allPages
                         ? System.IO.Path.Combine(folder, $"{baseName}_page_{index + 1:000}.png")
                         : singlePath;
@@ -6978,60 +9986,93 @@ namespace Caelum.Pages
                     encoder.Save(stream);
                 }
 
-                GetMainWindow()?.ShowToast(
+                if (ValidateDocumentOperationLease(operationLease))
+                    GetMainWindow()?.ShowToast(
                     LocalizationService.Format("Editor.PngExported", allPages ? pages.Count : 1, dpiScale.ToString("0.#", LocalizationService.CurrentCulture)),
                     "\uE74E",
                     2500);
             }
+            catch (OperationCanceledException)
+            {
+            }
             catch (Exception ex)
             {
-                GetMainWindow()?.ShowToast(LocalizationService.Format("Editor.PngExportFailed", ex.Message), "\uE783", 3500);
+                if (ValidateDocumentOperationLease(operationLease))
+                    GetMainWindow()?.ShowToast(LocalizationService.Format("Editor.PngExportFailed", ex.Message), "\uE783", 3500);
+            }
+            finally
+            {
+                if (ownsLease)
+                    operationLease.Dispose();
             }
         }
 
         private async void InsertPdfPages_Click(object sender, RoutedEventArgs e)
         {
-            if (string.IsNullOrWhiteSpace(_currentPdfPath))
+            e.Handled = true;
+            if (!TryCapturePdfContextMenuLease(out var operationLease) ||
+                string.IsNullOrWhiteSpace(_currentPdfPath))
                 return;
-            var dialog = new OpenFileDialog { Filter = LocalizationService.Get("Editor.PdfFileFilter"), Multiselect = false };
-            if (dialog.ShowDialog() != true)
-                return;
-
-            int sourcePageCount;
-            try
+            string filePath = _currentPdfPath;
+            using (operationLease)
             {
-                using var source = PdfiumPdfDocument.Load(dialog.FileName);
-                sourcePageCount = source.PageCount;
-            }
-            catch (Exception ex)
-            {
-                GetMainWindow()?.ShowToast(LocalizationService.Format("Editor.SourcePdfReadFailed", ex.Message), "\uE783", 3500);
-                return;
-            }
+                if (!ValidateDocumentOperationLease(operationLease))
+                    return;
+                var dialog = new OpenFileDialog { Filter = LocalizationService.Get("Editor.PdfFileFilter"), Multiselect = false };
+                if (dialog.ShowDialog() != true)
+                    return;
 
-            if (!TryPromptPageRange(sourcePageCount, out int startPage, out int endPage))
-                return;
-            int insertPageIndex = Math.Max(0, GetCurrentPageIndex());
-            await InsertExternalDocumentAsync(() => _pdfService.InsertPdfPagesAsync(
-                _currentPdfPath, dialog.FileName, insertPageIndex, startPage, endPage),
-                insertPageIndex,
-                endPage - startPage + 1,
-                LocalizationService.Get("Editor.PdfPagesInserted"));
+                int sourcePageCount;
+                try
+                {
+                    using var source = PdfiumPdfDocument.Load(dialog.FileName);
+                    sourcePageCount = source.PageCount;
+                }
+                catch (Exception ex)
+                {
+                    if (ValidateDocumentOperationLease(operationLease))
+                        GetMainWindow()?.ShowToast(LocalizationService.Format("Editor.SourcePdfReadFailed", ex.Message), "\uE783", 3500);
+                    return;
+                }
+
+                if (!TryPromptPageRange(sourcePageCount, out int startPage, out int endPage))
+                    return;
+                if (!ValidateDocumentOperationLease(operationLease))
+                    return;
+                int insertPageIndex = Math.Max(0, GetCurrentPageIndex());
+                await InsertExternalDocumentAsync(() => _pdfService.InsertPdfPagesAsync(
+                    filePath, dialog.FileName, insertPageIndex, startPage, endPage),
+                    insertPageIndex,
+                    endPage - startPage + 1,
+                    LocalizationService.Get("Editor.PdfPagesInserted"),
+                    operationLease);
+            }
         }
 
         private async void InsertImagePage_Click(object sender, RoutedEventArgs e)
         {
-            if (string.IsNullOrWhiteSpace(_currentPdfPath))
+            e.Handled = true;
+            if (!TryCapturePdfContextMenuLease(out var operationLease) ||
+                string.IsNullOrWhiteSpace(_currentPdfPath))
                 return;
-            var dialog = new OpenFileDialog { Filter = LocalizationService.Get("Editor.ImageFileFilter"), Multiselect = false };
-            if (dialog.ShowDialog() != true)
-                return;
-            int insertPageIndex = Math.Max(0, GetCurrentPageIndex());
-            await InsertExternalDocumentAsync(() => _pdfService.InsertImagePageAsync(
-                _currentPdfPath, dialog.FileName, insertPageIndex),
-                insertPageIndex,
-                1,
-                LocalizationService.Get("Editor.ImagePageInserted"));
+            string filePath = _currentPdfPath;
+            using (operationLease)
+            {
+                if (!ValidateDocumentOperationLease(operationLease))
+                    return;
+                var dialog = new OpenFileDialog { Filter = LocalizationService.Get("Editor.ImageFileFilter"), Multiselect = false };
+                if (dialog.ShowDialog() != true)
+                    return;
+                if (!ValidateDocumentOperationLease(operationLease))
+                    return;
+                int insertPageIndex = Math.Max(0, GetCurrentPageIndex());
+                await InsertExternalDocumentAsync(() => _pdfService.InsertImagePageAsync(
+                    filePath, dialog.FileName, insertPageIndex),
+                    insertPageIndex,
+                    1,
+                    LocalizationService.Get("Editor.ImagePageInserted"),
+                    operationLease);
+            }
         }
 
         private bool TryPromptPageRange(int pageCount, out int startPage, out int endPage)
@@ -7088,98 +10129,222 @@ namespace Caelum.Pages
             Func<Task> operation,
             int insertPageIndex,
             int insertedPageCount,
-            string successMessage)
+            string successMessage,
+            DocumentOperationLease operationLease = null)
         {
             byte[] before = null;
             int focusBefore = 0;
             List<PageBookmark> beforeBookmarks = null;
             bool operationMayHaveChangedDocument = false;
-            try
+            if (!TryBeginDocumentEdit(out var editLease))
+                return;
+            using (editLease)
             {
-                if (_isDirty && !await AutoSaveAsync())
+                if (string.IsNullOrWhiteSpace(_currentPdfPath))
                     return;
-                before = await File.ReadAllBytesAsync(_currentPdfPath);
-                focusBefore = GetCurrentPageIndex();
-                beforeBookmarks = PageBookmarkService.Load(_currentPdfPath).ToList();
-                operationMayHaveChangedDocument = true;
-                await operation();
-                byte[] after = await File.ReadAllBytesAsync(_currentPdfPath);
-                await LoadPdf(_currentPdfPath);
-                int focused = Math.Max(0, Math.Min(insertPageIndex, _pageControls.Count - 1));
-                JumpToPage(focused);
-                var afterBookmarks = PageBookmarkService.ApplyPageInsert(
-                    _currentPdfPath,
-                    insertPageIndex,
-                    insertedPageCount).ToList();
-                RefreshBookmarks();
-                PushUndoAction(new DocumentSnapshotAction(
-                    this,
-                    before,
-                    after,
-                    focusBefore,
-                    focused,
-                    beforeBookmarks,
-                    afterBookmarks));
-                GetMainWindow()?.ShowToast(successMessage, "\uE710", 2000);
-            }
-            catch (Exception ex)
-            {
-                if (operationMayHaveChangedDocument && before != null && !string.IsNullOrWhiteSpace(_currentPdfPath))
+
+                string filePath = _currentPdfPath;
+                DocumentOperationLease currentLease = operationLease ?? CaptureDocumentOperationLease(_pdfService);
+                try
                 {
-                    try
-                    {
-                        // The PDF write and bookmark sidecar update are separate files. If
-                        // either half fails before the undo action is registered, restore
-                        // both snapshots so a failed import cannot leave page indices stale.
-                        await WriteDocumentBytesAsync(_currentPdfPath, before);
-                        PageBookmarkService.Replace(_currentPdfPath, beforeBookmarks ?? new List<PageBookmark>());
-                        await LoadPdf(_currentPdfPath);
-                        JumpToPage(Math.Max(0, Math.Min(focusBefore, _pageControls.Count - 1)));
-                        RefreshBookmarks();
-                    }
-                    catch (Exception rollbackException)
-                    {
-                        System.Diagnostics.Debug.WriteLine($"[Import] Rollback failed: {rollbackException}");
-                    }
+                    if (!ValidateDocumentOperationLease(currentLease))
+                        return;
+                    if (_documentSaveCoordinator.IsDirty &&
+                        (!await AutoSaveAsync(currentLease) || !ValidateDocumentOperationLease(currentLease)))
+                        return;
+                    before = await File.ReadAllBytesAsync(filePath, currentLease.Token);
+                    if (!ValidateDocumentOperationLease(currentLease))
+                        return;
+                    focusBefore = GetCurrentPageIndex();
+                    beforeBookmarks = PageBookmarkService.Load(filePath).ToList();
+                    operationMayHaveChangedDocument = true;
+                    await operation();
+                    if (!ValidateDocumentOperationLease(currentLease))
+                        return;
+                    byte[] after = await File.ReadAllBytesAsync(filePath, currentLease.Token);
+                    if (!ValidateDocumentOperationLease(currentLease))
+                        return;
+                    currentLease = await ReloadDocumentForOperationAsync(filePath, currentLease);
+                    if (currentLease == null)
+                        return;
+                    int focused = Math.Max(0, Math.Min(insertPageIndex, _pageControls.Count - 1));
+                    if (!ValidateDocumentOperationLease(currentLease))
+                        return;
+                    JumpToPage(focused);
+                    var afterBookmarks = PageBookmarkService.ApplyPageInsert(
+                        filePath,
+                        insertPageIndex,
+                        insertedPageCount).ToList();
+                    RefreshBookmarks(_loadSessionId, filePath, currentLease);
+                    if (!ValidateDocumentOperationLease(currentLease))
+                        return;
+                    PushUndoAction(new DocumentSnapshotAction(
+                        this,
+                        before,
+                        after,
+                        focusBefore,
+                        focused,
+                        beforeBookmarks,
+                        afterBookmarks));
+                    if (!ValidateDocumentOperationLease(currentLease))
+                        return;
+                    GetMainWindow()?.ShowToast(successMessage, "\uE710", 2000);
                 }
-                GetMainWindow()?.ShowToast(LocalizationService.Format("Editor.ImportFailed", ex.Message), "\uE783", 3500);
+                catch (OperationCanceledException)
+                {
+                }
+                catch (Exception ex)
+                {
+                    // A stale import must not roll back or report against the
+                    // replacement document. Only the still-live transaction
+                    // may restore its before-bytes and sidecar.
+                    if (!ValidateDocumentOperationLease(currentLease))
+                        return;
+
+                    if (operationMayHaveChangedDocument && before != null)
+                    {
+                        try
+                        {
+                            await WriteDocumentBytesAsync(filePath, before, currentLease.Token);
+                            if (!ValidateDocumentOperationLease(currentLease))
+                                return;
+                            PageBookmarkService.Replace(filePath, beforeBookmarks ?? new List<PageBookmark>());
+                            currentLease = await ReloadDocumentForOperationAsync(filePath, currentLease);
+                            if (currentLease == null)
+                                return;
+                            if (!ValidateDocumentOperationLease(currentLease))
+                                return;
+                            JumpToPage(Math.Max(0, Math.Min(focusBefore, _pageControls.Count - 1)));
+                            RefreshBookmarks(_loadSessionId, filePath, currentLease);
+                        }
+                        catch (OperationCanceledException)
+                        {
+                            return;
+                        }
+                        catch (Exception rollbackException)
+                        {
+                            if (ValidateDocumentOperationLease(currentLease))
+                                System.Diagnostics.Debug.WriteLine($"[Import] Rollback failed: {rollbackException}");
+                        }
+                    }
+                    if (ValidateDocumentOperationLease(currentLease))
+                        GetMainWindow()?.ShowToast(LocalizationService.Format("Editor.ImportFailed", ex.Message), "\uE783", 3500);
+                }
+                finally
+                {
+                    currentLease?.Dispose();
+                }
             }
         }
 
         private async void RotateCurrentPage_Click(object sender, RoutedEventArgs e)
         {
-            if (string.IsNullOrWhiteSpace(_currentPdfPath) || _pageControls.Count == 0)
-                return;
-            try
+            e.Handled = true;
+            DocumentOperationLease operationLease;
+            if (sender is MenuItem)
             {
-                if (_isDirty && !await AutoSaveAsync())
+                if (!TryCapturePdfContextMenuLease(out operationLease))
                     return;
-                int pageIndex = GetCurrentPageIndex();
-                byte[] before = await File.ReadAllBytesAsync(_currentPdfPath);
-                await _pdfService.RotatePageAsync(_currentPdfPath, pageIndex, 1);
-                byte[] after = await File.ReadAllBytesAsync(_currentPdfPath);
-                await LoadPdf(_currentPdfPath);
-                JumpToPage(pageIndex);
-                PushUndoAction(new DocumentSnapshotAction(this, before, after, pageIndex, pageIndex));
-                GetMainWindow()?.ShowToast(LocalizationService.Get("Editor.PageRotated"), "\uE7AD", 1800);
             }
-            catch (Exception ex)
+            else
             {
-                GetMainWindow()?.ShowToast(LocalizationService.Format("Editor.RotateFailed", ex.Message), "\uE783", 3500);
+                operationLease = CaptureDocumentOperationLease(_pdfService);
+                if (!ValidateDocumentOperationLease(operationLease))
+                {
+                    operationLease.Dispose();
+                    return;
+                }
+            }
+
+            if (!TryBeginDocumentEdit(out var editLease))
+            {
+                operationLease.Dispose();
+                return;
+            }
+
+            using (operationLease)
+            using (editLease)
+            {
+                if (string.IsNullOrWhiteSpace(_currentPdfPath) || _pageControls.Count == 0)
+                    return;
+
+                string filePath = _currentPdfPath;
+                try
+                {
+                    if (!ValidateDocumentOperationLease(operationLease))
+                        return;
+                    if (_documentSaveCoordinator.IsDirty &&
+                        (!await AutoSaveAsync(operationLease) || !ValidateDocumentOperationLease(operationLease)))
+                        return;
+                    int pageIndex = GetCurrentPageIndex();
+                    byte[] before = await File.ReadAllBytesAsync(filePath, operationLease.Token);
+                    if (!ValidateDocumentOperationLease(operationLease))
+                        return;
+                    await _pdfService.RotatePageAsync(filePath, pageIndex, 1);
+                    if (!ValidateDocumentOperationLease(operationLease))
+                        return;
+                    byte[] after = await File.ReadAllBytesAsync(filePath, operationLease.Token);
+                    if (!ValidateDocumentOperationLease(operationLease))
+                        return;
+                    var refreshedLease = await ReloadDocumentForOperationAsync(filePath, operationLease);
+                    if (refreshedLease == null)
+                        return;
+                    using (refreshedLease)
+                    {
+                        if (!ValidateDocumentOperationLease(refreshedLease))
+                            return;
+                        JumpToPage(pageIndex);
+                        PushUndoAction(new DocumentSnapshotAction(this, before, after, pageIndex, pageIndex));
+                        if (!ValidateDocumentOperationLease(refreshedLease))
+                            return;
+                        GetMainWindow()?.ShowToast(LocalizationService.Get("Editor.PageRotated"), "\uE7AD", 1800);
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                }
+                catch (Exception ex)
+                {
+                    if (ValidateDocumentOperationLease(operationLease))
+                        GetMainWindow()?.ShowToast(LocalizationService.Format("Editor.RotateFailed", ex.Message), "\uE783", 3500);
+                }
             }
         }
 
-        private async Task PrintPdfAsync()
+        private async Task PrintPdfAsync(DocumentOperationLease operationLease = null)
         {
+            bool ownsLease = operationLease == null;
+            operationLease ??= CaptureDocumentOperationLease(_pdfService);
             if (string.IsNullOrWhiteSpace(_currentPdfPath))
             {
-                GetMainWindow()?.ShowToast(LocalizationService.Get("Editor.NoDocumentLoaded"), "\uE783");
+                if (ownsLease)
+                    GetMainWindow()?.ShowToast(LocalizationService.Get("Editor.NoDocumentLoaded"), "\uE783");
+                if (ownsLease)
+                    operationLease.Dispose();
+                return;
+            }
+
+            string filePath = _currentPdfPath;
+            if (!ValidateDocumentOperationLease(operationLease))
+            {
+                if (ownsLease)
+                    operationLease.Dispose();
                 return;
             }
 
             var dialog = new PrintDialog();
             if (dialog.ShowDialog() != true)
+            {
+                if (ownsLease)
+                    operationLease.Dispose();
                 return;
+            }
+            if (!ValidateDocumentOperationLease(operationLease))
+            {
+                if (ownsLease)
+                    operationLease.Dispose();
+                return;
+            }
 
             string originalLoadingText = LoadingText.Text;
             ShowLoadingOverlay();
@@ -7187,16 +10352,27 @@ namespace Caelum.Pages
 
             try
             {
-                var pages = await BuildPrintablePagesAsync(includeAnnotations: true);
+                var pages = await BuildPrintablePagesAsync(
+                    includeAnnotations: true,
+                    operationLease: operationLease,
+                    filePath: filePath);
+                if (!ValidateDocumentOperationLease(operationLease))
+                    return;
                 if (pages.Count == 0)
                     throw new InvalidOperationException(LocalizationService.Get("Editor.NoPagesToPrint"));
 
                 var printDocument = CreatePrintDocument(pages, dialog);
-                dialog.PrintDocument(printDocument.DocumentPaginator, System.IO.Path.GetFileName(_currentPdfPath));
-                GetMainWindow()?.ShowToast(LocalizationService.Get("Editor.PrintSent"), "\uE749", 1500);
+                dialog.PrintDocument(printDocument.DocumentPaginator, System.IO.Path.GetFileName(filePath));
+                if (ValidateDocumentOperationLease(operationLease))
+                    GetMainWindow()?.ShowToast(LocalizationService.Get("Editor.PrintSent"), "\uE749", 1500);
+            }
+            catch (OperationCanceledException)
+            {
             }
             catch (Exception ex)
             {
+                if (!ValidateDocumentOperationLease(operationLease))
+                    return;
                 var mw = GetMainWindow();
                 if (mw != null)
                     await DialogService.ShowErrorAsync(mw, LocalizationService.Get("Common.Error"), LocalizationService.Format("Editor.PrintFailed", ex.Message));
@@ -7205,29 +10381,52 @@ namespace Caelum.Pages
             }
             finally
             {
-                LoadingText.Text = originalLoadingText;
-                HideLoadingOverlay();
+                if (ValidateDocumentOperationLease(operationLease))
+                {
+                    LoadingText.Text = originalLoadingText;
+                    HideLoadingOverlay();
+                }
+                if (ownsLease)
+                    operationLease.Dispose();
             }
         }
 
-        private async Task<IReadOnlyList<PrintablePageImage>> BuildPrintablePagesAsync(bool includeAnnotations, double dpiScale = 1.0)
+        private async Task<IReadOnlyList<PrintablePageImage>> BuildPrintablePagesAsync(
+            bool includeAnnotations,
+            double dpiScale = 1.0,
+            DocumentOperationLease operationLease = null,
+            string filePath = null)
         {
             string tempPrintPath = null;
+            bool ownsLease = operationLease == null;
+            operationLease ??= CaptureDocumentOperationLease(_pdfService);
+            filePath ??= _currentPdfPath;
 
             try
             {
-                string renderPath = _currentPdfPath;
+                if (!ValidateDocumentOperationLease(operationLease))
+                    return Array.Empty<PrintablePageImage>();
+                string renderPath = filePath;
                 if (includeAnnotations)
                 {
                     string tempDirectory = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "Caelum", "Print");
                     Directory.CreateDirectory(tempDirectory);
                     tempPrintPath = System.IO.Path.Combine(tempDirectory, $"{Guid.NewGuid():N}.pdf");
-                    File.Copy(_currentPdfPath, tempPrintPath, true);
+                    PdfAtomicFile.CopyFile(filePath, tempPrintPath);
                     await _pdfService.SaveAnnotationsToPdfAsync(tempPrintPath, CollectAnnotations());
+                    if (!ValidateDocumentOperationLease(operationLease))
+                        return Array.Empty<PrintablePageImage>();
                     renderPath = tempPrintPath;
                 }
 
-                return await Task.Run(() => RenderPrintablePages(renderPath, includeAnnotations, dpiScale));
+                var pages = await Task.Run(() => RenderPrintablePages(renderPath, includeAnnotations, dpiScale));
+                if (!ValidateDocumentOperationLease(operationLease))
+                    return Array.Empty<PrintablePageImage>();
+                return pages;
+            }
+            catch (OperationCanceledException)
+            {
+                return Array.Empty<PrintablePageImage>();
             }
             finally
             {
@@ -7235,6 +10434,8 @@ namespace Caelum.Pages
                 {
                     try { File.Delete(tempPrintPath); } catch { }
                 }
+                if (ownsLease)
+                    operationLease.Dispose();
             }
         }
 
@@ -7328,13 +10529,13 @@ namespace Caelum.Pages
             return document;
         }
 
-        private async Task PromptSaveAsForDraftAsync()
+        private async Task<DocumentOperationLease> PromptSaveAsForDraftAsync(
+            DocumentOperationLease operationLease)
         {
             if (_hasPromptedForSaveAs || string.IsNullOrWhiteSpace(_currentPdfPath))
-                return;
-
-            _hasPromptedForSaveAs = true;
-            _promptSaveAsAfterLoad = false;
+                return null;
+            if (!ValidateDocumentOperationLease(operationLease))
+                return null;
 
             var initialName = System.IO.Path.GetFileName(_currentPdfPath);
             var dialog = new SaveFileDialog
@@ -7348,28 +10549,72 @@ namespace Caelum.Pages
             };
 
             if (dialog.ShowDialog() != true)
-                return;
+            {
+                if (ValidateDocumentOperationLease(operationLease))
+                {
+                    _hasPromptedForSaveAs = true;
+                    _promptSaveAsAfterLoad = false;
+                }
+                return null;
+            }
+
+            if (!ValidateDocumentOperationLease(operationLease))
+                return null;
+
+            _hasPromptedForSaveAs = true;
+            _promptSaveAsAfterLoad = false;
 
             var oldPath = _currentPdfPath;
             var newPath = dialog.FileName;
+            DocumentOperationLease refreshedLease = null;
+            bool leaseHandedOff = false;
 
             try
             {
-                if (_isDirty && !await AutoSaveAsync())
-                    return;
+                if (_documentSaveCoordinator.IsDirty && !await AutoSaveAsync(operationLease))
+                    return null;
+                if (!ValidateDocumentOperationLease(operationLease))
+                    return null;
 
-                if (!string.Equals(oldPath, newPath, StringComparison.OrdinalIgnoreCase))
+                bool samePdfPath = string.Equals(
+                    PdfSaveCoordinator.NormalizePath(oldPath),
+                    PdfSaveCoordinator.NormalizePath(newPath),
+                    StringComparison.OrdinalIgnoreCase);
+                if (!samePdfPath)
                 {
-                    Directory.CreateDirectory(System.IO.Path.GetDirectoryName(newPath) ?? string.Empty);
-                    File.Copy(oldPath, newPath, true);
+                    // Save-As reads the old PDF and writes the destination.
+                    // Admit both paths in deterministic order so a concurrent
+                    // writer cannot change the source while it is copied.
+                    await PdfSaveCoordinator.RunExclusiveAsync(
+                        new[] { oldPath, newPath },
+                        () => Task.Run(() =>
+                        {
+                            string directory = System.IO.Path.GetDirectoryName(newPath);
+                            if (!string.IsNullOrWhiteSpace(directory))
+                                Directory.CreateDirectory(directory);
+                            PdfAtomicFile.CopyFile(oldPath, newPath);
+                        })).ConfigureAwait(true);
+                    if (!ValidateDocumentOperationLease(operationLease))
+                        return null;
                 }
 
+                if (!ValidateDocumentOperationLease(operationLease))
+                    return null;
                 RecentFilesService.UpdatePath(oldPath, newPath);
                 RecentFilesService.AddOrPromote(newPath, _pageControls.Count, File.GetLastWriteTimeUtc(newPath), _pendingLibraryFolderId, true);
                 UpdateCurrentPdfPath(newPath);
                 _isNotebookDraft = false;
+                _documentOperationSession.Begin(_loadSessionId, newPath, _pdfService);
+                refreshedLease = CaptureDocumentOperationLease(_loadSessionId, newPath, _pdfService);
+                if (!ValidateDocumentOperationLease(refreshedLease))
+                    return null;
+
                 GetMainWindow()?.HandleFilePathChanged(oldPath, newPath);
-                GetMainWindow()?.ShowToast(LocalizationService.Get("Home.NotebookSaved"), "\uE74E");
+                if (ValidateDocumentOperationLease(refreshedLease))
+                    GetMainWindow()?.ShowToast(LocalizationService.Get("Home.NotebookSaved"), "\uE74E");
+
+                if (!ValidateDocumentOperationLease(refreshedLease))
+                    return null;
 
                 if (!string.Equals(oldPath, newPath, StringComparison.OrdinalIgnoreCase) &&
                     oldPath.IndexOf(System.IO.Path.Combine("Caelum", "Drafts"), StringComparison.OrdinalIgnoreCase) >= 0 &&
@@ -7383,14 +10628,24 @@ namespace Caelum.Pages
                     {
                     }
                 }
+                leaseHandedOff = true;
+                return refreshedLease;
             }
             catch (Exception ex)
             {
+                if (!ValidateDocumentOperationLease(operationLease))
+                    return null;
                 var mw = GetMainWindow();
                 if (mw != null)
                     await DialogService.ShowErrorAsync(mw, LocalizationService.Get("Common.Error"), LocalizationService.Format("Home.CreateNotebookFailed", ex.Message));
                 else
                     MessageBox.Show(LocalizationService.Format("Home.CreateNotebookFailed", ex.Message), LocalizationService.Get("Common.Error"), MessageBoxButton.OK, MessageBoxImage.Error);
+                return null;
+            }
+            finally
+            {
+                if (!leaseHandedOff)
+                    refreshedLease?.Dispose();
             }
         }
 
@@ -7406,25 +10661,6 @@ namespace Caelum.Pages
             var center = new Point(PdfScrollViewer.ViewportWidth / 2, PdfScrollViewer.ViewportHeight / 2);
             double newZoom = Math.Max(ZoomMin, Math.Min(ZoomMax, _zoomLevel - ZoomStep));
             ZoomAroundPoint(newZoom, center);
-        }
-
-        private void FitWidthButton_Click(object sender, RoutedEventArgs e) => ApplyFitZoom(fitPage: false);
-
-        private void FitPageButton_Click(object sender, RoutedEventArgs e) => ApplyFitZoom(fitPage: true);
-
-        private void ApplyFitZoom(bool fitPage)
-        {
-            if (_pageControls.Count == 0 || IsSelectablePdfSurfaceActive)
-                return;
-
-            var page = _pageControls[Math.Max(0, Math.Min(GetCurrentPageIndex(), _pageControls.Count - 1))];
-            double viewportWidth = Math.Max(200, PdfScrollViewer.ViewportWidth - 72);
-            double viewportHeight = Math.Max(200, PdfScrollViewer.ViewportHeight - 72);
-            double widthRatio = viewportWidth / Math.Max(1, page.Width);
-            double heightRatio = viewportHeight / Math.Max(1, page.Height);
-            double level = fitPage ? Math.Min(widthRatio, heightRatio) : widthRatio;
-            ApplyCustomZoom(Math.Max(ZoomMin, Math.Min(ZoomMax, level)));
-            JumpToPage(page.PageIndex);
         }
 
         private void ZoomLabel_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
@@ -7473,20 +10709,34 @@ namespace Caelum.Pages
             ZoomLabel.Visibility = Visibility.Visible;
         }
 
-        private void PageJumpBorder_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+        private bool _isPageJumpInitializing = true;
+        private bool _isPageJumpEditing;
+        private bool _suppressPageJumpTextChanged;
+        private string _pageJumpOpeningValue = "1";
+        private string _pageJumpValidationMessage;
+
+        private void PageNumberTextBox_GotKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
         {
-            if (_pageControls.Count == 0)
+            if (PageNumberTextBox == null)
                 return;
 
-            if (PageNumberTextBox.Visibility == Visibility.Visible)
-                return;
+            _isPageJumpEditing = true;
+            _pageJumpOpeningValue = PageNumberTextBox.Text;
+            ClearPageJumpValidationMessage();
+            PageNumberTextBox.Dispatcher.BeginInvoke(new Action(() =>
+            {
+                if (PageNumberTextBox.IsKeyboardFocusWithin)
+                    PageNumberTextBox.SelectAll();
+            }), System.Windows.Threading.DispatcherPriority.Input);
+        }
 
-            PageNumberLabel.Visibility = Visibility.Collapsed;
-            PageNumberTextBox.Text = (GetCurrentPageIndex() + 1).ToString();
-            PageNumberTextBox.Visibility = Visibility.Visible;
-            PageNumberTextBox.Focus();
-            PageNumberTextBox.SelectAll();
-            e.Handled = true;
+        private void PageNumberTextBox_TextChanged(object sender, TextChangedEventArgs e)
+        {
+            // Enter/Escape/indicator synchronization writes the field while it
+            // remains visible and focused.  Only user edits reopen the session;
+            // this makes every subsequent Enter, Escape or Tab deterministic.
+            if (!_isPageJumpInitializing && !_suppressPageJumpTextChanged)
+                _isPageJumpEditing = true;
         }
 
         private void PageNumberTextBox_KeyDown(object sender, KeyEventArgs e)
@@ -7498,6 +10748,9 @@ namespace Caelum.Pages
             }
             else if (e.Key == Key.Escape)
             {
+                if (PageNumberTextBox != null && !string.IsNullOrWhiteSpace(_pageJumpOpeningValue))
+                    SetPageJumpText(_pageJumpOpeningValue);
+                ClearPageJumpValidationMessage();
                 HidePageNumberTextBox();
                 e.Handled = true;
             }
@@ -7505,7 +10758,7 @@ namespace Caelum.Pages
 
         private void PageNumberTextBox_LostFocus(object sender, RoutedEventArgs e)
         {
-            if (PageNumberTextBox.Visibility == Visibility.Visible)
+            if (_isPageJumpEditing)
                 ApplyPageJumpFromTextBox();
         }
 
@@ -7517,19 +10770,78 @@ namespace Caelum.Pages
                 return;
             }
 
-            if (int.TryParse(PageNumberTextBox.Text.Trim(), out int requestedPage))
+            string rawValue = PageNumberTextBox.Text?.Trim() ?? string.Empty;
+            if (!int.TryParse(rawValue, out int requestedPage))
             {
-                requestedPage = Math.Max(1, Math.Min(_pageControls.Count, requestedPage));
-                JumpToPage(requestedPage - 1);
+                SetPageJumpText((GetCurrentPageIndex() + 1).ToString());
+                ShowPageJumpValidationMessage(LocalizationService.Get("Editor.PageJumpInvalid"));
+                _isPageJumpEditing = false;
+                return;
             }
 
+            int unclampedPage = requestedPage;
+            requestedPage = Math.Max(1, Math.Min(_pageControls.Count, requestedPage));
+            if (unclampedPage != requestedPage)
+            {
+                ShowPageJumpValidationMessage(LocalizationService.Format(
+                    "Editor.PageJumpOutOfRange", _pageControls.Count));
+            }
+            else
+            {
+                ClearPageJumpValidationMessage();
+            }
+
+            JumpToPage(requestedPage - 1);
             HidePageNumberTextBox();
         }
 
         private void HidePageNumberTextBox()
         {
-            PageNumberTextBox.Visibility = Visibility.Collapsed;
-            PageNumberLabel.Visibility = Visibility.Visible;
+            _isPageJumpEditing = false;
+            if (PageNumberTextBox != null && _pageControls.Count > 0)
+                SetPageJumpText((GetCurrentPageIndex() + 1).ToString());
+            if (PageNumberLabel != null)
+                PageNumberLabel.Text = PageNumberTextBox?.Text ?? "0";
+        }
+
+        private void SetPageJumpText(string value)
+        {
+            if (PageNumberTextBox == null)
+                return;
+
+            _suppressPageJumpTextChanged = true;
+            try
+            {
+                PageNumberTextBox.Text = value ?? string.Empty;
+            }
+            finally
+            {
+                _suppressPageJumpTextChanged = false;
+            }
+        }
+
+        private void ShowPageJumpValidationMessage(string message)
+        {
+            _pageJumpValidationMessage = message ?? string.Empty;
+            if (PageNumberTextBox == null)
+                return;
+
+            ToolTipService.SetToolTip(PageNumberTextBox, _pageJumpValidationMessage);
+            AutomationProperties.SetHelpText(PageNumberTextBox, _pageJumpValidationMessage);
+            AutomationProperties.SetItemStatus(PageNumberTextBox, _pageJumpValidationMessage);
+        }
+
+        private void ClearPageJumpValidationMessage()
+        {
+            _pageJumpValidationMessage = null;
+            if (PageNumberTextBox == null)
+                return;
+
+            string label = LocalizationService.Get("Editor.PageJumpTooltip");
+            ToolTipService.SetToolTip(PageNumberTextBox, label);
+            AutomationProperties.SetName(PageNumberTextBox, label);
+            AutomationProperties.SetHelpText(PageNumberTextBox, label);
+            AutomationProperties.SetItemStatus(PageNumberTextBox, string.Empty);
         }
 
         private void JumpToPage(int pageIndex)
@@ -7560,15 +10872,15 @@ namespace Caelum.Pages
                 BorderThickness = new Thickness(1),
                 CornerRadius = new CornerRadius(16),
                 Child = panel,
-                Effect = new System.Windows.Media.Effects.DropShadowEffect { BlurRadius = 12, ShadowDepth = 2, Opacity = 0.10, Color = Colors.Black }
+                Effect = new System.Windows.Media.Effects.DropShadowEffect { BlurRadius = 12, ShadowDepth = 2, Opacity = ThemeService.GetShadowOpacity(), Color = Colors.Black }
             };
             border.SetResourceReference(Border.BackgroundProperty, "ThemeSurfaceBrush");
             border.SetResourceReference(Border.BorderBrushProperty, "ThemeBorderBrush");
 
             var deleteButton = new Button
             {
-                Width = 28,
-                Height = 28,
+                Width = 32,
+                Height = 32,
                 Background = Brushes.Transparent,
                 BorderThickness = new Thickness(0),
                 Cursor = Cursors.Hand,
@@ -7576,31 +10888,34 @@ namespace Caelum.Pages
                 Margin = new Thickness(0)
             };
             _textDeleteButton = deleteButton;
-            deleteButton.Template = CreateIconButtonTemplate("#FEE2E2", "#FECACA");
-            deleteButton.Content = new TextBlock
+            deleteButton.Template = CreateIconButtonTemplate();
+            deleteButton.Content = new Path
             {
-                Text = "\uE74D",
-                FontFamily = new FontFamily("Segoe MDL2 Assets"),
-                FontSize = 12,
-                Foreground = new SolidColorBrush(Color.FromRgb(185, 28, 28)),
-                HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Center
+                Width = 16,
+                Height = 16,
+                Stretch = Stretch.Uniform,
+                Fill = Brushes.Transparent,
+                StrokeThickness = 1.6,
+                StrokeStartLineCap = PenLineCap.Round,
+                StrokeEndLineCap = PenLineCap.Round,
+                StrokeLineJoin = PenLineJoin.Round,
+                Data = Geometry.Parse("M5,5 L19,5 M8,5 L8,3 L16,3 L16,5 M7,7 L8,19 L16,19 L17,7")
             };
+            ((Path)deleteButton.Content).SetResourceReference(Path.StrokeProperty, "ThemeMarginBrush");
             deleteButton.Click += (s, e) => DeleteSelectedTextBox();
 
             var sep1 = ThemeDivider(new Border
             {
                 Width = 1,
                 Height = 18,
-                Background = new SolidColorBrush(Color.FromArgb(24, 15, 23, 42)),
                 Margin = new Thickness(6, 5, 6, 5),
                 VerticalAlignment = VerticalAlignment.Center
             });
 
             var decreaseFontButton = new Button
             {
-                Width = 30,
-                Height = 28,
+                Width = 32,
+                Height = 32,
                 Margin = new Thickness(0),
                 Cursor = Cursors.Hand,
                 Background = Brushes.Transparent,
@@ -7609,13 +10924,13 @@ namespace Caelum.Pages
                 Content = CreateTextSizeButtonContent(increase: false)
             };
             _textDecreaseFontButton = decreaseFontButton;
-            decreaseFontButton.Template = CreateIconButtonTemplate("#E5E7EB", "#D1D5DB");
+            decreaseFontButton.Template = CreateIconButtonTemplate();
             decreaseFontButton.Click += (s, e) => AdjustSelectedTextBoxFontSize(increase: false);
 
             var increaseFontButton = new Button
             {
-                Width = 30,
-                Height = 28,
+                Width = 32,
+                Height = 32,
                 Margin = new Thickness(0),
                 Cursor = Cursors.Hand,
                 Background = Brushes.Transparent,
@@ -7624,12 +10939,11 @@ namespace Caelum.Pages
                 Content = CreateTextSizeButtonContent(increase: true)
             };
             _textIncreaseFontButton = increaseFontButton;
-            increaseFontButton.Template = CreateIconButtonTemplate("#E5E7EB", "#D1D5DB");
+            increaseFontButton.Template = CreateIconButtonTemplate();
             increaseFontButton.Click += (s, e) => AdjustSelectedTextBoxFontSize(increase: true);
 
             var fontButtonGroup = new Border
             {
-                Background = new SolidColorBrush(Color.FromArgb(24, 15, 23, 42)),
                 CornerRadius = new CornerRadius(10),
                 Padding = new Thickness(2, 0, 2, 0),
                 Child = new StackPanel
@@ -7643,19 +10957,18 @@ namespace Caelum.Pages
                             Width = 1,
                             Height = 16,
                             Margin = new Thickness(1, 0, 1, 0),
-                            VerticalAlignment = VerticalAlignment.Center,
-                            Background = new SolidColorBrush(Color.FromArgb(30, 15, 23, 42))
+                            VerticalAlignment = VerticalAlignment.Center
                         }),
                         increaseFontButton
                     }
                 }
             };
+            fontButtonGroup.SetResourceReference(Border.BackgroundProperty, "ThemeSurfaceAltBrush");
 
             var sep2 = ThemeDivider(new Border
             {
                 Width = 1,
                 Height = 18,
-                Background = new SolidColorBrush(Color.FromArgb(24, 15, 23, 42)),
                 Margin = new Thickness(6, 5, 6, 5),
                 VerticalAlignment = VerticalAlignment.Center
             });
@@ -7666,36 +10979,57 @@ namespace Caelum.Pages
                 Height = 14,
                 CornerRadius = new CornerRadius(7),
                 Background = new SolidColorBrush(_textColor),
-                BorderBrush = new SolidColorBrush(Color.FromArgb(36, 15, 23, 42)),
                 BorderThickness = new Thickness(1)
             };
+            _colorIndicator.SetResourceReference(Border.BorderBrushProperty, "ThemeBorderBrush");
             var colorButton = new Button
             {
                 Content = _colorIndicator,
-                Width = 28,
-                Height = 28,
+                Width = 32,
+                Height = 32,
                 Cursor = Cursors.Hand,
                 Background = Brushes.Transparent,
                 BorderThickness = new Thickness(0),
                 Margin = new Thickness(0)
             };
-            colorButton.Template = CreateIconButtonTemplate("#E0E7FF", "#DBEAFE");
+            _textColorButton = colorButton;
+            colorButton.Template = CreateIconButtonTemplate();
             var colorPopup = new Popup { Placement = PlacementMode.Bottom, StaysOpen = false, AllowsTransparency = true };
             _textColorPopup = colorPopup;
+            _transientUiRegistry.Register(colorPopup);
             PopupZOrderHelper.FixPopupTopmost(colorPopup);
 
             int cols = 12;
             int rows = 8;
-            double cellSize = 20;
+            double cellSize = 32;
             var paletteGrid = new Grid { Width = cols * cellSize, Height = rows * cellSize, ClipToBounds = true };
+            var selectionIndicator = CreateColorSelectionIndicator(cellSize);
+            StackPanel recentRow = null;
 
-            var selectionIndicator = new Border
+            void UpdateTextColorMarkers(Color selected)
             {
-                Width = cellSize, Height = cellSize,
-                BorderBrush = Brushes.White, BorderThickness = new Thickness(2),
-                Background = Brushes.Transparent, IsHitTestVisible = false,
-                Visibility = Visibility.Collapsed, HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Top
-            };
+                foreach (var swatch in recentRow?.Children.OfType<Button>() ?? Enumerable.Empty<Button>())
+                {
+                    if (swatch.Content is not Border visual)
+                        continue;
+                    bool isSelected = swatch.Tag is Color swatchColor && swatchColor == selected;
+                    visual.BorderThickness = isSelected ? new Thickness(2) : new Thickness(1);
+                    visual.SetResourceReference(
+                        Border.BorderBrushProperty,
+                        isSelected ? "ThemeFocusBrush" : "ThemeBorderBrush");
+                }
+
+                selectionIndicator.Visibility = Visibility.Collapsed;
+                foreach (var element in paletteGrid.Children)
+                {
+                    if (element is Button cell && cell.Tag is Color cellColor && cellColor == selected)
+                    {
+                        selectionIndicator.Margin = cell.Margin;
+                        selectionIndicator.Visibility = Visibility.Visible;
+                        break;
+                    }
+                }
+            }
 
             for (int row = 0; row < rows; row++)
             {
@@ -7715,22 +11049,45 @@ namespace Caelum.Pages
                         cellColor = HsvToColor(hue, saturation, val);
                     }
 
-                    var cell = new Border
+                    var cellVisual = new Border
                     {
-                        Width = cellSize, Height = cellSize,
+                        Width = cellSize - 6, Height = cellSize - 6,
                         Background = new SolidColorBrush(cellColor),
-                        HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Top,
-                        Margin = new Thickness(col * cellSize, row * cellSize, 0, 0),
-                        Cursor = Cursors.Hand, Tag = cellColor
+                        CornerRadius = new CornerRadius(4),
+                        BorderThickness = new Thickness(1)
                     };
-
-                    cell.MouseLeftButtonDown += (s, ev) =>
+                    cellVisual.SetResourceReference(Border.BorderBrushProperty, "ThemeBorderBrush");
+                    var cell = new Button
                     {
-                        var b = s as Border;
-                        var picked = (Color)b.Tag;
-                        selectionIndicator.Margin = b.Margin;
-                        selectionIndicator.Visibility = Visibility.Visible;
-                        ApplyTextColor(picked);
+                        Width = cellSize,
+                        Height = cellSize,
+                        Padding = new Thickness(3),
+                        Background = Brushes.Transparent,
+                        BorderThickness = new Thickness(0),
+                        HorizontalContentAlignment = HorizontalAlignment.Center,
+                        VerticalContentAlignment = VerticalAlignment.Center,
+                        HorizontalAlignment = HorizontalAlignment.Left,
+                        VerticalAlignment = VerticalAlignment.Top,
+                        Margin = new Thickness(col * cellSize, row * cellSize, 0, 0),
+                        Cursor = Cursors.Hand,
+                        Focusable = true,
+                        Content = cellVisual,
+                        Tag = cellColor
+                    };
+                    ApplyToolbarPopupButtonStyle(cell);
+                    string cellLabel = $"#{cellColor.R:X2}{cellColor.G:X2}{cellColor.B:X2}";
+                    ToolTipService.SetToolTip(cell, cellLabel);
+                    AutomationProperties.SetAutomationId(cell, $"Editor.TextPalette.Color.{row}.{col}");
+                    AutomationProperties.SetName(cell, cellLabel);
+                    AutomationProperties.SetHelpText(cell, cellLabel);
+
+                    cell.Click += (s, ev) =>
+                    {
+                        if (s is Button b && b.Tag is Color picked)
+                        {
+                            UpdateTextColorMarkers(picked);
+                            ApplyTextColor(picked);
+                        }
                         ev.Handled = true;
                     };
 
@@ -7738,9 +11095,9 @@ namespace Caelum.Pages
                 }
             }
 
-            foreach (Border cell in paletteGrid.Children)
+            foreach (var element in paletteGrid.Children)
             {
-                if (cell.Tag is Color c && c == _textColor)
+                if (element is Button cell && cell.Tag is Color c && c == _textColor)
                 {
                     selectionIndicator.Margin = cell.Margin;
                     selectionIndicator.Visibility = Visibility.Visible;
@@ -7775,13 +11132,12 @@ namespace Caelum.Pages
             // Task 14: "最近 Recent" swatch row above the palette (hidden
             // while empty); repopulated on every popup open.
             var recentSection = new StackPanel { Margin = new Thickness(0, 0, 0, 12), Visibility = Visibility.Collapsed };
-            var recentRow = new StackPanel { Orientation = Orientation.Horizontal };
+            recentRow = new StackPanel { Orientation = Orientation.Horizontal };
             _textRecentLabel = ThemeSubtleHeader(new TextBlock
             {
                 Text = LocalizationService.Get("Editor.Recent"),
                 FontSize = 13,
                 FontWeight = FontWeights.SemiBold,
-                Foreground = new SolidColorBrush(Color.FromRgb(80, 80, 80)),
                 Margin = new Thickness(0, 0, 0, 8)
             });
             recentSection.Children.Add(_textRecentLabel);
@@ -7789,17 +11145,24 @@ namespace Caelum.Pages
 
             var colorPopupBorder = new Border
             {
-                Background = new SolidColorBrush(Color.FromArgb(250, 248, 250, 252)),
-                BorderBrush = new SolidColorBrush(Color.FromArgb(28, 15, 23, 42)),
                 BorderThickness = new Thickness(1),
                 CornerRadius = new CornerRadius(16),
                 Child = new StackPanel { Margin = new Thickness(16), Children = { recentSection, paletteGrid } },
-                Effect = new System.Windows.Media.Effects.DropShadowEffect { BlurRadius = 24, ShadowDepth = 0, Opacity = 0.18, Color = Colors.Black }
+                Effect = new System.Windows.Media.Effects.DropShadowEffect { BlurRadius = 24, ShadowDepth = 0, Opacity = ThemeService.GetShadowOpacity(), Color = Colors.Black }
             };
             colorPopupBorder.SetResourceReference(Border.BackgroundProperty, "ThemeSurfaceBrush");
             colorPopupBorder.SetResourceReference(Border.BorderBrushProperty, "ThemeBorderBrush");
             colorPopup.Child = colorPopupBorder;
-            colorPopup.Opened += (s, e) => RefreshRecentColorsRow(recentSection, recentRow, () => AppSettingsService.Load().RecentTextColors, ApplyTextColor);
+            colorPopup.Opened += (s, e) =>
+            {
+                RefreshRecentColorsRow(
+                    recentSection,
+                    recentRow,
+                    () => AppSettingsService.Load().RecentTextColors,
+                    ApplyTextColor,
+                    UpdateTextColorMarkers);
+                UpdateTextColorMarkers(_textColor);
+            };
             colorButton.Click += (s, e) =>
             {
                 colorPopup.PlacementTarget = colorButton;
@@ -7816,7 +11179,6 @@ namespace Caelum.Pages
             {
                 Width = 1,
                 Height = 18,
-                Background = new SolidColorBrush(Color.FromArgb(24, 15, 23, 42)),
                 Margin = new Thickness(6, 5, 6, 5),
                 VerticalAlignment = VerticalAlignment.Center
             });
@@ -7824,8 +11186,10 @@ namespace Caelum.Pages
             _textBoldButton = new ToggleButton
             {
                 Content = "B",
-                Width = 28,
-                Height = 28,
+                Width = 32,
+                Height = 32,
+                MinWidth = 32,
+                MinHeight = 32,
                 FontWeight = FontWeights.Bold,
                 Cursor = Cursors.Hand,
                 ToolTip = LocalizationService.Get("Editor.BoldTooltip")
@@ -7833,12 +11197,16 @@ namespace Caelum.Pages
             _textItalicButton = new ToggleButton
             {
                 Content = "I",
-                Width = 28,
-                Height = 28,
+                Width = 32,
+                Height = 32,
+                MinWidth = 32,
+                MinHeight = 32,
                 FontStyle = FontStyles.Italic,
                 Cursor = Cursors.Hand,
                 ToolTip = LocalizationService.Get("Editor.ItalicTooltip")
             };
+            ApplyToolbarPopupToggleStyle(_textBoldButton);
+            ApplyToolbarPopupToggleStyle(_textItalicButton);
             _textBoldButton.Click += (_, __) => ApplySelectedTextFormat(tb =>
                 tb.FontWeight = _textBoldButton.IsChecked == true ? FontWeights.Bold : FontWeights.Normal);
             _textItalicButton.Click += (_, __) => ApplySelectedTextFormat(tb =>
@@ -7847,7 +11215,7 @@ namespace Caelum.Pages
             _textFontFamilyCombo = new ComboBox
             {
                 Width = 104,
-                Height = 28,
+                Height = 32,
                 Margin = new Thickness(4, 0, 0, 0),
                 ItemsSource = new[] { "Segoe UI", "Arial", "Times New Roman", "Consolas" },
                 Style = (Style)Application.Current.FindResource("CompactComboBox"),
@@ -7862,18 +11230,30 @@ namespace Caelum.Pages
             _textAlignmentCombo = new ComboBox
             {
                 Width = 86,
-                Height = 28,
+                Height = 32,
+                MinHeight = 32,
                 Margin = new Thickness(4, 0, 0, 0),
-                ItemsSource = new[] { "Left", "Center", "Right" },
+                ItemsSource = BuildTextAlignmentOptions(),
+                DisplayMemberPath = nameof(TextAlignmentOption.Label),
+                SelectedValuePath = nameof(TextAlignmentOption.Value),
+                SelectedValue = _textAlignment,
                 Style = (Style)Application.Current.FindResource("CompactComboBox"),
                 ToolTip = LocalizationService.Get("Editor.AlignmentTooltip")
             };
             PopupZOrderHelper.FixComboBoxPopupTopmost(_textFontFamilyCombo);
             PopupZOrderHelper.FixComboBoxPopupTopmost(_textAlignmentCombo);
+            _transientUiRegistry.Register(_textFontFamilyCombo);
+            _transientUiRegistry.Register(_textAlignmentCombo);
             _textAlignmentCombo.SelectionChanged += (_, __) =>
             {
-                if (_textAlignmentCombo.SelectedItem is string alignment)
-                    ApplySelectedTextFormat(tb => tb.TextAlignment = ParseTextAlignment(alignment));
+                if (_isRefreshingTextAlignmentOptions)
+                    return;
+
+                if (_textAlignmentCombo.SelectedItem is TextAlignmentOption alignment)
+                {
+                    _textAlignment = alignment.Value;
+                    ApplySelectedTextFormat(tb => tb.TextAlignment = alignment.Value);
+                }
             };
 
             panel.Children.Add(formatSeparator);
@@ -7883,6 +11263,37 @@ namespace Caelum.Pages
             panel.Children.Add(_textAlignmentCombo);
 
             _inlineTextBoxToolbar = border;
+        }
+
+        private static IReadOnlyList<TextAlignmentOption> BuildTextAlignmentOptions()
+        {
+            return new[]
+            {
+                new TextAlignmentOption(TextAlignment.Left, LocalizationService.Get("Editor.AlignmentLeft")),
+                new TextAlignmentOption(TextAlignment.Center, LocalizationService.Get("Editor.AlignmentCenter")),
+                new TextAlignmentOption(TextAlignment.Right, LocalizationService.Get("Editor.AlignmentRight"))
+            };
+        }
+
+        private void RefreshTextAlignmentOptions()
+        {
+            if (_textAlignmentCombo == null)
+                return;
+
+            var selectedAlignment = _textAlignmentCombo.SelectedItem is TextAlignmentOption selected
+                ? selected.Value
+                : _selectedTextBox?.TextAlignment ?? _textAlignment;
+
+            _isRefreshingTextAlignmentOptions = true;
+            try
+            {
+                _textAlignmentCombo.ItemsSource = BuildTextAlignmentOptions();
+                _textAlignmentCombo.SelectedValue = selectedAlignment;
+            }
+            finally
+            {
+                _isRefreshingTextAlignmentOptions = false;
+            }
         }
 
         // Popup no longer auto-deselects. Deselection happens via:
@@ -8058,13 +11469,19 @@ namespace Caelum.Pages
                 {
                     if (child is Border b && !b.IsHitTestVisible && b.Tag is string tag && tag == "chrome")
                     {
-                        b.BorderBrush = isSelected
-                            ? new SolidColorBrush(Color.FromArgb(90, 0, 120, 212))
-                            : Brushes.Transparent;
                         b.BorderThickness = isSelected ? new Thickness(1.5) : new Thickness(0);
-                        b.Background = isSelected
-                            ? new SolidColorBrush(Color.FromArgb(10, 0, 120, 212))
-                            : Brushes.Transparent;
+                        if (isSelected)
+                        {
+                            b.SetResourceReference(Border.BorderBrushProperty, "ThemeFocusBrush");
+                            b.SetResourceReference(Border.BackgroundProperty, "ThemeSelectionBrush");
+                        }
+                        else
+                        {
+                            b.ClearValue(Border.BorderBrushProperty);
+                            b.BorderBrush = Brushes.Transparent;
+                            b.ClearValue(Border.BackgroundProperty);
+                            b.Background = Brushes.Transparent;
+                        }
                     }
                     else if (child is Border handle && handle.Cursor == Cursors.SizeAll)
                     {
@@ -8090,7 +11507,10 @@ namespace Caelum.Pages
             if (_textFontFamilyCombo != null)
                 _textFontFamilyCombo.SelectedItem = _selectedTextBox.FontFamily?.Source ?? "Segoe UI";
             if (_textAlignmentCombo != null)
-                _textAlignmentCombo.SelectedItem = _selectedTextBox.TextAlignment.ToString();
+            {
+                _textAlignment = _selectedTextBox.TextAlignment;
+                _textAlignmentCombo.SelectedValue = _selectedTextBox.TextAlignment;
+            }
         }
 
         private void ApplySelectedTextFormat(Action<TextBox> apply)
@@ -8190,20 +11610,18 @@ namespace Caelum.Pages
                 Text = "A",
                 FontSize = increase ? 15 : 13,
                 FontWeight = FontWeights.SemiBold,
-                Foreground = new SolidColorBrush(Color.FromRgb(31, 41, 55)),
                 VerticalAlignment = VerticalAlignment.Center
             };
-            sizeGlyph.SetResourceReference(TextElement.ForegroundProperty, "ThemeForegroundBrush");
+            sizeGlyph.SetResourceReference(TextElement.ForegroundProperty, "ThemeTextBrush");
 
             var directionGlyph = new TextBlock
             {
                 Text = increase ? "^" : "v",
                 FontSize = 8,
                 Margin = new Thickness(1, 0, 0, 0),
-                Foreground = new SolidColorBrush(Color.FromRgb(75, 85, 99)),
                 VerticalAlignment = increase ? VerticalAlignment.Top : VerticalAlignment.Bottom
             };
-            directionGlyph.SetResourceReference(TextElement.ForegroundProperty, "ThemeSubtleForegroundBrush");
+            directionGlyph.SetResourceReference(TextElement.ForegroundProperty, "ThemeSubtleTextBrush");
 
             return new StackPanel
             {
@@ -8407,11 +11825,13 @@ namespace Caelum.Pages
             {
                 CornerRadius = new CornerRadius(8),
                 BorderThickness = select ? new Thickness(1.5) : new Thickness(0),
-                BorderBrush = select ? new SolidColorBrush(Color.FromArgb(90, 0, 120, 212)) : Brushes.Transparent,
-                Background = select ? new SolidColorBrush(Color.FromArgb(10, 0, 120, 212)) : Brushes.Transparent,
+                BorderBrush = Brushes.Transparent,
+                Background = Brushes.Transparent,
                 IsHitTestVisible = false,
                 Tag = "chrome"
             };
+            if (select)
+                chrome.SetResourceReference(Border.BorderBrushProperty, "ThemeFocusBrush");
             Grid.SetColumnSpan(chrome, 2);
 
             double availableWidth = page.ActualWidth - Math.Max(0, position.X);
@@ -8438,8 +11858,9 @@ namespace Caelum.Pages
                 HorizontalAlignment = HorizontalAlignment.Stretch,
                 VerticalAlignment = VerticalAlignment.Stretch,
                 VerticalContentAlignment = VerticalAlignment.Top,
-                CaretBrush = new SolidColorBrush(Color.FromRgb(0, 120, 212))
+                CaretBrush = Brushes.Transparent
             };
+            textBox.SetResourceReference(TextBox.CaretBrushProperty, "ThemeAccentBrush");
 
             page.SizeChanged += (s, e) =>
             {
@@ -8470,10 +11891,12 @@ namespace Caelum.Pages
                 {
                     BlurRadius = 8,
                     ShadowDepth = 1,
-                    Opacity = 0.10,
+                    Opacity = ThemeService.GetShadowOpacity(),
                     Color = Colors.Black
                 }
             };
+            dragHandle.SetResourceReference(Border.BackgroundProperty, "ThemeControlBrush");
+            dragHandle.SetResourceReference(Border.BorderBrushProperty, "ThemeBorderBrush");
 
             var dragIcon = new StackPanel
             {
@@ -8491,13 +11914,15 @@ namespace Caelum.Pages
 
                 for (int row = 0; row < 3; row++)
                 {
-                    dotColumn.Children.Add(new Ellipse
+                    var dot = new Ellipse
                     {
                         Width = 3,
                         Height = 3,
-                        Fill = new SolidColorBrush(Color.FromRgb(100, 116, 139)),
+                        Fill = Brushes.Transparent,
                         Margin = new Thickness(0, 1.5, 0, 1.5)
-                    });
+                    };
+                    dot.SetResourceReference(System.Windows.Shapes.Shape.FillProperty, "ThemeSubtleTextBrush");
+                    dotColumn.Children.Add(dot);
                 }
 
                 dragIcon.Children.Add(dotColumn);
@@ -8534,8 +11959,8 @@ namespace Caelum.Pages
                     Margin = new Thickness(-5),
                     HorizontalAlignment = definition.Item2,
                     VerticalAlignment = definition.Item3,
-                    Background = new SolidColorBrush(Color.FromRgb(0, 120, 212)),
-                    BorderBrush = Brushes.White,
+                    Background = Brushes.Transparent,
+                    BorderBrush = Brushes.Transparent,
                     BorderThickness = new Thickness(1),
                     CornerRadius = new CornerRadius(5),
                     Cursor = definition.Item4,
@@ -8544,6 +11969,8 @@ namespace Caelum.Pages
                     Tag = definition.Item1,
                     ToolTip = LocalizationService.Get("Editor.ResizeTextBox")
                 };
+                resizeHandle.SetResourceReference(Border.BackgroundProperty, "ThemeAccentBrush");
+                resizeHandle.SetResourceReference(Border.BorderBrushProperty, "ThemeFocusBrush");
                 AutomationProperties.SetAutomationId(
                     resizeHandle,
                     TextAnnotationGeometry.GetResizeHandleAutomationId(definition.Item1));
@@ -8556,10 +11983,12 @@ namespace Caelum.Pages
                 resizeHandle.MouseLeftButtonDown += TextResizeHandle_MouseLeftButtonDown;
                 resizeHandle.MouseMove += TextResizeHandle_MouseMove;
                 resizeHandle.MouseLeftButtonUp += TextResizeHandle_MouseLeftButtonUp;
+                resizeHandle.LostMouseCapture += TextResizeHandle_LostMouseCapture;
                 resizeHandle.KeyDown += TextResizeHandle_KeyDown;
                 resizeHandle.StylusDown += TextResizeHandle_StylusDown;
                 resizeHandle.StylusMove += TextResizeHandle_StylusMove;
                 resizeHandle.StylusUp += TextResizeHandle_StylusUp;
+                resizeHandle.LostStylusCapture += TextResizeHandle_LostStylusCapture;
                 container.Children.Add(resizeHandle);
             }
 
@@ -8578,9 +12007,11 @@ namespace Caelum.Pages
             dragHandle.MouseLeftButtonDown += DragHandle_MouseLeftButtonDown;
             dragHandle.MouseMove += DragHandle_MouseMove;
             dragHandle.MouseLeftButtonUp += DragHandle_MouseLeftButtonUp;
+            dragHandle.LostMouseCapture += DragHandle_LostMouseCapture;
             dragHandle.StylusDown += DragHandle_StylusDown;
             dragHandle.StylusMove += DragHandle_StylusMove;
             dragHandle.StylusUp += DragHandle_StylusUp;
+            dragHandle.LostStylusCapture += DragHandle_LostStylusCapture;
 
             textBox.TextChanged += (s, e) => MarkDirty();
             textBox.PreviewMouseLeftButtonDown += (s, e) =>
@@ -8837,10 +12268,18 @@ namespace Caelum.Pages
             if (_resizingTextContainer == null)
                 return;
 
-            if (sender is UIElement handle && handle.IsMouseCaptured)
-                handle.ReleaseMouseCapture();
+            _suppressTextCaptureCancellation = true;
+            try
+            {
+                if (sender is UIElement handle && handle.IsMouseCaptured)
+                    handle.ReleaseMouseCapture();
 
-            CompleteTextResize();
+                CompleteTextResize();
+            }
+            finally
+            {
+                _suppressTextCaptureCancellation = false;
+            }
             e.Handled = true;
         }
 
@@ -8849,11 +12288,31 @@ namespace Caelum.Pages
             if (_resizingTextContainer == null)
                 return;
 
-            if (sender is UIElement handle && handle.IsStylusCaptured)
-                handle.ReleaseStylusCapture();
+            _suppressTextCaptureCancellation = true;
+            try
+            {
+                if (sender is UIElement handle && handle.IsStylusCaptured)
+                    handle.ReleaseStylusCapture();
 
-            CompleteTextResize();
+                CompleteTextResize();
+            }
+            finally
+            {
+                _suppressTextCaptureCancellation = false;
+            }
             e.Handled = true;
+        }
+
+        private void TextResizeHandle_LostMouseCapture(object sender, MouseEventArgs e)
+        {
+            if (!_suppressTextCaptureCancellation)
+                CancelTextResize(restoreBounds: true);
+        }
+
+        private void TextResizeHandle_LostStylusCapture(object sender, StylusEventArgs e)
+        {
+            if (!_suppressTextCaptureCancellation)
+                CancelTextResize(restoreBounds: true);
         }
 
         private void CompleteTextResize()
@@ -8868,6 +12327,7 @@ namespace Caelum.Pages
             bool afterAutoHeight = IsTextAnnotationAutoHeight(resizedContainer);
             _resizingTextContainer = null;
             _resizingTextPage = null;
+            _textResizeHandle = default;
 
             bool geometryChanged = Math.Abs(before.X - after.X) > 0.5
                 || Math.Abs(before.Y - after.Y) > 0.5
@@ -8906,17 +12366,27 @@ namespace Caelum.Pages
             if (resizingContainer == null)
                 return;
 
-            if (restoreBounds)
-                ApplyTextContainerBounds(
-                    resizingContainer,
-                    _textResizeStartBounds,
-                    _textResizeStartAutoWidth,
-                    _textResizeStartAutoHeight);
+            _suppressTextCaptureCancellation = true;
+            try
+            {
+                if (restoreBounds)
+                    ApplyTextContainerBounds(
+                        resizingContainer,
+                        _textResizeStartBounds,
+                        _textResizeStartAutoWidth,
+                        _textResizeStartAutoHeight);
 
-            Mouse.Capture(null);
-            Stylus.Capture(null);
-            _resizingTextContainer = null;
-            _resizingTextPage = null;
+                Mouse.Capture(null);
+                Stylus.Capture(null);
+            }
+            finally
+            {
+                _suppressTextCaptureCancellation = false;
+                _resizingTextContainer = null;
+                _resizingTextPage = null;
+                _textResizeHandle = default;
+                _textResizeStartBounds = default;
+            }
         }
 
         private void DragHandle_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
@@ -8940,8 +12410,17 @@ namespace Caelum.Pages
         private void DragHandle_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
         {
             var handle = sender as Border;
-            handle?.ReleaseMouseCapture();
-            var wasDragging = CompleteTextBoxDrag();
+            _suppressTextCaptureCancellation = true;
+            bool wasDragging;
+            try
+            {
+                handle?.ReleaseMouseCapture();
+                wasDragging = CompleteTextBoxDrag();
+            }
+            finally
+            {
+                _suppressTextCaptureCancellation = false;
+            }
             e.Handled = wasDragging;
         }
 
@@ -8968,9 +12447,30 @@ namespace Caelum.Pages
 
         private void DragHandle_StylusUp(object sender, StylusEventArgs e)
         {
-            (sender as Border)?.ReleaseStylusCapture();
-            var wasDragging = CompleteTextBoxDrag();
+            _suppressTextCaptureCancellation = true;
+            bool wasDragging;
+            try
+            {
+                (sender as Border)?.ReleaseStylusCapture();
+                wasDragging = CompleteTextBoxDrag();
+            }
+            finally
+            {
+                _suppressTextCaptureCancellation = false;
+            }
             e.Handled = wasDragging;
+        }
+
+        private void DragHandle_LostMouseCapture(object sender, MouseEventArgs e)
+        {
+            if (!_suppressTextCaptureCancellation)
+                CancelTextBoxDrag(restoreBounds: true);
+        }
+
+        private void DragHandle_LostStylusCapture(object sender, StylusEventArgs e)
+        {
+            if (!_suppressTextCaptureCancellation)
+                CancelTextBoxDrag(restoreBounds: true);
         }
 
         private void BeginTextBoxDrag(Border handle, Point pressPoint)
@@ -9055,14 +12555,14 @@ namespace Caelum.Pages
                             sourcePage, targetPage,
                             endX - _dragStartX, endY - _dragStartY,
                             -targetOriginInSource.X, -targetOriginInSource.Y,
-                            new List<System.Windows.Ink.Stroke>(),
+                            new List<StrokePlacement>(),
                             new List<System.Windows.Controls.Grid> { _draggedContainer });
 
                         if (sourcePage.HasSelection && sourcePage.SelectedTextContainers.Contains(_draggedContainer))
                             sourcePage.ClearSelection();
 
-                        moveAction.ExecuteInitialTransfer();
-                        PushUndoAction(moveAction);
+                        if (moveAction.ExecuteInitialTransfer())
+                            PushUndoAction(moveAction);
                     }
                     else
                     {
@@ -9093,7 +12593,42 @@ namespace Caelum.Pages
             }
             _draggedContainer = null;
             _draggedContainerPage = null;
+            _dragStartX = 0;
+            _dragStartY = 0;
             return wasDragging;
+        }
+
+        private void CancelTextBoxDrag(bool restoreBounds)
+        {
+            var container = _draggedContainer;
+            bool active = container != null || _dragArmed || _isDragging;
+            if (!active)
+                return;
+
+            _suppressTextCaptureCancellation = true;
+            try
+            {
+                if (restoreBounds && container != null)
+                {
+                    Canvas.SetLeft(container, _dragStartX);
+                    Canvas.SetTop(container, _dragStartY);
+                }
+
+                if (Mouse.Captured is UIElement mouseOwner)
+                    mouseOwner.ReleaseMouseCapture();
+                if (Stylus.Captured is UIElement stylusOwner)
+                    stylusOwner.ReleaseStylusCapture();
+            }
+            finally
+            {
+                _suppressTextCaptureCancellation = false;
+                _isDragging = false;
+                _dragArmed = false;
+                _draggedContainer = null;
+                _draggedContainerPage = null;
+                _dragStartX = 0;
+                _dragStartY = 0;
+            }
         }
 
         private void PageControl_PreviewMouseDown(object sender, MouseButtonEventArgs e)
@@ -9127,10 +12662,7 @@ namespace Caelum.Pages
                 var container = page.AddStickyNote(note);
                 if (container != null)
                 {
-                    PushUndoAction(new ItemsAddedAction(
-                        page,
-                        new List<System.Windows.Ink.Stroke>(),
-                        new List<Grid> { container }));
+                    PushUndoAction(new StickyNoteAddedAction(page, container));
                     OpenStickyNoteEditor(page, container, note);
                 }
                 e.Handled = true;
@@ -9145,27 +12677,25 @@ namespace Caelum.Pages
                 return;
             }
 
+            using var operationLease = CaptureDocumentOperationLease(_pdfService);
+            if (!ValidateDocumentOperationLease(operationLease))
+                return;
             try
             {
-                // Flush an active TextBox edit before collecting annotations so
-                // Ctrl+S cannot save clean and then create a new dirty undo
-                // action when focus eventually leaves the editor.
-                CommitTextEditSession();
-                var annotations = CollectAnnotations();
-                long saveGeneration = _dirtyGeneration;
-
-                // The PDF is the source of truth. Only create a history sidecar
-                // after the atomic PDF save succeeds, otherwise a failed save
-                // would leave a misleading "ghost" version behind.
-                await _pdfService.SaveAnnotationsToPdfAsync(_currentPdfPath, annotations);
-                await Services.VersionControlService.SaveVersionAsync(_currentPdfPath, annotations);
-                if (_dirtyGeneration == saveGeneration)
-                    _isDirty = false;
-
-                GetMainWindow()?.ShowToast(LocalizationService.Get("Editor.SavedSuccessfully"));
+                // Manual save joins an in-flight autosave, so the user can
+                // press Ctrl+S without racing the timer or writing a second
+                // annotation snapshot.
+                if (await SaveCurrentDocumentWithLeaseAsync(operationLease) &&
+                    ValidateDocumentOperationLease(operationLease))
+                    GetMainWindow()?.ShowToast(LocalizationService.Get("Editor.SavedSuccessfully"));
+            }
+            catch (OperationCanceledException)
+            {
             }
             catch (Exception ex)
             {
+                if (!ValidateDocumentOperationLease(operationLease))
+                    return;
                 var mw = GetMainWindow();
                 if (mw != null)
                     await DialogService.ShowErrorAsync(mw, LocalizationService.Get("Common.Error"), LocalizationService.Format("Editor.SaveFailed", ex.Message));
@@ -9174,33 +12704,170 @@ namespace Caelum.Pages
             }
         }
 
-        public async Task<bool> AutoSaveAsync()
+        public async Task<bool> AutoSaveAsync(DocumentOperationLease operationLease = null)
         {
-            if (!_isDirty || string.IsNullOrEmpty(_currentPdfPath)) return false;
+            bool ownsLease = operationLease == null;
+            operationLease ??= CaptureDocumentOperationLease(_pdfService);
+            // Do not short-circuit on IsDirty: a successful callback clears
+            // the flag before its in-flight task finishes. SaveCurrentDocumentWithLeaseAsync
+            // must still join that task during the completion window.
             try
             {
-                CommitTextEditSession();
-                var annotations = CollectAnnotations();
-                long saveGeneration = _dirtyGeneration;
-
-                // Keep autosave history transactional with the document save.
-                await _pdfService.SaveAnnotationsToPdfAsync(_currentPdfPath, annotations);
-                await Services.VersionControlService.SaveVersionAsync(_currentPdfPath, annotations);
-                if (_dirtyGeneration != saveGeneration)
-                {
-                    _isDirty = true;
+                if (string.IsNullOrEmpty(_currentPdfPath) ||
+                    !ValidateDocumentOperationLease(operationLease))
                     return false;
-                }
-
-                _isDirty = false;
-                return true;
+                return await SaveCurrentDocumentWithLeaseAsync(operationLease) &&
+                    ValidateDocumentOperationLease(operationLease);
+            }
+            catch (OperationCanceledException)
+            {
+                return false;
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[AutoSave] Failed: {ex}");
-                GetMainWindow()?.ShowToast(LocalizationService.Format("Editor.AutoSaveFailed", ex.Message), "\uE783", 3500);
+                if (ValidateDocumentOperationLease(operationLease))
+                {
+                    System.Diagnostics.Debug.WriteLine($"[AutoSave] Failed: {ex}");
+                    GetMainWindow()?.ShowToast(LocalizationService.Format("Editor.AutoSaveFailed", ex.Message), "\uE783", 3500);
+                }
                 return false;
             }
+            finally
+            {
+                if (ownsLease)
+                    operationLease.Dispose();
+            }
+        }
+
+        /// <summary>
+        /// Returns the one current save task for this editor. Manual and
+        /// automatic callers intentionally share this boundary; a later
+        /// timer tick retries if the task observed a newer dirty generation.
+        /// </summary>
+        private Task<bool> SaveCurrentDocumentAsync() => SaveCurrentDocumentWithLeaseAsync();
+
+        private async Task<bool> SaveCurrentDocumentWithLeaseAsync(DocumentOperationLease operationLease = null)
+        {
+            bool ownsLease = operationLease == null;
+            operationLease ??= CaptureDocumentOperationLease(_pdfService);
+            if (_resourcesReleased || !_releaseState.CanResumeInteraction)
+            {
+                if (ownsLease)
+                    operationLease.Dispose();
+                return false;
+            }
+            if (!ValidateDocumentOperationLease(operationLease))
+            {
+                if (ownsLease)
+                    operationLease.Dispose();
+                return false;
+            }
+
+            // Capture/commit the active text session before SaveAsync captures
+            // its generation.  Committing inside the persistence callback
+            // would make the first save appear stale and cause an unnecessary
+            // second PDF/version write.
+            CommitTextEditSession();
+
+            Task<DocumentSaveResult> saveTask;
+            lock (_saveGate)
+            {
+                saveTask = _autoSaveInFlight;
+                if (saveTask == null)
+                {
+                    saveTask = _documentSaveCoordinator.SaveAsync(
+                        generation => SaveCurrentDocumentCoreAsync(generation, operationLease));
+                    _autoSaveInFlight = saveTask;
+                }
+            }
+
+            try
+            {
+                var result = await saveTask;
+                if (!ValidateDocumentOperationLease(operationLease))
+                    return false;
+                SyncDirtyStateMirror();
+                return result.Succeeded && result.GenerationIsCurrent;
+            }
+            finally
+            {
+                lock (_saveGate)
+                {
+                    if (ReferenceEquals(_autoSaveInFlight, saveTask))
+                        _autoSaveInFlight = null;
+                }
+                if (ownsLease)
+                    operationLease.Dispose();
+            }
+        }
+
+        private async Task SaveCurrentDocumentCoreAsync(
+            long saveGeneration,
+            DocumentOperationLease operationLease = null)
+        {
+            bool ownsLease = operationLease == null;
+            operationLease ??= CaptureDocumentOperationLease(_pdfService);
+            if (!ValidateDocumentOperationLease(operationLease))
+            {
+                if (ownsLease)
+                    operationLease.Dispose();
+                throw new OperationCanceledException(operationLease.Token);
+            }
+            // DocumentSaveCoordinator deliberately does not capture a WPF
+            // synchronization context. A generation mismatch can therefore
+            // retry its persistence callback on a thread-pool continuation;
+            // collect the live DependencyObjects only on this page's
+            // dispatcher, while the PDF/version I/O remains asynchronous.
+            if (!Dispatcher.CheckAccess())
+            {
+                await Dispatcher.InvokeAsync(
+                        () => SaveCurrentDocumentCoreAsync(saveGeneration, operationLease),
+                        System.Windows.Threading.DispatcherPriority.Normal)
+                    .Task
+                    .Unwrap()
+                    .ConfigureAwait(false);
+                if (!ValidateDocumentOperationLease(operationLease))
+                {
+                    if (ownsLease)
+                        operationLease.Dispose();
+                    throw new OperationCanceledException(operationLease.Token);
+                }
+                if (ownsLease)
+                    operationLease.Dispose();
+                return;
+            }
+
+            var annotations = CollectAnnotations();
+            if (!ValidateDocumentOperationLease(operationLease))
+            {
+                if (ownsLease)
+                    operationLease.Dispose();
+                throw new OperationCanceledException(operationLease.Token);
+            }
+            string filePath = _currentPdfPath;
+
+            // The PDF is the source of truth. Only create a history sidecar
+            // after the atomic PDF save succeeds, otherwise a failed save
+            // would leave a misleading "ghost" version behind.
+            await _pdfService.SaveAnnotationsToPdfAsync(_currentPdfPath, annotations);
+            if (!ValidateDocumentOperationLease(operationLease))
+            {
+                if (ownsLease)
+                    operationLease.Dispose();
+                throw new OperationCanceledException(operationLease.Token);
+            }
+            await Services.VersionControlService.SaveVersionAsync(filePath, annotations, operationLease.Token);
+            if (!ValidateDocumentOperationLease(operationLease))
+            {
+                if (ownsLease)
+                    operationLease.Dispose();
+                throw new OperationCanceledException(operationLease.Token);
+            }
+            // DocumentSaveCoordinator compares saveGeneration with the
+            // latest generation atomically after this callback returns.
+            SyncDirtyStateMirror();
+            if (ownsLease)
+                operationLease.Dispose();
         }
 
         private Dictionary<int, PageAnnotation> CollectAnnotations()
@@ -9334,9 +13001,15 @@ namespace Caelum.Pages
                     {
                         pa.StickyNotes.Add(new StickyNoteAnnotation
                         {
+                            Id = note.Id,
                             X = x,
                             Y = y,
-                            Text = note.Text
+                            Text = note.Text,
+                            Width = container.ActualWidth > 0 ? container.ActualWidth : container.Width,
+                            Height = container.ActualHeight > 0 ? container.ActualHeight : container.Height,
+                            R = note.R,
+                            G = note.G,
+                            B = note.B
                         });
                     }
                 }
@@ -9361,15 +13034,19 @@ namespace Caelum.Pages
             return Application.Current.MainWindow as MainWindow;
         }
 
-        private async Task LoadAnnotationsFromPdfServiceAsync()
+        private async Task LoadAnnotationsFromPdfServiceAsync(DocumentOperationLease operationLease = null)
         {
             if (_pdfService.ExtractedAnnotations == null || _pdfService.ExtractedAnnotations.Count == 0) return;
+            if (operationLease != null && !ValidateDocumentOperationLease(operationLease))
+                return;
 
             try
             {
                 _isLoadingAnnotations = true;
                 foreach (var page in _pageControls)
                 {
+                    if (operationLease != null && !ValidateDocumentOperationLease(operationLease))
+                        return;
                     if (_pdfService.ExtractedAnnotations.TryGetValue(page.PageIndex, out var pa))
                     {
                         foreach (var sa in pa.Strokes)
@@ -9432,11 +13109,15 @@ namespace Caelum.Pages
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"LoadAnnotationsFromPdfServiceAsync EXCEPTION: {ex.GetType().Name}: {ex.Message}");
+                if (operationLease == null || ValidateDocumentOperationLease(operationLease))
+                    System.Diagnostics.Debug.WriteLine($"LoadAnnotationsFromPdfServiceAsync EXCEPTION: {ex.GetType().Name}: {ex.Message}");
             }
             finally
             {
-                _isLoadingAnnotations = false;
+                // Do not let a stale load clear the guard owned by a newer
+                // document's annotation injection.
+                if (operationLease == null || ValidateDocumentOperationLease(operationLease))
+                    _isLoadingAnnotations = false;
             }
             await Task.CompletedTask;
         }
@@ -9492,16 +13173,60 @@ namespace Caelum.Pages
             if (sender is not PdfPageControl page || container == null)
                 return;
 
-            if (page.GetOverlayData(container) is StickyNoteAnnotation note)
+            if (IsLiveStickyContainer(page, container)
+                && page.GetOverlayData(container) is StickyNoteAnnotation note)
                 OpenStickyNoteEditor(page, container, note);
+        }
+
+        private void PageControl_StickyNoteMoved(object sender, StickyNoteMovedEventArgs e)
+        {
+            if (_isLoadingAnnotations || e?.Container == null || sender is not PdfPageControl page
+                || !IsLiveStickyContainer(page, e.Container))
+                return;
+
+            PushUndoAction(new StickyNoteMovedAction(
+                page,
+                e.Container,
+                e.OldPosition,
+                e.NewPosition));
+            MarkDirty();
+        }
+
+        private void PageControl_StickyNoteDeleteRequested(object sender, Grid container)
+        {
+            if (_isLoadingAnnotations || container == null || sender is not PdfPageControl page
+                || !IsLiveStickyContainer(page, container)
+                || page.GetOverlayData(container) is not StickyNoteAnnotation note)
+                return;
+
+            // A marker-level Delete always wins over an open editor bubble. It
+            // uses the same reversible action as the explicit popup button.
+            if (ReferenceEquals(_stickyNoteEditingContainer, container))
+                CancelStickyNoteEdit();
+
+            if (page.RemoveTextContainerQuiet(container))
+            {
+                PushUndoAction(new StickyNoteDeletedAction(page, container));
+                MarkDirty();
+            }
+        }
+
+        private void PageControl_StickyNoteContextMenuCreated(object sender, ContextMenu menu)
+        {
+            if (sender is PdfPageControl page && _pageControls.Contains(page))
+                _transientUiRegistry.Register(menu);
         }
 
         private void OpenStickyNoteEditor(PdfPageControl page, Grid container, StickyNoteAnnotation note)
         {
-            CommitStickyNoteEdit();
+            CancelStickyNoteEdit();
 
+            _stickyNoteEditingPage = page;
+            _stickyNoteEditingContainer = container;
             _stickyNoteEditingModel = note;
             _stickyNoteEditingOriginalText = note.Text ?? string.Empty;
+            _stickyNoteEditingOriginalPosition = new Point(note.X, note.Y);
+            _stickyNoteEditingSessionId = _loadSessionId;
             _stickyNoteEditor = new TextBox
             {
                 Text = _stickyNoteEditingOriginalText,
@@ -9518,16 +13243,42 @@ namespace Caelum.Pages
 
             var saveButton = new Button
             {
-                Content = LocalizationService.Get("Common.Save"),
-                HorizontalAlignment = HorizontalAlignment.Right,
                 Padding = new Thickness(12, 5, 12, 5),
-                MinWidth = 72
+                MinWidth = 72,
+                MinHeight = 32
             };
             _stickyNoteSaveButton = saveButton;
+            ApplyStickyNoteButtonMetadata(saveButton, LocalizationService.Get("Common.Save"), "Sticky.Save");
+
+            var cancelButton = new Button
+            {
+                Padding = new Thickness(12, 5, 12, 5),
+                MinWidth = 72,
+                MinHeight = 32
+            };
+            _stickyNoteCancelButton = cancelButton;
+            ApplyStickyNoteButtonMetadata(cancelButton, LocalizationService.Get("Common.Cancel"), "Sticky.Cancel");
+
+            var deleteButton = new Button
+            {
+                Padding = new Thickness(12, 5, 12, 5),
+                MinWidth = 72,
+                MinHeight = 32
+            };
+            _stickyNoteDeleteButton = deleteButton;
+            ApplyStickyNoteButtonMetadata(deleteButton, LocalizationService.Get("Editor.DeleteTooltip"), "Sticky.Delete");
 
             var panel = new StackPanel { Margin = new Thickness(12) };
             panel.Children.Add(_stickyNoteEditor);
-            panel.Children.Add(saveButton);
+            var actionRow = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                HorizontalAlignment = HorizontalAlignment.Right
+            };
+            actionRow.Children.Add(saveButton);
+            actionRow.Children.Add(cancelButton);
+            actionRow.Children.Add(deleteButton);
+            panel.Children.Add(actionRow);
 
             var border = new Border
             {
@@ -9546,9 +13297,13 @@ namespace Caelum.Pages
                 AllowsTransparency = true,
                 Child = border
             };
+            AutomationProperties.SetAutomationId(border, $"Sticky.Editor.{note.Id}");
             PopupZOrderHelper.FixPopupTopmost(_stickyNotePopup);
+            _transientUiRegistry.Register(_stickyNotePopup);
             _stickyNotePopup.Closed += StickyNotePopup_Closed;
-            saveButton.Click += (_, __) => _stickyNotePopup.IsOpen = false;
+            saveButton.Click += (_, __) => SaveStickyNoteEdit();
+            cancelButton.Click += (_, __) => CancelStickyNoteEdit();
+            deleteButton.Click += (_, __) => DeleteStickyNoteEdit();
             _stickyNotePopup.IsOpen = true;
             _stickyNoteEditor.Focus();
             _stickyNoteEditor.SelectAll();
@@ -9556,33 +13311,148 @@ namespace Caelum.Pages
 
         private void StickyNotePopup_Closed(object sender, EventArgs e)
         {
-            CommitStickyNoteEdit();
+            // Clicking outside, Escape, deactivation and unloading all follow
+            // the explicit Cancel contract; only the Save button commits.
+            CancelStickyNoteEdit();
         }
 
-        private void CommitStickyNoteEdit()
+        private void CloseStickyNotePopup(Popup popup)
+        {
+            if (popup == null)
+                return;
+
+            popup.Closed -= StickyNotePopup_Closed;
+            PopupZOrderHelper.UnfixPopupTopmost(popup);
+            if (popup.IsOpen)
+                popup.IsOpen = false;
+        }
+
+        private void ResetStickyNoteEditorState()
+        {
+            _stickyNotePopup = null;
+            _stickyNoteEditor = null;
+            _stickyNoteSaveButton = null;
+            _stickyNoteCancelButton = null;
+            _stickyNoteDeleteButton = null;
+            _stickyNoteEditingModel = null;
+            _stickyNoteEditingContainer = null;
+            _stickyNoteEditingPage = null;
+            _stickyNoteEditingOriginalText = null;
+            _stickyNoteEditingOriginalPosition = default;
+            _stickyNoteEditingSessionId = 0;
+        }
+
+        private static void ApplyStickyNoteButtonMetadata(Button button, string label, string automationId)
+        {
+            if (button == null)
+                return;
+
+            button.Content = label;
+            ToolTipService.SetToolTip(button, label);
+            AutomationProperties.SetAutomationId(button, automationId);
+            AutomationProperties.SetName(button, label);
+            AutomationProperties.SetHelpText(button, label);
+            button.Focusable = true;
+            KeyboardNavigation.SetIsTabStop(button, true);
+            if (double.IsNaN(button.MinHeight) || button.MinHeight < 32)
+                button.MinHeight = 32;
+            ApplyToolbarFocusVisualStyle(button);
+            button.SetResourceReference(Control.BorderBrushProperty, "ThemeFocusBrush");
+            button.SetResourceReference(Control.FocusVisualStyleProperty, "ToolbarFocusVisualStyle");
+        }
+
+        private bool IsLiveStickyNoteEdit(
+            PdfPageControl page,
+            Grid container,
+            StickyNoteAnnotation note,
+            int sessionId)
+        {
+            return sessionId == _loadSessionId && IsLiveStickyContainer(page, container, note);
+        }
+
+        private bool IsLiveStickyContainer(
+            PdfPageControl page,
+            Grid container,
+            StickyNoteAnnotation note = null)
+        {
+            return page != null
+                && _pageControls.Contains(page)
+                && container != null
+                && page.GetOverlayContainers().Contains(container)
+                && (note == null || ReferenceEquals(page.GetOverlayData(container), note));
+        }
+
+        private void SaveStickyNoteEdit()
         {
             if (_stickyNotePopup == null)
                 return;
 
             var popup = _stickyNotePopup;
+            var page = _stickyNoteEditingPage;
+            var container = _stickyNoteEditingContainer;
             var note = _stickyNoteEditingModel;
+            var sessionId = _stickyNoteEditingSessionId;
             var before = _stickyNoteEditingOriginalText ?? string.Empty;
             var after = _stickyNoteEditor?.Text ?? string.Empty;
-
-            _stickyNotePopup = null;
-            _stickyNoteEditor = null;
-            _stickyNoteSaveButton = null;
-            _stickyNoteEditingModel = null;
-            _stickyNoteEditingOriginalText = null;
-
-            if (note != null && !string.Equals(before, after, StringComparison.Ordinal))
+            CloseStickyNotePopup(popup);
+            if (IsLiveStickyNoteEdit(page, container, note, sessionId)
+                && !string.Equals(before, after, StringComparison.Ordinal))
             {
-                note.Text = after;
-                PushUndoAction(new StickyNoteEditAction(note, before, after));
+                if (page.SetStickyNoteTextQuiet(container, after))
+                {
+                    PushUndoAction(new StickyNoteEditAction(page, container, note, before, after));
+                    MarkDirty();
+                }
+            }
+            ResetStickyNoteEditorState();
+        }
+
+        private void CancelStickyNoteEdit()
+        {
+            if (_stickyNotePopup == null)
+                return;
+
+            var popup = _stickyNotePopup;
+            var page = _stickyNoteEditingPage;
+            var container = _stickyNoteEditingContainer;
+            var note = _stickyNoteEditingModel;
+            var sessionId = _stickyNoteEditingSessionId;
+            var originalText = _stickyNoteEditingOriginalText ?? string.Empty;
+            var originalPosition = _stickyNoteEditingOriginalPosition;
+            CloseStickyNotePopup(popup);
+            if (IsLiveStickyNoteEdit(page, container, note, sessionId))
+            {
+                page.SetStickyNoteTextQuiet(container, originalText);
+                page.SetStickyNotePositionQuiet(container, originalPosition);
+            }
+            ResetStickyNoteEditorState();
+        }
+
+        private void DeleteStickyNoteEdit()
+        {
+            if (_stickyNotePopup == null)
+                return;
+
+            var popup = _stickyNotePopup;
+            var page = _stickyNoteEditingPage;
+            var container = _stickyNoteEditingContainer;
+            var note = _stickyNoteEditingModel;
+            var sessionId = _stickyNoteEditingSessionId;
+            CloseStickyNotePopup(popup);
+            ResetStickyNoteEditorState();
+            if (IsLiveStickyNoteEdit(page, container, note, sessionId)
+                && page.RemoveTextContainerQuiet(container))
+            {
+                PushUndoAction(new StickyNoteDeletedAction(page, container));
                 MarkDirty();
             }
+        }
 
-            popup.Closed -= StickyNotePopup_Closed;
+        // Kept as a compatibility shim for existing close/save barriers. New
+        // transient lifecycle paths use CancelStickyNoteEdit explicitly.
+        private void CommitStickyNoteEdit()
+        {
+            SaveStickyNoteEdit();
         }
 
         private void PageControl_StrokeCollectedUndoable(object sender, System.Windows.Ink.Stroke stroke)
@@ -9594,23 +13464,46 @@ namespace Caelum.Pages
         private void PageControl_StrokesErased(object sender, StrokesErasedEventArgs e)
         {
             if (sender is PdfPageControl page)
-                PushUndoAction(new StrokesErasedAction(page, e.RemovedStrokes, e.AddedStrokes));
+            {
+                var removedPlacements = e.RemovedPlacements.Count > 0
+                    ? e.RemovedPlacements.ToList()
+                    : e.RemovedStrokes.Select(page.CaptureStrokePlacement).ToList();
+                var addedPlacements = e.AddedPlacements.Count > 0
+                    ? e.AddedPlacements.ToList()
+                    : e.AddedStrokes.Select(page.CaptureStrokePlacement).ToList();
+                PushUndoAction(new StrokesErasedAction(
+                    page,
+                    removedPlacements,
+                    addedPlacements));
+            }
         }
 
         private void PageControl_StrokeRecognized(object sender, StrokeRecognizedEventArgs e)
         {
             if (sender is PdfPageControl page)
-                PushUndoAction(new StrokeReplacedAction(page, e.OriginalStroke, e.IdealStroke));
+                PushUndoAction(new StrokeReplacedAction(
+                    page,
+                    e.Token,
+                    e.OriginalIndex,
+                    e.OriginalSnapshot,
+                    e.IdealSnapshot));
         }
 
         private void MarkDirty()
         {
-            _dirtyGeneration++;
-            _isDirty = true;
+            _documentSaveCoordinator.MarkDirty();
+            SyncDirtyStateMirror();
+        }
+
+        private void SyncDirtyStateMirror()
+        {
+            _dirtyGeneration = _documentSaveCoordinator.DirtyGeneration;
+            _isDirty = _documentSaveCoordinator.IsDirty;
         }
 
         private void NavigateBackCore()
         {
+            CloseTransientUi("navigation");
             SetHostActive(false);
             if (NavigationService != null && NavigationService.CanGoBack)
                 NavigationService.GoBack();
@@ -9621,17 +13514,50 @@ namespace Caelum.Pages
         private void ShowLoadingOverlay()
         {
             LoadingOverlay.Visibility = Visibility.Visible;
+            UpdateLoadingAnimation();
             UpdatePdfSurfaceVisibility();
         }
 
         private void HideLoadingOverlay()
         {
+            StopLoadingAnimation();
             LoadingOverlay.Visibility = Visibility.Collapsed;
             UpdatePdfSurfaceVisibility();
         }
 
+        private void UpdateLoadingAnimation()
+        {
+            if (LoadingRotate == null)
+                return;
+
+            LoadingRotate.BeginAnimation(RotateTransform.AngleProperty, null);
+            LoadingRotate.Angle = 0;
+            if (!ThemeService.ShouldAnimate)
+                return;
+
+            var duration = ThemeService.GetAnimationDuration(TimeSpan.FromSeconds(1));
+            if (duration == TimeSpan.Zero)
+                return;
+
+            var animation = new DoubleAnimation(0, 360, duration)
+            {
+                RepeatBehavior = RepeatBehavior.Forever
+            };
+            LoadingRotate.BeginAnimation(RotateTransform.AngleProperty, animation);
+        }
+
+        private void StopLoadingAnimation()
+        {
+            if (LoadingRotate == null)
+                return;
+
+            LoadingRotate.BeginAnimation(RotateTransform.AngleProperty, null);
+            LoadingRotate.Angle = 0;
+        }
+
         private void CancelActiveLoad()
         {
+            _documentOperationSession.Cancel();
             try { Interlocked.Increment(ref _loadSessionId); _loadCts?.Cancel(); _loadCts?.Dispose(); } catch { }
             _loadCts = null;
         }
@@ -9652,12 +13578,16 @@ namespace Caelum.Pages
                 pageControl.ImagesChanged -= PageControl_ImagesChanged;
                 pageControl.AreaHighlightCreated -= PageControl_AreaHighlightCreated;
                 pageControl.StickyNoteActivated -= PageControl_StickyNoteActivated;
+                pageControl.StickyNoteMoved -= PageControl_StickyNoteMoved;
+                pageControl.StickyNoteDeleteRequested -= PageControl_StickyNoteDeleteRequested;
+                pageControl.StickyNoteContextMenuCreated -= PageControl_StickyNoteContextMenuCreated;
                 pageControl.HiddenInkCreated -= PageControl_HiddenInkCreated;
                 pageControl.HiddenInkRemoved -= PageControl_HiddenInkRemoved;
                 pageControl.HiddenInksRemoved -= PageControl_HiddenInksRemoved;
                 pageControl.SelectionChanged -= PageControl_SelectionChanged;
                 pageControl.SelectionMoveCompleted -= PageControl_SelectionMoveCompleted;
                 pageControl.SelectionResizeCompleted -= PageControl_SelectionResizeCompleted;
+                pageControl.UnfixTransientUiHooks();
             }
         }
 
@@ -9699,38 +13629,66 @@ namespace Caelum.Pages
                 (byte)((b + m) * 255));
         }
 
-        private static ControlTemplate CreateIconButtonTemplate(string hoverColor, string pressedColor)
+        private static ControlTemplate CreateIconButtonTemplate()
         {
             var template = new ControlTemplate(typeof(Button));
+            var rootGrid = new FrameworkElementFactory(typeof(Grid));
             var borderFactory = new FrameworkElementFactory(typeof(Border));
-            borderFactory.SetValue(Border.BackgroundProperty, Brushes.Transparent);
+            borderFactory.SetValue(Border.BackgroundProperty, new TemplateBindingExtension(Button.BackgroundProperty));
             borderFactory.SetValue(Border.CornerRadiusProperty, new CornerRadius(8));
             borderFactory.SetValue(Border.PaddingProperty, new Thickness(4));
             borderFactory.Name = "Root";
 
             var contentFactory = new FrameworkElementFactory(typeof(ContentPresenter));
+            contentFactory.Name = "Content";
             contentFactory.SetValue(ContentPresenter.HorizontalAlignmentProperty, HorizontalAlignment.Center);
             contentFactory.SetValue(ContentPresenter.VerticalAlignmentProperty, VerticalAlignment.Center);
             borderFactory.AppendChild(contentFactory);
+            rootGrid.AppendChild(borderFactory);
 
-            template.VisualTree = borderFactory;
+            var focusRingFactory = new FrameworkElementFactory(typeof(Border));
+            focusRingFactory.Name = "FocusRing";
+            focusRingFactory.SetValue(Border.BorderBrushProperty, new DynamicResourceExtension("ThemeFocusBrush"));
+            focusRingFactory.SetValue(Border.BorderThicknessProperty, new Thickness(2));
+            focusRingFactory.SetValue(Border.CornerRadiusProperty, new CornerRadius(8));
+            focusRingFactory.SetValue(Border.MarginProperty, new Thickness(-2));
+            focusRingFactory.SetValue(UIElement.VisibilityProperty, Visibility.Collapsed);
+            rootGrid.AppendChild(focusRingFactory);
+
+            template.VisualTree = rootGrid;
 
             var hoverTrigger = new Trigger { Property = UIElement.IsMouseOverProperty, Value = true };
             hoverTrigger.Setters.Add(new Setter(Border.BackgroundProperty,
-                new SolidColorBrush((Color)ColorConverter.ConvertFromString(hoverColor)), "Root"));
+                new DynamicResourceExtension("ThemeControlHoverBrush"), "Root"));
             template.Triggers.Add(hoverTrigger);
 
             var pressTrigger = new Trigger { Property = System.Windows.Controls.Primitives.ButtonBase.IsPressedProperty, Value = true };
             pressTrigger.Setters.Add(new Setter(Border.BackgroundProperty,
-                new SolidColorBrush((Color)ColorConverter.ConvertFromString(pressedColor)), "Root"));
+                new DynamicResourceExtension("ThemeControlPressedBrush"), "Root"));
             template.Triggers.Add(pressTrigger);
+
+            var focusTrigger = new Trigger { Property = UIElement.IsKeyboardFocusWithinProperty, Value = true };
+            focusTrigger.Setters.Add(new Setter(UIElement.VisibilityProperty, Visibility.Visible, "FocusRing"));
+            template.Triggers.Add(focusTrigger);
+
+            var disabledTrigger = new Trigger { Property = UIElement.IsEnabledProperty, Value = false };
+            disabledTrigger.Setters.Add(new Setter(UIElement.OpacityProperty, 0.55, "Root"));
+            disabledTrigger.Setters.Add(new Setter(Border.BackgroundProperty,
+                new DynamicResourceExtension("ThemeSurfaceAltBrush"), "Root"));
+            disabledTrigger.Setters.Add(new Setter(TextElement.ForegroundProperty,
+                new DynamicResourceExtension("ThemeDisabledForegroundBrush"), "Content"));
+            disabledTrigger.Setters.Add(new Setter(UIElement.VisibilityProperty, Visibility.Collapsed, "FocusRing"));
+            template.Triggers.Add(disabledTrigger);
 
             return template;
         }
 
-        private static ControlTemplate CreatePageChromeButtonTemplate(string hoverColor, string pressedColor)
+        private static ControlTemplate CreatePageChromeButtonTemplate(
+            string hoverResourceKey,
+            string pressedResourceKey)
         {
             var template = new ControlTemplate(typeof(Button));
+            var rootGrid = new FrameworkElementFactory(typeof(Grid));
             var borderFactory = new FrameworkElementFactory(typeof(Border));
             borderFactory.Name = "Root";
             borderFactory.SetValue(Border.BackgroundProperty, new TemplateBindingExtension(Button.BackgroundProperty));
@@ -9743,20 +13701,222 @@ namespace Caelum.Pages
             contentFactory.SetValue(ContentPresenter.HorizontalAlignmentProperty, HorizontalAlignment.Center);
             contentFactory.SetValue(ContentPresenter.VerticalAlignmentProperty, VerticalAlignment.Center);
             borderFactory.AppendChild(contentFactory);
+            rootGrid.AppendChild(borderFactory);
 
-            template.VisualTree = borderFactory;
+            var focusRingFactory = new FrameworkElementFactory(typeof(Border));
+            focusRingFactory.Name = "FocusRing";
+            focusRingFactory.SetValue(Border.BorderBrushProperty, new DynamicResourceExtension("ThemeFocusBrush"));
+            focusRingFactory.SetValue(Border.BorderThicknessProperty, new Thickness(2));
+            focusRingFactory.SetValue(Border.CornerRadiusProperty, new CornerRadius(12));
+            focusRingFactory.SetValue(Border.MarginProperty, new Thickness(-2));
+            focusRingFactory.SetValue(UIElement.VisibilityProperty, Visibility.Collapsed);
+            focusRingFactory.SetValue(UIElement.IsHitTestVisibleProperty, false);
+            rootGrid.AppendChild(focusRingFactory);
+
+            template.VisualTree = rootGrid;
 
             var hoverTrigger = new Trigger { Property = UIElement.IsMouseOverProperty, Value = true };
             hoverTrigger.Setters.Add(new Setter(Border.BackgroundProperty,
-                new SolidColorBrush((Color)ColorConverter.ConvertFromString(hoverColor)), "Root"));
+                new DynamicResourceExtension(hoverResourceKey), "Root"));
             template.Triggers.Add(hoverTrigger);
 
             var pressTrigger = new Trigger { Property = ButtonBase.IsPressedProperty, Value = true };
             pressTrigger.Setters.Add(new Setter(Border.BackgroundProperty,
-                new SolidColorBrush((Color)ColorConverter.ConvertFromString(pressedColor)), "Root"));
+                new DynamicResourceExtension(pressedResourceKey), "Root"));
             template.Triggers.Add(pressTrigger);
 
+            var focusTrigger = new Trigger { Property = UIElement.IsKeyboardFocusWithinProperty, Value = true };
+            focusTrigger.Setters.Add(new Setter(UIElement.VisibilityProperty, Visibility.Visible, "FocusRing"));
+            template.Triggers.Add(focusTrigger);
+
+            var disabledTrigger = new Trigger { Property = UIElement.IsEnabledProperty, Value = false };
+            disabledTrigger.Setters.Add(new Setter(UIElement.OpacityProperty, 0.55, "Root"));
+            disabledTrigger.Setters.Add(new Setter(UIElement.VisibilityProperty, Visibility.Collapsed, "FocusRing"));
+            template.Triggers.Add(disabledTrigger);
+
             return template;
+        }
+    }
+}
+
+namespace Caelum.Pages
+{
+    /// <summary>
+    /// Keyboard and UI Automation resize target for the document sidebar.  The
+    /// visual template is a narrow rail, while this control deliberately keeps
+    /// a 32-DIP hit/focus target for pointer, keyboard and touch users.
+    /// </summary>
+    public sealed class SidebarResizeThumb : Thumb
+    {
+        public static readonly DependencyProperty MinimumProperty =
+            DependencyProperty.Register(nameof(Minimum), typeof(double), typeof(SidebarResizeThumb),
+                new PropertyMetadata(154d));
+
+        public static readonly DependencyProperty MaximumProperty =
+            DependencyProperty.Register(nameof(Maximum), typeof(double), typeof(SidebarResizeThumb),
+                new PropertyMetadata(320d));
+
+        public static readonly DependencyProperty ValueProperty =
+            DependencyProperty.Register(nameof(Value), typeof(double), typeof(SidebarResizeThumb),
+                new FrameworkPropertyMetadata(184d, FrameworkPropertyMetadataOptions.BindsTwoWayByDefault));
+
+        public double Minimum
+        {
+            get => (double)GetValue(MinimumProperty);
+            set => SetValue(MinimumProperty, value);
+        }
+
+        public double Maximum
+        {
+            get => (double)GetValue(MaximumProperty);
+            set => SetValue(MaximumProperty, value);
+        }
+
+        public double Value
+        {
+            get => (double)GetValue(ValueProperty);
+            set => SetValue(ValueProperty, Math.Max(Minimum, Math.Min(Maximum, value)));
+        }
+
+        internal event EventHandler ValueChanged;
+
+        internal void SetAutomationValue(double value)
+        {
+            Value = value;
+            ValueChanged?.Invoke(this, EventArgs.Empty);
+        }
+
+        protected override AutomationPeer OnCreateAutomationPeer()
+        {
+            return new SidebarResizeThumbAutomationPeer(this);
+        }
+    }
+
+    internal sealed class SidebarResizeThumbAutomationPeer : FrameworkElementAutomationPeer, IRangeValueProvider
+    {
+        private new SidebarResizeThumb Owner => (SidebarResizeThumb)base.Owner;
+
+        public SidebarResizeThumbAutomationPeer(SidebarResizeThumb owner)
+            : base(owner)
+        {
+        }
+
+        public double Value => Owner.Value;
+        bool IRangeValueProvider.IsReadOnly => false;
+        public double Maximum => Owner.Maximum;
+        public double Minimum => Owner.Minimum;
+        public double SmallChange => 8;
+        public double LargeChange => 32;
+
+        void IRangeValueProvider.SetValue(double value)
+        {
+            if (double.IsNaN(value) || value < Minimum || value > Maximum)
+                throw new ArgumentOutOfRangeException(nameof(value));
+            Owner.SetAutomationValue(value);
+        }
+
+        protected override AutomationControlType GetAutomationControlTypeCore() => AutomationControlType.Thumb;
+
+        protected override string GetClassNameCore() => nameof(SidebarResizeThumb);
+
+        protected override string GetNameCore()
+        {
+            var name = AutomationProperties.GetName(Owner);
+            return string.IsNullOrWhiteSpace(name) ? "Sidebar resize" : name;
+        }
+
+        protected override string GetHelpTextCore()
+        {
+            var help = AutomationProperties.GetHelpText(Owner);
+            return string.IsNullOrWhiteSpace(help) ? GetNameCore() : help;
+        }
+
+        public override object GetPattern(PatternInterface patternInterface)
+        {
+            return patternInterface == PatternInterface.RangeValue
+                ? this
+                : base.GetPattern(patternInterface);
+        }
+    }
+
+    /// <summary>
+    /// Keeps the outline tree's normal TreeView selection semantics while
+    /// supplying a custom item container whose peer can also be invoked.
+    /// </summary>
+    public sealed class SidebarOutlineTreeView : TreeView
+    {
+        private Action<int> _pageInvoker;
+
+        internal Action<int> PageInvoker
+        {
+            get => _pageInvoker;
+            set => _pageInvoker = value;
+        }
+
+        protected override DependencyObject GetContainerForItemOverride()
+        {
+            return new SidebarOutlineTreeViewItem { PageInvoker = PageInvoker };
+        }
+
+        protected override bool IsItemItsOwnContainerOverride(object item) => item is SidebarOutlineTreeViewItem;
+    }
+
+    public sealed class SidebarOutlineTreeViewItem : TreeViewItem
+    {
+        internal Action InvokeAction { get; set; }
+        internal Action<int> PageInvoker { get; set; }
+
+        internal void InvokeFromAutomation()
+        {
+            if (InvokeAction != null)
+            {
+                InvokeAction();
+                return;
+            }
+
+            if (DataContext is EditorPage.SidebarOutlineItem model && PageInvoker != null)
+            {
+                PageInvoker(model.PageIndex);
+                return;
+            }
+
+            // A virtualized/recycled item may be invoked before its Loaded
+            // metadata callback runs.  Preserve the ordinary TreeView
+            // selection route as a final safe fallback in that case.
+            IsSelected = true;
+        }
+
+        protected override DependencyObject GetContainerForItemOverride()
+        {
+            return new SidebarOutlineTreeViewItem { PageInvoker = PageInvoker };
+        }
+
+        protected override bool IsItemItsOwnContainerOverride(object item) => item is SidebarOutlineTreeViewItem;
+
+        protected override AutomationPeer OnCreateAutomationPeer() => new SidebarOutlineTreeViewItemAutomationPeer(this);
+    }
+
+    internal sealed class SidebarOutlineTreeViewItemAutomationPeer : TreeViewItemAutomationPeer, IInvokeProvider
+    {
+        private new SidebarOutlineTreeViewItem Owner => (SidebarOutlineTreeViewItem)base.Owner;
+
+        public SidebarOutlineTreeViewItemAutomationPeer(SidebarOutlineTreeViewItem owner)
+            : base(owner)
+        {
+        }
+
+        public override object GetPattern(PatternInterface patternInterface)
+        {
+            return patternInterface == PatternInterface.Invoke
+                ? this
+                : base.GetPattern(patternInterface);
+        }
+
+        void IInvokeProvider.Invoke()
+        {
+            if (!Owner.IsEnabled)
+                throw new ElementNotEnabledException();
+            Owner.InvokeFromAutomation();
         }
     }
 }

@@ -190,7 +190,7 @@ namespace Caelum.Pages
 
             try
             {
-                File.Copy(tile.Path, dialog.FileName, true);
+                PdfAtomicFile.CopyFile(tile.Path, dialog.FileName);
                 if (Window.GetWindow(this) is MainWindow mw)
                     mw.ShowToast(LocalizationService.Get("Home.ExportSucceeded"), "\uEDE1");
             }

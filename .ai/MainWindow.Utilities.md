@@ -17,4 +17,5 @@ Shared settings, localization, tab refresh, and settings-dialog orchestration fo
 ## V5 Completion Status
 
 - Settings preview applies language and ThemeService resources immediately, propagates the complete settings snapshot to open EditorPage tabs, and restores the original snapshot on cancel.
+- Wave5 preview passes `WorkspaceBackdrop` to `ThemeService` so the editor surround changes live while PDF page/image layers remain untouched; save/reopen persists the value through `AppSettingsService`.
 - Localization refresh no longer overwrites a live preview with persisted settings.

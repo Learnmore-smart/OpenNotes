@@ -224,6 +224,21 @@ try {
     Write-Output "THEME_PREVIEW_SELECTED='$($themeOption.Current.Name)'"
     try { $themeExpandCollapse.Collapse() } catch { }
 
+    $backdropComboBox = Find-DescendantByAutomationId $settingsAfterLanguage 'WorkspaceBackdropComboBox'
+    if ($null -eq $backdropComboBox) {
+        throw 'The workspace backdrop ComboBox was not discoverable through UI Automation.'
+    }
+    $backdropExpandCollapse = $backdropComboBox.GetCurrentPattern(
+        [System.Windows.Automation.ExpandCollapsePattern]::Pattern)
+    $backdropExpandCollapse.Expand()
+    Start-Sleep -Milliseconds 250
+    $backdropOption = Select-ListItem $process.Id 'Slate|Ardoise|板岩'
+    if ($null -eq $backdropOption) {
+        throw 'The Slate workspace backdrop option did not expose SelectionItemPattern.'
+    }
+    Write-Output "BACKDROP_PREVIEW_SELECTED='$($backdropOption.Current.Name)'"
+    try { $backdropExpandCollapse.Collapse() } catch { }
+
     Start-Sleep -Milliseconds 700
     $settingsAfterTheme = Find-SettingsWindow $process.Id
     if ($null -eq $settingsAfterTheme) {
@@ -284,13 +299,19 @@ try {
             Find-DescendantByAutomationId $reopenedSettingsWindow 'LanguageComboBox')
         $reopenedTheme = Get-SelectedComboName (
             Find-DescendantByAutomationId $reopenedSettingsWindow 'ThemeComboBox')
+        $reopenedBackdrop = Get-SelectedComboName (
+            Find-DescendantByAutomationId $reopenedSettingsWindow 'WorkspaceBackdropComboBox')
         Write-Output "PERSISTED_LANGUAGE='$reopenedLanguage'"
         Write-Output "PERSISTED_THEME='$reopenedTheme'"
+        Write-Output "PERSISTED_BACKDROP='$reopenedBackdrop'"
         if ($reopenedLanguage -notmatch 'Fran|French|法语|法文') {
             throw "French language selection was not persisted. selected='$reopenedLanguage'"
         }
         if ($reopenedTheme -notmatch 'Sombre|Dark|深色') {
             throw "Dark theme selection was not persisted. selected='$reopenedTheme'"
+        }
+        if ($reopenedBackdrop -notmatch 'Slate|Ardoise|板岩') {
+            throw "Slate workspace backdrop selection was not persisted. selected='$reopenedBackdrop'"
         }
 
         $reopenedCancelButton = Find-DescendantByAutomationId $reopenedSettingsWindow 'CancelButton'

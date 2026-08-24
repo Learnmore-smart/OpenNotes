@@ -1,5 +1,5 @@
 # tools/Test-OpenNotesAdvancedPointerSmoke.ps1
-> Last updated: 2026-08-22 | Protection: STANDARD
+> Last updated: 2026-08-23 (Wave 3 production ID migration) | Protection: STANDARD
 
 ## Purpose
 
@@ -13,6 +13,7 @@ Provide an independent, isolated desktop smoke for editor paths that are not cov
 - Do not access or modify Codex AppData, authentication, logs, user documents, or the normal Caelum data root.
 - Do not delete user files. Cleanup is limited to exact temporary paths created by this smoke under the system temp directory and the child process it started.
 - Report unsupported or unreliable interaction paths as unverified; never emit a PASS from source inspection alone.
+- Dot-sources `OpenNotesEditorAutomationIds.ps1`; production toolbar IDs, `PdfScrollViewer`, runtime page surfaces and text drag/resize peers are resolved through the shared alias helpers.
 
 ## Open Threads / Resume Context
 
@@ -20,6 +21,7 @@ Provide an independent, isolated desktop smoke for editor paths that are not cov
 - **Intent:** Add a real-pointer/keyboard regression smoke for shape, Hidden Ink, and selection/clipboard behavior without changing WPF product behavior.
 - **Next steps:** 1) keep all screen-input phases foreground-verified; 2) use page-image bounds for pixel probes; 3) require a fresh clipboard payload and shape geometry; 4) run PowerShell parsing and an isolated desktop smoke; 5) leave any hardware, cross-page, or third-party-viewer gaps explicitly unclaimed.
 - **Blockers / notes:** The current host may reject physical cursor injection or clipboard ownership. The script must distinguish physical input from any fallback and fail/mark unverified if the requested path cannot be observed reliably. `window-message` is intentionally rejected for real-pointer claims. Hidden Ink uses a three-phase base/mask/reveal/restore pixel comparison and a page-surface bound, rather than independent brightness thresholds. The first live run exposed and fixed a PowerShell pipeline-capture bug in the toolbar logging helper; the returned pointer mode is now kept separate from its diagnostic line.
+- **2026-08-23 run:** parser/source checks passed; the isolated advanced smoke stopped at `REAL_SCREEN_INPUT_UNAVAILABLE` during `editor-startup` (`foregroundHwnd=0`, `foregroundPid=0`) and reported `ISOLATED_ENV_CLEANED=True`. This is an environment block, not a product PASS/FAIL claim.
 
 ## Agent Decisions / Thoughts
 

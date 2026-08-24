@@ -25,8 +25,9 @@ namespace Caelum.Models
         // Task 23: pen preset slots (3 toolbar slots). Each slot captures a
         // tool ("Pen" | "Highlighter"), its color and size. Left-click on a
         // slot applies the preset; right-click captures the current tool
-        // state into the slot. EditorPage fills the 3 defaults on first use
-        // (empty list), NOT Sanitize — Sanitize only deep-copies.
+        // state into the slot. EditorPage may render in-memory fallback
+        // visuals, but an empty list remains empty and is not written back;
+        // Sanitize only deep-copies.
         public List<PenPreset> PenPresets { get; set; } = new List<PenPreset>();
 
         // Task 24: stroke smoothing level applied to freshly collected
@@ -41,6 +42,9 @@ namespace Caelum.Models
         public string DefaultPenColorHex { get; set; } = "#000000";
         public double DefaultPenSize { get; set; } = 1.5;
         public string Theme { get; set; } = "Light";
+        // Wave5: editor desk/surround decoration only. PDF page pixels remain
+        // an opaque, independent paper layer in PdfPageControl.
+        public string WorkspaceBackdrop { get; set; } = "Neutral";
 
         // Display-only PDF rendering policy. Balanced is the safe default for
         // existing settings files; this never changes saved PDF fidelity.

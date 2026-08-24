@@ -1,5 +1,5 @@
 # website/index.html
-> Last updated: 2026-08-22（live-folio website redesign completion） | Protection: STANDARD
+> Last updated: 2026-08-24（5.0.0 visible version metadata） | Protection: STANDARD
 
 ## Purpose
 
@@ -18,7 +18,7 @@ Static GitHub Pages editorial landing page for OpenNotes with a live annotation 
 
 - **Status:** complete
 - The page is recomposed into hero/live folio, method, workspace anatomy, evidence drawer, principles and download sections. Relative links, all six optional artwork filenames, three locales and every annotation control are preserved.
-- **Brand asset pass:** in progress; replace the hand-authored header glyph with the supplied optimized OpenNotes 96px favicon PNG and add full relative SVG/ICO/manifest metadata without changing layout or interaction behavior.
+- The supplied OpenNotes favicon bundle remains wired through relative SVG/ICO/96px/manifest references; the visible release marker is now `V5.0.0`. No new EXE page or Pages deployment is part of this release.
 
 ## Verification
 

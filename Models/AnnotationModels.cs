@@ -55,9 +55,12 @@ namespace Caelum.Models
     public class HiddenInkAnnotation
     {
         public string Id { get; set; } = Guid.NewGuid().ToString("N");
-        public byte R { get; set; } = 255;
-        public byte G { get; set; } = 255;
-        public byte B { get; set; } = 255;
+        // New study masks use a neutral, high-contrast gray cover. Explicit
+        // RGB values from older sidecars (including pure white 255/255/255)
+        // deserialize unchanged, so this default is not a data migration.
+        public byte R { get; set; } = 199;
+        public byte G { get; set; } = 205;
+        public byte B { get; set; } = 212;
         public byte A { get; set; } = 255;
         public double Size { get; set; } = 28.0;
         public int RevealDurationMs { get; set; } = HiddenInkRevealState.DefaultRevealDurationMs;
@@ -173,8 +176,19 @@ namespace Caelum.Models
     /// </summary>
     public class StickyNoteAnnotation
     {
+        // Stable sidecar/UI identity. Missing legacy JSON fields retain the
+        // initializer-generated value, so old notes remain fully compatible.
+        public string Id { get; set; } = Guid.NewGuid().ToString("N");
         public double X { get; set; }
         public double Y { get; set; }
         public string Text { get; set; } = "";
+        // Marker geometry/colour travel with sidecars, clipboard payloads and
+        // PDF round trips. Legacy notes omit these fields and keep the visual
+        // defaults used by the original 36-DIP marker.
+        public double Width { get; set; } = 36.0;
+        public double Height { get; set; } = 36.0;
+        public byte R { get; set; } = 253;
+        public byte G { get; set; } = 231;
+        public byte B { get; set; } = 138;
     }
 }

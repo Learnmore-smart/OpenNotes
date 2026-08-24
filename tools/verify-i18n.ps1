@@ -510,6 +510,27 @@ foreach ($sourceFile in $sourceFiles) {
 
 Write-Host "Localization calls checked: $callCount"
 
+Write-Section 'Dynamic visible ItemsSource strings'
+foreach ($sourceFile in $sourceFiles) {
+    $relativePath = Get-RelativePath $sourceFile.FullName
+    try {
+        $source = Get-Content -Raw -Encoding UTF8 -LiteralPath $sourceFile.FullName
+    }
+    catch {
+        Add-Issue "Unable to read $relativePath for ItemsSource scanning: $($_.Exception.Message)"
+        continue
+    }
+
+    # Alignment labels are visible runtime values. They must be localized
+    # model labels, never a literal string array that survives LanguageChanged.
+    foreach ($match in [regex]::Matches(
+        $source,
+        '(?s)ItemsSource\s*=\s*new\s*\[\]\s*\{\s*"Left"\s*,\s*"Center"\s*,\s*"Right"\s*\}')) {
+        $lineNumber = Get-LineNumber -Text $source -Index $match.Index
+        Add-Issue "${relativePath}:$lineNumber contains hard-coded alignment ItemsSource labels; use localized TextAlignmentOption values"
+    }
+}
+
 Write-Section 'Hard-coded visible strings'
 $hardcodedCount = 0
 foreach ($sourceFile in $sourceFiles) {

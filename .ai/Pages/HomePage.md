@@ -12,6 +12,9 @@ Displays the document/folder home surface inside the MainWindow tab shell.
 - Folder/file tile hover, drop-target, selection, checkbox, filename and metadata states use the shared `ThemeService` brush tokens, so the home surface follows light, dark and high-contrast palettes.
 - PDF/file preview artwork remains content-specific; changing the theme does not recolor document thumbnails.
 - The fallback notebook directory uses `ProductInfo.GetDataDirectory()`; production remains `%LOCALAPPDATA%\Caelum\Notebooks`, while an explicit `OPENNOTES_DATA_ROOT` isolates diagnostic/test runs.
+- Wave5 review routes dynamically created add/file/folder context menus through `ThemeSurfaceBrush`, `ThemeBorderBrush`, `ThemeSurfaceOpacity`, `ThemeTextBrush` and `ThemeDangerBrush`; the rename prompt now uses live surface/control/text/border resources and follows runtime theme preview.
+- Home smooth scrolling consumes `ThemeService.GetAnimationDuration`; ReduceMotion cancels the Rendering subscription and jumps to the target offset.
+- Add-tile, folder, and file hover scale effects now run through the code-behind `AnimateTileScale` helper and `ThemeService.GetAnimationDuration`; the retired fixed `0.2/0.3` second storyboards cannot bypass ReduceMotion.
 
 ## Constraints
 
@@ -20,10 +23,10 @@ Displays the document/folder home surface inside the MainWindow tab shell.
 
 ## Open Threads
 
-- **Status:** complete for localization and paper/ink surface work
+- **Status:** complete for localization, paper/ink surface and Wave5 review work
 - Every live HomePage subscribes to `LocalizationService.LanguageChanged` while loaded, unsubscribes while unloaded, and refreshes once when it is loaded again. The current pass keeps the page refresh idempotent while MainWindow updates tab chrome.
 - All three dynamically created HomePage menus register the helper immediately before opening. Their refresh path resolves each catalog key at the call site, keeping the static i18n verifier able to prove every key while preserving already-open menu updates.
-- The root uses `ThemeDeskBrush`, the breadcrumb/header uses `ThemePaperAltBrush`, the leading archive rail uses `ThemeMarginBrush`, and drag/drop feedback uses semantic ink/selection tokens. Manual Alt-Tab/context-menu verification remains a desktop check; the solution builds with 0 errors and two documented NU1701 warnings.
+- The root uses `ThemeWorkspaceBrush`, the selection panel uses `ThemeSidebarBrush`, the breadcrumb/header uses `ThemePaperAltBrush`, the leading archive rail uses `ThemeMarginBrush`, and drag/drop feedback uses semantic ink/selection tokens. Manual Alt-Tab/context-menu verification remains a desktop check; the solution builds with 0 errors and two documented NU1701 warnings.
 
 ## Agent Decisions / Thoughts
 

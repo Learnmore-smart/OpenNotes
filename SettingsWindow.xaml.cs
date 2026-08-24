@@ -1,6 +1,7 @@
 using System;
 using System.Linq;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Media;
 using Caelum.Models;
@@ -27,6 +28,7 @@ namespace Caelum
             PopupZOrderHelper.FixComboBoxPopupTopmost(SmoothingComboBox);
             PopupZOrderHelper.FixComboBoxPopupTopmost(PerformanceModeComboBox);
             PopupZOrderHelper.FixComboBoxPopupTopmost(ThemeComboBox);
+            PopupZOrderHelper.FixComboBoxPopupTopmost(WorkspaceBackdropComboBox);
             LanguageComboBox.SelectionChanged += LanguageComboBox_SelectionChanged;
 
             LanguageComboBox.ItemsSource = LocalizationService.GetLanguageOptions();
@@ -42,6 +44,7 @@ namespace Caelum
             DefaultPenSizeTextBox.Text = currentSettings.DefaultPenSize.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
             var themeIndex = GetThemeIndex(currentSettings.Theme);
             var performanceModeIndex = GetPerformanceModeIndex(currentSettings.PerformanceMode);
+            var workspaceBackdropIndex = GetWorkspaceBackdropIndex(currentSettings.WorkspaceBackdrop);
             AutoSaveIntervalComboBox.SelectionChanged += SettingsControl_SelectionChanged;
             PressureCheckBox.Checked += SettingsControl_Changed;
             PressureCheckBox.Unchecked += SettingsControl_Changed;
@@ -50,11 +53,13 @@ namespace Caelum
             SmoothingComboBox.SelectionChanged += SettingsControl_SelectionChanged;
             PerformanceModeComboBox.SelectionChanged += SettingsControl_SelectionChanged;
             ThemeComboBox.SelectionChanged += SettingsControl_SelectionChanged;
+            WorkspaceBackdropComboBox.SelectionChanged += SettingsControl_SelectionChanged;
 
             ApplyLocalization();
             SmoothingComboBox.SelectedIndex = smoothingIndex;
             PerformanceModeComboBox.SelectedIndex = performanceModeIndex;
             ThemeComboBox.SelectedIndex = themeIndex;
+            WorkspaceBackdropComboBox.SelectedIndex = workspaceBackdropIndex;
         }
 
         public AppSettings SelectedSettings { get; private set; }
@@ -64,6 +69,7 @@ namespace Caelum
             var smoothingIndex = SmoothingComboBox.SelectedIndex < 0 ? 2 : SmoothingComboBox.SelectedIndex;
             var performanceModeIndex = PerformanceModeComboBox.SelectedIndex < 0 ? 1 : PerformanceModeComboBox.SelectedIndex;
             var themeIndex = ThemeComboBox.SelectedIndex < 0 ? 0 : ThemeComboBox.SelectedIndex;
+            var workspaceBackdropIndex = WorkspaceBackdropComboBox.SelectedIndex < 0 ? 0 : WorkspaceBackdropComboBox.SelectedIndex;
 
             _isApplyingLocalization = true;
             try
@@ -113,6 +119,18 @@ namespace Caelum
                     $"▣  {LocalizationService.Get("Settings.ThemeHighContrast")}"
                 };
                 ThemeComboBox.SelectedIndex = Math.Max(0, Math.Min(3, themeIndex));
+
+                WorkspaceBackdropLabelTextBlock.Text = LocalizationService.Get("Settings.WorkspaceBackdrop");
+                WorkspaceBackdropHintTextBlock.Text = LocalizationService.Get("Settings.WorkspaceBackdropHint");
+                AutomationProperties.SetName(WorkspaceBackdropComboBox, WorkspaceBackdropLabelTextBlock.Text);
+                AutomationProperties.SetHelpText(WorkspaceBackdropComboBox, WorkspaceBackdropHintTextBlock.Text);
+                WorkspaceBackdropComboBox.ItemsSource = new[]
+                {
+                    LocalizationService.Get("Settings.WorkspaceBackdropNeutral"),
+                    LocalizationService.Get("Settings.WorkspaceBackdropPaper"),
+                    LocalizationService.Get("Settings.WorkspaceBackdropSlate")
+                };
+                WorkspaceBackdropComboBox.SelectedIndex = Math.Max(0, Math.Min(2, workspaceBackdropIndex));
             }
             finally
             {
@@ -149,7 +167,28 @@ namespace Caelum
             selected.DefaultPenSize = Math.Max(0.5, Math.Min(24, penSize));
             selected.PerformanceMode = GetPerformanceModeValue(PerformanceModeComboBox.SelectedIndex);
             selected.Theme = GetThemeValue(ThemeComboBox.SelectedIndex);
+            selected.WorkspaceBackdrop = GetWorkspaceBackdropValue(WorkspaceBackdropComboBox.SelectedIndex);
             return selected;
+        }
+
+        private static int GetWorkspaceBackdropIndex(string value)
+        {
+            return value?.Trim().ToLowerInvariant() switch
+            {
+                "paper" => 1,
+                "slate" => 2,
+                _ => 0
+            };
+        }
+
+        private static string GetWorkspaceBackdropValue(int index)
+        {
+            return index switch
+            {
+                1 => "Paper",
+                2 => "Slate",
+                _ => "Neutral"
+            };
         }
 
         private static int GetPerformanceModeIndex(string value)
@@ -232,6 +271,7 @@ namespace Caelum
                 DefaultPenColorHex = source.DefaultPenColorHex,
                 DefaultPenSize = source.DefaultPenSize,
                 Theme = source.Theme,
+                WorkspaceBackdrop = source.WorkspaceBackdrop,
                 PerformanceMode = source.PerformanceMode
             };
         }

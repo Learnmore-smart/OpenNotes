@@ -4,6 +4,7 @@ using System.Globalization;
 using System.IO;
 using System.Net;
 using System.Reflection;
+using System.Runtime.ExceptionServices;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -35,12 +36,23 @@ namespace Caelum.Services
         }
 
         private readonly SemaphoreSlim _documentLock = new SemaphoreSlim(1, 1);
+        // Save/dispose admission is acquired before _documentLock.  Dispose
+        // therefore cannot publish DisposeStarted while an admitted save is
+        // between its final state check and a native reload/create.
+        private readonly SemaphoreSlim _lifetimeGate = new SemaphoreSlim(1, 1);
         private const double PdfPointToDipScale = 96.0 / 72.0;
         private PdfiumPdfDocument _pdfDocument;
         private Stream _pdfBackingStream;
         private string _sourceFilePath;
         private readonly Dictionary<int, PdfPageTextInfo> _pageTextInfoCache = new Dictionary<int, PdfPageTextInfo>();
+        private const int DisposeActive = 0;
+        private const int DisposeStarted = 1;
+        private const int DisposeCompleted = 2;
         private int _disposeState;
+        // Replaced after a failed disposal attempt so ReleaseResourcesAsync
+        // can retry the same service instead of permanently observing the
+        // first exception.
+        private TaskCompletionSource<bool> _disposeCompletion = NewDisposeCompletion();
         private static readonly Regex RichTextBreakRegex = new Regex(@"<\s*br\s*/?\s*>|<\s*/p\s*>", RegexOptions.IgnoreCase | RegexOptions.Compiled);
         private static readonly Regex RichTextTagRegex = new Regex(@"<[^>]+>", RegexOptions.Compiled);
         private static readonly Regex DefaultAppearanceFontSizeRegex = new Regex(@"(?<size>[+-]?\d+(?:\.\d+)?)\s+Tf\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
@@ -91,17 +103,34 @@ namespace Caelum.Services
             double heightPoints = 792,
             PageInsertTemplate template = PageInsertTemplate.Blank)
         {
-            await Task.Run(() =>
-            {
-                Directory.CreateDirectory(Path.GetDirectoryName(filePath) ?? string.Empty);
+            // Blank-document creation is also a physical write. Join the
+            // process-wide path lease so a new-document/import workflow cannot
+            // overwrite a concurrent structural or annotation replacement of
+            // the same path.
+            await PdfSaveCoordinator.RunExclusiveAsync(
+                filePath,
+                () => Task.Run(() =>
+                {
+                    string directory = Path.GetDirectoryName(filePath);
+                    if (!string.IsNullOrWhiteSpace(directory))
+                        Directory.CreateDirectory(directory);
 
-                using var document = new PdfSharpCore.Pdf.PdfDocument();
-                var page = document.AddPage();
-                page.Width = widthPoints;
-                page.Height = heightPoints;
-                ApplyPageTemplate(page, template);
-                document.Save(filePath);
-            }).ConfigureAwait(false);
+                    string tempPath = PdfAtomicFile.CreateTempPath(filePath);
+                    try
+                    {
+                        using var document = new PdfSharpCore.Pdf.PdfDocument();
+                        var page = document.AddPage();
+                        page.Width = widthPoints;
+                        page.Height = heightPoints;
+                        ApplyPageTemplate(page, template);
+                        PdfAtomicFile.SaveDocument(document, tempPath);
+                        PdfAtomicFile.Replace(tempPath, filePath);
+                    }
+                    finally
+                    {
+                        PdfAtomicFile.TryDelete(tempPath);
+                    }
+                })).ConfigureAwait(false);
         }
 
         public async Task AppendBlankPageAsync(string filePath, double? widthPoints = null, double? heightPoints = null)
@@ -111,30 +140,20 @@ namespace Caelum.Services
 
         public async Task InsertPageAsync(string filePath, int insertIndex, PageInsertTemplate template, double? widthPoints = null, double? heightPoints = null)
         {
-            await _documentLock.WaitAsync().ConfigureAwait(false);
-            try
+            await RunDocumentWriteAsync(filePath, async () =>
             {
                 await Task.Run(() => InsertPageCore(filePath, insertIndex, template, widthPoints, heightPoints), CancellationToken.None).ConfigureAwait(false);
                 await ReloadDocumentFromFileAsync(filePath).ConfigureAwait(false);
-            }
-            finally
-            {
-                _documentLock.Release();
-            }
+            }).ConfigureAwait(false);
         }
 
         public async Task DeletePageAsync(string filePath, int pageIndex)
         {
-            await _documentLock.WaitAsync().ConfigureAwait(false);
-            try
+            await RunDocumentWriteAsync(filePath, async () =>
             {
                 await Task.Run(() => DeletePageCore(filePath, pageIndex), CancellationToken.None).ConfigureAwait(false);
                 await ReloadDocumentFromFileAsync(filePath).ConfigureAwait(false);
-            }
-            finally
-            {
-                _documentLock.Release();
-            }
+            }).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -159,7 +178,13 @@ namespace Caelum.Services
 
         public async Task LoadPdfAsync(string filePath, CancellationToken cancellationToken = default)
         {
-            await LoadPdfCoreAsync(filePath, cancellationToken);
+            // Loads replace the in-memory/native view of the same PDF. Join
+            // the process-wide path lease so a reload cannot observe a
+            // structural/annotation write halfway through its replacement.
+            await PdfSaveCoordinator.RunExclusiveAsync(
+                filePath,
+                () => LoadPdfCoreAsync(filePath, cancellationToken),
+                cancellationToken).ConfigureAwait(false);
         }
 
         public bool TryGetCachedPageTextInfo(int pageIndex, out PdfPageTextInfo textInfo)
@@ -255,20 +280,31 @@ namespace Caelum.Services
         private async Task LoadPdfCoreAsync(string filePath, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            await _documentLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+            ThrowIfDisposed();
+            await _lifetimeGate.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
             {
-                DisposeCurrentDocument();
-                _sourceFilePath = filePath;
+                ThrowIfDisposed();
+                await _documentLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+                try
+                {
+                    ThrowIfDisposed();
+                    DisposeCurrentDocument();
+                    _sourceFilePath = filePath;
 
-                var loaded = await Task.Run(() => LoadPdfDocument(filePath, cancellationToken), cancellationToken).ConfigureAwait(false);
-                _pdfDocument = loaded.Document;
-                _pdfBackingStream = loaded.BackingStream;
-                ExtractedAnnotations = loaded.ExtractedAnnotations;
+                    var loaded = await Task.Run(() => LoadPdfDocument(filePath, cancellationToken), cancellationToken).ConfigureAwait(false);
+                    _pdfDocument = loaded.Document;
+                    _pdfBackingStream = loaded.BackingStream;
+                    ExtractedAnnotations = loaded.ExtractedAnnotations;
+                }
+                finally
+                {
+                    _documentLock.Release();
+                }
             }
             finally
             {
-                _documentLock.Release();
+                _lifetimeGate.Release();
             }
         }
 
@@ -321,21 +357,136 @@ namespace Caelum.Services
         private void DisposeCurrentDocument()
         {
             _pageTextInfoCache.Clear();
-            _pdfDocument?.Dispose();
-            _pdfDocument = null;
-            _pdfBackingStream?.Dispose();
-            _pdfBackingStream = null;
+            Exception firstFailure = null;
+            var document = _pdfDocument;
+            if (document != null)
+            {
+                try
+                {
+                    document.Dispose();
+                    _pdfDocument = null;
+                }
+                catch (Exception ex)
+                {
+                    // Keep the owner reachable for a later retry. A failed
+                    // native Dispose must not be converted into a leaked,
+                    // forgotten document by clearing the field first.
+                    firstFailure = ex;
+                }
+            }
+
+            var backingStream = _pdfBackingStream;
+            if (backingStream != null)
+            {
+                try
+                {
+                    backingStream.Dispose();
+                    _pdfBackingStream = null;
+                }
+                catch (Exception ex)
+                {
+                    // Preserve a failed stream owner for the same retryable
+                    // disposal contract, while still attempting every other
+                    // resource above.
+                    firstFailure ??= ex;
+                }
+            }
+
+            if (firstFailure != null)
+                ExceptionDispatchInfo.Capture(firstFailure).Throw();
         }
 
         private async Task ReloadDocumentFromFileAsync(string filePath)
         {
+            ThrowIfDisposed();
             DisposeCurrentDocument();
             _sourceFilePath = filePath;
 
-            var loaded = await Task.Run(() => LoadPdfDocument(filePath, CancellationToken.None), CancellationToken.None).ConfigureAwait(false);
-            _pdfDocument = loaded.Document;
-            _pdfBackingStream = loaded.BackingStream;
-            ExtractedAnnotations = loaded.ExtractedAnnotations;
+            LoadedPdfDocument loaded = null;
+            try
+            {
+                loaded = await Task.Run(() => LoadPdfDocument(filePath, CancellationToken.None), CancellationToken.None).ConfigureAwait(false);
+                ThrowIfDisposed();
+                _pdfDocument = loaded.Document;
+                _pdfBackingStream = loaded.BackingStream;
+                ExtractedAnnotations = loaded.ExtractedAnnotations;
+                loaded = null;
+            }
+            finally
+            {
+                DisposeLoadedPdf(loaded);
+            }
+        }
+
+        private static void DisposeLoadedPdf(LoadedPdfDocument loaded)
+        {
+            if (loaded == null)
+                return;
+
+            Exception firstFailure = null;
+            try
+            {
+                loaded.Document?.Dispose();
+            }
+            catch (Exception ex)
+            {
+                firstFailure = ex;
+            }
+
+            try
+            {
+                loaded.BackingStream?.Dispose();
+            }
+            catch (Exception ex)
+            {
+                firstFailure ??= ex;
+            }
+
+            if (firstFailure != null)
+                ExceptionDispatchInfo.Capture(firstFailure).Throw();
+        }
+
+        /// <summary>
+        /// Admits every write which changes a PDF and reloads the in-memory
+        /// document under one lifetime/document critical section.  The order is
+        /// path coordinator, lifetime gate, then document lock; DisposeAsync
+        /// uses the latter two in the same order, so a queued write cannot pass
+        /// a disposal checkpoint and recreate native state afterwards.
+        /// </summary>
+        private Task RunDocumentWriteAsync(string filePath, Func<Task> writeAsync)
+            => RunDocumentWriteAsync(new[] { filePath }, writeAsync);
+
+        private Task RunDocumentWriteAsync(IReadOnlyCollection<string> paths, Func<Task> writeAsync)
+        {
+            ThrowIfDisposed();
+            ArgumentNullException.ThrowIfNull(writeAsync);
+            return PdfSaveCoordinator.RunExclusiveAsync(paths, () =>
+                RunDocumentWriteUnderLifetimeAsync(writeAsync));
+        }
+
+        private async Task RunDocumentWriteUnderLifetimeAsync(Func<Task> writeAsync)
+        {
+            ThrowIfDisposed();
+            await _lifetimeGate.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                ThrowIfDisposed();
+                await _documentLock.WaitAsync().ConfigureAwait(false);
+                try
+                {
+                    ThrowIfDisposed();
+                    await writeAsync().ConfigureAwait(false);
+                    ThrowIfDisposed();
+                }
+                finally
+                {
+                    _documentLock.Release();
+                }
+            }
+            finally
+            {
+                _lifetimeGate.Release();
+            }
         }
 
         private static void InsertPageCore(string filePath, int insertIndex, PageInsertTemplate template, double? widthPoints, double? heightPoints)
@@ -343,9 +494,7 @@ namespace Caelum.Services
             if (!File.Exists(filePath))
                 throw new FileNotFoundException("PDF to update not found.", filePath);
 
-            string tempPath = Path.Combine(
-                Path.GetDirectoryName(filePath) ?? string.Empty,
-                $"{Path.GetFileName(filePath)}.{Guid.NewGuid():N}.tmp");
+            string tempPath = CreatePdfTempPath(filePath);
 
             try
             {
@@ -365,7 +514,7 @@ namespace Caelum.Services
                     SaveModifiedDocument(document, tempPath);
                 }
 
-                File.Copy(tempPath, filePath, true);
+                PdfAtomicFile.Replace(tempPath, filePath);
             }
             finally
             {
@@ -385,9 +534,7 @@ namespace Caelum.Services
             if (!File.Exists(filePath))
                 throw new FileNotFoundException("PDF to update not found.", filePath);
 
-            string tempPath = Path.Combine(
-                Path.GetDirectoryName(filePath) ?? string.Empty,
-                $"{Path.GetFileName(filePath)}.{Guid.NewGuid():N}.tmp");
+            string tempPath = CreatePdfTempPath(filePath);
 
             try
             {
@@ -404,7 +551,7 @@ namespace Caelum.Services
                     SaveModifiedDocument(document, tempPath);
                 }
 
-                File.Copy(tempPath, filePath, true);
+                PdfAtomicFile.Replace(tempPath, filePath);
             }
             finally
             {
@@ -440,8 +587,8 @@ namespace Caelum.Services
                 using var output = new PdfSharpCore.Pdf.PdfDocument();
                 foreach (int sourceIndex in order)
                     output.AddPage(source.Pages[sourceIndex]);
-                output.Save(tempPath);
-                File.Copy(tempPath, filePath, true);
+                PdfAtomicFile.SaveDocument(output, tempPath);
+                PdfAtomicFile.Replace(tempPath, filePath);
             }
             finally
             {
@@ -468,8 +615,8 @@ namespace Caelum.Services
                     if (i == pageIndex)
                         output.AddPage(source.Pages[i]);
                 }
-                output.Save(tempPath);
-                File.Copy(tempPath, filePath, true);
+                PdfAtomicFile.SaveDocument(output, tempPath);
+                PdfAtomicFile.Replace(tempPath, filePath);
             }
             finally
             {
@@ -498,7 +645,7 @@ namespace Caelum.Services
                     SaveModifiedDocument(document, tempPath);
                 }
 
-                File.Copy(tempPath, filePath, true);
+                PdfAtomicFile.Replace(tempPath, filePath);
             }
             finally
             {
@@ -541,8 +688,8 @@ namespace Caelum.Services
                         output.AddPage(source.Pages[sourceIndex]);
                 }
 
-                output.Save(tempPath);
-                File.Copy(tempPath, targetPath, true);
+                PdfAtomicFile.SaveDocument(output, tempPath);
+                PdfAtomicFile.Replace(tempPath, targetPath);
             }
             finally
             {
@@ -582,7 +729,7 @@ namespace Caelum.Services
                     SaveModifiedDocument(document, tempPath);
                 }
 
-                File.Copy(tempPath, targetPath, true);
+                PdfAtomicFile.Replace(tempPath, targetPath);
             }
             finally
             {
@@ -626,25 +773,17 @@ namespace Caelum.Services
 
         private static string CreatePdfTempPath(string filePath)
         {
-            return Path.Combine(Path.GetDirectoryName(filePath) ?? string.Empty, $"{Path.GetFileName(filePath)}.{Guid.NewGuid():N}.tmp");
+            return PdfAtomicFile.CreateTempPath(filePath);
         }
 
         private static void TryDeleteFile(string filePath)
         {
-            try
-            {
-                if (File.Exists(filePath))
-                    File.Delete(filePath);
-            }
-            catch
-            {
-            }
+            PdfAtomicFile.TryDelete(filePath);
         }
 
         private static void SaveModifiedDocument(PdfSharpCore.Pdf.PdfDocument document, string tempPath)
         {
-            using var outputStream = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None);
-            document.Save(outputStream, false);
+            PdfAtomicFile.SaveDocument(document, tempPath);
         }
 
         private static void ApplyPageTemplate(PdfSharpCore.Pdf.PdfPage page, PageInsertTemplate template)
@@ -723,31 +862,21 @@ namespace Caelum.Services
         /// <summary>Task 30: reorder pages while preserving their PDF contents.</summary>
         public async Task ReorderPagesAsync(string filePath, int fromIndex, int toIndex)
         {
-            await _documentLock.WaitAsync().ConfigureAwait(false);
-            try
+            await RunDocumentWriteAsync(filePath, async () =>
             {
                 await Task.Run(() => ReorderPagesCore(filePath, fromIndex, toIndex)).ConfigureAwait(false);
                 await ReloadDocumentFromFileAsync(filePath).ConfigureAwait(false);
-            }
-            finally
-            {
-                _documentLock.Release();
-            }
+            }).ConfigureAwait(false);
         }
 
         /// <summary>Task 30: duplicate one page immediately after itself.</summary>
         public async Task DuplicatePageAsync(string filePath, int pageIndex)
         {
-            await _documentLock.WaitAsync().ConfigureAwait(false);
-            try
+            await RunDocumentWriteAsync(filePath, async () =>
             {
                 await Task.Run(() => DuplicatePageCore(filePath, pageIndex)).ConfigureAwait(false);
                 await ReloadDocumentFromFileAsync(filePath).ConfigureAwait(false);
-            }
-            finally
-            {
-                _documentLock.Release();
-            }
+            }).ConfigureAwait(false);
         }
 
         /// <summary>Task 31: read the PDF outline using PdfSharpCore.</summary>
@@ -763,46 +892,35 @@ namespace Caelum.Services
         /// <summary>Task 34: rotate one page by 90 degrees and persist /Rotate.</summary>
         public async Task RotatePageAsync(string filePath, int pageIndex, int quarterTurns = 1)
         {
-            await _documentLock.WaitAsync().ConfigureAwait(false);
-            try
+            await RunDocumentWriteAsync(filePath, async () =>
             {
                 await Task.Run(() => RotatePageCore(filePath, pageIndex, quarterTurns)).ConfigureAwait(false);
                 await ReloadDocumentFromFileAsync(filePath).ConfigureAwait(false);
-            }
-            finally
-            {
-                _documentLock.Release();
-            }
+            }).ConfigureAwait(false);
         }
 
         /// <summary>Task 37: import a page range from another PDF at an index.</summary>
         public async Task InsertPdfPagesAsync(string targetPath, string sourcePath, int insertIndex, int startPage, int endPage)
         {
-            await _documentLock.WaitAsync().ConfigureAwait(false);
-            try
+            // Import reads source bytes while replacing target bytes.  Hold
+            // both process-wide path leases in the coordinator's deterministic
+            // order so another instance cannot rewrite the source halfway
+            // through the import and crossed A<-B/B<-A calls cannot deadlock.
+            await RunDocumentWriteAsync(new[] { targetPath, sourcePath }, async () =>
             {
                 await Task.Run(() => InsertPdfPagesCore(targetPath, sourcePath, insertIndex, startPage, endPage)).ConfigureAwait(false);
                 await ReloadDocumentFromFileAsync(targetPath).ConfigureAwait(false);
-            }
-            finally
-            {
-                _documentLock.Release();
-            }
+            }).ConfigureAwait(false);
         }
 
         /// <summary>Task 37: create a new page and center an image on it.</summary>
         public async Task InsertImagePageAsync(string targetPath, string imagePath, int insertIndex)
         {
-            await _documentLock.WaitAsync().ConfigureAwait(false);
-            try
+            await RunDocumentWriteAsync(targetPath, async () =>
             {
                 await Task.Run(() => InsertImagePageCore(targetPath, imagePath, insertIndex)).ConfigureAwait(false);
                 await ReloadDocumentFromFileAsync(targetPath).ConfigureAwait(false);
-            }
-            finally
-            {
-                _documentLock.Release();
-            }
+            }).ConfigureAwait(false);
         }
 
         private static void DrawDottedTemplate(XGraphics gfx, double width, double height)
@@ -844,6 +962,7 @@ namespace Caelum.Services
         private Dictionary<int, Models.PageAnnotation> ExtractAndStripAnnotations(Stream sourceStream, Stream outputStream, CancellationToken cancellationToken)
         {
             var extractedAnnotations = new Dictionary<int, Models.PageAnnotation>();
+            var extractedStickyNoteIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             const double dipDpi = 96.0;
             double scale = dipDpi / 72.0;
 
@@ -925,14 +1044,11 @@ namespace Caelum.Services
                                             {
                                                 if (isHiddenInk)
                                                 {
-                                                    pageAnnots.HiddenInks.Add(new Models.HiddenInkAnnotation
+                                                    var hiddenAnnotation = new Models.HiddenInkAnnotation
                                                     {
                                                         Id = string.IsNullOrWhiteSpace(hiddenInkId)
                                                             ? Guid.NewGuid().ToString("N")
                                                             : hiddenInkId,
-                                                        R = r,
-                                                        G = g,
-                                                        B = b,
                                                         A = 255,
                                                         Size = size,
                                                         RevealDurationMs = isHiddenInk
@@ -941,7 +1057,18 @@ namespace Caelum.Services
                                                             ? dict.Elements.GetInteger("/WNARevealMs")
                                                             : Models.HiddenInkRevealState.DefaultRevealDurationMs,
                                                         Points = points
-                                                    });
+                                                    };
+                                                    // A legacy hidden mask may omit /C. Keep
+                                                    // ordinary ink's historical white fallback,
+                                                    // but let the model's new neutral-gray default
+                                                    // supply the production Hidden Ink fallback.
+                                                    if (cArray != null && cArray.Elements.Count >= 3)
+                                                    {
+                                                        hiddenAnnotation.R = r;
+                                                        hiddenAnnotation.G = g;
+                                                        hiddenAnnotation.B = b;
+                                                    }
+                                                    pageAnnots.HiddenInks.Add(hiddenAnnotation);
                                                 }
                                                 else
                                                 {
@@ -1052,6 +1179,7 @@ namespace Caelum.Services
                                 var stickyNote = TryExtractStickyNote(dict, pageHeight, scale);
                                 if (stickyNote != null)
                                 {
+                                    EnsureUniqueStickyNoteId(stickyNote, extractedStickyNoteIds);
                                     pageAnnots.StickyNotes.Add(stickyNote);
                                     elementsToRemove.Add(annotItem);
                                 }
@@ -1250,29 +1378,68 @@ namespace Caelum.Services
 
         public async ValueTask DisposeAsync()
         {
-            if (Interlocked.Exchange(ref _disposeState, 1) != 0)
-                return;
-
-            await _documentLock.WaitAsync().ConfigureAwait(false);
+            // Acquire the same admission boundary as saves before publishing
+            // DisposeStarted. An already-admitted save completes (or fails)
+            // before disposal begins; a waiter observes the state only after
+            // it acquires this gate and cannot reload a native document.
+            await _lifetimeGate.WaitAsync().ConfigureAwait(false);
             try
             {
-                DisposeCurrentDocument();
-                ExtractedAnnotations = new Dictionary<int, Models.PageAnnotation>();
-                _sourceFilePath = null;
+                if (Interlocked.CompareExchange(ref _disposeState, DisposeStarted, DisposeActive) != DisposeActive)
+                {
+                    await _disposeCompletion.Task.ConfigureAwait(false);
+                    return;
+                }
+
+                await _documentLock.WaitAsync().ConfigureAwait(false);
+                try
+                {
+                    DisposeCurrentDocument();
+                    ExtractedAnnotations = new Dictionary<int, Models.PageAnnotation>();
+                    _sourceFilePath = null;
+                }
+                finally
+                {
+                    _documentLock.Release();
+                }
+
+                Volatile.Write(ref _disposeState, DisposeCompleted);
+                _disposeCompletion.TrySetResult(true);
+                GC.SuppressFinalize(this);
+            }
+            catch (Exception ex)
+            {
+                Volatile.Write(ref _disposeState, DisposeActive);
+                _disposeCompletion.TrySetException(ex);
+                _disposeCompletion = NewDisposeCompletion();
+                throw;
             }
             finally
             {
-                _documentLock.Release();
+                _lifetimeGate.Release();
             }
-
-            GC.SuppressFinalize(this);
         }
 
-        public async Task SaveAnnotationsToPdfAsync(string filePath, Dictionary<int, Models.PageAnnotation> annotations)
+        public Task SaveAnnotationsToPdfAsync(string filePath, Dictionary<int, Models.PageAnnotation> annotations)
         {
-            await _documentLock.WaitAsync().ConfigureAwait(false);
-            try
+            ThrowIfDisposed();
+            // PdfService instances have their own document lifetime lock, but
+            // an editor can hold more than one instance for the same path
+            // (autosave/manual or separate tabs). The shared coordinator must
+            // cover the entire write and optional reload, not only the temp
+            // file construction, so every reader sees a complete PDF.
+            return PdfSaveCoordinator.RunExclusiveAsync(
+                filePath,
+                () => SaveAnnotationsToPdfCoreAsync(filePath, annotations));
+        }
+
+        private async Task SaveAnnotationsToPdfCoreAsync(
+            string filePath,
+            Dictionary<int, Models.PageAnnotation> annotations)
+        {
+            await RunDocumentWriteUnderLifetimeAsync(async () =>
             {
+                ThrowIfDisposed();
                 bool requiresReload = _pdfBackingStream == null;
                 if (requiresReload)
                     DisposeCurrentDocument();
@@ -1281,17 +1448,20 @@ namespace Caelum.Services
 
                 if (requiresReload)
                 {
-                    var loaded = await Task.Run(() => LoadPdfDocument(filePath, CancellationToken.None), CancellationToken.None).ConfigureAwait(false);
-                    _pdfDocument = loaded.Document;
-                    _pdfBackingStream = loaded.BackingStream;
-                    ExtractedAnnotations = loaded.ExtractedAnnotations;
+                    ThrowIfDisposed();
+                    await ReloadDocumentFromFileAsync(filePath).ConfigureAwait(false);
                 }
-            }
-            finally
-            {
-                _documentLock.Release();
-            }
+            }).ConfigureAwait(false);
         }
+
+        private void ThrowIfDisposed()
+        {
+            if (Volatile.Read(ref _disposeState) != DisposeActive)
+                throw new ObjectDisposedException(nameof(PdfService));
+        }
+
+        private static TaskCompletionSource<bool> NewDisposeCompletion() =>
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         private void SaveAnnotationsCore(string filePath, Dictionary<int, Models.PageAnnotation> annotations)
         {
@@ -1301,9 +1471,7 @@ namespace Caelum.Services
             if (fileInfo.IsReadOnly)
                 throw new UnauthorizedAccessException($"The file \"{Path.GetFileName(filePath)}\" is read-only. Please disable read-only mode in file properties and try again.");
 
-            string tempPath = Path.Combine(
-                Path.GetDirectoryName(filePath) ?? string.Empty,
-                $"{Path.GetFileName(filePath)}.{Guid.NewGuid():N}.tmp");
+            string tempPath = CreatePdfTempPath(filePath);
 
             try
             {
@@ -1325,6 +1493,7 @@ namespace Caelum.Services
                 {
                     const double dipDpi = 96.0;
                     double scale = 72.0 / dipDpi;
+                    var stickyNoteIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
                     for (int i = 0; i < document.PageCount; i++)
                     {
@@ -1623,7 +1792,7 @@ namespace Caelum.Services
                         // Task 26: sticky notes as standard /Text annotations.
                         foreach (var note in pageAnnots.StickyNotes)
                         {
-                            WriteStickyNoteAnnotation(document, pdfPage, note, scale, pageHeight);
+                            WriteStickyNoteAnnotation(document, pdfPage, note, scale, pageHeight, stickyNoteIds);
                         }
 
                         // Task 19: image annotations — /Stamp with an XForm
@@ -1677,17 +1846,15 @@ namespace Caelum.Services
                         }
                     }
 
-                    // Save the document to the temporary file
-                    using (var outputStream = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None))
-                    {
-                        document.Save(outputStream, false);
-                    }
+                    // Save and flush the complete document before replacing
+                    // the target path.
+                    PdfAtomicFile.SaveDocument(document, tempPath);
                 }
 
                 // Now that the document is saved and streams are closed, move the temp file
                 try
                 {
-                    File.Move(tempPath, filePath, true);
+                    PdfAtomicFile.Replace(tempPath, filePath);
                 }
                 catch (UnauthorizedAccessException ex)
                 {
@@ -2045,31 +2212,41 @@ namespace Caelum.Services
             PdfSharpCore.Pdf.PdfPage pdfPage,
             Models.StickyNoteAnnotation note,
             double scale,
-            double pageHeight)
+            double pageHeight,
+            ISet<string> usedNoteIds = null)
         {
             if (note == null) return;
 
-            // 22pt icon square, top-left at (X, Y) in page DIP coords.
-            const double iconSizePt = 22.0;
+            // Persist marker geometry in PDF points (the /Rect remains the
+            // interoperable fallback for viewers that ignore WNA metadata).
+            const double legacyIconSizePt = 22.0;
+            double iconWidthPt = note.Width > 0 ? note.Width * scale : legacyIconSizePt;
+            double iconHeightPt = note.Height > 0 ? note.Height * scale : legacyIconSizePt;
             double x = note.X * scale;
             double yTop = pageHeight - note.Y * scale;
-            double yBottom = yTop - iconSizePt;
+            double yBottom = yTop - iconHeightPt;
 
             var dict = new PdfDictionary(document);
             dict.Elements.SetName(PdfAnnotation.Keys.Subtype, "/Text");
-            dict.Elements.SetString("/NM", $"{StickyNoteNmPrefix}{Guid.NewGuid():N}");
+            // Keep the model identity in /NM so a PDF round trip does not
+            // silently orphan the editor marker or its undo/redo references.
+            string noteId = EnsureUniqueStickyNoteId(note, usedNoteIds);
+            dict.Elements.SetString("/NM", $"{StickyNoteNmPrefix}{noteId}");
             dict.Elements.SetInteger("/F", 4);
-            dict.Elements.SetRectangle(PdfAnnotation.Keys.Rect, new PdfSharpPdfRectangle(new XRect(x, yBottom, iconSizePt, iconSizePt)));
+            dict.Elements.SetRectangle(PdfAnnotation.Keys.Rect,
+                new PdfSharpPdfRectangle(new XRect(x, yBottom, iconWidthPt, iconHeightPt)));
+            dict.Elements.SetReal("/WNAWidth", iconWidthPt);
+            dict.Elements.SetReal("/WNAHeight", iconHeightPt);
 
             if (!string.IsNullOrEmpty(note.Text))
                 dict.Elements.SetString(PdfAnnotation.Keys.Contents, note.Text, PdfStringEncoding.Unicode);
 
-            // A recognizable yellow comment icon in viewers that honour /Name+color.
+            // A recognizable comment icon in viewers that honour /Name+color.
             dict.Elements.SetName("/Name", "/Comment");
             var colorArray = new PdfArray();
-            colorArray.Elements.Add(new PdfReal(0.99));
-            colorArray.Elements.Add(new PdfReal(0.91));
-            colorArray.Elements.Add(new PdfReal(0.54));
+            colorArray.Elements.Add(new PdfReal(note.R / 255.0));
+            colorArray.Elements.Add(new PdfReal(note.G / 255.0));
+            colorArray.Elements.Add(new PdfReal(note.B / 255.0));
             dict.Elements.Add("/C", colorArray);
 
             AddAnnotationToPage(pdfPage, dict);
@@ -2923,12 +3100,51 @@ namespace Caelum.Services
                 return null;
 
             var rect = dict.Elements.GetRectangle("/Rect");
-            return new Models.StickyNoteAnnotation
+            string nm = dict.Elements.GetString("/NM");
+            string id = nm != null && nm.StartsWith(StickyNoteNmPrefix, StringComparison.Ordinal)
+                ? nm.Substring(StickyNoteNmPrefix.Length)
+                : null;
+            double widthPt = GetDouble(dict.Elements.GetValue("/WNAWidth"), rect.Width);
+            double heightPt = GetDouble(dict.Elements.GetValue("/WNAHeight"), rect.Height);
+            var note = new Models.StickyNoteAnnotation
             {
+                Id = string.IsNullOrWhiteSpace(id) ? Guid.NewGuid().ToString("N") : id,
                 X = rect.X1 * scale,
                 Y = (pageHeight - rect.Y1 - rect.Height) * scale,
-                Text = ExtractAnnotationText(dict)
+                Text = ExtractAnnotationText(dict),
+                Width = widthPt * scale,
+                Height = heightPt * scale
             };
+
+            var colorArray = dict.Elements.GetArray("/C");
+            if (colorArray != null && colorArray.Elements.Count >= 3)
+            {
+                note.R = (byte)Math.Round(Math.Max(0, Math.Min(1, GetDouble(colorArray.Elements[0]))) * 255);
+                note.G = (byte)Math.Round(Math.Max(0, Math.Min(1, GetDouble(colorArray.Elements[1]))) * 255);
+                note.B = (byte)Math.Round(Math.Max(0, Math.Min(1, GetDouble(colorArray.Elements[2]))) * 255);
+            }
+            return note;
+        }
+
+        private static string EnsureUniqueStickyNoteId(
+            Models.StickyNoteAnnotation note,
+            ISet<string> usedIds)
+        {
+            if (note == null)
+                return string.Empty;
+
+            string candidate = note.Id?.Trim();
+            if (string.IsNullOrWhiteSpace(candidate))
+                candidate = Guid.NewGuid().ToString("N");
+
+            if (usedIds != null)
+            {
+                while (!usedIds.Add(candidate))
+                    candidate = Guid.NewGuid().ToString("N");
+            }
+
+            note.Id = candidate;
+            return candidate;
         }
 
         private static string ExtractAnnotationText(PdfDictionary dict)

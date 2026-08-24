@@ -3,12 +3,14 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Media.Imaging;
 using System.Windows.Ink;
+using System.Runtime.CompilerServices;
 using Caelum.Models;
 using Caelum.Services;
 
@@ -78,6 +80,24 @@ namespace Caelum.Controls
     }
 
     /// <summary>
+    /// Describes one completed Sticky Note marker move in page DIP coordinates.
+    /// The editor turns this single pointer gesture into one undo action.
+    /// </summary>
+    public sealed class StickyNoteMovedEventArgs : EventArgs
+    {
+        public StickyNoteMovedEventArgs(Grid container, Point oldPosition, Point newPosition)
+        {
+            Container = container;
+            OldPosition = oldPosition;
+            NewPosition = newPosition;
+        }
+
+        public Grid Container { get; }
+        public Point OldPosition { get; }
+        public Point NewPosition { get; }
+    }
+
+    /// <summary>
     /// Payload describing the net effect of one erase gesture (stylus/mouse
     /// down → up). Eraser-mode agnostic: pixel-clip erasing reports the removed
     /// original strokes plus the fragment strokes created by clipping, while a
@@ -86,13 +106,59 @@ namespace Caelum.Controls
     public sealed class StrokesErasedEventArgs : EventArgs
     {
         public StrokesErasedEventArgs(List<System.Windows.Ink.Stroke> removedStrokes, List<System.Windows.Ink.Stroke> addedStrokes)
+            : this(removedStrokes, addedStrokes, null, null)
         {
-            RemovedStrokes = removedStrokes;
-            AddedStrokes = addedStrokes;
+        }
+
+        public StrokesErasedEventArgs(
+            List<System.Windows.Ink.Stroke> removedStrokes,
+            List<System.Windows.Ink.Stroke> addedStrokes,
+            IReadOnlyList<StrokePlacement> removedPlacements,
+            IReadOnlyList<StrokePlacement> addedPlacements)
+        {
+            RemovedStrokes = removedStrokes ?? new List<System.Windows.Ink.Stroke>();
+            AddedStrokes = addedStrokes ?? new List<System.Windows.Ink.Stroke>();
+            RemovedPlacements = removedPlacements ?? Array.Empty<StrokePlacement>();
+            AddedPlacements = addedPlacements ?? Array.Empty<StrokePlacement>();
         }
 
         public List<System.Windows.Ink.Stroke> RemovedStrokes { get; }
         public List<System.Windows.Ink.Stroke> AddedStrokes { get; }
+        public IReadOnlyList<StrokePlacement> RemovedPlacements { get; }
+        public IReadOnlyList<StrokePlacement> AddedPlacements { get; }
+    }
+
+    /// <summary>
+    /// Stable placement identity for one live stroke. The reference is kept
+    /// only by ordinary erase/delete/move actions; shape replacement history
+    /// remains snapshot-only. Token, side, index, and owner travel together
+    /// so re-adding a stroke cannot silently append it or change its page.
+    /// </summary>
+    public sealed class StrokePlacement
+    {
+        public StrokePlacement(
+            PdfPageControl owner,
+            Stroke stroke,
+            StrokeReplacementSnapshot snapshot,
+            int index)
+        {
+            Owner = owner ?? throw new ArgumentNullException(nameof(owner));
+            Stroke = stroke ?? throw new ArgumentNullException(nameof(stroke));
+            Snapshot = snapshot ?? throw new ArgumentNullException(nameof(snapshot));
+            Index = index;
+        }
+
+        public PdfPageControl Owner { get; }
+        public Stroke Stroke { get; }
+        public StrokeReplacementSnapshot Snapshot { get; }
+        public Guid Token => Snapshot.Token;
+        public StrokeReplacementSide Side => Snapshot.Side;
+        public int Index { get; }
+
+        public StrokePlacement ForOwner(PdfPageControl owner, int index)
+        {
+            return new StrokePlacement(owner, Stroke, Snapshot, index);
+        }
     }
 
     /// <summary>
@@ -111,24 +177,31 @@ namespace Caelum.Controls
     }
 
     /// <summary>
-    /// Payload for a successful scribble shape recognition: the original
-    /// freehand stroke (already swapped out of the collection) and the
-    /// ideal replacement stroke (already swapped in). Undo must restore
-    /// the original; redo re-applies the ideal shape.
+    /// Payload for a successful scribble shape recognition. The page has
+    /// already replaced the original in place; consumers receive only copied
+    /// token/snapshot data so undo never retains live WPF strokes.
     /// </summary>
     public sealed class StrokeRecognizedEventArgs : EventArgs
     {
-        public StrokeRecognizedEventArgs(System.Windows.Ink.Stroke originalStroke, System.Windows.Ink.Stroke idealStroke)
+        public StrokeRecognizedEventArgs(
+            Guid token,
+            int originalIndex,
+            StrokeReplacementSnapshot originalSnapshot,
+            StrokeReplacementSnapshot idealSnapshot)
         {
-            OriginalStroke = originalStroke;
-            IdealStroke = idealStroke;
+            Token = token;
+            OriginalIndex = originalIndex;
+            OriginalSnapshot = originalSnapshot ?? throw new ArgumentNullException(nameof(originalSnapshot));
+            IdealSnapshot = idealSnapshot ?? throw new ArgumentNullException(nameof(idealSnapshot));
         }
 
-        public System.Windows.Ink.Stroke OriginalStroke { get; }
-        public System.Windows.Ink.Stroke IdealStroke { get; }
+        public Guid Token { get; }
+        public int OriginalIndex { get; }
+        public StrokeReplacementSnapshot OriginalSnapshot { get; }
+        public StrokeReplacementSnapshot IdealSnapshot { get; }
     }
 
-    public sealed partial class PdfPageControl : UserControl
+    public sealed partial class PdfPageControl : UserControl, IInteractionCancellation
     {
         public static readonly DependencyProperty PageSourceProperty =
             DependencyProperty.Register(nameof(PageSource), typeof(BitmapSource), typeof(PdfPageControl), new PropertyMetadata(null, OnPageSourceChanged));
@@ -145,6 +218,9 @@ namespace Caelum.Controls
         /// </summary>
         public void SetHostActive(bool isActive)
         {
+            if (!isActive)
+                CancelInteraction("inactive host");
+
             if (_isHostActive == isActive)
                 return;
 
@@ -165,6 +241,75 @@ namespace Caelum.Controls
 
             if (HasSelection)
                 UpdateSelectionVisuals();
+        }
+
+        /// <summary>
+        /// True while this page owns a pointer/stylus gesture that has not yet
+        /// reached its normal release path.
+        /// </summary>
+        public bool HasActiveInteraction =>
+            _stickyDragContainer != null
+            || _isSelecting
+            || _isDraggingSelection
+            || _isResizingSelection
+            || _isShapeDragging
+            || _isLaserDrawing
+            || _isAreaHighlightDragging
+            || _isErasing
+            || PdfTextSelectionCanvas.IsMouseCaptured
+            || PdfTextSelectionCanvas.IsStylusCaptured;
+
+        /// <summary>
+        /// Cancels every page-local transient gesture.  Transform snapshots
+        /// are restored before capture is released so LostCapture re-entry
+        /// cannot observe a half-applied move or emit a completion event.
+        /// </summary>
+        public void CancelInteraction(string reason = null)
+        {
+            if (_stickyDragContainer != null)
+                EndStickyPointer(_stickyDragContainer, canceled: true);
+
+            CancelSelectionInteraction(restoreSnapshot: true);
+
+            if (_isShapeDragging)
+            {
+                _isShapeDragging = false;
+                ShapePreviewCanvas.Children.Clear();
+                _shapePreviewPolylines.Clear();
+                ReleaseInkCaptures();
+            }
+
+            if (_isAreaHighlightDragging)
+            {
+                _isAreaHighlightDragging = false;
+                if (_areaHighlightPreview != null)
+                    ShapePreviewCanvas.Children.Remove(_areaHighlightPreview);
+                _areaHighlightPreview = null;
+                ReleaseInkCaptures();
+            }
+
+            if (_isLaserDrawing)
+            {
+                _isLaserDrawing = false;
+                _laserPolyline = null;
+                LaserInkCanvas.Children.Clear();
+                _liveLaserPolylines.Clear();
+                ReleaseInkCaptures();
+            }
+
+            if (PdfTextSelectionCanvas.IsMouseCaptured)
+                PdfTextSelectionCanvas.ReleaseMouseCapture();
+            if (PdfTextSelectionCanvas.IsStylusCaptured)
+                PdfTextSelectionCanvas.ReleaseStylusCapture();
+            ClearPdfTextSelection();
+        }
+
+        private void ReleaseInkCaptures()
+        {
+            if (InkCanvas.IsMouseCaptured)
+                InkCanvas.ReleaseMouseCapture();
+            if (InkCanvas.IsStylusCaptured)
+                InkCanvas.ReleaseStylusCapture();
         }
 
         /// <summary>
@@ -200,6 +345,12 @@ namespace Caelum.Controls
         public event EventHandler<Grid> AreaHighlightCreated;
         /// <summary>Task 26: raised when the user clicks a sticky-note icon (open the editing bubble).</summary>
         public event EventHandler<Grid> StickyNoteActivated;
+        /// <summary>Task 26: raised after a sticky marker drag commits a bounded move.</summary>
+        public event EventHandler<StickyNoteMovedEventArgs> StickyNoteMoved;
+        /// <summary>Task 26: raised by Delete, the marker context menu, or keyboard deletion.</summary>
+        public event EventHandler<Grid> StickyNoteDeleteRequested;
+        /// <summary>Task 26: lets the owning editor register marker menus in its transient registry.</summary>
+        public event EventHandler<ContextMenu> StickyNoteContextMenuCreated;
         /// <summary>Study mode: raised after one opaque hidden mask is committed.</summary>
         public event EventHandler<HiddenInkAnnotation> HiddenInkCreated;
         /// <summary>Study mode: raised when the eraser removes one mask.</summary>
@@ -216,6 +367,8 @@ namespace Caelum.Controls
         // flushed on stylus/mouse up) feeding the StrokesErased undo event.
         private List<Stroke> _eraseGestureRemovedStrokes;
         private List<Stroke> _eraseGestureAddedStrokes;
+        private List<StrokePlacement> _eraseGestureRemovedPlacements;
+        private List<StrokePlacement> _eraseGestureAddedPlacements;
         private List<HiddenInkAnnotation> _eraseGestureRemovedHiddenInks;
         private bool _isPdfTextSelectionEnabled;
         // Task 12.2: generation counter for the two-layer bitmap swap. Every
@@ -263,6 +416,28 @@ namespace Caelum.Controls
         private Point _resizeAnchorPoint;
         private double _resizeStartHandleDist;
         private double _lastResizeScale;
+        private bool _suppressSelectionCaptureCancellation;
+
+        private sealed class SelectionContainerSnapshot
+        {
+            public Grid Container;
+            public Point Position;
+            public double Width;
+            public double Height;
+            public double FontSize;
+        }
+
+        private sealed class SelectionInteractionSnapshot
+        {
+            public readonly Dictionary<Stroke, StylusPointCollection> StrokePoints =
+                new Dictionary<Stroke, StylusPointCollection>();
+            public readonly Dictionary<Stroke, DrawingAttributes> StrokeAttributes =
+                new Dictionary<Stroke, DrawingAttributes>();
+            public readonly List<SelectionContainerSnapshot> Containers =
+                new List<SelectionContainerSnapshot>();
+        }
+
+        private SelectionInteractionSnapshot _selectionInteractionSnapshot;
         // Marching-ants per-item selection outlines (Task 6). One shared
         // CompositionTarget.Rendering driver advances StrokeDashOffset (and the
         // blue↔cyan color swap) for every per-item rect at once — no
@@ -290,8 +465,39 @@ namespace Caelum.Controls
         private readonly Dictionary<string, System.Windows.Threading.DispatcherTimer> _hiddenInkRevealTimers =
             new Dictionary<string, System.Windows.Threading.DispatcherTimer>(StringComparer.Ordinal);
 
-        /// <summary>Solid colour used for newly created study masks.</summary>
-        public Color HiddenInkMaskColor { get; set; } = Colors.White;
+        // Sticky markers are the only interactive children of ImageOverlayCanvas.
+        // Keep their event delegates so removing/re-adding a note does not retain
+        // a detached container or accumulate handlers across undo/redo.
+        private sealed class StickyInteractionHandlers
+        {
+            public MouseButtonEventHandler MouseDown;
+            public MouseEventHandler MouseMove;
+            public MouseButtonEventHandler MouseUp;
+            public StylusDownEventHandler StylusDown;
+            public StylusEventHandler StylusMove;
+            public StylusEventHandler StylusUp;
+            public MouseEventHandler LostMouseCapture;
+            public StylusEventHandler LostStylusCapture;
+            public KeyEventHandler KeyDown;
+        }
+
+        private readonly Dictionary<Grid, StickyInteractionHandlers> _stickyInteractionHandlers =
+            new Dictionary<Grid, StickyInteractionHandlers>();
+        private Grid _stickyDragContainer;
+        private Point _stickyDragStartPointer;
+        private Point _stickyDragStartPosition;
+        private bool _stickyDragMoved;
+        private bool _stickyDragUsingStylus;
+        private bool _suppressStickyCaptureCancellation;
+        private const double StickyDragThreshold = 3.0;
+        private const double StickyMarkerSize = 36.0;
+
+        /// <summary>
+        /// Solid colour used for newly created study masks. Existing loaded
+        /// annotations keep their serialized RGB values; this only controls
+        /// masks created in the current editor session.
+        /// </summary>
+        public Color HiddenInkMaskColor { get; set; } = Color.FromRgb(199, 205, 212);
 
         /// <summary>Width of newly created study masks in page DIP.</summary>
         public double HiddenInkSize { get; set; } = 28.0;
@@ -410,6 +616,18 @@ namespace Caelum.Controls
         // here ever touches InkCanvas.Strokes / InkMutated / undo / dirty.
         private bool _isLaserDrawing;
         private bool _isHostActive = true;
+        private bool _documentInputEnabled = true;
+
+        /// <summary>
+        /// Closes the page's input admission while its owning editor is
+        /// snapshotting/disposing.  Rendering remains enabled; only model
+        /// mutation controls inherit the disabled state.
+        /// </summary>
+        public void SetDocumentInputEnabled(bool enabled)
+        {
+            _documentInputEnabled = enabled;
+            IsEnabled = enabled;
+        }
         private System.Windows.Shapes.Polyline _laserPolyline;
         private readonly List<System.Windows.Shapes.Polyline> _liveLaserPolylines =
             new List<System.Windows.Shapes.Polyline>();
@@ -443,6 +661,41 @@ namespace Caelum.Controls
         // Custom stroke collection to prevent WPF's InkCanvas from clearing strokes
         // during visibility or EditingMode toggles.
         private readonly StrokeCollection _strokes = new StrokeCollection();
+
+        // Shape recognition is session-only: each live stroke has a stable
+        // token and replacement side. Reference identity is intentional
+        // because WPF Stroke equality is not a persistence identity.
+        private sealed class StrokeMetadata
+        {
+            public StrokeMetadata(Guid token, StrokeReplacementSide side)
+            {
+                Token = token;
+                Side = side;
+            }
+
+            public Guid Token { get; }
+            public StrokeReplacementSide Side { get; set; }
+        }
+
+        private sealed class StrokeReferenceComparer : IEqualityComparer<Stroke>
+        {
+            public bool Equals(Stroke x, Stroke y) => ReferenceEquals(x, y);
+            public int GetHashCode(Stroke obj) => RuntimeHelpers.GetHashCode(obj);
+        }
+
+        private readonly Dictionary<Stroke, StrokeMetadata> _strokeMetadata =
+            new Dictionary<Stroke, StrokeMetadata>(new StrokeReferenceComparer());
+
+        // The page uses the same pure token/index ledger as the unit tests.
+        // WPF strokes remain the rendering layer; this state is rebuilt from
+        // that layer before token operations and updated by quiet mutations.
+        private StrokeReplacementState _replacementState =
+            new StrokeReplacementState(Array.Empty<StrokeReplacementEntry>());
+
+        // A removed live stroke can be restored with its original token, side,
+        // and index even after it is no longer present in InkCanvas.Strokes.
+        private readonly Dictionary<Stroke, StrokePlacement> _strokePlacementHistory =
+            new Dictionary<Stroke, StrokePlacement>(new StrokeReferenceComparer());
 
         public PdfPageControl()
         {
@@ -489,6 +742,23 @@ namespace Caelum.Controls
 
             Loaded += PdfPageControl_Loaded;
             Unloaded += PdfPageControl_Unloaded;
+        }
+
+        /// <summary>
+        /// Clamps a marker's top-left position to the measured page surface.
+        /// All values are DIP; callers may pass a zero-sized/unmeasured page.
+        /// </summary>
+        public static Point ClampStickyNotePosition(Point position, Size pageSize, Size markerSize)
+        {
+            double pageWidth = double.IsNaN(pageSize.Width) ? 0 : Math.Max(0, pageSize.Width);
+            double pageHeight = double.IsNaN(pageSize.Height) ? 0 : Math.Max(0, pageSize.Height);
+            double markerWidth = double.IsNaN(markerSize.Width) ? 0 : Math.Max(0, markerSize.Width);
+            double markerHeight = double.IsNaN(markerSize.Height) ? 0 : Math.Max(0, markerSize.Height);
+            double maxX = Math.Max(0, pageWidth - markerWidth);
+            double maxY = Math.Max(0, pageHeight - markerHeight);
+            double x = double.IsNaN(position.X) ? 0 : position.X;
+            double y = double.IsNaN(position.Y) ? 0 : position.Y;
+            return new Point(Math.Clamp(x, 0, maxX), Math.Clamp(y, 0, maxY));
         }
 
         /// <summary>
@@ -568,6 +838,7 @@ namespace Caelum.Controls
             }
 
             PreserveTapStroke(e.Stroke);
+            EnsureStrokeToken(e.Stroke);
 
             var stroke = e.Stroke;
 
@@ -616,9 +887,32 @@ namespace Caelum.Controls
                 && stroke.StylusPoints.Count >= MinRecognizedShapePoints
                 && TryRecognizeShape(stroke, out var idealStroke))
             {
-                ReplaceRecognizedStroke(stroke, idealStroke);
-                InkMutated?.Invoke(this, EventArgs.Empty);
-                StrokeRecognized?.Invoke(this, new StrokeRecognizedEventArgs(stroke, idealStroke));
+                var token = EnsureStrokeToken(stroke);
+                var originalSnapshot = CaptureStrokeSnapshot(
+                    stroke,
+                    token,
+                    StrokeReplacementSide.Original);
+                var idealSnapshot = CaptureStrokeSnapshot(
+                    idealStroke,
+                    token,
+                    StrokeReplacementSide.Ideal);
+
+                if (ReplaceRecognizedStroke(
+                    stroke,
+                    idealStroke,
+                    token,
+                    idealSnapshot,
+                    out var originalIndex))
+                {
+                    InkMutated?.Invoke(this, EventArgs.Empty);
+                    StrokeRecognized?.Invoke(
+                        this,
+                        new StrokeRecognizedEventArgs(
+                            token,
+                            originalIndex,
+                            originalSnapshot,
+                            idealSnapshot));
+                }
                 return;
             }
 
@@ -638,6 +932,7 @@ namespace Caelum.Controls
             // completed stroke out immediately so ordinary ink persistence,
             // erasing, and undo cannot mistake a mask for normal ink.
             InkCanvas.Strokes.Remove(stroke);
+            _strokeMetadata.Remove(stroke);
 
             var hidden = new HiddenInkAnnotation
             {
@@ -668,6 +963,308 @@ namespace Caelum.Controls
             }
 
             AddHiddenInkInternal(hidden, raiseCreated: true);
+        }
+
+        private Guid EnsureStrokeToken(
+            Stroke stroke,
+            StrokeReplacementSide side = StrokeReplacementSide.Original,
+            Guid? preferredToken = null)
+        {
+            if (stroke == null)
+                return Guid.Empty;
+
+            if (_strokeMetadata.TryGetValue(stroke, out var metadata))
+                return metadata.Token;
+
+            var token = preferredToken.GetValueOrDefault();
+            if (token == Guid.Empty)
+                token = Guid.NewGuid();
+
+            _strokeMetadata[stroke] = new StrokeMetadata(token, side);
+            return token;
+        }
+
+        private StrokeReplacementSide GetStrokeSide(Stroke stroke)
+        {
+            return _strokeMetadata.TryGetValue(stroke, out var metadata)
+                ? metadata.Side
+                : StrokeReplacementSide.Original;
+        }
+
+        private void RegisterStroke(
+            Stroke stroke,
+            Guid token,
+            StrokeReplacementSide side = StrokeReplacementSide.Original)
+        {
+            if (stroke == null || token == Guid.Empty)
+                return;
+
+            _strokeMetadata[stroke] = new StrokeMetadata(token, side);
+        }
+
+        private void SynchronizeReplacementState()
+        {
+            var entries = new List<StrokeReplacementEntry>(_strokes.Count);
+            foreach (var stroke in _strokes)
+            {
+                var token = EnsureStrokeToken(stroke);
+                var side = GetStrokeSide(stroke);
+                entries.Add(new StrokeReplacementEntry(
+                    CaptureStrokeSnapshot(stroke, token, side)));
+            }
+
+            _replacementState = new StrokeReplacementState(entries);
+        }
+
+        private StrokePlacement AddStrokeToCollection(
+            Stroke stroke,
+            Guid? token = null,
+            StrokeReplacementSide side = StrokeReplacementSide.Original,
+            int? index = null)
+        {
+            if (stroke == null)
+                return null;
+
+            int existingIndex = _strokes.IndexOf(stroke);
+            if (existingIndex >= 0)
+                return CaptureStrokePlacement(stroke);
+
+            int insertionIndex = index.GetValueOrDefault(_strokes.Count);
+            insertionIndex = Math.Max(0, Math.Min(insertionIndex, _strokes.Count));
+            _strokes.Insert(insertionIndex, stroke);
+            RegisterStroke(stroke, token ?? Guid.NewGuid(), side);
+            var placement = CaptureStrokePlacement(stroke);
+            SynchronizeReplacementState();
+            return placement;
+        }
+
+        private void ReplaceStrokeAt(
+            int index,
+            Stroke replacement,
+            Guid token,
+            StrokeReplacementSide side)
+        {
+            if (index < 0 || index >= _strokes.Count || replacement == null || token == Guid.Empty)
+                return;
+
+            var previous = _strokes[index];
+            var previousPlacement = CaptureStrokePlacement(previous);
+            _strokePlacementHistory[previous] = previousPlacement;
+            _strokeMetadata.Remove(previous);
+            _strokes[index] = replacement;
+            RegisterStroke(replacement, token, side);
+            _strokePlacementHistory[replacement] = CaptureStrokePlacement(replacement);
+            SynchronizeReplacementState();
+        }
+
+        private StrokeReplacementSnapshot CaptureStrokeSnapshot(
+            Stroke stroke,
+            Guid token,
+            StrokeReplacementSide side)
+        {
+            var attrs = stroke.DrawingAttributes;
+            var points = stroke.StylusPoints
+                .Select(point => new StrokeReplacementPoint(point.X, point.Y, point.PressureFactor))
+                .ToList();
+            var color = attrs.Color;
+            return new StrokeReplacementSnapshot(
+                token,
+                side,
+                points,
+                color.R,
+                color.G,
+                color.B,
+                color.A,
+                attrs.Width,
+                attrs.Height,
+                attrs.IsHighlighter,
+                attrs.FitToCurve,
+                attrs.IgnorePressure);
+        }
+
+        private static Stroke CreateStrokeFromSnapshot(StrokeReplacementSnapshot snapshot)
+        {
+            if (snapshot == null || snapshot.Points.Count == 0)
+                return null;
+
+            var points = new StylusPointCollection();
+            foreach (var point in snapshot.Points)
+                points.Add(new StylusPoint(point.X, point.Y, point.PressureFactor));
+            if (points.Count == 1)
+                points.Add(new StylusPoint(points[0].X + 0.1, points[0].Y, points[0].PressureFactor));
+
+            var stroke = new Stroke(points)
+            {
+                DrawingAttributes = new DrawingAttributes
+                {
+                    Color = Color.FromArgb(snapshot.A, snapshot.R, snapshot.G, snapshot.B),
+                    Width = snapshot.Width,
+                    Height = snapshot.Height,
+                    IsHighlighter = snapshot.IsHighlighter,
+                    FitToCurve = snapshot.FitToCurve,
+                    IgnorePressure = snapshot.IgnorePressure
+                }
+            };
+            return stroke;
+        }
+
+        /// <summary>
+        /// Captures the live stroke's token, side, immutable snapshot, index,
+        /// and owning page. The returned record remains valid while the stroke
+        /// is temporarily removed for an undoable action.
+        /// </summary>
+        public StrokePlacement CaptureStrokePlacement(Stroke stroke)
+        {
+            if (stroke == null)
+                throw new ArgumentNullException(nameof(stroke));
+
+            int index = _strokes.IndexOf(stroke);
+            if (index < 0)
+            {
+                if (_strokePlacementHistory.TryGetValue(stroke, out var historical))
+                    return historical;
+                throw new ArgumentException("The stroke does not belong to this page.", nameof(stroke));
+            }
+
+            var token = EnsureStrokeToken(stroke);
+            var snapshot = CaptureStrokeSnapshot(stroke, token, GetStrokeSide(stroke));
+            var placement = new StrokePlacement(this, stroke, snapshot, index);
+            _strokePlacementHistory[stroke] = placement;
+            return placement;
+        }
+
+        /// <summary>
+        /// Resolves a logical placement to the current live stroke while
+        /// retaining the page's token/side contract.  Replacement actions may
+        /// legitimately swap the WPF stroke reference; callers that need to
+        /// roll back a transfer must capture that live reference before
+        /// removing it, otherwise a stale snapshot can be restored instead.
+        /// </summary>
+        public bool TryCaptureCurrentStrokePlacement(
+            StrokePlacement expected,
+            out StrokePlacement current)
+        {
+            current = null;
+            if (expected == null || !ReferenceEquals(expected.Owner, this))
+                return false;
+
+            if (!TryResolveCurrentStroke(expected, out var currentStroke, out _))
+                return false;
+
+            current = CaptureStrokePlacement(currentStroke);
+            return true;
+        }
+
+        /// <summary>
+        /// Removes only the exact live stroke represented by a placement.
+        /// Unlike the normal logical-token removal used by replacement-aware
+        /// undo, this is the identity guard required by cross-page transfer
+        /// rollback so an unrelated same-token target can never be deleted.
+        /// </summary>
+        public bool RemoveStrokeQuietExact(StrokePlacement placement)
+        {
+            if (placement == null
+                || !ReferenceEquals(placement.Owner, this)
+                || placement.Stroke == null
+                || !_strokes.Contains(placement.Stroke))
+            {
+                return false;
+            }
+
+            if (!_strokeMetadata.TryGetValue(placement.Stroke, out var metadata)
+                || metadata.Token != placement.Token
+                || metadata.Side != placement.Side)
+            {
+                return false;
+            }
+
+            return RemoveStrokeQuiet(placement.Stroke);
+        }
+
+        private bool TryFindCurrentStroke(
+            Guid token,
+            out Stroke currentStroke,
+            out int currentIndex)
+        {
+            currentStroke = null;
+            currentIndex = -1;
+            if (token == Guid.Empty)
+                return false;
+
+            SynchronizeReplacementState();
+            for (int index = 0; index < _strokes.Count; index++)
+            {
+                var candidate = _strokes[index];
+                if (!_strokeMetadata.TryGetValue(candidate, out var metadata)
+                    || metadata.Token != token)
+                {
+                    continue;
+                }
+
+                currentStroke = candidate;
+                currentIndex = index;
+                return true;
+            }
+
+            return false;
+        }
+
+        private bool TryResolveCurrentStroke(
+            StrokePlacement placement,
+            out Stroke currentStroke,
+            out int currentIndex)
+        {
+            currentStroke = null;
+            currentIndex = -1;
+            if (placement == null || !ReferenceEquals(placement.Owner, this))
+                return false;
+
+            if (!TryFindCurrentStroke(placement.Token, out currentStroke, out currentIndex))
+                return false;
+
+            if (!_strokeMetadata.TryGetValue(currentStroke, out var metadata)
+                || metadata.Side != placement.Side)
+            {
+                currentStroke = null;
+                currentIndex = -1;
+                return false;
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// Replaces a tokenized stroke at its existing collection index. The
+        /// operation is quiet for undo/redo and returns false when another
+        /// action has already removed or changed the token; it never appends.
+        /// </summary>
+        public bool TryReplaceStrokeQuiet(
+            Guid token,
+            StrokeReplacementSide expectedSide,
+            StrokeReplacementSnapshot replacement,
+            out int index)
+        {
+            index = -1;
+            if (token == Guid.Empty || replacement == null || replacement.Token != token)
+                return false;
+
+            SynchronizeReplacementState();
+            if (!_replacementState.TryReplaceStrokeQuiet(
+                token,
+                expectedSide,
+                replacement,
+                out index))
+                return false;
+
+            var replacementStroke = CreateStrokeFromSnapshot(replacement);
+            if (replacementStroke == null)
+            {
+                index = -1;
+                return false;
+            }
+
+            ReplaceStrokeAt(index, replacementStroke, token, replacement.Side);
+            return true;
         }
 
         /// <summary>
@@ -718,7 +1315,7 @@ namespace Caelum.Controls
 
             int index = _strokes.IndexOf(stroke);
             if (index >= 0)
-                _strokes[index] = replacement;
+                ReplaceStrokeAt(index, replacement, EnsureStrokeToken(stroke), GetStrokeSide(stroke));
 
             return replacement;
         }
@@ -755,9 +1352,9 @@ namespace Caelum.Controls
 
             int index = _strokes.IndexOf(stroke);
             if (index >= 0)
-                _strokes[index] = replacement;
+                ReplaceStrokeAt(index, replacement, EnsureStrokeToken(stroke), GetStrokeSide(stroke));
             else
-                _strokes.Add(replacement);
+                AddStrokeToCollection(replacement);
 
             return replacement;
         }
@@ -826,9 +1423,9 @@ namespace Caelum.Controls
 
             int index = _strokes.IndexOf(stroke);
             if (index >= 0)
-                _strokes[index] = replacement;
+                ReplaceStrokeAt(index, replacement, EnsureStrokeToken(stroke), GetStrokeSide(stroke));
             else
-                _strokes.Add(replacement);
+                AddStrokeToCollection(replacement);
 
             return replacement;
         }
@@ -873,9 +1470,9 @@ namespace Caelum.Controls
                 var rawReplacement = new Stroke(rawPoints) { DrawingAttributes = rawAttributes };
                 int rawIndex = _strokes.IndexOf(stroke);
                 if (rawIndex >= 0)
-                    _strokes[rawIndex] = rawReplacement;
+                    ReplaceStrokeAt(rawIndex, rawReplacement, EnsureStrokeToken(stroke), GetStrokeSide(stroke));
                 else
-                    _strokes.Add(rawReplacement);
+                    AddStrokeToCollection(rawReplacement);
                 return rawReplacement;
             }
 
@@ -912,9 +1509,9 @@ namespace Caelum.Controls
             var replacement = new Stroke(smoothed) { DrawingAttributes = attributes };
             int index = _strokes.IndexOf(stroke);
             if (index >= 0)
-                _strokes[index] = replacement;
+                ReplaceStrokeAt(index, replacement, EnsureStrokeToken(stroke), GetStrokeSide(stroke));
             else
-                _strokes.Add(replacement);
+                AddStrokeToCollection(replacement);
             return replacement;
         }
 
@@ -943,6 +1540,17 @@ namespace Caelum.Controls
 
         private void PdfPageControl_Loaded(object sender, RoutedEventArgs e)
         {
+            // A virtualised page may unload while its visual tree remains in
+            // the annotation model. Reattach only the marker-local handlers
+            // when it returns; this keeps pointer captures and ContextMenu
+            // z-order hooks from accumulating across page virtualization.
+            foreach (var container in ImageOverlayCanvas.Children.OfType<Grid>()
+                .Where(IsStickyNoteContainer)
+                .ToList())
+            {
+                AttachStickyNoteHandlers(container);
+            }
+
             // Reveal is a session-only interaction. Revirtualising a page
             // must never carry a previously revealed mask into the new view.
             foreach (var visual in _hiddenInkVisuals.Values)
@@ -974,9 +1582,11 @@ namespace Caelum.Controls
             SelectionOverlayCanvas.MouseLeftButtonDown += SelectionOverlayCanvas_MouseLeftButtonDown;
             SelectionOverlayCanvas.MouseMove += SelectionOverlayCanvas_MouseMove;
             SelectionOverlayCanvas.MouseLeftButtonUp += SelectionOverlayCanvas_MouseLeftButtonUp;
+            SelectionOverlayCanvas.LostMouseCapture += SelectionOverlayCanvas_LostMouseCapture;
             SelectionOverlayCanvas.StylusDown += SelectionOverlayCanvas_StylusDown;
             SelectionOverlayCanvas.StylusMove += SelectionOverlayCanvas_StylusMove;
             SelectionOverlayCanvas.StylusUp += SelectionOverlayCanvas_StylusUp;
+            SelectionOverlayCanvas.LostStylusCapture += SelectionOverlayCanvas_LostStylusCapture;
 
             // Fix for auto-scroll bug: Prevent ScrollViewer from scrolling when InkCanvas gets focus
             this.RequestBringIntoView += PdfPageControl_RequestBringIntoView;
@@ -984,6 +1594,10 @@ namespace Caelum.Controls
 
         private void PdfPageControl_Unloaded(object sender, RoutedEventArgs e)
         {
+            CancelInteraction("page unloaded");
+            foreach (var container in _stickyInteractionHandlers.Keys.ToList())
+                DetachStickyNoteHandlers(container);
+
             _isErasing = false;
             _erasePoints = null;
             EndEraseGesture();
@@ -1019,9 +1633,11 @@ namespace Caelum.Controls
             SelectionOverlayCanvas.MouseLeftButtonDown -= SelectionOverlayCanvas_MouseLeftButtonDown;
             SelectionOverlayCanvas.MouseMove -= SelectionOverlayCanvas_MouseMove;
             SelectionOverlayCanvas.MouseLeftButtonUp -= SelectionOverlayCanvas_MouseLeftButtonUp;
+            SelectionOverlayCanvas.LostMouseCapture -= SelectionOverlayCanvas_LostMouseCapture;
             SelectionOverlayCanvas.StylusDown -= SelectionOverlayCanvas_StylusDown;
             SelectionOverlayCanvas.StylusMove -= SelectionOverlayCanvas_StylusMove;
             SelectionOverlayCanvas.StylusUp -= SelectionOverlayCanvas_StylusUp;
+            SelectionOverlayCanvas.LostStylusCapture -= SelectionOverlayCanvas_LostStylusCapture;
 
             this.RequestBringIntoView -= PdfPageControl_RequestBringIntoView;
         }
@@ -1581,8 +2197,8 @@ namespace Caelum.Controls
             {
                 EraserIndicator.Width = _eraserSize;
                 EraserIndicator.Height = _eraserSize;
-                EraserIndicator.Stroke = new SolidColorBrush(Color.FromArgb(255, 0, 120, 212));
-                EraserIndicator.Fill = new SolidColorBrush(Color.FromArgb(16, 0, 120, 212));
+                EraserIndicator.SetResourceReference(System.Windows.Shapes.Shape.StrokeProperty, "ThemeAccentBrush");
+                EraserIndicator.SetResourceReference(System.Windows.Shapes.Shape.FillProperty, "ThemeSelectionBrush");
             }
             else if (_currentMode == CustomInkInputProcessingMode.Inking
                 || _currentMode == CustomInkInputProcessingMode.HiddenInk)
@@ -1895,7 +2511,7 @@ namespace Caelum.Controls
                     stylusPoints.Add(new StylusPoint(p.X, p.Y));
 
                 var stroke = new Stroke(stylusPoints) { DrawingAttributes = attributes.Clone() };
-                InkCanvas.Strokes.Add(stroke);
+                AddStrokeToCollection(stroke);
                 committed.Add(stroke);
             }
 
@@ -1980,7 +2596,15 @@ namespace Caelum.Controls
             if (polyline == null)
                 return;
 
-            var fade = new DoubleAnimation(1.0, 0.0, TimeSpan.FromSeconds(LaserFadeDurationSeconds))
+            TimeSpan fadeDuration = ThemeService.GetAnimationDuration(TimeSpan.FromSeconds(LaserFadeDurationSeconds));
+            if (fadeDuration == TimeSpan.Zero || !ThemeService.ShouldAnimate)
+            {
+                LaserInkCanvas.Children.Remove(polyline);
+                _liveLaserPolylines.Remove(polyline);
+                return;
+            }
+
+            var fade = new DoubleAnimation(1.0, 0.0, fadeDuration)
             {
                 BeginTime = TimeSpan.FromSeconds(LaserFadeDelaySeconds)
             };
@@ -2004,7 +2628,7 @@ namespace Caelum.Controls
             _areaHighlightPreview = new System.Windows.Shapes.Rectangle
             {
                 Stroke = new SolidColorBrush(Color.FromArgb(220, AreaHighlightColor.R, AreaHighlightColor.G, AreaHighlightColor.B)),
-                Fill = new SolidColorBrush(Color.FromArgb(48, AreaHighlightColor.R, AreaHighlightColor.G, AreaHighlightColor.B)),
+                Fill = new SolidColorBrush(Color.FromArgb(AreaHighlightOpacity, AreaHighlightColor.R, AreaHighlightColor.G, AreaHighlightColor.B)),
                 StrokeThickness = 1.5,
                 StrokeDashArray = new DoubleCollection { 4, 2 },
                 IsHitTestVisible = false
@@ -2092,17 +2716,33 @@ namespace Caelum.Controls
         }
 
         /// <summary>
-        /// Swaps the freshly collected original stroke for its ideal
-        /// replacement in place (same pattern as ApplyInkSimulation), so
-        /// later consumers only ever see the ideal stroke in the collection.
+        /// Swaps a freshly collected original for its ideal snapshot at the
+        /// same collection index. A stale/missing token is a quiet failure;
+        /// this method never appends an ideal stroke.
         /// </summary>
-        private void ReplaceRecognizedStroke(Stroke original, Stroke ideal)
+        private bool ReplaceRecognizedStroke(
+            Stroke original,
+            Stroke ideal,
+            Guid token,
+            StrokeReplacementSnapshot idealSnapshot,
+            out int index)
         {
-            int index = _strokes.IndexOf(original);
-            if (index >= 0)
-                _strokes[index] = ideal;
-            else
-                _strokes.Add(ideal);
+            index = -1;
+            if (original == null || ideal == null || token == Guid.Empty)
+                return false;
+
+            if (!_strokeMetadata.TryGetValue(original, out var metadata)
+                || metadata.Token != token
+                || metadata.Side != StrokeReplacementSide.Original)
+            {
+                return false;
+            }
+
+            return TryReplaceStrokeQuiet(
+                token,
+                StrokeReplacementSide.Original,
+                idealSnapshot,
+                out index);
         }
 
         /// <summary>
@@ -2576,16 +3216,28 @@ namespace Caelum.Controls
             {
                 _eraseGestureRemovedStrokes = new List<Stroke>();
                 _eraseGestureAddedStrokes = new List<Stroke>();
+                _eraseGestureRemovedPlacements = new List<StrokePlacement>();
+                _eraseGestureAddedPlacements = new List<StrokePlacement>();
             }
 
-            if (!_eraseGestureAddedStrokes.Remove(removedStroke))
+            int addedIndex = _eraseGestureAddedStrokes.IndexOf(removedStroke);
+            if (addedIndex >= 0)
+            {
+                _eraseGestureAddedStrokes.RemoveAt(addedIndex);
+                _eraseGestureAddedPlacements.RemoveAt(addedIndex);
+            }
+            else
+            {
                 _eraseGestureRemovedStrokes.Add(removedStroke);
+                _eraseGestureRemovedPlacements.Add(CaptureStrokePlacement(removedStroke));
+            }
 
-            InkCanvas.Strokes.Remove(removedStroke);
+            RemoveStrokeQuiet(removedStroke);
             foreach (var newStroke in addedStrokes)
             {
-                InkCanvas.Strokes.Add(newStroke);
+                var placement = AddStrokeToCollection(newStroke);
                 _eraseGestureAddedStrokes.Add(newStroke);
+                _eraseGestureAddedPlacements.Add(placement);
             }
         }
 
@@ -2600,6 +3252,8 @@ namespace Caelum.Controls
             // a cancelled/lost-capture gesture.
             _eraseGestureRemovedStrokes = null;
             _eraseGestureAddedStrokes = null;
+            _eraseGestureRemovedPlacements = null;
+            _eraseGestureAddedPlacements = null;
             _eraseGestureRemovedHiddenInks = null;
         }
 
@@ -2614,15 +3268,25 @@ namespace Caelum.Controls
         {
             var removed = _eraseGestureRemovedStrokes;
             var added = _eraseGestureAddedStrokes;
+            var removedPlacements = _eraseGestureRemovedPlacements;
+            var addedPlacements = _eraseGestureAddedPlacements;
             var removedHiddenInks = _eraseGestureRemovedHiddenInks;
             _eraseGestureRemovedStrokes = null;
             _eraseGestureAddedStrokes = null;
+            _eraseGestureRemovedPlacements = null;
+            _eraseGestureAddedPlacements = null;
             _eraseGestureRemovedHiddenInks = null;
 
             if (removed != null && added != null
                 && (removed.Count > 0 || added.Count > 0))
             {
-                StrokesErased?.Invoke(this, new StrokesErasedEventArgs(removed, added));
+                StrokesErased?.Invoke(
+                    this,
+                    new StrokesErasedEventArgs(
+                        removed,
+                        added,
+                        removedPlacements,
+                        addedPlacements));
             }
 
             if (removedHiddenInks != null && removedHiddenInks.Count > 0)
@@ -2824,9 +3488,12 @@ namespace Caelum.Controls
                     Height = rect.Height,
                     RadiusX = 2,
                     RadiusY = 2,
-                    Fill = new SolidColorBrush(Color.FromArgb(80, 0, 120, 212)),
+                    Fill = Brushes.Transparent,
                     IsHitTestVisible = false
                 };
+
+                highlight.SetResourceReference(System.Windows.Shapes.Shape.FillProperty, "ThemeSelectionBrush");
+                highlight.Opacity = 0.45;
 
                 Canvas.SetLeft(highlight, rect.X);
                 Canvas.SetTop(highlight, rect.Y);
@@ -2968,12 +3635,21 @@ namespace Caelum.Controls
 
         public StrokeCollection GetStrokes()
         {
-            return InkCanvas.Strokes;
+            // Preserve the historical StrokeCollection return type for read-
+            // only callers while preventing callers from mutating the live
+            // collection without updating token/placement metadata.
+            var copy = new StrokeCollection();
+            foreach (var stroke in _strokes)
+                copy.Add(stroke);
+            return copy;
         }
 
         public void ClearInk()
         {
             InkCanvas.Strokes.Clear();
+            _strokeMetadata.Clear();
+            _strokePlacementHistory.Clear();
+            _replacementState = new StrokeReplacementState(Array.Empty<StrokeReplacementEntry>());
             InkMutated?.Invoke(this, EventArgs.Empty);
         }
 
@@ -3033,7 +3709,7 @@ namespace Caelum.Controls
 
                 var stroke = new Stroke(stylusPoints);
                 stroke.DrawingAttributes = attrs;
-                InkCanvas.Strokes.Add(stroke);
+                AddStrokeToCollection(stroke);
                 return stroke;
             }
 
@@ -3261,12 +3937,17 @@ namespace Caelum.Controls
         public void ClearStrokes()
         {
             InkCanvas.Strokes.Clear();
+            _strokeMetadata.Clear();
+            _strokePlacementHistory.Clear();
+            _replacementState = new StrokeReplacementState(Array.Empty<StrokeReplacementEntry>());
         }
 
         public void ClearAllAnnotations()
         {
             ClearStrokes();
             TextOverlayCanvas.Children.Clear();
+            foreach (var container in _stickyInteractionHandlers.Keys.ToList())
+                DetachStickyNoteHandlers(container);
             ImageOverlayCanvas.Children.Clear();
             _imageContainers.Clear();
             _imageDataById.Clear();
@@ -3279,14 +3960,90 @@ namespace Caelum.Controls
             HiddenInkCanvas.Children.Clear();
         }
 
-        public void RemoveStrokeQuiet(Stroke stroke)
+        public bool RemoveStrokeQuiet(Stroke stroke)
         {
-            InkCanvas.Strokes.Remove(stroke);
+            if (stroke == null)
+                return false;
+
+            int index = _strokes.IndexOf(stroke);
+            if (index < 0)
+                return false;
+
+            _strokePlacementHistory[stroke] = CaptureStrokePlacement(stroke);
+            _strokes.RemoveAt(index);
+            _strokeMetadata.Remove(stroke);
+            SynchronizeReplacementState();
+            return true;
         }
 
-        public void AddStrokeQuiet(Stroke stroke)
+        public StrokePlacement AddStrokeQuiet(Stroke stroke)
         {
-            InkCanvas.Strokes.Add(stroke);
+            if (stroke == null)
+                return null;
+
+            if (_strokePlacementHistory.TryGetValue(stroke, out var placement))
+            {
+                int index = ReferenceEquals(placement.Owner, this)
+                    ? placement.Index
+                    : _strokes.Count;
+                return AddStrokeQuiet(placement.ForOwner(this, index));
+            }
+
+            return AddStrokeToCollection(stroke);
+        }
+
+        public bool RemoveStrokeQuiet(StrokePlacement placement)
+        {
+            if (!TryResolveCurrentStroke(placement, out var currentStroke, out _))
+                return false;
+
+            return RemoveStrokeQuiet(currentStroke);
+        }
+
+        public StrokePlacement AddStrokeQuiet(StrokePlacement placement)
+        {
+            if (placement == null
+                || !ReferenceEquals(placement.Owner, this)
+                || placement.Token == Guid.Empty)
+                return null;
+
+            if (TryFindCurrentStroke(placement.Token, out var currentStroke, out _))
+            {
+                if (!_strokeMetadata.TryGetValue(currentStroke, out var currentMetadata)
+                    || currentMetadata.Side != placement.Side)
+                {
+                    return null;
+                }
+
+                // A token/side pair identifies one logical replacement on
+                // one page.  A different live stroke with the same pair is a
+                // target conflict, not an idempotent re-add.  Returning it as
+                // success would make a cross-page transfer remove its source
+                // while silently retaining the unrelated target stroke.
+                if (!ReferenceEquals(currentStroke, placement.Stroke))
+                    return null;
+
+                return CaptureStrokePlacement(currentStroke);
+            }
+
+            if (_strokes.Contains(placement.Stroke))
+            {
+                if (!_strokeMetadata.TryGetValue(placement.Stroke, out var currentMetadata)
+                    || currentMetadata.Token != placement.Token
+                    || currentMetadata.Side != placement.Side)
+                {
+                    return null;
+                }
+
+                return CaptureStrokePlacement(placement.Stroke);
+            }
+
+            var added = AddStrokeToCollection(
+                placement.Stroke,
+                placement.Token,
+                placement.Side,
+                placement.Index);
+            return added;
         }
 
         // ----- Task 19: image annotations -----
@@ -3359,7 +4116,10 @@ namespace Caelum.Controls
             {
                 Width = width,
                 Height = height,
-                Tag = ImageContainerTag
+                Tag = ImageContainerTag,
+                // SelectionOverlayCanvas owns image interaction; an image
+                // visual must never block the page's drawing surface.
+                IsHitTestVisible = false
             };
             container.Children.Add(image);
 
@@ -3392,6 +4152,12 @@ namespace Caelum.Controls
         {
             if (container == null || data == null) return;
             _imageDataById[container] = data;
+        }
+
+        public void RemoveImageData(Grid container)
+        {
+            if (container != null)
+                _imageDataById.Remove(container);
         }
 
         internal static bool IsImageContainer(Grid container)
@@ -3518,7 +4284,8 @@ namespace Caelum.Controls
                 Width = width,
                 Height = height,
                 Tag = MarkupContainerTag,
-                Background = Brushes.Transparent // keeps the interior hit-testable for selection
+                Background = Brushes.Transparent,
+                IsHitTestVisible = false
             };
             container.Children.Add(new Viewbox
             {
@@ -3551,7 +4318,8 @@ namespace Caelum.Controls
                 Width = area.Width,
                 Height = area.Height,
                 Tag = AreaHighlightContainerTag,
-                Background = new SolidColorBrush(Color.FromArgb(area.A, area.R, area.G, area.B))
+                Background = new SolidColorBrush(Color.FromArgb(area.A, area.R, area.G, area.B)),
+                IsHitTestVisible = false
             };
 
             Canvas.SetLeft(container, Math.Max(0, area.X));
@@ -3564,29 +4332,41 @@ namespace Caelum.Controls
 
         /// <summary>
         /// Task 26: collapsed sticky-note icon as an overlay container. The
-        /// icon is a fixed 26x26 DIP rounded square (yellow); the note text
-        /// lives in the payload model and opens in an editing bubble hosted
-        /// by the editor page.
+        /// marker is the only ImageOverlayCanvas child that is hit-testable.
+        /// Its pointer gesture captures directly on the marker, clamps to the
+        /// page and raises either Activated (click) or Moved (drag).
         /// </summary>
         public Grid AddStickyNote(StickyNoteAnnotation note)
         {
             if (note == null)
                 return null;
 
+            EnsureStickyNoteIdentity(note);
+
+            double markerWidth = note.Width >= 32 && !double.IsNaN(note.Width)
+                ? note.Width
+                : StickyMarkerSize;
+            double markerHeight = note.Height >= 32 && !double.IsNaN(note.Height)
+                ? note.Height
+                : StickyMarkerSize;
+            note.Width = markerWidth;
+            note.Height = markerHeight;
+
             var icon = new Border
             {
-                Width = 22,
-                Height = 22,
-                CornerRadius = new CornerRadius(5),
-                Background = new SolidColorBrush(Color.FromRgb(0xFD, 0xE7, 0x8A)),
+                Width = markerWidth,
+                Height = markerHeight,
+                CornerRadius = new CornerRadius(7),
+                Background = new SolidColorBrush(Color.FromRgb(note.R, note.G, note.B)),
                 BorderBrush = new SolidColorBrush(Color.FromRgb(0xD4, 0xA7, 0x2C)),
                 BorderThickness = new Thickness(1),
-                Child = new TextBlock
+                Child = new System.Windows.Shapes.Path
                 {
-                    Text = "\uE70B",
-                    FontFamily = new FontFamily("Segoe MDL2 Assets"),
-                    FontSize = 12,
-                    Foreground = new SolidColorBrush(Color.FromRgb(0x7A, 0x5C, 0x0E)),
+                    Width = 20,
+                    Height = 20,
+                    Stretch = Stretch.Uniform,
+                    Data = Geometry.Parse("M4,3 L16,3 L20,7 L20,20 L4,20 Z M16,3 L16,8 L20,8 M7,12 L17,12 M7,16 L15,16"),
+                    Fill = new SolidColorBrush(Color.FromRgb(0x7A, 0x5C, 0x0E)),
                     HorizontalAlignment = HorizontalAlignment.Center,
                     VerticalAlignment = VerticalAlignment.Center,
                     IsHitTestVisible = false
@@ -3595,25 +4375,405 @@ namespace Caelum.Controls
 
             var container = new Grid
             {
-                Width = 26,
-                Height = 26,
+                Width = markerWidth,
+                Height = markerHeight,
                 Tag = StickyNoteContainerTag,
-                Background = Brushes.Transparent
+                Background = Brushes.Transparent,
+                IsHitTestVisible = true,
+                Focusable = true
             };
             container.Children.Add(icon);
 
-            container.MouseLeftButtonDown += (sender, args) =>
-            {
-                StickyNoteActivated?.Invoke(this, container);
-                args.Handled = true;
-            };
+            KeyboardNavigation.SetIsTabStop(container, true);
+            container.SetResourceReference(FrameworkElement.FocusVisualStyleProperty, "ToolbarFocusVisualStyle");
+            AutomationProperties.SetAutomationId(container, $"StickyNote.{note.Id}");
+            string stickyLabel = LocalizationService.Get("Editor.StickyNoteTooltip");
+            AutomationProperties.SetName(container, stickyLabel);
+            AutomationProperties.SetHelpText(container, stickyLabel);
+            ToolTipService.SetToolTip(container, note.Text ?? string.Empty);
+            container.ContextMenu = BuildStickyNoteContextMenu(container);
+            StickyNoteContextMenuCreated?.Invoke(this, container.ContextMenu);
+            AttachStickyNoteHandlers(container);
 
-            Canvas.SetLeft(container, Math.Max(0, note.X));
-            Canvas.SetTop(container, Math.Max(0, note.Y));
             ImageOverlayCanvas.Children.Add(container);
             _overlayData[container] = note;
+            SetStickyNotePositionQuiet(container, new Point(note.X, note.Y));
             ImagesChanged?.Invoke(this, EventArgs.Empty);
             return container;
+        }
+
+        /// <summary>
+        /// PDF annotation names are page-local in the sidecar format, but a
+        /// malformed file can repeat or omit them. Repair only the identity;
+        /// text, geometry and colour remain untouched.
+        /// </summary>
+        private void EnsureStickyNoteIdentity(StickyNoteAnnotation note)
+        {
+            string candidate = note.Id?.Trim();
+            bool used = !string.IsNullOrWhiteSpace(candidate)
+                && _overlayData.Values
+                    .OfType<StickyNoteAnnotation>()
+                    .Any(existing => string.Equals(existing.Id?.Trim(), candidate,
+                        StringComparison.OrdinalIgnoreCase));
+            if (string.IsNullOrWhiteSpace(candidate) || used)
+            {
+                do
+                    candidate = Guid.NewGuid().ToString("N");
+                while (_overlayData.Values
+                    .OfType<StickyNoteAnnotation>()
+                    .Any(existing => string.Equals(existing.Id, candidate,
+                        StringComparison.OrdinalIgnoreCase)));
+            }
+
+            note.Id = candidate;
+        }
+
+        private void AttachStickyNoteHandlers(Grid container)
+        {
+            if (container == null || _stickyInteractionHandlers.ContainsKey(container))
+                return;
+
+            var handlers = new StickyInteractionHandlers
+            {
+                MouseDown = StickyNote_MouseLeftButtonDown,
+                MouseMove = StickyNote_MouseMove,
+                MouseUp = StickyNote_MouseLeftButtonUp,
+                StylusDown = StickyNote_StylusDown,
+                StylusMove = StickyNote_StylusMove,
+                StylusUp = StickyNote_StylusUp,
+                LostMouseCapture = StickyNote_LostMouseCapture,
+                LostStylusCapture = StickyNote_LostStylusCapture,
+                KeyDown = StickyNote_KeyDown
+            };
+            container.MouseLeftButtonDown += handlers.MouseDown;
+            container.MouseMove += handlers.MouseMove;
+            container.MouseLeftButtonUp += handlers.MouseUp;
+            container.StylusDown += handlers.StylusDown;
+            container.StylusMove += handlers.StylusMove;
+            container.StylusUp += handlers.StylusUp;
+            container.LostMouseCapture += handlers.LostMouseCapture;
+            container.LostStylusCapture += handlers.LostStylusCapture;
+            container.KeyDown += handlers.KeyDown;
+            if (container.ContextMenu != null)
+                PopupZOrderHelper.FixContextMenuTopmost(container.ContextMenu);
+            _stickyInteractionHandlers[container] = handlers;
+        }
+
+        private void DetachStickyNoteHandlers(Grid container)
+        {
+            if (container == null || !_stickyInteractionHandlers.TryGetValue(container, out var handlers))
+                return;
+
+            container.MouseLeftButtonDown -= handlers.MouseDown;
+            container.MouseMove -= handlers.MouseMove;
+            container.MouseLeftButtonUp -= handlers.MouseUp;
+            container.StylusDown -= handlers.StylusDown;
+            container.StylusMove -= handlers.StylusMove;
+            container.StylusUp -= handlers.StylusUp;
+            container.LostMouseCapture -= handlers.LostMouseCapture;
+            container.LostStylusCapture -= handlers.LostStylusCapture;
+            container.KeyDown -= handlers.KeyDown;
+            if (container.ContextMenu != null)
+                PopupZOrderHelper.UnfixContextMenuTopmost(container.ContextMenu);
+            if (ReferenceEquals(_stickyDragContainer, container))
+                EndStickyPointer(container, canceled: true);
+            _stickyInteractionHandlers.Remove(container);
+        }
+
+        /// <summary>
+        /// PopupZOrderHelper hooks belong to the live marker owner.  A
+        /// transient sweep can release those exact delegates without removing
+        /// the marker input handlers; the matching ensure method reattaches one
+        /// hook when the page becomes interactive again.
+        /// </summary>
+        public void UnfixTransientUiHooks()
+        {
+            foreach (var container in _stickyInteractionHandlers.Keys.ToList())
+            {
+                if (container.ContextMenu != null)
+                    PopupZOrderHelper.UnfixContextMenuTopmost(container.ContextMenu);
+            }
+        }
+
+        public void EnsureTransientUiHooks()
+        {
+            foreach (var container in _stickyInteractionHandlers.Keys.ToList())
+            {
+                if (container.ContextMenu != null)
+                    PopupZOrderHelper.FixContextMenuTopmost(container.ContextMenu);
+            }
+        }
+
+        private ContextMenu BuildStickyNoteContextMenu(Grid container)
+        {
+            var menu = new ContextMenu
+            {
+                PlacementTarget = container,
+                Tag = "StickyNote.ContextMenu"
+            };
+            menu.SetResourceReference(Control.ForegroundProperty, "ThemeTextBrush");
+
+            var delete = new MenuItem
+            {
+                Header = LocalizationService.Get("Editor.DeleteTooltip"),
+                MinHeight = 32,
+                Tag = "StickyNote.Delete"
+            };
+            AutomationProperties.SetAutomationId(delete, "Sticky.Delete.ContextMenu");
+            string deleteLabel = LocalizationService.Get("Editor.DeleteTooltip");
+            AutomationProperties.SetName(delete, deleteLabel);
+            AutomationProperties.SetHelpText(delete, deleteLabel);
+            delete.Click += (sender, args) =>
+            {
+                StickyNoteDeleteRequested?.Invoke(this, container);
+                args.Handled = true;
+            };
+            menu.Items.Add(delete);
+            return menu;
+        }
+
+        private Size GetStickyPageSize()
+        {
+            double width = ActualWidth > 0 ? ActualWidth : Width;
+            double height = ActualHeight > 0 ? ActualHeight : Height;
+            if (width <= 0) width = RootGrid.ActualWidth > 0 ? RootGrid.ActualWidth : RootGrid.Width;
+            if (height <= 0) height = RootGrid.ActualHeight > 0 ? RootGrid.ActualHeight : RootGrid.Height;
+            if (width <= 0) width = 1584;
+            if (height <= 0) height = 2245;
+            return new Size(Math.Max(0, width), Math.Max(0, height));
+        }
+
+        /// <summary>Quietly moves a Sticky Note without raising a user action.</summary>
+        public bool SetStickyNotePositionQuiet(Grid container, Point position)
+        {
+            if (container == null || !IsOverlayContainer(container)
+                || GetOverlayData(container) is not StickyNoteAnnotation note)
+                return false;
+
+            var clamped = ClampStickyNotePosition(
+                position,
+                GetStickyPageSize(),
+                new Size(container.Width > 0 ? container.Width : StickyMarkerSize,
+                    container.Height > 0 ? container.Height : StickyMarkerSize));
+            Canvas.SetLeft(container, clamped.X);
+            Canvas.SetTop(container, clamped.Y);
+            note.X = clamped.X;
+            note.Y = clamped.Y;
+            ToolTipService.SetToolTip(container, note.Text ?? string.Empty);
+            return true;
+        }
+
+        /// <summary>Quietly updates note text for an undo/redo action.</summary>
+        public bool SetStickyNoteTextQuiet(Grid container, string text)
+        {
+            if (container == null || !IsStickyNoteContainer(container)
+                || GetOverlayData(container) is not StickyNoteAnnotation note)
+                return false;
+
+            note.Text = text ?? string.Empty;
+            ToolTipService.SetToolTip(container, note.Text);
+            return true;
+        }
+
+        private bool IsStickyNoteContainer(Grid container)
+            => container != null && (container.Tag as string) == StickyNoteContainerTag;
+
+        private void BeginStickyPointer(Grid container, Point pointer, bool stylus)
+        {
+            if (!IsStickyNoteContainer(container))
+                return;
+
+            if (ReferenceEquals(_stickyDragContainer, container))
+                EndStickyPointer(container, canceled: true);
+            if (_stickyDragContainer != null)
+                EndStickyPointer(_stickyDragContainer, canceled: true);
+
+            _stickyDragContainer = container;
+            _stickyDragStartPointer = pointer;
+            _stickyDragStartPosition = new Point(
+                double.IsNaN(Canvas.GetLeft(container)) ? 0 : Canvas.GetLeft(container),
+                double.IsNaN(Canvas.GetTop(container)) ? 0 : Canvas.GetTop(container));
+            _stickyDragMoved = false;
+            _stickyDragUsingStylus = stylus;
+            container.Focus();
+            if (stylus)
+                container.CaptureStylus();
+            else
+                container.CaptureMouse();
+        }
+
+        private void UpdateStickyPointer(Grid container, Point pointer)
+        {
+            if (!ReferenceEquals(_stickyDragContainer, container))
+                return;
+
+            var delta = pointer - _stickyDragStartPointer;
+            if (!_stickyDragMoved
+                && Math.Abs(delta.X) < StickyDragThreshold
+                && Math.Abs(delta.Y) < StickyDragThreshold)
+                return;
+
+            _stickyDragMoved = true;
+            SetStickyNotePositionQuiet(
+                container,
+                new Point(_stickyDragStartPosition.X + delta.X, _stickyDragStartPosition.Y + delta.Y));
+        }
+
+        private void EndStickyPointer(Grid container, bool canceled)
+        {
+            if (!ReferenceEquals(_stickyDragContainer, container))
+                return;
+
+            _suppressStickyCaptureCancellation = true;
+            try
+            {
+                if (_stickyDragUsingStylus && container.IsStylusCaptured)
+                    container.ReleaseStylusCapture();
+                if (!_stickyDragUsingStylus && container.IsMouseCaptured)
+                    container.ReleaseMouseCapture();
+            }
+            finally
+            {
+                _suppressStickyCaptureCancellation = false;
+            }
+
+            bool moved = _stickyDragMoved;
+            var oldPosition = _stickyDragStartPosition;
+            var newPosition = new Point(
+                double.IsNaN(Canvas.GetLeft(container)) ? oldPosition.X : Canvas.GetLeft(container),
+                double.IsNaN(Canvas.GetTop(container)) ? oldPosition.Y : Canvas.GetTop(container));
+            _stickyDragContainer = null;
+            _stickyDragMoved = false;
+            _stickyDragUsingStylus = false;
+
+            if (canceled)
+            {
+                // Deactivation/unload can interrupt a captured gesture before
+                // MouseUp/StylusUp. Never leave an unrecorded half-move in the
+                // model; the next activation can start a fresh gesture.
+                if (moved)
+                    SetStickyNotePositionQuiet(container, oldPosition);
+                return;
+            }
+            if (moved)
+            {
+                StickyNoteMoved?.Invoke(this, new StickyNoteMovedEventArgs(container, oldPosition, newPosition));
+            }
+            else
+            {
+                StickyNoteActivated?.Invoke(this, container);
+            }
+        }
+
+        private void StickyNote_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+        {
+            if (e.StylusDevice != null || e.ChangedButton != MouseButton.Left)
+                return;
+            BeginStickyPointer(sender as Grid, e.GetPosition(this), stylus: false);
+            e.Handled = true;
+        }
+
+        private void StickyNote_MouseMove(object sender, MouseEventArgs e)
+        {
+            if (e.StylusDevice != null || e.LeftButton != MouseButtonState.Pressed)
+                return;
+            UpdateStickyPointer(sender as Grid, e.GetPosition(this));
+            if (ReferenceEquals(_stickyDragContainer, sender))
+                e.Handled = true;
+        }
+
+        private void StickyNote_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+        {
+            if (e.StylusDevice != null || e.ChangedButton != MouseButton.Left)
+                return;
+            EndStickyPointer(sender as Grid, canceled: false);
+            e.Handled = true;
+        }
+
+        private void StickyNote_StylusDown(object sender, StylusDownEventArgs e)
+        {
+            BeginStickyPointer(sender as Grid, e.GetPosition(this), stylus: true);
+            e.Handled = true;
+        }
+
+        private void StickyNote_StylusMove(object sender, StylusEventArgs e)
+        {
+            UpdateStickyPointer(sender as Grid, e.GetPosition(this));
+            if (ReferenceEquals(_stickyDragContainer, sender))
+                e.Handled = true;
+        }
+
+        private void StickyNote_StylusUp(object sender, StylusEventArgs e)
+        {
+            EndStickyPointer(sender as Grid, canceled: false);
+            e.Handled = true;
+        }
+
+        private void StickyNote_LostMouseCapture(object sender, MouseEventArgs e)
+        {
+            if (!_suppressStickyCaptureCancellation
+                && sender is Grid container
+                && ReferenceEquals(_stickyDragContainer, container))
+            {
+                EndStickyPointer(container, canceled: true);
+            }
+        }
+
+        private void StickyNote_LostStylusCapture(object sender, StylusEventArgs e)
+        {
+            if (!_suppressStickyCaptureCancellation
+                && sender is Grid container
+                && ReferenceEquals(_stickyDragContainer, container))
+            {
+                EndStickyPointer(container, canceled: true);
+            }
+        }
+
+        private void StickyNote_KeyDown(object sender, KeyEventArgs e)
+        {
+            var container = sender as Grid;
+            if (!IsStickyNoteContainer(container)
+                || GetOverlayData(container) is not StickyNoteAnnotation note)
+                return;
+
+            if (e.Key == Key.Enter || e.Key == Key.Space)
+            {
+                StickyNoteActivated?.Invoke(this, container);
+                e.Handled = true;
+                return;
+            }
+
+            if (e.Key == Key.Delete)
+            {
+                StickyNoteDeleteRequested?.Invoke(this, container);
+                e.Handled = true;
+                return;
+            }
+
+            double step = e.KeyboardDevice?.Modifiers.HasFlag(ModifierKeys.Shift) == true ? 16.0 : 4.0;
+            double dx = 0;
+            double dy = 0;
+            switch (e.Key)
+            {
+                case Key.Left: dx = -step; break;
+                case Key.Right: dx = step; break;
+                case Key.Up: dy = -step; break;
+                case Key.Down: dy = step; break;
+                default: return;
+            }
+
+            var oldPosition = new Point(note.X, note.Y);
+            if (!SetStickyNotePositionQuiet(container, new Point(oldPosition.X + dx, oldPosition.Y + dy)))
+                return;
+
+            var newPosition = new Point(note.X, note.Y);
+            if (Math.Abs(newPosition.X - oldPosition.X) > 0.01
+                || Math.Abs(newPosition.Y - oldPosition.Y) > 0.01)
+            {
+                StickyNoteMoved?.Invoke(this,
+                    new StickyNoteMovedEventArgs(container, oldPosition, newPosition));
+            }
+            e.Handled = true;
         }
 
         /// <summary>All overlay containers currently on the page (images excluded).</summary>
@@ -3628,7 +4788,25 @@ namespace Caelum.Controls
             return result;
         }
 
-        public void RemoveTextContainerQuiet(Grid container)
+        /// <summary>Refreshes marker context-menu labels after a language change.</summary>
+        public void RefreshStickyNoteContextMenuLocalization()
+        {
+            foreach (var container in GetOverlayContainers().Where(IsStickyNoteContainer))
+            {
+                string stickyLabel = LocalizationService.Get("Editor.StickyNoteTooltip");
+                AutomationProperties.SetName(container, stickyLabel);
+                AutomationProperties.SetHelpText(container, stickyLabel);
+                if (container.ContextMenu?.Items.OfType<MenuItem>().FirstOrDefault() is not MenuItem delete)
+                    continue;
+
+                string label = LocalizationService.Get("Editor.DeleteTooltip");
+                delete.Header = label;
+                AutomationProperties.SetName(delete, label);
+                AutomationProperties.SetHelpText(delete, label);
+            }
+        }
+
+        public bool RemoveTextContainerQuiet(Grid container)
         {
             // Task 19/25/26/27: containers live on two layers — text on
             // TextOverlayCanvas, images + overlay annotations (markup / area
@@ -3636,15 +4814,24 @@ namespace Caelum.Controls
             // Removal is centralized here so undo / delete / cross-page flows
             // stay layer-agnostic. The payload dicts keep their entries so a
             // later re-add (undo / move back) restores the item as-is.
-            if (ReferenceEquals(container?.Parent, ImageOverlayCanvas))
+            if (container == null)
+                return false;
+
+            if (ReferenceEquals(container.Parent, ImageOverlayCanvas))
             {
+                if (IsStickyNoteContainer(container))
+                    DetachStickyNoteHandlers(container);
                 ImageOverlayCanvas.Children.Remove(container);
                 _imageContainers.Remove(container);
+                return true;
             }
-            else
+            if (ReferenceEquals(container.Parent, TextOverlayCanvas))
             {
                 TextOverlayCanvas.Children.Remove(container);
+                return true;
             }
+
+            return false;
         }
 
         public void AddTextContainerQuiet(Grid container)
@@ -3652,6 +4839,8 @@ namespace Caelum.Controls
             if (IsOverlayContainer(container))
             {
                 ImageOverlayCanvas.Children.Add(container);
+                if (IsStickyNoteContainer(container))
+                    AttachStickyNoteHandlers(container);
                 if (IsImageContainer(container) && !_imageContainers.Contains(container))
                     _imageContainers.Add(container);
             }
@@ -3659,6 +4848,140 @@ namespace Caelum.Controls
             {
                 TextOverlayCanvas.Children.Add(container);
             }
+        }
+
+        private void CaptureSelectionInteractionSnapshot()
+        {
+            if (_selectionInteractionSnapshot != null)
+                return;
+
+            var snapshot = new SelectionInteractionSnapshot();
+            foreach (var stroke in _selectedStrokes)
+            {
+                if (stroke == null)
+                    continue;
+
+                var points = new StylusPointCollection();
+                foreach (var point in stroke.StylusPoints)
+                    points.Add(point);
+                snapshot.StrokePoints[stroke] = points;
+                snapshot.StrokeAttributes[stroke] = stroke.DrawingAttributes.Clone();
+            }
+
+            foreach (var container in _selectedTextContainers)
+            {
+                if (container == null)
+                    continue;
+
+                var textBox = container.Children.OfType<TextBox>().FirstOrDefault();
+                snapshot.Containers.Add(new SelectionContainerSnapshot
+                {
+                    Container = container,
+                    Position = new Point(
+                        double.IsNaN(Canvas.GetLeft(container)) ? 0 : Canvas.GetLeft(container),
+                        double.IsNaN(Canvas.GetTop(container)) ? 0 : Canvas.GetTop(container)),
+                    Width = container.Width,
+                    Height = container.Height,
+                    FontSize = textBox?.FontSize ?? double.NaN
+                });
+            }
+
+            _selectionInteractionSnapshot = snapshot;
+        }
+
+        private void RestoreSelectionInteractionSnapshot()
+        {
+            var snapshot = _selectionInteractionSnapshot;
+            if (snapshot == null)
+                return;
+
+            foreach (var pair in snapshot.StrokePoints)
+            {
+                if (pair.Key == null)
+                    continue;
+                var points = new StylusPointCollection();
+                foreach (var point in pair.Value)
+                    points.Add(point);
+                pair.Key.StylusPoints = points;
+                if (snapshot.StrokeAttributes.TryGetValue(pair.Key, out var attributes))
+                    pair.Key.DrawingAttributes = attributes.Clone();
+            }
+
+            foreach (var item in snapshot.Containers)
+            {
+                var container = item.Container;
+                if (container == null)
+                    continue;
+
+                if (IsStickyNoteContainer(container))
+                    SetStickyNotePositionQuiet(container, item.Position);
+                else
+                {
+                    Canvas.SetLeft(container, item.Position.X);
+                    Canvas.SetTop(container, item.Position.Y);
+                }
+
+                if (!double.IsNaN(item.Width) && item.Width > 0)
+                    container.Width = item.Width;
+                if (!double.IsNaN(item.Height) && item.Height > 0)
+                    container.Height = item.Height;
+                var textBox = container.Children.OfType<TextBox>().FirstOrDefault();
+                if (textBox != null && !double.IsNaN(item.FontSize) && item.FontSize > 0)
+                    textBox.FontSize = item.FontSize;
+            }
+        }
+
+        private void CancelSelectionInteraction(bool restoreSnapshot)
+        {
+            bool active = _isSelecting || _isDraggingSelection || _isResizingSelection
+                || _selectionInteractionSnapshot != null
+                || SelectionOverlayCanvas.IsMouseCaptured
+                || SelectionOverlayCanvas.IsStylusCaptured;
+            if (!active)
+                return;
+
+            if (restoreSnapshot)
+                RestoreSelectionInteractionSnapshot();
+
+            _suppressSelectionCaptureCancellation = true;
+            try
+            {
+                if (SelectionOverlayCanvas.IsMouseCaptured)
+                    SelectionOverlayCanvas.ReleaseMouseCapture();
+                if (SelectionOverlayCanvas.IsStylusCaptured)
+                    SelectionOverlayCanvas.ReleaseStylusCapture();
+            }
+            finally
+            {
+                _suppressSelectionCaptureCancellation = false;
+            }
+
+            _isSelecting = false;
+            _isDraggingSelection = false;
+            _isResizingSelection = false;
+            _lastResizeScale = 1.0;
+            _totalDragDeltaX = 0;
+            _totalDragDeltaY = 0;
+            if (this.Parent is System.Windows.Controls.Grid pageGrid)
+                System.Windows.Controls.Panel.SetZIndex(pageGrid, 0);
+            _freeSelectionPath = null;
+            _freeSelectionPoints = null;
+            _selectionRect = null;
+            SelectionOverlayCanvas.Children.Clear();
+            _selectionInteractionSnapshot = null;
+            UpdateSelectionVisuals();
+        }
+
+        private void SelectionOverlayCanvas_LostMouseCapture(object sender, MouseEventArgs e)
+        {
+            if (!_suppressSelectionCaptureCancellation)
+                CancelSelectionInteraction(restoreSnapshot: true);
+        }
+
+        private void SelectionOverlayCanvas_LostStylusCapture(object sender, StylusEventArgs e)
+        {
+            if (!_suppressSelectionCaptureCancellation)
+                CancelSelectionInteraction(restoreSnapshot: true);
         }
 
         public void SetSelectionMode(bool enabled)
@@ -3669,6 +4992,7 @@ namespace Caelum.Controls
 
             if (!enabled)
             {
+                CancelSelectionInteraction(restoreSnapshot: true);
                 ClearSelection();
                 if (SelectionOverlayCanvas.IsMouseCaptured)
                     SelectionOverlayCanvas.ReleaseMouseCapture();
@@ -3774,7 +5098,7 @@ namespace Caelum.Controls
                 var newPoints = new StylusPointCollection();
                 foreach (var pt in stroke.StylusPoints)
                 {
-                    newPoints.Add(new StylusPoint(pt.X + deltaX, pt.Y + deltaY));
+                    newPoints.Add(new StylusPoint(pt.X + deltaX, pt.Y + deltaY, pt.PressureFactor));
                 }
                 stroke.StylusPoints = newPoints;
             }
@@ -3783,8 +5107,18 @@ namespace Caelum.Controls
             {
                 var left = Canvas.GetLeft(container);
                 var top = Canvas.GetTop(container);
-                Canvas.SetLeft(container, left + deltaX);
-                Canvas.SetTop(container, top + deltaY);
+                if (IsStickyNoteContainer(container))
+                {
+                    SetStickyNotePositionQuiet(container,
+                        new Point(
+                            (double.IsNaN(left) ? 0 : left) + deltaX,
+                            (double.IsNaN(top) ? 0 : top) + deltaY));
+                }
+                else
+                {
+                    Canvas.SetLeft(container, left + deltaX);
+                    Canvas.SetTop(container, top + deltaY);
+                }
             }
 
             UpdateSelectionVisuals();
@@ -3825,8 +5159,6 @@ namespace Caelum.Controls
                 var top = Canvas.GetTop(container);
                 var newLeft = center.X + (left - center.X) * scaleFactor;
                 var newTop = center.Y + (top - center.Y) * scaleFactor;
-                Canvas.SetLeft(container, newLeft);
-                Canvas.SetTop(container, newTop);
 
                 if (IsOverlayContainer(container))
                 {
@@ -3836,9 +5168,27 @@ namespace Caelum.Controls
                     // highlight: Background; sticky: centered icon).
                     container.Width = Math.Max(1.0, container.Width * scaleFactor);
                     container.Height = Math.Max(1.0, container.Height * scaleFactor);
+                    if (IsStickyNoteContainer(container)
+                        && GetOverlayData(container) is StickyNoteAnnotation note)
+                    {
+                        note.Width = container.Width;
+                        note.Height = container.Height;
+                        // A selection resize is a real geometry edit, not just
+                        // a visual transform.  Keep the serialized DIP origin
+                        // in sync and clamp against the new marker dimensions
+                        // before the next save/undo/cross-page operation.
+                        SetStickyNotePositionQuiet(container, new Point(newLeft, newTop));
+                    }
+                    else
+                    {
+                        Canvas.SetLeft(container, newLeft);
+                        Canvas.SetTop(container, newTop);
+                    }
                 }
                 else
                 {
+                    Canvas.SetLeft(container, newLeft);
+                    Canvas.SetTop(container, newTop);
                     var tb = container.Children.OfType<TextBox>().FirstOrDefault();
                     if (tb != null)
                     {
@@ -3904,18 +5254,19 @@ namespace Caelum.Controls
             }
 
             SelectionOverlayCanvas.Children.Clear();
-            var accentBrush = new SolidColorBrush(Color.FromRgb(37, 99, 235));
-
             var selectionBorder = new System.Windows.Shapes.Rectangle
             {
                 Width = bounds.Width + 8,
                 Height = bounds.Height + 8,
-                Stroke = accentBrush,
+                Stroke = Brushes.Transparent,
                 StrokeThickness = 1.5,
                 StrokeDashArray = new DoubleCollection { 3, 2 },
-                Fill = new SolidColorBrush(Color.FromArgb(18, 37, 99, 235)),
+                Fill = Brushes.Transparent,
                 Cursor = Cursors.SizeAll
             };
+            selectionBorder.SetResourceReference(System.Windows.Shapes.Shape.StrokeProperty, "ThemeAccentBrush");
+            selectionBorder.SetResourceReference(System.Windows.Shapes.Shape.FillProperty, "ThemeSelectionBrush");
+            selectionBorder.Opacity = 0.18;
             Canvas.SetLeft(selectionBorder, bounds.Left - 4);
             Canvas.SetTop(selectionBorder, bounds.Top - 4);
             SelectionOverlayCanvas.Children.Add(selectionBorder);
@@ -3967,18 +5318,20 @@ namespace Caelum.Controls
                 {
                     Width = 12,
                     Height = 12,
-                    Fill = Brushes.White,
-                    Stroke = accentBrush,
+                    Fill = Brushes.Transparent,
+                    Stroke = Brushes.Transparent,
                     StrokeThickness = 1.5,
                     Cursor = handleCursors[i],
                     Effect = new System.Windows.Media.Effects.DropShadowEffect
                     {
                         BlurRadius = 6,
                         ShadowDepth = 0,
-                        Opacity = 0.12,
+                         Opacity = ThemeService.GetShadowOpacity(),
                         Color = Colors.Black
                     }
                 };
+                handle.SetResourceReference(System.Windows.Shapes.Shape.FillProperty, "ThemeSurfaceBrush");
+                handle.SetResourceReference(System.Windows.Shapes.Shape.StrokeProperty, "ThemeAccentBrush");
                 Canvas.SetLeft(handle, handlePos.X - 6);
                 Canvas.SetTop(handle, handlePos.Y - 6);
                 SelectionOverlayCanvas.Children.Add(handle);
@@ -3993,9 +5346,7 @@ namespace Caelum.Controls
             {
                 Width = Math.Max(bounds.Width, 1),
                 Height = Math.Max(bounds.Height, 1),
-                Stroke = _selectionColorPhaseSeconds >= SelectionColorHalfCycleSeconds
-                    ? SelectionOutlineCyanBrush
-                    : SelectionOutlineBlueBrush,
+                Stroke = Brushes.Transparent,
                 StrokeThickness = 1.2,
                 StrokeDashArray = PerItemOutlineDashArray,
                 StrokeDashOffset = _selectionDashOffset,
@@ -4003,6 +5354,7 @@ namespace Caelum.Controls
                 IsHitTestVisible = false,
                 Tag = "perItemOutline"
             };
+            outline.SetResourceReference(System.Windows.Shapes.Shape.StrokeProperty, "ThemeAccentBrush");
             Canvas.SetLeft(outline, bounds.Left);
             Canvas.SetTop(outline, bounds.Top);
             SelectionOverlayCanvas.Children.Add(outline);
@@ -4011,7 +5363,7 @@ namespace Caelum.Controls
 
         private void StartSelectionDashAnimation()
         {
-            if (!_isHostActive || _isSelectionDashAnimating)
+            if (!_isHostActive || !ThemeService.ShouldAnimate || _isSelectionDashAnimating)
                 return;
             _isSelectionDashAnimating = true;
             _selectionDashLastTickUtc = DateTime.UtcNow;
@@ -4034,7 +5386,7 @@ namespace Caelum.Controls
             // Bail out (and unsubscribe) when the page was unloaded without
             // ClearSelection — the static Rendering event would otherwise root
             // this control forever.
-            if (!_isSelectionDashAnimating || _perItemOutlines.Count == 0 || !IsLoaded)
+            if (!_isSelectionDashAnimating || !ThemeService.ShouldAnimate || _perItemOutlines.Count == 0 || !IsLoaded)
             {
                 StopSelectionDashAnimation();
                 return;
@@ -4051,10 +5403,14 @@ namespace Caelum.Controls
             if (_selectionColorPhaseSeconds >= SelectionColorHalfCycleSeconds * 2)
                 _selectionColorPhaseSeconds -= SelectionColorHalfCycleSeconds * 2;
 
-            // Light color cycle: hard-switch accent blue ↔ cyan every half cycle.
-            var brush = _selectionColorPhaseSeconds >= SelectionColorHalfCycleSeconds
-                ? SelectionOutlineCyanBrush
-                : SelectionOutlineBlueBrush;
+            // Switch between the live accent and focus brushes so the
+            // marching-ants cue remains visible in every runtime palette,
+            // including system HighContrast.
+            var brushKey = _selectionColorPhaseSeconds >= SelectionColorHalfCycleSeconds
+                ? "ThemeFocusBrush"
+                : "ThemeAccentBrush";
+            var brush = Application.Current?.TryFindResource(brushKey) as Brush
+                ?? Brushes.Transparent;
             foreach (var outline in _perItemOutlines)
             {
                 outline.StrokeDashOffset = _selectionDashOffset;
@@ -4066,21 +5422,12 @@ namespace Caelum.Controls
         // Frozen so all per-item rects can share one instance without
         // per-shape inheritance-context tracking.
         private static readonly DoubleCollection PerItemOutlineDashArray = CreateFrozenDashArray();
-        private static readonly SolidColorBrush SelectionOutlineBlueBrush = CreateFrozenBrush(37, 99, 235); // #2563EB
-        private static readonly SolidColorBrush SelectionOutlineCyanBrush = CreateFrozenBrush(8, 145, 178); // #0891B2
 
         private static DoubleCollection CreateFrozenDashArray()
         {
             var dash = new DoubleCollection { 3, 2 };
             dash.Freeze();
             return dash;
-        }
-
-        private static SolidColorBrush CreateFrozenBrush(byte r, byte g, byte b)
-        {
-            var brush = new SolidColorBrush(Color.FromRgb(r, g, b));
-            brush.Freeze();
-            return brush;
         }
 
         private static bool IsDescendantOf(DependencyObject descendant, DependencyObject ancestor)
@@ -4173,6 +5520,7 @@ namespace Caelum.Controls
                     var hitRect = new Rect(cornerHandles[i].X - 8, cornerHandles[i].Y - 8, 16, 16);
                     if (hitRect.Contains(point))
                     {
+                        CaptureSelectionInteractionSnapshot();
                         _isResizingSelection = true;
                         _resizeHandleIndex = i;
                         _resizeAnchorPoint = GetOppositeCorner(bounds, i);
@@ -4190,6 +5538,7 @@ namespace Caelum.Controls
 
                 if (inflatedBounds.Contains(point))
                 {
+                    CaptureSelectionInteractionSnapshot();
                     _isDraggingSelection = true;
                     _dragStartPoint = point;
                     _totalDragDeltaX = 0;
@@ -4413,8 +5762,18 @@ namespace Caelum.Controls
             {
                 _isResizingSelection = false;
                 if (this.Parent is System.Windows.Controls.Grid pGrid) { System.Windows.Controls.Panel.SetZIndex(pGrid, 0); }
-                if (SelectionOverlayCanvas.IsMouseCaptured)
-                    SelectionOverlayCanvas.ReleaseMouseCapture();
+                _suppressSelectionCaptureCancellation = true;
+                try
+                {
+                    if (SelectionOverlayCanvas.IsMouseCaptured)
+                        SelectionOverlayCanvas.ReleaseMouseCapture();
+                    if (SelectionOverlayCanvas.IsStylusCaptured)
+                        SelectionOverlayCanvas.ReleaseStylusCapture();
+                }
+                finally
+                {
+                    _suppressSelectionCaptureCancellation = false;
+                }
 
                 if (Math.Abs(_lastResizeScale - 1.0) > 0.001)
                     SelectionResizeCompleted?.Invoke(this, new SelectionResizeCompletedEventArgs(
@@ -4422,13 +5781,24 @@ namespace Caelum.Controls
                         new List<Stroke>(_selectedStrokes),
                         new List<Grid>(_selectedTextContainers)));
                 _lastResizeScale = 1.0;
+                _selectionInteractionSnapshot = null;
             }
             else if (_isDraggingSelection)
             {
                 _isDraggingSelection = false;
                 if (this.Parent is System.Windows.Controls.Grid pGrid) { System.Windows.Controls.Panel.SetZIndex(pGrid, 0); }
-                if (SelectionOverlayCanvas.IsMouseCaptured)
-                    SelectionOverlayCanvas.ReleaseMouseCapture();
+                _suppressSelectionCaptureCancellation = true;
+                try
+                {
+                    if (SelectionOverlayCanvas.IsMouseCaptured)
+                        SelectionOverlayCanvas.ReleaseMouseCapture();
+                    if (SelectionOverlayCanvas.IsStylusCaptured)
+                        SelectionOverlayCanvas.ReleaseStylusCapture();
+                }
+                finally
+                {
+                    _suppressSelectionCaptureCancellation = false;
+                }
 
                 if (Math.Abs(_totalDragDeltaX) > 0.5 || Math.Abs(_totalDragDeltaY) > 0.5)
                     SelectionMoveCompleted?.Invoke(this, new SelectionMoveCompletedEventArgs(
@@ -4437,6 +5807,7 @@ namespace Caelum.Controls
                         new List<Grid>(_selectedTextContainers)));
                 _totalDragDeltaX = 0;
                 _totalDragDeltaY = 0;
+                _selectionInteractionSnapshot = null;
             }
             else if (_isSelecting)
             {

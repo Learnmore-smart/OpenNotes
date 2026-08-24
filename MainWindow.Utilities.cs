@@ -15,7 +15,7 @@ namespace Caelum
         public void PreviewSettings(AppSettings settings)
         {
             LocalizationService.ApplyLanguage(settings.Language);
-            ThemeService.Apply(settings.Theme);
+            ThemeService.Apply(settings.Theme, workspaceBackdrop: settings.WorkspaceBackdrop);
 
             foreach (var tab in _tabs.Where(tab => tab?.Frame?.Content is EditorPage))
             {

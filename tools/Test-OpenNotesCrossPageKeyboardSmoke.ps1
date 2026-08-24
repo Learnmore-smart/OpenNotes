@@ -6,6 +6,7 @@ param(
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
+. (Join-Path $PSScriptRoot 'OpenNotesEditorAutomationIds.ps1')
 
 if ([string]::IsNullOrWhiteSpace($ExecutablePath)) {
     $ExecutablePath = Join-Path $PSScriptRoot '..\bin\Debug\net8.0-windows\win-x64\OpenNotes.exe'
@@ -231,7 +232,7 @@ function Invoke-ToolbarPointerClick([int]$processId, [IntPtr]$windowHandle, [str
 }
 
 function Get-PageRect([int]$processId, [int]$pageIndex) {
-    $element = Find-DescendantByAutomationId (Find-MainWindow $processId) "PdfPageControl.$pageIndex"
+    $element = Find-DescendantByAutomationId (Find-MainWindow $processId) (Get-EditorPageAutomationId $pageIndex)
     if ($null -eq $element -or $element.Current.IsOffscreen) { return $null }
     $rect = $element.Current.BoundingRectangle
     if ($rect.Width -lt 200 -or $rect.Height -lt 200) { return $null }
@@ -325,7 +326,7 @@ function Open-IsolatedPdf([System.Diagnostics.Process]$targetProcess) {
         ([int][Math]::Round($tileRect.Left + ($tileRect.Width * 0.5))) `
         ([int][Math]::Round($tileRect.Top + ($tileRect.Height * 0.5))) `
         'open-library-tile')
-    $editor = Wait-Until { Find-DescendantByAutomationId (Find-MainWindow $targetProcess.Id) 'TextToolButton' } 60
+    $editor = Wait-Until { Find-DescendantByAutomationId (Find-MainWindow $targetProcess.Id) $EditorAutomationIds.Text } 60
     if ($null -eq $editor) { throw 'Editor toolbar did not load after opening the two-page PDF.' }
     return [pscustomobject]@{
         MainWindow = Find-MainWindow $targetProcess.Id
@@ -334,12 +335,8 @@ function Open-IsolatedPdf([System.Diagnostics.Process]$targetProcess) {
 }
 
 function Prepare-TwoPageViewport([System.Diagnostics.Process]$targetProcess, [IntPtr]$windowHandle) {
-    $fitButton = Find-DescendantByAutomationId (Find-MainWindow $targetProcess.Id) 'FitPageButton'
-    if ($null -ne $fitButton) {
-        [void](Invoke-ToolbarPointerClick $targetProcess.Id $windowHandle 'FitPageButton')
-    }
     for ($attempt = 0; $attempt -lt 12; $attempt++) {
-        $viewer = Find-DescendantByAutomationId (Find-MainWindow $targetProcess.Id) 'PdfScrollViewer'
+        $viewer = Find-DescendantByAutomationId (Find-MainWindow $targetProcess.Id) $EditorAutomationIds.PdfScrollViewer
         $page0 = Get-PageRect $targetProcess.Id 0
         $page1 = Get-PageRect $targetProcess.Id 1
         if ($null -ne $viewer -and $null -ne $page0 -and $null -ne $page1) {
@@ -350,7 +347,7 @@ function Prepare-TwoPageViewport([System.Diagnostics.Process]$targetProcess, [In
                 return [pscustomobject]@{ Viewer = $viewerRect; Page0 = $page0; Page1 = $page1 }
             }
         }
-        [void](Invoke-ToolbarPointerClick $targetProcess.Id $windowHandle 'ZoomOutButton')
+        [void](Invoke-ToolbarPointerClick $targetProcess.Id $windowHandle $EditorAutomationIds.ZoomOut)
         Start-Sleep -Milliseconds 350
     }
     throw 'Could not bring both runtime PdfPageControl surfaces into the same visible viewport.'
@@ -391,7 +388,7 @@ try {
     $viewport = Prepare-TwoPageViewport $process $hwnd
     $expectedText = 'Cross page keyboard smoke'
 
-    [void](Invoke-ToolbarPointerClick $process.Id $hwnd 'TextToolButton')
+[void](Invoke-ToolbarPointerClick $process.Id $hwnd $EditorAutomationIds.Text)
     $createX = [int][Math]::Round($viewport.Page0.Left + ($viewport.Page0.Width * 0.28))
     $createY = [int][Math]::Round($viewport.Page0.Top + ($viewport.Page0.Height * 0.38))
     [void](Send-PointerClick $hwnd $createX $createY 'create-cross-page-text')
@@ -426,7 +423,7 @@ try {
     }
     Write-Output "KEYBOARD_NUDGE_COMPLETED before=$beforeNudgeRect after=$($nudgedTextBox.Current.BoundingRectangle)"
 
-    $resizeHandle = Find-DescendantByAutomationId (Find-MainWindow $process.Id) 'TextResizeHandle.BottomRight'
+    $resizeHandle = Find-DescendantByAutomationId (Find-MainWindow $process.Id) $EditorAutomationIds.TextResizeHandleBottomRight
     if ($null -eq $resizeHandle) { throw 'BottomRight text resize handle was not exposed to UIA.' }
     [void]$resizeHandle.SetFocus()
     $beforeKeyboardResize = (Wait-TextOnPage $process.Id 0 $expectedText 5).Current.BoundingRectangle
@@ -445,7 +442,7 @@ try {
     }
     Write-Output "KEYBOARD_RESIZE_COMPLETED before=$beforeKeyboardResize after=$($resizedTextBox.Current.BoundingRectangle)"
 
-    $dragHandle = Find-DescendantByAutomationId (Find-MainWindow $process.Id) 'TextAnnotationDragHandle'
+    $dragHandle = Find-DescendantByAutomationId (Find-MainWindow $process.Id) $EditorAutomationIds.TextAnnotationDragHandle
     if ($null -eq $dragHandle) { throw 'TextAnnotationDragHandle was not exposed to UIA.' }
     $dragRect = $dragHandle.Current.BoundingRectangle
     $sourceRect = (Wait-TextOnPage $process.Id 0 $expectedText 5).Current.BoundingRectangle
@@ -465,13 +462,13 @@ try {
     }
     Write-Output "TEXT_CROSS_PAGE_COMPLETED sourcePage=0 targetPage=1 targetRect=$($targetTextBox.Current.BoundingRectangle)"
 
-    [void](Invoke-ToolbarPointerClick $process.Id $hwnd 'UndoButton')
+[void](Invoke-ToolbarPointerClick $process.Id $hwnd $EditorAutomationIds.Undo)
     $undoSource = Wait-TextOnPage $process.Id 0 $expectedText 10
     $undoTarget = Wait-TextOnPage $process.Id 1 $expectedText 2
     if ($null -eq $undoSource -or $null -ne $undoTarget) {
         throw "Cross-page undo did not restore sourcePage=0 sourcePresent=$($null -ne $undoSource) targetPresent=$($null -ne $undoTarget)"
     }
-    [void](Invoke-ToolbarPointerClick $process.Id $hwnd 'RedoButton')
+[void](Invoke-ToolbarPointerClick $process.Id $hwnd $EditorAutomationIds.Redo)
     $redoTarget = Wait-TextOnPage $process.Id 1 $expectedText 10
     $redoSource = Wait-TextOnPage $process.Id 0 $expectedText 2
     if ($null -eq $redoTarget -or $null -ne $redoSource) {
@@ -480,7 +477,7 @@ try {
     Write-Output 'CROSS_PAGE_UNDO_REDO_COMPLETED undoSource=True redoTarget=True'
 
     $beforeSaveHash = (Get-FileHash -LiteralPath $pdfPath -Algorithm SHA256).Hash
-    [void](Invoke-ToolbarPointerClick $process.Id $hwnd 'SavePdfButton')
+[void](Invoke-ToolbarPointerClick $process.Id $hwnd $EditorAutomationIds.Save)
     $afterSaveHash = Wait-Until {
         try {
             $candidateHash = (Get-FileHash -LiteralPath $pdfPath -Algorithm SHA256).Hash

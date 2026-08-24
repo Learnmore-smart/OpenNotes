@@ -1,5 +1,5 @@
 # tools/Test-OpenNotesHiddenInkSmoke.ps1
-> Last updated: 2026-08-22 | Protection: STANDARD
+> Last updated: 2026-08-23 (Wave 3 production ID migration) | Protection: STANDARD
 
 ## Purpose
 
@@ -14,6 +14,7 @@ Run an isolated real-desktop regression for the Hidden Ink path: physical mouse 
 - Do not inspect or modify Codex state, authentication, logs, user documents or the normal Caelum data root.
 - Do not claim stylus coverage from mouse input; this runner reports mouse coverage only.
 - `-KeepArtifacts` is an explicit handoff mode for the independent viewer runner; it leaves only the exact generated temporary directory and reports its path.
+- Dot-sources `OpenNotesEditorAutomationIds.ps1`; toolbar, `PdfScrollViewer`, runtime page and save/undo controls use production aliases while `HiddenInkToolButton` remains compatible.
 
 ## Open Threads / Resume Context
 
@@ -28,6 +29,7 @@ Run an isolated real-desktop regression for the Hidden Ink path: physical mouse 
 - Preserve the strip-and-rebuild PDF path and `wna_hidden_` ownership marker.
 - Require both PDF marker/count evidence and screen phase evidence. A changed PDF alone does not prove that the live mask was visible, revealed or restored.
 - After restart, require the mask to be visible before attempting a second reveal; this protects the session-only reveal contract.
+- **2026-08-23 run:** the script parsed successfully and stopped at `REAL_SCREEN_INPUT_UNAVAILABLE` during `editor-startup` (`foregroundHwnd=0`, `foregroundPid=0`); it reported `HIDDEN_INK_SMOKE_RESULT=FAIL` with `ISOLATED_ENV_CLEANED=True`. No Hidden Ink pointer PASS is claimed for this host run.
 
 ## Change History
 

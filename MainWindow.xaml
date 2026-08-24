@@ -5,7 +5,7 @@
         Title="OpenNotes"
     Height="720" Width="1280"
     WindowStartupLocation="CenterScreen"
-    Background="{DynamicResource ThemeWindowBackgroundBrush}"
+    Background="{DynamicResource ThemeWindowBrush}"
     AllowDrop="True"
     WindowStyle="None"
     ResizeMode="CanResize">
@@ -164,7 +164,7 @@
             <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
 
-        <Border x:Name="TitleBarBorder" Grid.Row="0" Background="{DynamicResource ThemePaperAltBrush}">
+        <Border x:Name="TitleBarBorder" Grid.Row="0" Background="{DynamicResource ThemeToolbarBrush}">
             <Grid>
                 <Border x:Name="BrandMarginRail"
                         Width="3"
@@ -195,7 +195,7 @@
                                     <ColumnDefinition Width="120"/>
                                 </Grid.ColumnDefinitions>
                                 <TextBlock Text="&#xE721;" FontFamily="Segoe MDL2 Assets" FontSize="12" Foreground="{DynamicResource ThemeSubtleForegroundBrush}" VerticalAlignment="Center" Margin="8,0,4,0"/>
-                                <TextBox x:Name="SearchBox" Grid.Column="1" Background="Transparent" BorderThickness="0" VerticalAlignment="Center" Foreground="{DynamicResource ThemeForegroundBrush}" FontSize="12" TextChanged="SearchBox_TextChanged" />
+                        <TextBox x:Name="SearchBox" Grid.Column="1" Background="{DynamicResource ThemeControlBrush}" BorderThickness="0" VerticalAlignment="Center" Foreground="{DynamicResource ThemeTextBrush}" FontSize="12" TextChanged="SearchBox_TextChanged" />
                                 <TextBlock x:Name="SearchPlaceholder" Grid.Column="1" Text="" Foreground="{DynamicResource ThemeSubtleForegroundBrush}" FontSize="12" VerticalAlignment="Center" IsHitTestVisible="False" Margin="2,0,0,0">
                                     <TextBlock.Style>
                                         <Style TargetType="TextBlock">
@@ -225,7 +225,8 @@
                                 </ContextMenu>
                             </Button.ContextMenu>
                         </Button>
-                        <Button x:Name="MoreButton" Click="MoreButton_Click" Style="{StaticResource NavButtonStyle}" Margin="0,0,8,0" WindowChrome.IsHitTestVisibleInChrome="True">
+                        <Button x:Name="MoreButton" Click="MoreButton_Click" Style="{StaticResource NavButtonStyle}" Margin="0,0,8,0"
+                                AutomationProperties.AutomationId="MoreButton" WindowChrome.IsHitTestVisibleInChrome="True">
                             <TextBlock Text="&#xE712;" FontFamily="Segoe MDL2 Assets" FontSize="14" Foreground="{DynamicResource ThemeSubtleForegroundBrush}"/>
                             <Button.ContextMenu>
                                 <ContextMenu x:Name="MoreContextMenu">
@@ -271,10 +272,10 @@
                 Margin="0,0,0,80" Visibility="Collapsed" Opacity="0" IsHitTestVisible="False"
                 CornerRadius="10" Padding="20,10" Background="{DynamicResource ThemeForegroundBrush}">
             <Border.Effect>
-                <DropShadowEffect BlurRadius="16" ShadowDepth="4" Opacity="0.18" Color="#000"/>
+                <DropShadowEffect BlurRadius="16" ShadowDepth="4" Opacity="{DynamicResource ThemeShadowOpacity}" Color="#000"/>
             </Border.Effect>
             <StackPanel Orientation="Horizontal">
-                <TextBlock x:Name="ToastIcon" Text="&#xE73E;" FontFamily="Segoe MDL2 Assets" FontSize="14" Foreground="#4ADE80" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                <TextBlock x:Name="ToastIcon" Text="&#xE73E;" FontFamily="Segoe MDL2 Assets" FontSize="14" Foreground="{DynamicResource ThemeAccentBrush}" VerticalAlignment="Center" Margin="0,0,10,0"/>
                 <TextBlock x:Name="ToastText" Text="" FontSize="13" Foreground="{DynamicResource ThemeWindowBackgroundBrush}" VerticalAlignment="Center"/>
             </StackPanel>
         </Border>

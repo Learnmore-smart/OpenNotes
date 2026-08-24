@@ -1,4 +1,5 @@
 using System;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
@@ -21,12 +22,16 @@ namespace Caelum.Services
     public static class PopupZOrderHelper
     {
         private const int GWL_EXSTYLE = -20;
+        private const int GWL_HWNDPARENT = -8;
         private const int WS_EX_NOACTIVATE = 0x08000000;
         private const uint SWP_NOSIZE = 0x0001;
         private const uint SWP_NOMOVE = 0x0002;
         private const uint SWP_NOACTIVATE = 0x0010;
         // HWND_NOTOPMOST: place above all non-topmost windows, behind topmost ones.
         private static readonly IntPtr HWND_NOTOPMOST = new IntPtr(-2);
+        private static readonly ConditionalWeakTable<Popup, EventHandler> PopupOpenedHandlers = new();
+        private static readonly ConditionalWeakTable<ContextMenu, RoutedEventHandler> ContextMenuOpenedHandlers = new();
+        private static readonly ConditionalWeakTable<ComboBox, EventHandler> ComboBoxDropDownOpenedHandlers = new();
 
         [DllImport("user32.dll")]
         private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
@@ -37,16 +42,40 @@ namespace Caelum.Services
         [DllImport("user32.dll")]
         private static extern int SetWindowLong(IntPtr hWnd, int nIndex, int dwNewLong);
 
+        [DllImport("user32.dll", EntryPoint = "SetWindowLongPtr")]
+        private static extern IntPtr SetWindowLongPtr(IntPtr hWnd, int nIndex, IntPtr dwNewLong);
+
         /// <summary>
         /// Applies the no-topmost + no-activate Win32 fix to a Popup every time it opens.
         /// (Logic moved from EditorPage.FixPopupTopmost — EditorPage delegates here.)
         /// </summary>
         public static void FixPopupTopmost(Popup popup)
         {
-            popup.Opened += (s, e) =>
+            if (popup == null || PopupOpenedHandlers.TryGetValue(popup, out _))
+                return;
+
+            EventHandler handler = (s, e) =>
             {
-                ApplyNoTopmost(PresentationSource.FromVisual(popup.Child) as HwndSource);
+                ApplyNoTopmost(
+                    PresentationSource.FromVisual(popup.Child) as HwndSource,
+                    Window.GetWindow(popup.PlacementTarget));
             };
+            popup.Opened += handler;
+            PopupOpenedHandlers.Add(popup, handler);
+        }
+
+        /// <summary>
+        /// Removes the exact Opened handler installed by <see cref="FixPopupTopmost"/>.
+        /// EditorPage calls this before replacing localized tool popups so repeated
+        /// language refreshes never accumulate anonymous z-order subscriptions.
+        /// </summary>
+        public static void UnfixPopupTopmost(Popup popup)
+        {
+            if (popup == null || !PopupOpenedHandlers.TryGetValue(popup, out var handler))
+                return;
+
+            popup.Opened -= handler;
+            PopupOpenedHandlers.Remove(popup);
         }
 
         /// <summary>
@@ -57,13 +86,34 @@ namespace Caelum.Services
         /// </summary>
         public static void FixContextMenuTopmost(ContextMenu menu)
         {
-            menu.Opened += (s, e) =>
+            if (menu == null || ContextMenuOpenedHandlers.TryGetValue(menu, out _))
+                return;
+
+            RoutedEventHandler handler = (s, e) =>
             {
                 menu.Dispatcher.BeginInvoke(DispatcherPriority.Render, new Action(() =>
                 {
-                    ApplyNoTopmost(PresentationSource.FromVisual(menu) as HwndSource);
+                    ApplyNoTopmost(
+                        PresentationSource.FromVisual(menu) as HwndSource,
+                        Window.GetWindow(menu.PlacementTarget));
                 }));
             };
+            menu.Opened += handler;
+            ContextMenuOpenedHandlers.Add(menu, handler);
+        }
+
+        /// <summary>
+        /// Removes the ContextMenu Opened hook when its owner is being rebuilt
+        /// or unloaded. The operation is idempotent for callers that do not
+        /// own a registration.
+        /// </summary>
+        public static void UnfixContextMenuTopmost(ContextMenu menu)
+        {
+            if (menu == null || !ContextMenuOpenedHandlers.TryGetValue(menu, out var handler))
+                return;
+
+            menu.Opened -= handler;
+            ContextMenuOpenedHandlers.Remove(menu);
         }
 
         /// <summary>
@@ -73,20 +123,54 @@ namespace Caelum.Services
         /// </summary>
         public static void FixComboBoxPopupTopmost(ComboBox comboBox)
         {
-            comboBox.DropDownOpened += (s, e) =>
+            if (comboBox == null || ComboBoxDropDownOpenedHandlers.TryGetValue(comboBox, out _))
+                return;
+
+            EventHandler handler = (s, e) =>
             {
                 comboBox.Dispatcher.BeginInvoke(DispatcherPriority.Render, new Action(() =>
                 {
                     var popup = FindVisualChild<Popup>(comboBox);
                     if (popup?.Child != null)
-                        ApplyNoTopmost(PresentationSource.FromVisual(popup.Child) as HwndSource);
+                        ApplyNoTopmost(
+                            PresentationSource.FromVisual(popup.Child) as HwndSource,
+                            Window.GetWindow(comboBox));
                 }));
             };
+            comboBox.DropDownOpened += handler;
+            ComboBoxDropDownOpenedHandlers.Add(comboBox, handler);
         }
 
-        private static void ApplyNoTopmost(HwndSource source)
+        /// <summary>
+        /// Removes the ComboBox dropdown hook. This mirrors the Popup and
+        /// ContextMenu cleanup APIs and prevents repeated template setup from
+        /// accumulating anonymous delegates.
+        /// </summary>
+        public static void UnfixComboBoxPopupTopmost(ComboBox comboBox)
+        {
+            if (comboBox == null || !ComboBoxDropDownOpenedHandlers.TryGetValue(comboBox, out var handler))
+                return;
+
+            comboBox.DropDownOpened -= handler;
+            ComboBoxDropDownOpenedHandlers.Remove(comboBox);
+        }
+
+        private static void ApplyNoTopmost(HwndSource source, Window ownerWindow = null)
         {
             if (source == null) return;
+
+            // WPF normally assigns Popup ownership from PlacementTarget, but
+            // transparent/template popups can lose that relationship during
+            // localization rebuilds. Re-assert the real MainWindow owner
+            // before changing z-order; this keeps the popup above its editor
+            // and below unrelated applications without a global topmost hack.
+            var ownerSource = ownerWindow != null
+                ? PresentationSource.FromVisual(ownerWindow) as HwndSource
+                : null;
+            if (ownerSource != null && ownerSource.Handle != IntPtr.Zero)
+            {
+                SetWindowLongPtr(source.Handle, GWL_HWNDPARENT, ownerSource.Handle);
+            }
 
             // Remove topmost z-order imposed by WPF's transparent popup
             SetWindowPos(source.Handle, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE);

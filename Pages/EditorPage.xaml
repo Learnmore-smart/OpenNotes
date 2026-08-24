@@ -2,18 +2,44 @@
       xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
       xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
       xmlns:wfi="clr-namespace:System.Windows.Forms.Integration;assembly=WindowsFormsIntegration"
-      Background="{DynamicResource ThemeWindowBackgroundBrush}"
+      xmlns:local="clr-namespace:Caelum.Pages"
+      Background="{DynamicResource ThemeWindowBrush}"
       AllowDrop="True"
+      SizeChanged="EditorPage_SizeChanged"
       PreviewMouseDown="EditorPage_PreviewMouseDown"
       PreviewStylusDown="EditorPage_PreviewStylusDown"
       PreviewKeyDown="EditorPage_PreviewKeyDown">
 
     <Page.Resources>
+        <!-- Material token probes keep the page contract discoverable for
+             theme audits without tinting a toolbar icon with a fixed color. -->
+        <TextBlock x:Key="ThemeMarkBrushToken" Visibility="Collapsed"
+                   Foreground="{DynamicResource ThemeMarkBrush}"/>
+        <TextBlock x:Key="ThemeMarginBrushToken" Visibility="Collapsed"
+                   Foreground="{DynamicResource ThemeMarginBrush}"/>
+
+        <Style x:Key="ToolbarIconPathStyle" TargetType="Path">
+            <Setter Property="Width" Value="19"/>
+            <Setter Property="Height" Value="19"/>
+            <Setter Property="Stretch" Value="Uniform"/>
+            <Setter Property="Fill" Value="Transparent"/>
+            <Setter Property="Stroke" Value="{DynamicResource ThemeForegroundBrush}"/>
+            <Setter Property="StrokeThickness" Value="1.7"/>
+            <Setter Property="StrokeStartLineCap" Value="Round"/>
+            <Setter Property="StrokeEndLineCap" Value="Round"/>
+            <Setter Property="StrokeLineJoin" Value="Round"/>
+        </Style>
+
         <!-- Toolbar button -->
         <Style x:Key="ToolbarButtonStyle" TargetType="Button">
             <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Foreground" Value="{DynamicResource ThemeTextBrush}"/>
             <Setter Property="BorderThickness" Value="0"/>
             <Setter Property="Padding" Value="10,8"/>
+            <Setter Property="MinWidth" Value="32"/>
+            <Setter Property="MinHeight" Value="32"/>
+            <Setter Property="FocusVisualStyle" Value="{StaticResource ToolbarFocusVisualStyle}"/>
+            <Setter Property="ToolTipService.ShowOnDisabled" Value="True"/>
             <Setter Property="Cursor" Value="Hand"/>
             <Setter Property="Template">
                 <Setter.Value>
@@ -27,6 +53,9 @@
                             </Trigger>
                             <Trigger Property="IsPressed" Value="True">
                                 <Setter TargetName="Root" Property="Background" Value="{DynamicResource ThemeControlPressedBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="Root" Property="Opacity" Value="0.55"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -50,8 +79,13 @@
         <!-- Toolbar toggle button -->
         <Style x:Key="ToolbarToggleButtonStyle" TargetType="ToggleButton">
             <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Foreground" Value="{DynamicResource ThemeTextBrush}"/>
             <Setter Property="BorderThickness" Value="0"/>
             <Setter Property="Padding" Value="10,8"/>
+            <Setter Property="MinWidth" Value="32"/>
+            <Setter Property="MinHeight" Value="32"/>
+            <Setter Property="FocusVisualStyle" Value="{StaticResource ToolbarFocusVisualStyle}"/>
+            <Setter Property="ToolTipService.ShowOnDisabled" Value="True"/>
             <Setter Property="Cursor" Value="Hand"/>
             <Setter Property="Template">
                 <Setter.Value>
@@ -79,29 +113,220 @@
                                 </MultiTrigger.Conditions>
                                 <Setter TargetName="Root" Property="Background" Value="{DynamicResource ThemeControlPressedBrush}"/>
                             </MultiTrigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="Root" Property="Opacity" Value="0.55"/>
+                            </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
                 </Setter.Value>
             </Setter>
         </Style>
 
-        <Style x:Key="ToolbarFieldBorderStyle" TargetType="Border">
-            <Setter Property="Background" Value="{DynamicResource ThemeSurfaceAltBrush}"/>
-            <Setter Property="BorderBrush" Value="{DynamicResource ThemeBorderBrush}"/>
+        <!-- Wave4: the document rail uses the same compact focus/selection
+             language as the toolbar without inheriting native TabControl
+             chrome. The accent cue is paired with weight and a border so the
+             selected state is not conveyed by colour alone. -->
+        <Style x:Key="DocumentSidebarNavButtonStyle" TargetType="Button">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderBrush" Value="Transparent"/>
             <Setter Property="BorderThickness" Value="1"/>
-            <Setter Property="CornerRadius" Value="14"/>
-            <Setter Property="Padding" Value="12,4"/>
-            <Setter Property="MinHeight" Value="36"/>
+            <Setter Property="Foreground" Value="{DynamicResource ThemeForegroundBrush}"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Padding" Value="6,4"/>
+            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+            <Setter Property="MinWidth" Value="32"/>
+            <Setter Property="MinHeight" Value="40"/>
+            <Setter Property="Margin" Value="2"/>
+            <Setter Property="FocusVisualStyle" Value="{StaticResource ToolbarFocusVisualStyle}"/>
+            <Setter Property="ToolTipService.ShowOnDisabled" Value="True"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Grid>
+                            <Border x:Name="NavRoot"
+                                    Background="{TemplateBinding Background}"
+                                    BorderBrush="{TemplateBinding BorderBrush}"
+                                    BorderThickness="{TemplateBinding BorderThickness}"
+                                    CornerRadius="8"
+                                    Padding="{TemplateBinding Padding}">
+                                <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" VerticalAlignment="Center"/>
+                            </Border>
+                            <Border x:Name="NavSelectionCue"
+                                    Width="3"
+                                    HorizontalAlignment="Left"
+                                    VerticalAlignment="Stretch"
+                                    Margin="1,6,0,6"
+                                    CornerRadius="2"
+                                    Background="{DynamicResource ThemeAccentBrush}"
+                                    Visibility="Collapsed"/>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="NavRoot" Property="Background" Value="{DynamicResource ThemeControlHoverBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                                <Setter TargetName="NavRoot" Property="BorderBrush" Value="{DynamicResource ThemeFocusBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="NavRoot" Property="Background" Value="{DynamicResource ThemeControlPressedBrush}"/>
+                            </Trigger>
+                            <Trigger Property="Tag" Value="Selected">
+                                <Setter Property="Background" Value="{DynamicResource ThemeSelectionBrush}"/>
+                                <Setter Property="BorderBrush" Value="{DynamicResource ThemeAccentBrush}"/>
+                                <Setter Property="BorderThickness" Value="2,1,1,1"/>
+                                <Setter Property="FontWeight" Value="SemiBold"/>
+                                <Setter TargetName="NavSelectionCue" Property="Visibility" Value="Visible"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="DocumentSidebarListBoxItemStyle" TargetType="ListBoxItem">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderBrush" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Foreground" Value="{DynamicResource ThemeForegroundBrush}"/>
+            <Setter Property="Padding" Value="4"/>
+            <Setter Property="Margin" Value="2"/>
+            <Setter Property="MinHeight" Value="32"/>
+            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+            <Setter Property="FocusVisualStyle" Value="{StaticResource ToolbarFocusVisualStyle}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ListBoxItem">
+                        <Border x:Name="SidebarItemRoot"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="7"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                              VerticalAlignment="{TemplateBinding VerticalContentAlignment}"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="SidebarItemRoot" Property="Background" Value="{DynamicResource ThemeSelectionBrush}"/>
+                                <Setter TargetName="SidebarItemRoot" Property="BorderBrush" Value="{DynamicResource ThemeAccentBrush}"/>
+                                <Setter TargetName="SidebarItemRoot" Property="BorderThickness" Value="2,1,1,1"/>
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                                <Setter TargetName="SidebarItemRoot" Property="BorderBrush" Value="{DynamicResource ThemeFocusBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="SidebarItemRoot" Property="Background" Value="{DynamicResource ThemeControlHoverBrush}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <EventSetter Event="Loaded" Handler="SidebarListBoxItem_Loaded"/>
+            <EventSetter Event="Unloaded" Handler="SidebarListBoxItem_Unloaded"/>
+        </Style>
+
+        <Style x:Key="DocumentSidebarTreeViewItemStyle" TargetType="TreeViewItem">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderBrush" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Foreground" Value="{DynamicResource ThemeForegroundBrush}"/>
+            <Setter Property="Padding" Value="6,4"/>
+            <Setter Property="Margin" Value="2"/>
+            <Setter Property="MinHeight" Value="32"/>
+            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+            <Setter Property="FocusVisualStyle" Value="{StaticResource ToolbarFocusVisualStyle}"/>
+            <EventSetter Event="Loaded" Handler="OutlineTreeViewItem_Loaded"/>
             <Style.Triggers>
-                <Trigger Property="IsMouseOver" Value="True">
-                    <Setter Property="Background" Value="{DynamicResource ThemeSurfaceBrush}"/>
-                    <Setter Property="BorderBrush" Value="{DynamicResource ThemeAccentHoverBrush}"/>
+                <Trigger Property="IsSelected" Value="True">
+                    <Setter Property="Background" Value="{DynamicResource ThemeSelectionBrush}"/>
+                    <Setter Property="BorderBrush" Value="{DynamicResource ThemeAccentBrush}"/>
+                    <Setter Property="BorderThickness" Value="2,1,1,1"/>
+                    <Setter Property="FontWeight" Value="SemiBold"/>
                 </Trigger>
                 <Trigger Property="IsKeyboardFocusWithin" Value="True">
-                    <Setter Property="Background" Value="{DynamicResource ThemeSurfaceBrush}"/>
                     <Setter Property="BorderBrush" Value="{DynamicResource ThemeFocusBrush}"/>
                 </Trigger>
             </Style.Triggers>
+        </Style>
+
+        <DataTemplate x:Key="SidebarPageItemTemplate">
+            <StackPanel>
+                <Image Width="132"
+                       Height="170"
+                       Margin="4"
+                       Stretch="Uniform"
+                       Source="{Binding Thumbnail}"
+                       AutomationProperties.IsOffscreenBehavior="FromClip"/>
+                <TextBlock Text="{Binding PageLabel}"
+                           HorizontalAlignment="Center"
+                           Margin="0,2,0,4"
+                           Foreground="{DynamicResource ThemeSubtleForegroundBrush}"
+                           TextTrimming="CharacterEllipsis"/>
+            </StackPanel>
+        </DataTemplate>
+
+        <DataTemplate x:Key="SidebarBookmarkItemTemplate">
+            <TextBlock Text="{Binding Label}"
+                       Foreground="{DynamicResource ThemeForegroundBrush}"
+                       TextTrimming="CharacterEllipsis"
+                       VerticalAlignment="Center"/>
+        </DataTemplate>
+
+        <HierarchicalDataTemplate x:Key="SidebarOutlineItemTemplate"
+                                  ItemsSource="{Binding Children}">
+            <Grid MinHeight="32">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="{Binding Title}"
+                           Foreground="{DynamicResource ThemeForegroundBrush}"
+                           TextTrimming="CharacterEllipsis"
+                           VerticalAlignment="Center"/>
+                <Button Grid.Column="1"
+                        Width="32"
+                        Height="32"
+                        MinWidth="32"
+                        MinHeight="32"
+                        Margin="4,0,0,0"
+                        Padding="6"
+                        Style="{StaticResource ToolbarButtonStyle}"
+                        Focusable="True"
+                        KeyboardNavigation.IsTabStop="True"
+                        Loaded="OutlineInvokeButton_Loaded"
+                        Click="OutlineInvokeButton_Click">
+                    <Path Width="14"
+                          Height="14"
+                          Stretch="Uniform"
+                          Stroke="{DynamicResource ThemeForegroundBrush}"
+                          StrokeThickness="1.6"
+                          Data="M3,12 L12,3 M5,3 H12 V10"/>
+                </Button>
+            </Grid>
+        </HierarchicalDataTemplate>
+
+        <Style x:Key="SidebarResizeThumbStyle" TargetType="{x:Type local:SidebarResizeThumb}">
+            <Setter Property="Width" Value="32"/>
+            <Setter Property="MinWidth" Value="32"/>
+            <Setter Property="MinHeight" Value="32"/>
+            <Setter Property="Focusable" Value="True"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Foreground" Value="{DynamicResource ThemeBorderBrush}"/>
+            <Setter Property="FocusVisualStyle" Value="{StaticResource ToolbarFocusVisualStyle}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="{x:Type local:SidebarResizeThumb}">
+                        <Grid Background="Transparent">
+                            <Border Width="2"
+                                    HorizontalAlignment="Center"
+                                    VerticalAlignment="Stretch"
+                                    Background="{DynamicResource ThemeBorderBrush}"
+                                    CornerRadius="1"/>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
         </Style>
     </Page.Resources>
 
@@ -111,13 +336,13 @@
         <Grid x:Name="SelectablePdfContainer"
               Visibility="Collapsed"
               Margin="0,70,0,0"
-              Background="{DynamicResource ThemeCanvasBrush}">
+               Background="{DynamicResource ThemeWorkspaceBackdropBrush}">
             <wfi:WindowsFormsHost x:Name="SelectablePdfHost" />
         </Grid>
 
         <!-- PDF Pages Container (full area) -->
         <ScrollViewer x:Name="PdfScrollViewer" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
-                      Background="{DynamicResource ThemeCanvasBrush}"
+                      Background="{DynamicResource ThemeWorkspaceBackdropBrush}"
                       Style="{StaticResource SleekScrollViewer}"
                       PanningMode="None"
                       Stylus.IsFlicksEnabled="False"
@@ -137,7 +362,7 @@
                       PreviewTouchUp="PdfScrollViewer_PreviewTouchUp"
                       PreviewMouseRightButtonUp="PdfScrollViewer_PreviewMouseRightButtonUp">
             <ScrollViewer.ContextMenu>
-                <ContextMenu x:Name="PdfViewerContextMenu">
+                <ContextMenu x:Name="PdfViewerContextMenu" Opened="PdfViewerContextMenu_Opened">
                     <MenuItem x:Name="PrintMenuItem" InputGestureText="Ctrl+P" Click="ContextMenu_PrintClick">
                         <MenuItem.Icon>
                             <TextBlock Text="&#xE749;" FontFamily="Segoe MDL2 Assets" FontSize="14" Foreground="{DynamicResource ThemeForegroundBrush}"/>
@@ -154,7 +379,8 @@
                     <MenuItem x:Name="RotateCurrentPageMenuItem" Click="RotateCurrentPage_Click"/>
                 </ContextMenu>
             </ScrollViewer.ContextMenu>
-            <StackPanel x:Name="PagesContainer" Margin="32,20,32,32" HorizontalAlignment="Center">
+            <StackPanel x:Name="PagesContainer" Margin="32,20,32,32" HorizontalAlignment="Center"
+                        Background="{DynamicResource ThemePaperBrush}">
                 <StackPanel.LayoutTransform>
                     <ScaleTransform x:Name="PagesZoomTransform" ScaleX="1" ScaleY="1"/>
                 </StackPanel.LayoutTransform>
@@ -173,25 +399,34 @@
         <!-- Floating Toolbar -->
         <Border x:Name="ToolbarBorder" HorizontalAlignment="Center" VerticalAlignment="Top"
                 Margin="0,12,0,0" Padding="8,4" CornerRadius="14"
-                Background="{DynamicResource ThemePaperBrush}"
+                 Background="{DynamicResource ThemeToolbarBrush}"
                 BorderBrush="{DynamicResource ThemeBorderBrush}"
-                BorderThickness="1">
+              BorderThickness="1">
             <Border.Effect>
-                <DropShadowEffect BlurRadius="18" ShadowDepth="5" Opacity="0.12" Color="#000"/>
+                <DropShadowEffect BlurRadius="18" ShadowDepth="5" Opacity="{DynamicResource ThemeShadowOpacity}" Color="#000"/>
             </Border.Effect>
-            <StackPanel Orientation="Horizontal" Height="42">
+             <ScrollViewer x:Name="ToolbarItemsScrollViewer"
+                           HorizontalScrollBarVisibility="Auto"
+                           VerticalScrollBarVisibility="Hidden"
+                           CanContentScroll="True"
+                            AutomationProperties.AutomationId="Editor.ToolbarOverflow">
+                 <StackPanel Orientation="Horizontal" Height="42">
                 <!-- Undo -->
                 <Button x:Name="UndoButton" Click="UndoButton_Click"
                         Style="{StaticResource UndoRedoButtonStyle}"
-                        Width="42" Height="36" Margin="2,0" IsEnabled="False">
-                    <TextBlock Text="&#xE7A7;" FontFamily="Segoe MDL2 Assets" FontSize="17"/>
+                        Width="42" Height="36" Margin="2,0" IsEnabled="False"
+                        AutomationProperties.AutomationId="Editor.UndoButton">
+                    <Path Style="{StaticResource ToolbarIconPathStyle}"
+                          Data="M20,7 A8,8 0 1 0 19,15 M20,7 L20,2 M20,7 L15,7"/>
                 </Button>
 
                 <!-- Redo -->
                 <Button x:Name="RedoButton" Click="RedoButton_Click"
                         Style="{StaticResource UndoRedoButtonStyle}"
-                        Width="42" Height="36" Margin="2,0" IsEnabled="False">
-                    <TextBlock Text="&#xE7A6;" FontFamily="Segoe MDL2 Assets" FontSize="17"/>
+                        Width="42" Height="36" Margin="2,0" IsEnabled="False"
+                        AutomationProperties.AutomationId="Editor.RedoButton">
+                    <Path Style="{StaticResource ToolbarIconPathStyle}"
+                          Data="M4,7 A8,8 0 1 1 5,15 M4,7 L4,2 M4,7 L9,7"/>
                 </Button>
 
                 <!-- Separator -->
@@ -200,57 +435,85 @@
                 <!-- Pen -->
                 <ToggleButton x:Name="PenToolButton" Click="PenToolButton_Click"
                         Style="{StaticResource ToolbarToggleButtonStyle}"
-                        Width="42" Height="36" Margin="2,0">
-                    <TextBlock x:Name="PenIcon" Text="&#xED63;" FontFamily="Segoe MDL2 Assets" FontSize="19" Foreground="{DynamicResource ThemeForegroundBrush}"/>
+                        Width="42" Height="36" Margin="2,0"
+                        AutomationProperties.AutomationId="Editor.PenToolButton">
+                    <Grid Width="24" Height="24">
+                        <!-- Contrast backplate/ring keeps a black selected pen
+                             visible on dark and high-contrast surfaces. -->
+                        <Border x:Name="PenIconBackplate" Width="24" Height="24"
+                                CornerRadius="7"
+                                Background="{DynamicResource ThemeSurfaceAltBrush}"
+                                BorderBrush="{DynamicResource ThemeFocusBrush}"
+                                BorderThickness="1"/>
+                        <Path x:Name="PenIconContrast" Style="{StaticResource ToolbarIconPathStyle}"
+                              Stroke="{DynamicResource ThemeFocusBrush}"
+                              StrokeThickness="3"
+                              Data="M4,16 L14,6 L18,10 L8,20 Z M12,8 L16,12 M4,16 L8,20"/>
+                        <Path x:Name="PenIcon" Style="{StaticResource ToolbarIconPathStyle}"
+                              Data="M4,16 L14,6 L18,10 L8,20 Z M12,8 L16,12 M4,16 L8,20"/>
+                    </Grid>
                 </ToggleButton>
 
                 <!-- Highlighter -->
                 <ToggleButton x:Name="HighlighterToolButton" Click="HighlighterToolButton_Click"
                         Style="{StaticResource ToolbarToggleButtonStyle}"
-                        Width="42" Height="36" Margin="2,0">
-                    <TextBlock x:Name="HighlighterIcon" Text="&#xE7E6;" FontFamily="Segoe MDL2 Assets" FontSize="19" Foreground="{DynamicResource ThemeMarkBrush}"/>
+                        Width="42" Height="36" Margin="2,0"
+                        AutomationProperties.AutomationId="Editor.HighlighterToolButton">
+                    <Path x:Name="HighlighterIcon" Style="{StaticResource ToolbarIconPathStyle}"
+                          Data="M3,15 L13,5 L18,10 L8,20 Z M11,7 L16,12 M3,15 L8,20"/>
                 </ToggleButton>
 
                 <!-- Study mode: freehand opaque mask, click to reveal briefly. -->
                 <ToggleButton x:Name="HiddenInkToolButton" Click="HiddenInkToolButton_Click"
                         Style="{StaticResource ToolbarToggleButtonStyle}"
-                        Width="42" Height="36" Margin="2,0">
-                    <TextBlock Text="&#xE890;" FontFamily="Segoe MDL2 Assets" FontSize="18" Foreground="{DynamicResource ThemeSubtleForegroundBrush}"/>
+                        Width="42" Height="36" Margin="2,0"
+                         AutomationProperties.AutomationId="HiddenInkToolButton">
+                    <!-- A card/answer mark communicates covering a response and
+                         its temporary reveal without using eye semantics. -->
+                    <Path Width="18" Height="18" Stretch="Uniform"
+                          Fill="Transparent"
+                          Stroke="{DynamicResource ThemeSubtleForegroundBrush}"
+                          StrokeThickness="1.5"
+                          StrokeLineJoin="Round"
+                          Data="M3,4.5 L17,4.5 L17,15.5 L3,15.5 Z M5.5,7.5 L14.5,7.5 M5.5,10.5 L12,10.5 M5.5,13 L9.5,13"/>
                 </ToggleButton>
 
                 <!-- Task 26: place a collapsible sticky-note annotation. -->
                 <ToggleButton x:Name="StickyNoteToolButton" Click="StickyNoteToolButton_Click"
                         Style="{StaticResource ToolbarToggleButtonStyle}"
-                        Width="42" Height="36" Margin="2,0">
-                    <TextBlock Text="&#xE70B;" FontFamily="Segoe MDL2 Assets" FontSize="17" Foreground="{DynamicResource ThemeMarkBrush}"/>
+                        Width="42" Height="36" Margin="2,0"
+                        AutomationProperties.AutomationId="Editor.StickyNoteToolButton">
+                    <Path Style="{StaticResource ToolbarIconPathStyle}"
+                          Data="M4,3 L18,3 L18,17 L4,17 Z M7,7 L15,7 M7,10 L15,10 M7,13 L12,13"
+                          Stroke="{DynamicResource ThemeMarkBrush}"/>
                 </ToggleButton>
-
-                <!-- Task 23: pen preset slots (3). Populated in code by
-                     InitializePenPresetSlots: left-click applies the preset
-                     (tool + color + size), right-click captures the current
-                     Pen/Highlighter state into the slot. -->
-                <StackPanel x:Name="PresetSlotsPanel" Orientation="Horizontal"
-                            VerticalAlignment="Center" Margin="4,0,2,0"/>
 
                 <!-- Eraser -->
                 <ToggleButton x:Name="EraserToolButton" Click="EraserToolButton_Click"
                         Style="{StaticResource ToolbarToggleButtonStyle}"
-                        Width="42" Height="36" Margin="2,0">
-                    <TextBlock x:Name="EraserIcon" Text="&#xE75C;" FontFamily="Segoe MDL2 Assets" FontSize="19" Foreground="{DynamicResource ThemeForegroundBrush}"/>
+                        Width="42" Height="36" Margin="2,0"
+                        AutomationProperties.AutomationId="Editor.EraserToolButton">
+                    <Path x:Name="EraserIcon" Style="{StaticResource ToolbarIconPathStyle}"
+                          Data="M5,12 L12,5 L19,12 L12,19 Z M8,15 L15,8"/>
                 </ToggleButton>
 
                 <!-- Shape -->
                 <ToggleButton x:Name="ShapeToolButton" Click="ShapeToolButton_Click"
                         Style="{StaticResource ToolbarToggleButtonStyle}"
-                        Width="42" Height="36" Margin="2,0">
-                    <TextBlock x:Name="ShapeIcon" Text="&#xE8A9;" FontFamily="Segoe MDL2 Assets" FontSize="17" Foreground="{DynamicResource ThemeForegroundBrush}"/>
+                        Width="42" Height="36" Margin="2,0"
+                        AutomationProperties.AutomationId="Editor.ShapeToolButton">
+                    <Path x:Name="ShapeIcon" Style="{StaticResource ToolbarIconPathStyle}"
+                          Data="M4,4 L20,4 L20,20 L4,20 Z M8,16 L16,8"/>
                 </ToggleButton>
 
                 <!-- Laser pointer (ephemeral ink that fades away; never saved) -->
                 <ToggleButton x:Name="LaserToolButton" Click="LaserToolButton_Click"
                         Style="{StaticResource ToolbarToggleButtonStyle}"
-                        Width="42" Height="36" Margin="2,0">
-                    <TextBlock Text="&#xE790;" FontFamily="Segoe MDL2 Assets" FontSize="17" Foreground="{DynamicResource ThemeMarginBrush}"/>
+                        Width="42" Height="36" Margin="2,0"
+                        AutomationProperties.AutomationId="Editor.LaserToolButton">
+                    <Path x:Name="LaserIcon" Style="{StaticResource ToolbarIconPathStyle}"
+                          Stroke="{DynamicResource ThemeMarginBrush}"
+                          Data="M3,17 L12,8 L16,12 L21,7 M5,18 A2,2 0 1 1 5,14 A2,2 0 1 1 5,18"/>
                 </ToggleButton>
 
                 <!-- Task 22: on-screen ruler toggle. Overlay only — independent
@@ -258,15 +521,19 @@
                      pen strokes near its edge snap onto it. Never saved. -->
                 <ToggleButton x:Name="RulerToolButton" Click="RulerToolButton_Click"
                         Style="{StaticResource ToolbarToggleButtonStyle}"
-                        Width="42" Height="36" Margin="2,0">
-                    <TextBlock x:Name="RulerIcon" Text="&#xE770;" FontFamily="Segoe MDL2 Assets" FontSize="16" Foreground="{DynamicResource ThemeForegroundBrush}"/>
+                        Width="42" Height="36" Margin="2,0"
+                        AutomationProperties.AutomationId="Editor.RulerToolButton">
+                    <Path x:Name="RulerIcon" Style="{StaticResource ToolbarIconPathStyle}"
+                          Data="M3,6 L21,6 M3,10 L21,10 M3,14 L21,14 M3,18 L21,18 M7,4 L7,8 M12,4 L12,8 M17,4 L17,8"/>
                 </ToggleButton>
 
                 <!-- Select -->
                 <ToggleButton x:Name="SelectToolButton" Click="SelectToolButton_Click"
                         Style="{StaticResource ToolbarToggleButtonStyle}"
-                        Width="42" Height="36" Margin="2,0">
-                    <TextBlock x:Name="SelectIcon" Text="&#xE8B3;" FontFamily="Segoe MDL2 Assets" FontSize="18" Foreground="{DynamicResource ThemeForegroundBrush}"/>
+                        Width="42" Height="36" Margin="2,0"
+                        AutomationProperties.AutomationId="Editor.SelectToolButton">
+                    <Path x:Name="SelectIcon" Style="{StaticResource ToolbarIconPathStyle}"
+                          Data="M4,3 L8,20 L12,14 L18,20 L20,18 L14,12 L20,10 Z"/>
                 </ToggleButton>
 
                 <Border Width="1" Background="{DynamicResource ThemeMenuSeparatorBrush}" Margin="4,8"/>
@@ -274,50 +541,83 @@
                 <!-- Text -->
                 <ToggleButton x:Name="TextToolButton" Click="TextToolButton_Click"
                         Style="{StaticResource ToolbarToggleButtonStyle}"
-                        Width="42" Height="36" Margin="2,0">
-                    <TextBlock Text="A" FontSize="17" FontWeight="Bold" Foreground="{DynamicResource ThemeForegroundBrush}"/>
+                        Width="42" Height="36" Margin="2,0"
+                        AutomationProperties.AutomationId="Editor.TextToolButton">
+                    <Path Style="{StaticResource ToolbarIconPathStyle}"
+                          Data="M4,20 L12,4 L20,20 M7,14 L17,14"/>
                 </ToggleButton>
 
                 <!-- Save -->
                 <Button x:Name="SavePdfButton" Click="SavePdf_Click"
                         Style="{StaticResource ToolbarButtonStyle}"
-                        Width="42" Height="36" Margin="2,0">
-                    <TextBlock Text="&#xE74E;" FontFamily="Segoe MDL2 Assets" FontSize="17" Foreground="{DynamicResource ThemeForegroundBrush}"/>
+                        Width="42" Height="36" Margin="2,0"
+                        AutomationProperties.AutomationId="Editor.SavePdfButton">
+                    <Path Style="{StaticResource ToolbarIconPathStyle}"
+                          Data="M4,4 L17,4 L20,7 L20,20 L4,20 Z M7,4 L7,10 L16,10 L16,4 M8,14 L16,14 L16,18 L8,18 Z"/>
                 </Button>
 
                 <!-- Version History -->
                 <Button x:Name="VersionHistoryButton" Click="VersionHistory_Click"
                         Style="{StaticResource ToolbarButtonStyle}"
-                        Width="42" Height="36" Margin="2,0">
-                    <TextBlock Text="&#xE81C;" FontFamily="Segoe MDL2 Assets" FontSize="17" Foreground="{DynamicResource ThemeForegroundBrush}"/>
+                        Width="42" Height="36" Margin="2,0"
+                        AutomationProperties.AutomationId="Editor.VersionHistoryButton">
+                    <Path Style="{StaticResource ToolbarIconPathStyle}"
+                          Data="M12,3 A9,9 0 1 1 11.99,3 M12,7 L12,12 L16,14"/>
                 </Button>
 
                 <!-- Separator -->
                 <Border Width="1" Background="{DynamicResource ThemeMenuSeparatorBrush}" Margin="4,8"/>
 
-                <!-- Page Number -->
-                <Border x:Name="PageJumpBorder"
-                        Style="{StaticResource ToolbarFieldBorderStyle}"
-                        Margin="8,0,8,0"
-                        Cursor="Hand"
-                        MouseLeftButtonDown="PageJumpBorder_MouseLeftButtonDown">
-                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                        <Grid Width="38" Height="22" Margin="0,0,4,0">
-                            <TextBlock x:Name="PageNumberLabel" Text="0" FontSize="13" FontWeight="SemiBold" Foreground="{DynamicResource ThemeForegroundBrush}"
-                                       VerticalAlignment="Center" HorizontalAlignment="Center" TextAlignment="Center"/>
-                            <TextBox x:Name="PageNumberTextBox" FontSize="13" FontWeight="SemiBold" Foreground="{DynamicResource ThemeForegroundBrush}" Background="Transparent"
-                                     VerticalAlignment="Center" HorizontalAlignment="Center"
-                                     Width="38" Height="22" TextAlignment="Center" Padding="0"
-                                     BorderThickness="0" FocusVisualStyle="{x:Null}"
-                                      CaretBrush="{DynamicResource ThemeAccentBrush}" SelectionBrush="{DynamicResource ThemeSelectionBrush}"
-                                     Visibility="Collapsed"
-                                     KeyDown="PageNumberTextBox_KeyDown"
-                                     LostFocus="PageNumberTextBox_LostFocus"/>
-                        </Grid>
-                         <TextBlock x:Name="PageCountText" Text="/ 0" FontSize="13" Foreground="{DynamicResource ThemeSubtleForegroundBrush}"
-                                   VerticalAlignment="Center"/>
-                    </StackPanel>
-                </Border>
+                <!-- Wave4: compact page jump. The editable field is always
+                     visible and owns the stable UIA id, so Tab/Enter/Escape
+                     work without a mouse-only Border activation path. -->
+                <Grid x:Name="PageJumpGroup"
+                      Margin="6,0"
+                      MinHeight="32"
+                      VerticalAlignment="Center"
+                      AutomationProperties.AutomationId="Editor.PageJumpGroup">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="38"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBox x:Name="PageNumberTextBox"
+                             Grid.Column="0"
+                             FontSize="13"
+                             FontWeight="SemiBold"
+                             Foreground="{DynamicResource ThemeForegroundBrush}"
+                             Background="{DynamicResource ThemeSurfaceAltBrush}"
+                             BorderBrush="{DynamicResource ThemeBorderBrush}"
+                             BorderThickness="1"
+                             VerticalAlignment="Center"
+                             Width="38"
+                             Height="32"
+                             MinHeight="32"
+                              Text="1"
+                             TextAlignment="Center"
+                             Padding="2,0"
+                             FocusVisualStyle="{StaticResource ToolbarFocusVisualStyle}"
+                              CaretBrush="{DynamicResource ThemeAccentBrush}"
+                              SelectionBrush="{DynamicResource ThemeSelectionBrush}"
+                              SelectionTextBrush="{DynamicResource ThemeSelectionForegroundBrush}"
+                              KeyboardNavigation.IsTabStop="True"
+                              AutomationProperties.AutomationId="Editor.PageJump"
+                              GotKeyboardFocus="PageNumberTextBox_GotKeyboardFocus"
+                              TextChanged="PageNumberTextBox_TextChanged"
+                              KeyDown="PageNumberTextBox_KeyDown"
+                             LostFocus="PageNumberTextBox_LostFocus"/>
+                    <TextBlock x:Name="PageNumberLabel"
+                               Grid.Column="0"
+                               Text="0"
+                               Visibility="Collapsed"
+                               IsHitTestVisible="False"/>
+                    <TextBlock x:Name="PageCountText"
+                               Grid.Column="1"
+                               Text="/ 0"
+                               Margin="5,0,0,0"
+                               FontSize="13"
+                               Foreground="{DynamicResource ThemeSubtleTextBrush}"
+                               VerticalAlignment="Center"/>
+                </Grid>
 
                 <!-- Separator -->
                 <Border Width="1" Background="{DynamicResource ThemeMenuSeparatorBrush}" Margin="4,8"/>
@@ -325,15 +625,19 @@
                 <!-- Pen-only drawing (palm rejection): only the stylus creates ink -->
                 <ToggleButton x:Name="PenOnlyButton" Click="PenOnlyButton_Click"
                         Style="{StaticResource ToolbarToggleButtonStyle}"
-                        Width="36" Height="36" Margin="2,0">
-                    <TextBlock x:Name="PenOnlyIcon" Text="&#xE7C9;" FontFamily="Segoe MDL2 Assets" FontSize="16" Foreground="{DynamicResource ThemeForegroundBrush}"/>
+                        Width="36" Height="36" Margin="2,0"
+                        AutomationProperties.AutomationId="Editor.PenOnlyButton">
+                    <Path x:Name="PenOnlyIcon" Style="{StaticResource ToolbarIconPathStyle}"
+                          Data="M4,16 L14,6 L18,10 L8,20 Z M12,8 L16,12 M4,16 L8,20"/>
                 </ToggleButton>
 
                 <!-- Zoom Out -->
                 <Button x:Name="ZoomOutButton" Click="ZoomOutButton_Click"
                         Style="{StaticResource ToolbarButtonStyle}"
-                        Width="36" Height="36" Margin="2,0">
-                    <TextBlock Text="&#xE738;" FontFamily="Segoe MDL2 Assets" FontSize="14" Foreground="{DynamicResource ThemeForegroundBrush}"/>
+                        Width="36" Height="36" Margin="2,0"
+                        AutomationProperties.AutomationId="Editor.ZoomOutButton">
+                    <Path Style="{StaticResource ToolbarIconPathStyle}"
+                          Data="M4,12 L20,12"/>
                 </Button>
 
                 <!-- Zoom Percentage (click to edit) -->
@@ -354,80 +658,247 @@
                 <!-- Zoom In -->
                 <Button x:Name="ZoomInButton" Click="ZoomInButton_Click"
                         Style="{StaticResource ToolbarButtonStyle}"
-                        Width="36" Height="36" Margin="2,0">
-                    <TextBlock Text="&#xE710;" FontFamily="Segoe MDL2 Assets" FontSize="14" Foreground="{DynamicResource ThemeForegroundBrush}"/>
-                </Button>
-
-                <Button x:Name="FitWidthButton" Click="FitWidthButton_Click"
-                        Style="{StaticResource ToolbarButtonStyle}"
-                        Width="54" Height="36" Margin="2,0">
-                    <TextBlock x:Name="FitWidthLabel" FontSize="11" Foreground="{DynamicResource ThemeForegroundBrush}"/>
-                </Button>
-                <Button x:Name="FitPageButton" Click="FitPageButton_Click"
-                        Style="{StaticResource ToolbarButtonStyle}"
-                        Width="54" Height="36" Margin="2,0">
-                    <TextBlock x:Name="FitPageLabel" FontSize="11" Foreground="{DynamicResource ThemeForegroundBrush}"/>
+                        Width="36" Height="36" Margin="2,0"
+                        AutomationProperties.AutomationId="Editor.ZoomInButton">
+                    <Path Style="{StaticResource ToolbarIconPathStyle}"
+                          Data="M4,12 L20,12 M12,4 L12,20"/>
                 </Button>
                 <Button x:Name="RotatePageButton" Click="RotateCurrentPage_Click"
                         Style="{StaticResource ToolbarButtonStyle}"
-                        Width="42" Height="36" Margin="2,0">
-                    <TextBlock Text="&#xE7AD;" FontFamily="Segoe MDL2 Assets" FontSize="15" Foreground="{DynamicResource ThemeForegroundBrush}"/>
+                        Width="42" Height="36" Margin="2,0"
+                        AutomationProperties.AutomationId="Editor.RotatePageButton">
+                    <Path Style="{StaticResource ToolbarIconPathStyle}"
+                          Data="M6,8 A8,8 0 1 1 6,16 M6,8 L6,3 M6,8 L11,8"/>
                 </Button>
 
                 <!-- Task 16: keyboard-accessible immersive reading mode. -->
                 <Button x:Name="ImmersiveModeButton" Click="ImmersiveModeButton_Click"
                         Style="{StaticResource ToolbarButtonStyle}"
-                        Width="42" Height="36" Margin="2,0">
-                    <TextBlock Text="&#xE740;" FontFamily="Segoe MDL2 Assets" FontSize="15" Foreground="{DynamicResource ThemeForegroundBrush}"/>
+                        Width="42" Height="36" Margin="2,0"
+                        AutomationProperties.AutomationId="Editor.ImmersiveModeButton">
+                    <Path Style="{StaticResource ToolbarIconPathStyle}"
+                          Data="M4,9 L4,4 L9,4 M15,4 L20,4 L20,9 M4,15 L4,20 L9,20 M15,20 L20,20 L20,15"/>
                 </Button>
 
 
-             </StackPanel>
+                 </StackPanel>
+             </ScrollViewer>
         </Border>
 
-        <!-- Tasks 30–32: document navigation sidebar. It is an overlay so the
-             PDF canvas keeps its existing scroll/zoom geometry. -->
+        <!-- Wave4: custom document navigation rail. It remains an overlay so
+             the PDF canvas keeps its existing scroll/zoom geometry. The three
+             command buttons are ordinary Invoke peers; content visibility is
+             owned by SetSidebarTab rather than native TabItem selection. -->
         <Border x:Name="DocumentSidebar"
                 HorizontalAlignment="Left"
                 VerticalAlignment="Stretch"
                 Margin="12,70,0,12"
                 Width="184"
-                Background="{DynamicResource ThemeSurfaceBrush}"
+                MinWidth="154"
+                MaxWidth="320"
+                 Background="{DynamicResource ThemeSidebarBrush}"
                 BorderBrush="{DynamicResource ThemeBorderBrush}"
                 BorderThickness="1"
-                CornerRadius="14"
+                CornerRadius="12"
                 Panel.ZIndex="20">
-            <DockPanel>
-                <Button x:Name="SidebarCollapseButton" DockPanel.Dock="Top" Height="28" Margin="6"
-                        Click="SidebarCollapseButton_Click"/>
-                <TabControl x:Name="DocumentSidebarTabs" Background="Transparent" BorderThickness="0">
-                <TabItem x:Name="PagesTabItem">
-                    <ListBox x:Name="ThumbnailListBox"
-                             Margin="6"
-                             BorderThickness="0"
-                             Background="Transparent"
-                             ScrollViewer.CanContentScroll="True"
-                             VirtualizingPanel.IsVirtualizing="True"
-                             VirtualizingPanel.VirtualizationMode="Recycling"
-                             AllowDrop="True"
-                             SelectionChanged="ThumbnailListBox_SelectionChanged"
-                             PreviewMouseLeftButtonDown="ThumbnailListBox_PreviewMouseLeftButtonDown"
-                             PreviewMouseMove="ThumbnailListBox_PreviewMouseMove"
-                             Drop="ThumbnailListBox_Drop"/>
-                </TabItem>
-                <TabItem x:Name="OutlineTabItem">
-                    <TreeView x:Name="OutlineTreeView" Margin="6" BorderThickness="0" Background="Transparent"/>
-                </TabItem>
-                <TabItem x:Name="BookmarksTabItem">
-                    <DockPanel>
-                        <Button x:Name="BookmarkToggleButton" DockPanel.Dock="Top" Margin="8" Height="30"
-                                Click="BookmarkToggleButton_Click"/>
-                        <ListBox x:Name="BookmarksListBox" Margin="6" BorderThickness="0" Background="Transparent"
-                                 SelectionChanged="BookmarksListBox_SelectionChanged"/>
-                    </DockPanel>
-                </TabItem>
-                </TabControl>
-            </DockPanel>
+            <Grid KeyboardNavigation.TabNavigation="Local">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+
+                <Grid x:Name="SidebarHeaderGrid" Grid.Row="0" Margin="8,8,8,2">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock x:Name="SidebarTitleLabel"
+                               Grid.Column="0"
+                               Text=""
+                               Foreground="{DynamicResource ThemeSubtleForegroundBrush}"
+                               FontSize="11"
+                               FontWeight="SemiBold"
+                               VerticalAlignment="Center"
+                               TextTrimming="CharacterEllipsis"/>
+                    <Button x:Name="SidebarCollapseButton"
+                            Grid.Column="1"
+                            Width="32"
+                            Height="32"
+                            MinWidth="32"
+                            MinHeight="32"
+                            Style="{StaticResource ToolbarButtonStyle}"
+                            Click="SidebarCollapseButton_Click"
+                            AutomationProperties.AutomationId="Editor.Sidebar.Collapse">
+                        <Path x:Name="SidebarCollapseIcon"
+                              Width="14"
+                              Height="14"
+                              Stretch="Uniform"
+                              Stroke="{DynamicResource ThemeForegroundBrush}"
+                              StrokeThickness="1.8"
+                              Data="M14,3 L6,7 L14,11"/>
+                    </Button>
+                </Grid>
+
+                <!-- SidebarNavBar.Visibility is updated by SetSidebarCollapsed
+                     so collapsed mode leaves only the 32-DIP expand control. -->
+                <StackPanel x:Name="SidebarNavBar"
+                            Grid.Row="1"
+                            Orientation="Vertical"
+                            Margin="8,2,8,6"
+                            KeyboardNavigation.TabNavigation="Local">
+                    <Button x:Name="SidebarPagesButton"
+                            Style="{StaticResource DocumentSidebarNavButtonStyle}"
+                            Click="SidebarPagesButton_Click"
+                            AutomationProperties.AutomationId="Editor.Sidebar.Pages">
+                        <StackPanel>
+                            <Path Width="15" Height="15" Stretch="Uniform" Stroke="{DynamicResource ThemeForegroundBrush}" StrokeThickness="1.5"
+                                  Data="M3,3 L21,3 L21,21 L3,21 Z M7,8 L17,8 M7,12 L17,12 M7,16 L14,16"/>
+                            <TextBlock x:Name="SidebarPagesLabel" HorizontalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+                        </StackPanel>
+                    </Button>
+                    <Button x:Name="SidebarOutlineButton"
+                            Style="{StaticResource DocumentSidebarNavButtonStyle}"
+                            Click="SidebarOutlineButton_Click"
+                            AutomationProperties.AutomationId="Editor.Sidebar.Outline">
+                        <StackPanel>
+                            <Path Width="15" Height="15" Stretch="Uniform" Stroke="{DynamicResource ThemeForegroundBrush}" StrokeThickness="1.5"
+                                  Data="M5,5 L7,5 M10,5 L19,5 M5,12 L7,12 M10,12 L19,12 M5,19 L7,19 M10,19 L19,19"/>
+                            <TextBlock x:Name="SidebarOutlineLabel" HorizontalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+                        </StackPanel>
+                    </Button>
+                    <Button x:Name="SidebarBookmarksButton"
+                            Style="{StaticResource DocumentSidebarNavButtonStyle}"
+                            Click="SidebarBookmarksButton_Click"
+                            AutomationProperties.AutomationId="Editor.Sidebar.Bookmarks">
+                        <StackPanel>
+                            <Path Width="15" Height="15" Stretch="Uniform" Stroke="{DynamicResource ThemeForegroundBrush}" StrokeThickness="1.5"
+                                  Data="M5,3 L19,3 L19,21 L12,17 L5,21 Z"/>
+                            <TextBlock x:Name="SidebarBookmarksLabel" HorizontalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+                        </StackPanel>
+                    </Button>
+                </StackPanel>
+
+                <Grid x:Name="SidebarContentHost" Grid.Row="2" Margin="6,0,6,6">
+                    <Grid x:Name="PagesSidebarContent">
+                         <ListBox x:Name="ThumbnailListBox"
+                                 Margin="0"
+                                 BorderThickness="0"
+                                 Background="Transparent"
+                                  ItemContainerStyle="{StaticResource DocumentSidebarListBoxItemStyle}"
+                                  ItemTemplate="{StaticResource SidebarPageItemTemplate}"
+                                  ItemsSource="{Binding SidebarPageItems, RelativeSource={RelativeSource AncestorType=Page}}"
+                                  ScrollViewer.CanContentScroll="True"
+                                  ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                  VirtualizingPanel.IsVirtualizing="True"
+                                  VirtualizingPanel.VirtualizationMode="Recycling"
+                                  VirtualizingPanel.IsVirtualizingWhenGrouping="True"
+                                  VirtualizingPanel.ScrollUnit="Pixel"
+                                  AllowDrop="True"
+                                  SelectionChanged="ThumbnailListBox_SelectionChanged"
+                                  ContextMenuOpening="ThumbnailListBox_ContextMenuOpening"
+                                 PreviewMouseLeftButtonDown="ThumbnailListBox_PreviewMouseLeftButtonDown"
+                                 PreviewMouseMove="ThumbnailListBox_PreviewMouseMove"
+                                 Drop="ThumbnailListBox_Drop"/>
+                        <TextBlock x:Name="PagesEmptyState"
+                                   Text=""
+                                   Foreground="{DynamicResource ThemeSubtleForegroundBrush}"
+                                   FontSize="12"
+                                   TextWrapping="Wrap"
+                                   TextAlignment="Center"
+                                   Margin="10"
+                                   VerticalAlignment="Center"
+                                   IsHitTestVisible="False"
+                                   Visibility="Visible"/>
+                    </Grid>
+
+                    <Grid x:Name="OutlineSidebarContent" Visibility="Collapsed">
+                        <local:SidebarOutlineTreeView x:Name="OutlineTreeView"
+                                  Margin="0"
+                                  BorderThickness="0"
+                                  Background="Transparent"
+                                  ItemContainerStyle="{StaticResource DocumentSidebarTreeViewItemStyle}"
+                                  ItemTemplate="{StaticResource SidebarOutlineItemTemplate}"
+                                  ItemsSource="{Binding SidebarOutlineItems, RelativeSource={RelativeSource AncestorType=Page}}"
+                                  ScrollViewer.CanContentScroll="True"
+                                  ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                  VirtualizingPanel.IsVirtualizing="True"
+                                  VirtualizingPanel.VirtualizationMode="Recycling"
+                                  VirtualizingPanel.IsVirtualizingWhenGrouping="True"
+                                  SelectedItemChanged="OutlineTreeView_SelectedItemChanged"/>
+                        <TextBlock x:Name="OutlineEmptyState"
+                                   Text=""
+                                   Foreground="{DynamicResource ThemeSubtleForegroundBrush}"
+                                   FontSize="12"
+                                   TextWrapping="Wrap"
+                                   TextAlignment="Center"
+                                   Margin="10"
+                                   VerticalAlignment="Center"
+                                   IsHitTestVisible="False"
+                                   Visibility="Visible"/>
+                    </Grid>
+
+                    <Grid x:Name="BookmarksSidebarContent" Visibility="Collapsed">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+                            <ToggleButton x:Name="BookmarkToggleButton"
+                                Grid.Row="0"
+                                Margin="2,2,2,6"
+                                Height="34"
+                                MinHeight="32"
+                                 Style="{StaticResource ToolbarToggleButtonStyle}"
+                                 Focusable="True"
+                                 AutomationProperties.AutomationId="Editor.Sidebar.BookmarkToggle"
+                                 Click="BookmarkToggleButton_Click"
+                                 />
+                        <Grid Grid.Row="1">
+                            <ListBox x:Name="BookmarksListBox"
+                                     Margin="0"
+                                     BorderThickness="0"
+                                     Background="Transparent"
+                                     ItemContainerStyle="{StaticResource DocumentSidebarListBoxItemStyle}"
+                                     ItemTemplate="{StaticResource SidebarBookmarkItemTemplate}"
+                                     ItemsSource="{Binding SidebarBookmarkItems, RelativeSource={RelativeSource AncestorType=Page}}"
+                                     ScrollViewer.CanContentScroll="True"
+                                     ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                     VirtualizingPanel.IsVirtualizing="True"
+                                     VirtualizingPanel.VirtualizationMode="Recycling"
+                                     VirtualizingPanel.IsVirtualizingWhenGrouping="True"
+                                     SelectionChanged="BookmarksListBox_SelectionChanged"
+                                     ContextMenuOpening="BookmarksListBox_ContextMenuOpening"/>
+                            <TextBlock x:Name="BookmarksEmptyState"
+                                       Text=""
+                                       Foreground="{DynamicResource ThemeSubtleForegroundBrush}"
+                                       FontSize="12"
+                                       TextWrapping="Wrap"
+                                       TextAlignment="Center"
+                                       Margin="10"
+                                       VerticalAlignment="Center"
+                                       IsHitTestVisible="False"
+                                       Visibility="Visible"/>
+                        </Grid>
+                    </Grid>
+                </Grid>
+
+                 <local:SidebarResizeThumb x:Name="SidebarResizeThumb"
+                        Grid.RowSpan="3"
+                        Style="{StaticResource SidebarResizeThumbStyle}"
+                        Width="32"
+                        HorizontalAlignment="Right"
+                        VerticalAlignment="Stretch"
+                        Cursor="SizeWE"
+                        DragDelta="SidebarResizeThumb_DragDelta"
+                        KeyDown="SidebarResizeThumb_KeyDown"
+                        Focusable="True"
+                        KeyboardNavigation.IsTabStop="True"
+                         AutomationProperties.AutomationId="Editor.Sidebar.Resize"
+                         Minimum="154"
+                         Maximum="320"
+                         Value="184"
+                         MinHeight="32"/>
+            </Grid>
         </Border>
 
         <!-- Task 32: asynchronous full-document search results. -->
@@ -464,7 +935,7 @@
         <!-- Eraser Size Preview Overlay -->
         <Ellipse x:Name="EraserSizePreviewEllipse"
                  HorizontalAlignment="Center" VerticalAlignment="Center"
-                 Stroke="#0078D4" StrokeThickness="1.5" Fill="#150078D4"
+                 Stroke="{DynamicResource ThemeAccentBrush}" StrokeThickness="1.5" Fill="{DynamicResource ThemeSelectionBrush}"
                  IsHitTestVisible="False" Visibility="Collapsed"
                  Panel.ZIndex="10"/>
 
@@ -476,28 +947,13 @@
                     BorderBrush="{DynamicResource ThemeBorderBrush}"
                     BorderThickness="1">
                 <Border.Effect>
-                    <DropShadowEffect BlurRadius="20" ShadowDepth="4" Opacity="0.10" Color="#000"/>
+                    <DropShadowEffect BlurRadius="20" ShadowDepth="4" Opacity="{DynamicResource ThemeShadowOpacity}" Color="#000"/>
                 </Border.Effect>
                 <StackPanel Orientation="Horizontal">
                     <TextBlock x:Name="LoadingRing" Text="&#xE712;" FontFamily="Segoe MDL2 Assets" FontSize="22" Foreground="{DynamicResource ThemeAccentBrush}" RenderTransformOrigin="0.5,0.5" Margin="0,0,12,0">
                         <TextBlock.RenderTransform>
                             <RotateTransform x:Name="LoadingRotate" Angle="0"/>
                         </TextBlock.RenderTransform>
-                        <TextBlock.Style>
-                            <Style TargetType="TextBlock">
-                                <Style.Triggers>
-                                    <DataTrigger Binding="{Binding Visibility, ElementName=LoadingOverlay}" Value="Visible">
-                                        <DataTrigger.EnterActions>
-                                            <BeginStoryboard x:Name="LoadingStoryboard">
-                                                <Storyboard RepeatBehavior="Forever">
-                                                    <DoubleAnimation Storyboard.TargetProperty="(TextBlock.RenderTransform).(RotateTransform.Angle)" From="0" To="360" Duration="0:0:1"/>
-                                                </Storyboard>
-                                            </BeginStoryboard>
-                                        </DataTrigger.EnterActions>
-                                    </DataTrigger>
-                                </Style.Triggers>
-                            </Style>
-                        </TextBlock.Style>
                     </TextBlock>
                     <TextBlock x:Name="LoadingText" FontSize="15" VerticalAlignment="Center" Foreground="{DynamicResource ThemeForegroundBrush}"/>
                 </StackPanel>

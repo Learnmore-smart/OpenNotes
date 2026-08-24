@@ -8,6 +8,7 @@ $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
 Add-Type -AssemblyName System.Drawing
+. (Join-Path $PSScriptRoot 'OpenNotesEditorAutomationIds.ps1')
 
 if ([string]::IsNullOrWhiteSpace($ExecutablePath)) {
     $ExecutablePath = Join-Path $PSScriptRoot '..\bin\Debug\net8.0-windows\win-x64\OpenNotes.exe'
@@ -230,7 +231,7 @@ function Invoke-ToolbarPointerClick([int]$processId, [IntPtr]$windowHandle, [str
 }
 
 function Get-PageRect([int]$processId) {
-    $page = Find-DescendantByAutomationId (Find-MainWindow $processId) 'PdfPageControl.0'
+    $page = Find-DescendantByAutomationId (Find-MainWindow $processId) (Get-EditorPageAutomationId 0)
     if ($null -eq $page -or $page.Current.IsOffscreen) { return $null }
     $rect = $page.Current.BoundingRectangle
     if ($rect.Width -lt 250 -or $rect.Height -lt 250) { return $null }
@@ -265,12 +266,12 @@ function Get-HiddenInkMarkerCount([string]$path) {
 function Save-IsolatedDocument([int]$processId, [IntPtr]$windowHandle, [string]$label) {
     $beforeHash = (Get-FileHash -LiteralPath $pdfPath -Algorithm SHA256).Hash
     $saveButton = Wait-Until {
-        $candidate = Find-DescendantByAutomationId (Find-MainWindow $processId) 'SavePdfButton'
+        $candidate = Find-DescendantByAutomationId (Find-MainWindow $processId) $EditorAutomationIds.Save
         if ($null -ne $candidate -and $candidate.Current.IsEnabled) { return $candidate }
         return $null
     } 10
     if ($null -eq $saveButton) { throw "SavePdfButton was not enabled for '$label'." }
-    $mode = Invoke-ToolbarPointerClick $processId $windowHandle 'SavePdfButton'
+    $mode = Invoke-ToolbarPointerClick $processId $windowHandle $EditorAutomationIds.Save
     Assert-ScreenInput $mode "save:$label"
     $afterHash = Wait-Until {
         try {
@@ -363,17 +364,21 @@ try {
     Assert-ScreenInput $tileMode 'open-library-tile'
 
     $hiddenTool = Wait-Until {
-        Find-DescendantByAutomationId (Find-MainWindow $process.Id) 'HiddenInkToolButton'
+        Find-DescendantByAutomationId (Find-MainWindow $process.Id) $EditorAutomationIds.HiddenInk
     } 60
-    if ($null -eq $hiddenTool) { throw 'HiddenInkToolButton was not found after opening the PDF.' }
+    if ($null -eq $hiddenTool) { throw 'Hidden Ink tool was not found after opening the PDF.' }
+    $pdfViewer = Wait-Until {
+        Find-DescendantByAutomationId (Find-MainWindow $process.Id) $EditorAutomationIds.PdfScrollViewer
+    } 20
+    if ($null -eq $pdfViewer) { throw 'PdfScrollViewer was not found after opening the PDF.' }
     $pageRect = Wait-Until { Get-PageRect $process.Id } 20
     if ($null -eq $pageRect) { throw 'PdfPageControl.0 did not expose a usable visible page surface.' }
     Write-Output "EDITOR_SURFACE_READY pageRect=$pageRect"
 
-    $hiddenMode = Invoke-ToolbarPointerClick $process.Id $hwnd 'HiddenInkToolButton'
+    $hiddenMode = Invoke-ToolbarPointerClick $process.Id $hwnd $EditorAutomationIds.HiddenInk
     Assert-ScreenInput $hiddenMode 'activate-hidden-ink'
-    if ($null -eq (Wait-ToggleState $process.Id 'HiddenInkToolButton' 'On' 5)) {
-        throw "HiddenInkToolButton did not become active state='$((Get-ToggleState $process.Id 'HiddenInkToolButton'))'."
+    if ($null -eq (Wait-ToggleState $process.Id $EditorAutomationIds.HiddenInk 'On' 5)) {
+        throw "Hidden Ink tool did not become active state='$((Get-ToggleState $process.Id $EditorAutomationIds.HiddenInk))'."
     }
 
     $startX = [int][Math]::Round($pageRect.Left + ($pageRect.Width * 0.34))
@@ -418,10 +423,10 @@ try {
     }
     Write-Output "HIDDEN_INK_REVEAL_COMPLETED mode='$revealMode' revealDistance=$revealDistance restoreDistance=$restoreDistance"
 
-    $eraserMode = Invoke-ToolbarPointerClick $process.Id $hwnd 'EraserToolButton'
+    $eraserMode = Invoke-ToolbarPointerClick $process.Id $hwnd $EditorAutomationIds.Eraser
     Assert-ScreenInput $eraserMode 'activate-eraser'
-    if ($null -eq (Wait-ToggleState $process.Id 'EraserToolButton' 'On' 5)) {
-        throw "EraserToolButton did not become active state='$((Get-ToggleState $process.Id 'EraserToolButton'))'."
+    if ($null -eq (Wait-ToggleState $process.Id $EditorAutomationIds.Eraser 'On' 5)) {
+        throw "Eraser tool did not become active state='$((Get-ToggleState $process.Id $EditorAutomationIds.Eraser))'."
     }
     # Close the eraser size popup with a harmless page click, then make a real
     # eraser gesture through the center of the mask.
@@ -444,12 +449,12 @@ try {
     Write-Output "HIDDEN_INK_ERASE_COMPLETED mode='$eraseMode' eraseDistance=$eraseDistance markerAfterErase=$markerAfterErase"
 
     $undoButton = Wait-Until {
-        $candidate = Find-DescendantByAutomationId (Find-MainWindow $process.Id) 'UndoButton'
+        $candidate = Find-DescendantByAutomationId (Find-MainWindow $process.Id) $EditorAutomationIds.Undo
         if ($null -ne $candidate -and $candidate.Current.IsEnabled) { return $candidate }
         return $null
     } 10
     if ($null -eq $undoButton) { throw 'UndoButton was not enabled after Hidden Ink erase.' }
-    $undoMode = Invoke-ToolbarPointerClick $process.Id $hwnd 'UndoButton'
+    $undoMode = Invoke-ToolbarPointerClick $process.Id $hwnd $EditorAutomationIds.Undo
     Assert-ScreenInput $undoMode 'hidden-ink-erase-undo'
     Start-Sleep -Milliseconds 600
     $restoredByUndoPixel = Get-ScreenPixel $midX $lineY

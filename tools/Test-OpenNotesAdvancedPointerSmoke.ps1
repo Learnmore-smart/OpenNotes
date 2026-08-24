@@ -8,6 +8,7 @@ Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
 Add-Type -AssemblyName PresentationCore
 Add-Type -AssemblyName System.Drawing
+. (Join-Path $PSScriptRoot 'OpenNotesEditorAutomationIds.ps1')
 
 if ([string]::IsNullOrWhiteSpace($ExecutablePath)) {
     $ExecutablePath = Join-Path $PSScriptRoot '..\bin\Debug\net8.0-windows\win-x64\OpenNotes.exe'
@@ -364,7 +365,7 @@ function Get-ScreenPixel([int]$x, [int]$y) {
 }
 
 function Get-PageSurfaceRect($mainWindow, [System.Windows.Rect]$viewerRect, [int]$pageIndex = 0) {
-    $pageControl = Find-DescendantByAutomationId $mainWindow "PdfPageControl.$pageIndex"
+    $pageControl = Find-DescendantByAutomationId $mainWindow (Get-EditorPageAutomationId $pageIndex)
     if ($null -ne $pageControl) {
         $pageControlRect = $pageControl.Current.BoundingRectangle
         if (-not $pageControl.Current.IsOffscreen -and
@@ -437,7 +438,7 @@ function Write-ErrorDialogSnapshot([int]$processId) {
 function Save-IsolatedDocument([int]$processId, [IntPtr]$windowHandle, [string]$label) {
     $beforeHash = (Get-FileHash -LiteralPath $pdfPath -Algorithm SHA256).Hash
     $saveButton = Wait-Until {
-        $candidate = Find-DescendantByAutomationId (Find-MainWindow $processId) 'SavePdfButton'
+        $candidate = Find-DescendantByAutomationId (Find-MainWindow $processId) $EditorAutomationIds.Save
         if ($null -ne $candidate -and $candidate.Current.IsEnabled) { return $candidate }
         return $null
     } 10
@@ -445,7 +446,7 @@ function Save-IsolatedDocument([int]$processId, [IntPtr]$windowHandle, [string]$
         Write-ErrorDialogSnapshot $processId
         throw "SavePdfButton was not enabled for '$label'."
     }
-    $mode = Invoke-ToolbarPointerClick $processId $windowHandle 'SavePdfButton'
+    $mode = Invoke-ToolbarPointerClick $processId $windowHandle $EditorAutomationIds.Save
     Assert-ScreenInput $mode "save:$label"
     $afterHash = Wait-Until {
         try {
@@ -534,11 +535,11 @@ try {
     Write-Output "OPEN_REQUESTED via=screen-pointer mode='$tileMode' rect=$tileRect"
 
     $textTool = Wait-Until {
-        Find-DescendantByAutomationId (Find-MainWindow $process.Id) 'TextToolButton'
+        Find-DescendantByAutomationId (Find-MainWindow $process.Id) $EditorAutomationIds.Text
     } 60
-    if ($null -eq $textTool) { throw 'TextToolButton was not found after opening the PDF.' }
+    if ($null -eq $textTool) { throw 'Text tool was not found after opening the PDF.' }
     $viewer = Wait-Until {
-        Find-DescendantByAutomationId (Find-MainWindow $process.Id) 'PdfScrollViewer'
+        Find-DescendantByAutomationId (Find-MainWindow $process.Id) $EditorAutomationIds.PdfScrollViewer
     } 15
     if ($null -eq $viewer) { throw 'PdfScrollViewer was not found.' }
     $viewerRect = $viewer.Current.BoundingRectangle
@@ -549,14 +550,14 @@ try {
     Write-Output "EDITOR_SURFACE_READY viewerRect=$viewerRect pageRect=$pageRect"
 
     # Shape: toolbar pointer -> real screen drag -> PDF-owned /Ink marker.
-    $shapeMode = Invoke-ToolbarPointerClick $process.Id $hwnd 'ShapeToolButton'
+    $shapeMode = Invoke-ToolbarPointerClick $process.Id $hwnd $EditorAutomationIds.Shape
     Assert-ScreenInput $shapeMode 'activate-shape'
-    $shapeState = Wait-ToggleState $process.Id 'ShapeToolButton' 'On' 5
+    $shapeState = Wait-ToggleState $process.Id $EditorAutomationIds.Shape 'On' 5
     if ($null -eq $shapeState) {
-        Write-Output "SHAPE_TOOL_STATE_AFTER_POINTER='$((Get-ToggleState $process.Id 'ShapeToolButton'))'"
-        $shapeMode = Invoke-ToolbarPointerClick $process.Id $hwnd 'ShapeToolButton'
+        Write-Output "SHAPE_TOOL_STATE_AFTER_POINTER='$((Get-ToggleState $process.Id $EditorAutomationIds.Shape))'"
+        $shapeMode = Invoke-ToolbarPointerClick $process.Id $hwnd $EditorAutomationIds.Shape
         Assert-ScreenInput $shapeMode 'activate-shape-retry'
-        $shapeState = Wait-ToggleState $process.Id 'ShapeToolButton' 'On' 5
+        $shapeState = Wait-ToggleState $process.Id $EditorAutomationIds.Shape 'On' 5
     }
     if ($null -eq $shapeState) {
         throw 'ShapeToolButton did not become active after bounded real-pointer retries.'
@@ -566,13 +567,13 @@ try {
     $shapeEndX = [int][Math]::Round($pageRect.Left + ($pageRect.Width * 0.50))
     $shapeEndY = [int][Math]::Round($pageRect.Top + ($pageRect.Height * 0.40))
     $shapeProbe = Get-ScreenPixel $shapeStartX $shapeStartY
-    Write-Output "SHAPE_SCREEN_GEOMETRY start=$shapeStartX,$shapeStartY end=$shapeEndX,$shapeEndY rgb=$($shapeProbe.R),$($shapeProbe.G),$($shapeProbe.B) state=$((Get-ToggleState $process.Id 'ShapeToolButton'))"
+Write-Output "SHAPE_SCREEN_GEOMETRY start=$shapeStartX,$shapeStartY end=$shapeEndX,$shapeEndY rgb=$($shapeProbe.R),$($shapeProbe.G),$($shapeProbe.B) state=$((Get-ToggleState $process.Id $EditorAutomationIds.Shape))"
     # The shape button owns an options popup. A first page click may only close
     # that popup, so dismiss it with a harmless tap before the real drag.
     $shapeDismissMode = Send-PointerClick $hwnd $shapeStartX $shapeStartY
     Assert-ScreenInput $shapeDismissMode 'dismiss-shape-popup'
     Start-Sleep -Milliseconds 250
-    Write-Output "SHAPE_TOOL_STATE_AFTER_DISMISS='$((Get-ToggleState $process.Id 'ShapeToolButton'))'"
+Write-Output "SHAPE_TOOL_STATE_AFTER_DISMISS='$((Get-ToggleState $process.Id $EditorAutomationIds.Shape))'"
     $shapeDragMode = Send-PointerDrag $hwnd $shapeStartX $shapeStartY $shapeEndX $shapeEndY
     Assert-ScreenInput $shapeDragMode 'shape-drag'
     Start-Sleep -Milliseconds 500
@@ -585,7 +586,7 @@ try {
     Write-Output "SHAPE_DRAG_COMPLETED mode='$shapeDragMode' normalInkBefore=$normalInkBeforeShape normalInkAfter=$normalInkAfterShape"
 
     # Shape undo/redo are observed through the saved PDF, not private state.
-    $undoMode = Invoke-ToolbarPointerClick $process.Id $hwnd 'UndoButton'
+    $undoMode = Invoke-ToolbarPointerClick $process.Id $hwnd $EditorAutomationIds.Undo
     Assert-ScreenInput $undoMode 'shape-undo'
     Start-Sleep -Milliseconds 500
     Save-IsolatedDocument $process.Id $hwnd 'shape-undo'
@@ -594,7 +595,7 @@ try {
         throw "Shape undo did not remove the owned ink annotation expected=$normalInkBeforeShape actual=$normalInkAfterShapeUndo"
     }
 
-    $redoMode = Invoke-ToolbarPointerClick $process.Id $hwnd 'RedoButton'
+    $redoMode = Invoke-ToolbarPointerClick $process.Id $hwnd $EditorAutomationIds.Redo
     Assert-ScreenInput $redoMode 'shape-redo'
     Start-Sleep -Milliseconds 500
     Save-IsolatedDocument $process.Id $hwnd 'shape-redo'
@@ -607,10 +608,10 @@ try {
 
     # Hidden Ink: use a black page and sample the real screen before/after the
     # opaque mask is clicked. The marker count separately proves persistence.
-    $hiddenMode = Invoke-ToolbarPointerClick $process.Id $hwnd 'HiddenInkToolButton'
+    $hiddenMode = Invoke-ToolbarPointerClick $process.Id $hwnd $EditorAutomationIds.HiddenInk
     Assert-ScreenInput $hiddenMode 'activate-hidden-ink'
-    if ($null -eq (Wait-ToggleState $process.Id 'HiddenInkToolButton' 'On' 5)) {
-        throw "HiddenInkToolButton did not become active state='$((Get-ToggleState $process.Id 'HiddenInkToolButton'))'."
+    if ($null -eq (Wait-ToggleState $process.Id $EditorAutomationIds.HiddenInk 'On' 5)) {
+        throw "Hidden Ink did not become active state='$((Get-ToggleState $process.Id $EditorAutomationIds.HiddenInk))'."
     }
     $hiddenStartX = [int][Math]::Round($pageRect.Left + ($pageRect.Width * 0.38))
     $hiddenStartY = [int][Math]::Round($pageRect.Top + ($pageRect.Height * 0.56))
@@ -655,10 +656,10 @@ try {
 
     # Selection/copy/paste: real marquee, OS keyboard Ctrl+C, clipboard JSON,
     # real blank-page click anchor, OS keyboard Ctrl+V, then saved PDF count.
-    $selectMode = Invoke-ToolbarPointerClick $process.Id $hwnd 'SelectToolButton'
+    $selectMode = Invoke-ToolbarPointerClick $process.Id $hwnd $EditorAutomationIds.Select
     Assert-ScreenInput $selectMode 'activate-select'
-    if ($null -eq (Wait-ToggleState $process.Id 'SelectToolButton' 'On' 5)) {
-        throw "SelectToolButton did not become active state='$((Get-ToggleState $process.Id 'SelectToolButton'))'."
+    if ($null -eq (Wait-ToggleState $process.Id $EditorAutomationIds.Select 'On' 5)) {
+        throw "Select tool did not become active state='$((Get-ToggleState $process.Id $EditorAutomationIds.Select))'."
     }
     $selectionStartX = [int][Math]::Round($shapeStartX - 40)
     $selectionStartY = [int][Math]::Round($shapeStartY - 40)

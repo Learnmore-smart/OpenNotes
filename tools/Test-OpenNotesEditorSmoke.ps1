@@ -9,6 +9,7 @@ param(
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
+. (Join-Path $PSScriptRoot 'OpenNotesEditorAutomationIds.ps1')
 
 if ([string]::IsNullOrWhiteSpace($ExecutablePath)) {
     $ExecutablePath = Join-Path $PSScriptRoot '..\bin\Debug\net8.0-windows\win-x64\OpenNotes.exe'
@@ -232,6 +233,15 @@ function Invoke-ToolAndReport([int]$processId, [string]$automationId) {
     Write-Output "TOOL_INVOKED id='$automationId' toggleState='$state'"
 }
 
+function Invoke-EditorCommandAndReport([int]$processId, [string]$automationId) {
+    $mainWindow = Find-MainWindow $processId
+    $control = Find-DescendantByAutomationId $mainWindow $automationId
+    if ($null -eq $control) { throw "Editor command control was not found: $automationId" }
+    Invoke-UiAutomationElement $control
+    Start-Sleep -Milliseconds 120
+    Write-Output "EDITOR_COMMAND_INVOKED id='$automationId'"
+}
+
 try {
     if (-not (Test-Path -LiteralPath $resolvedPdfPath -PathType Leaf)) {
         throw "PDF was not found: $resolvedPdfPath"
@@ -296,32 +306,137 @@ try {
             throw "OpenNotes exited while loading the PDF with code $($process.ExitCode)."
         }
         $currentMain = Find-MainWindow $process.Id
-        Find-DescendantByAutomationId $currentMain 'TextToolButton'
+        Find-DescendantByAutomationId $currentMain $EditorAutomationIds.Text
     } $EditorTimeoutSeconds
     if ($null -eq $editorTool) {
         Write-UiAutomationSnapshot $process.Id
-        throw 'The editor TextToolButton was not exposed after opening the PDF.'
+        throw 'The editor Text tool was not exposed after opening the PDF.'
     }
     Write-Output "EDITOR_TOOL_FOUND id='$($editorTool.Current.AutomationId)' name='$($editorTool.Current.Name)'"
 
-    foreach ($automationId in @(
-        'UndoButton', 'RedoButton', 'PenToolButton', 'HighlighterToolButton',
-        'HiddenInkToolButton', 'StickyNoteToolButton', 'EraserToolButton', 'ShapeToolButton',
-        'LaserToolButton', 'RulerToolButton', 'SelectToolButton', 'TextToolButton',
-        'SavePdfButton', 'PdfScrollViewer')) {
+    $requiredAutomationIds = @(
+        $EditorAutomationIds.Undo, $EditorAutomationIds.Redo, $EditorAutomationIds.Pen, $EditorAutomationIds.Highlighter,
+        $EditorAutomationIds.HiddenInk, $EditorAutomationIds.Sticky, $EditorAutomationIds.Eraser, $EditorAutomationIds.Shape,
+        $EditorAutomationIds.Laser, $EditorAutomationIds.Ruler, $EditorAutomationIds.Select, $EditorAutomationIds.Text,
+        $EditorAutomationIds.Save, $EditorAutomationIds.PageJump, $EditorAutomationIds.SidebarPages,
+        $EditorAutomationIds.SidebarOutline, $EditorAutomationIds.SidebarBookmarks, $EditorAutomationIds.SidebarCollapse,
+        $EditorAutomationIds.SidebarResize, $EditorAutomationIds.PdfScrollViewer,
+        "$($EditorAutomationIds.SidebarPagePrefix)1"
+    )
+    # Keep this list explicit. A control belongs here only when the production
+    # EditorPage contract promises it on every loaded PDF; optional future
+    # surfaces must be listed separately and may not hide a required omission.
+    $optionalAutomationIds = @()
+
+    foreach ($automationId in $requiredAutomationIds) {
         $control = Find-DescendantByAutomationId (Find-MainWindow $process.Id) $automationId
-        if ($null -ne $control) {
-            Write-Output "EDITOR_CONTROL id='$automationId' enabled=$($control.Current.IsEnabled)"
-        }
-        else {
+        if ($null -eq $control) {
             Write-Output "EDITOR_CONTROL_MISSING id='$automationId'"
+            throw "Required editor control missing: $automationId"
         }
+        Write-Output "EDITOR_CONTROL id='$automationId' enabled=$($control.Current.IsEnabled)"
+    }
+
+    $pageJumpControl = Find-DescendantByAutomationId (Find-MainWindow $process.Id) $EditorAutomationIds.PageJump
+    try {
+        $valuePattern = $pageJumpControl.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
+        $pageValue = $valuePattern.Current.Value
+        if ([string]::IsNullOrWhiteSpace($pageValue)) { throw 'The page jump ValuePattern returned an empty value.' }
+        if ($pageValue -ne '1') { throw "The initial page jump ValuePattern must expose page 1 (value='$pageValue')." }
+        if ([string]::IsNullOrWhiteSpace($pageJumpControl.Current.Name) -or
+            [string]::IsNullOrWhiteSpace($pageJumpControl.Current.HelpText)) {
+            throw 'The page jump UIA Name/HelpText metadata is empty.'
+        }
+        Write-Output "PAGE_JUMP_UIA value='$pageValue' name='$($pageJumpControl.Current.Name)'"
+
+        # The isolated fixture used by Wave4 is multi-page.  Exercise the
+        # actual ValuePattern commit path so a required field that only looks
+        # discoverable cannot make the smoke pass.
+        $valuePattern.SetValue('2')
+        Start-Sleep -Milliseconds 250
+        $committedPageValue = (Find-DescendantByAutomationId (Find-MainWindow $process.Id) $EditorAutomationIds.PageJump).GetCurrentPattern(
+            [System.Windows.Automation.ValuePattern]::Pattern).Current.Value
+        if ($committedPageValue -notmatch '2') {
+            throw "The page jump did not commit page 2 through ValuePattern (value='$committedPageValue')."
+        }
+        Write-Output "PAGE_JUMP_COMMITTED value='$committedPageValue'"
+    }
+    catch {
+        throw "Page jump UIA contract failed: $($_.Exception.Message)"
+    }
+
+    foreach ($sidebarCommand in @(
+        $EditorAutomationIds.SidebarPages, $EditorAutomationIds.SidebarBookmarks,
+        $EditorAutomationIds.SidebarOutline)) {
+        Invoke-EditorCommandAndReport $process.Id $sidebarCommand
+    }
+
+    $outlinePageTwoId = "$($EditorAutomationIds.SidebarOutlinePrefix)Page.2"
+    $outlinePageTwo = Wait-Until {
+        Find-DescendantByAutomationId (Find-MainWindow $process.Id) $outlinePageTwoId
+    } 5
+    if ($null -eq $outlinePageTwo) {
+        throw "Required multi-page outline item missing: $outlinePageTwoId"
+    }
+    Write-Output "EDITOR_CONTROL id='$outlinePageTwoId' enabled=$($outlinePageTwo.Current.IsEnabled)"
+    try {
+        $supportedOutlinePatterns = @($outlinePageTwo.GetSupportedPatterns() | ForEach-Object { $_.ProgrammaticName })
+        Write-Output "OUTLINE_SELECTION_PATTERNS id='$outlinePageTwoId' patterns='$($supportedOutlinePatterns -join ',')' class='$($outlinePageTwo.Current.ClassName)' controlType='$($outlinePageTwo.Current.ControlType.ProgrammaticName)'"
+        # Exercise Invoke before Selection so both patterns are checked on a
+        # freshly realized fallback item.  Reset the page field first so the
+        # Invoke result cannot be masked by the earlier PageJump commit.
+        $pageJumpForOutline = Find-DescendantByAutomationId (Find-MainWindow $process.Id) $EditorAutomationIds.PageJump
+        $pageJumpForOutline.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('1')
+        Start-Sleep -Milliseconds 150
+
+        $outlineInvokeId = "$outlinePageTwoId.Invoke"
+        $outlineInvokeControl = Wait-Until {
+            Find-DescendantByAutomationId (Find-MainWindow $process.Id) $outlineInvokeId
+        } 5
+        if ($null -eq $outlineInvokeControl) {
+            throw "Required fallback outline Invoke button missing: $outlineInvokeId"
+        }
+        $outlineInvoke = $outlineInvokeControl.GetCurrentPattern(
+            [System.Windows.Automation.InvokePattern]::Pattern)
+        $outlineInvoke.Invoke()
+        Start-Sleep -Milliseconds 150
+        $invokePageValue = (Find-DescendantByAutomationId (Find-MainWindow $process.Id) $EditorAutomationIds.PageJump).GetCurrentPattern(
+            [System.Windows.Automation.ValuePattern]::Pattern).Current.Value
+        if ($invokePageValue -ne '2') {
+            throw "Outline page 2 InvokePattern did not reach page 2 (value='$invokePageValue')."
+        }
+        Write-Output "OUTLINE_INVOKE_INVOKED id='$outlineInvokeId' page='$invokePageValue'"
+
+        $outlinePageTwo = Find-DescendantByAutomationId (Find-MainWindow $process.Id) $outlinePageTwoId
+        $outlineSelection = $outlinePageTwo.GetCurrentPattern(
+            [System.Windows.Automation.SelectionItemPattern]::Pattern)
+        $outlineSelection.Select()
+        Start-Sleep -Milliseconds 150
+        $selectionPageValue = (Find-DescendantByAutomationId (Find-MainWindow $process.Id) $EditorAutomationIds.PageJump).GetCurrentPattern(
+            [System.Windows.Automation.ValuePattern]::Pattern).Current.Value
+        if ($selectionPageValue -ne '2') {
+            throw "Outline page 2 SelectionItemPattern did not reach page 2 (value='$selectionPageValue')."
+        }
+        Write-Output "OUTLINE_SELECTION_INVOKED id='$outlinePageTwoId' page='$selectionPageValue'"
+    }
+    catch {
+        throw "Outline page 2 SelectionItem/InvokePattern failed: $($_.Exception.Message)"
+    }
+    Invoke-EditorCommandAndReport $process.Id $EditorAutomationIds.SidebarCollapse
+
+    foreach ($automationId in $optionalAutomationIds) {
+        $control = Find-DescendantByAutomationId (Find-MainWindow $process.Id) $automationId
+        if ($null -eq $control) {
+            Write-Output "OPTIONAL_CONTROL_MISSING id='$automationId'"
+            continue
+        }
+        Write-Output "OPTIONAL_EDITOR_CONTROL id='$automationId' enabled=$($control.Current.IsEnabled)"
     }
 
     foreach ($automationId in @(
-        'PenToolButton', 'HighlighterToolButton', 'HiddenInkToolButton',
-        'EraserToolButton', 'ShapeToolButton', 'LaserToolButton', 'RulerToolButton',
-        'SelectToolButton', 'TextToolButton')) {
+        $EditorAutomationIds.Pen, $EditorAutomationIds.Highlighter, $EditorAutomationIds.HiddenInk,
+        $EditorAutomationIds.Eraser, $EditorAutomationIds.Shape, $EditorAutomationIds.Laser, $EditorAutomationIds.Ruler,
+        $EditorAutomationIds.Select, $EditorAutomationIds.Text)) {
         Invoke-ToolAndReport $process.Id $automationId
     }
 

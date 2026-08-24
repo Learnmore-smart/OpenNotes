@@ -1,12 +1,51 @@
 # Controls/PdfPageControl.xaml(.cs)
-> Last updated: 2026-08-20（Hidden Ink documentation pass）| Protection: STANDARD
+> Last updated: 2026-08-24（Wave6 Sticky/transient dual-review GREEN closure）| Protection: STANDARD
+
+## Wave6 Open Thread
+
+- **Status:** green for focused automated scope. `ImageOverlayCanvas` has a null
+  background and only Sticky marker containers are hit-testable; image/markup/area
+  visuals remain non-hit-testable so PDF drawing is not swallowed.
+- Sticky markers use mouse/stylus capture, page-bounded DIP coordinates, arrow-key
+  nudging (Shift large step), explicit move/delete events, a 36-DIP minimum marker,
+  UIA name/help/id, and a localized Delete context menu. Quiet setters keep undo/redo
+  and selection moves from retaining stale UI references; unload detaches handlers and
+  PopupZOrder hooks before Loaded reattaches them.
+
+## Wave6 dual-review follow-up (2026-08-24) — GREEN closure
+
+- **Root cause/fix:** `PdfPageControl` implements `IInteractionCancellation`; Sticky,
+  selection/resize, PDF text-selection and page-local drawing captures are cancelled
+  idempotently on LostCapture, Escape/deactivation/navigation/reload/unload and inactive host.
+  Selection snapshots and Sticky opening positions restore before capture release; normal
+  pointer/stylus-up alone emits completion events, so cancellation never adds undo/dirty.
+- **Reopen/ownership:** marker handlers remain guarded by one per-container registration;
+  exact PopupZOrder ContextMenu hooks have explicit Unfix/Ensure methods used by close/release/
+  unload. The null `ImageOverlayCanvas` background and semantic-only Sticky hit-test invariant
+  remain unchanged. Focused deterministic STA/source contracts are green; external foreground
+  and device checks remain unclaimed.
+
+## Wave 1 quality follow-up（2026-08-23）
+
+- `StrokePlacement` is the ordinary live-stroke undo boundary: it carries the owning `PdfPageControl`, stable token, replacement side, immutable snapshot, live reference, and original collection index. `AddStrokeQuiet`/`RemoveStrokeQuiet` preserve that identity across erase/delete/cross-page undo and insert at the recorded index instead of appending.
+- `StrokesErasedEventArgs` now carries removed/added placement lists alongside its legacy stroke lists. `ApplyErasedStroke` records placements before removal and for each fragment after insertion, including net cancellation when a fragment is re-clipped in the same gesture.
+- `TryReplaceStrokeQuiet` synchronizes and delegates token/index/side lookup to the production `StrokeReplacementState`; a missing/stale token or side returns `false` without changing the collection. Replacement snapshots copy every point's `PressureFactor` and `DrawingAttributes.IgnorePressure`, so original pressure remains variable while ideal replacements can remain uniform.
+- `RemoveStrokeQuiet(StrokePlacement)` resolves the current live `Stroke` by page owner, stable token, and replacement side before removing it; `AddStrokeQuiet(StrokePlacement)` requires the same owning page and matching token/side, then resolves an existing current stroke on that page so shape undo/redo can create a new live reference without duplication. A foreign owner, side conflict, or empty token is a no-op; neither path relies only on the historical `Stroke` reference or appends a duplicate token.
+- Cross-page transfer adds an identity-specific `RemoveStrokeQuietExact` and `TryCaptureCurrentStrokePlacement`: before removing a source after shape replacement, the action captures the current live reference; target add/remove and rollback require the expected owner/token/side/reference. An unrelated same-token/same-side target therefore leaves the source intact and cannot be treated as a successful transfer.
+- `GetStrokes()` keeps its historical `StrokeCollection` return type for existing read callers but returns a defensive collection copy; mutating that copy cannot add/remove live page strokes or bypass metadata.
+- `MoveItemsDirectly` preserves point pressure during page movement. `ClearInk`/`ClearStrokes` clear placement history and the replacement ledger together.
 
 ## Purpose（一句话）
 单个 PDF 页面的交互控件：以多层 Canvas 承载墨迹（InkCanvas）、文本、高亮、PDF 文本选择、选区变换和学习模式 Hidden Ink，实现点级切割橡皮、框选/套索、拖拽/缩放、拖拽画形状、激光笔渐隐墨迹，以及可点击短暂揭示的遮罩。
 
+## Wave5 surface invariant
+
+Keep `PageGrid`, `PdfImage`, and `PdfImageOverlay` opaque and independent from `WorkspaceBackdrop`; no tint/effect/color matrix/overlay brush may be introduced on PDF image layers. Pixel comparisons across Neutral/Paper/Slate must be identical.
+
 ## What It Does（关键机制，含行号引用）
-- **层级结构**（PdfPageControl.xaml，自底向上）：`PdfImage`（位图）→ `PdfImageOverlay`（Task 12.2 位图交换覆盖层，与 PdfImage 同布局槽、Opacity 0、不参与命中，仅 SwapPageSource 过程中短暂可见）→ `ImageOverlayCanvas`（Task 19 图片注释层，InkCanvas 之下=墨迹盖图片；IsHitTestVisible=false，全部交互走 SelectionOverlayCanvas）→ `InkCanvas`（墨迹）→ `ShapePreviewCanvas`（形状拖拽虚线预览，不参与命中）→ `TextOverlayCanvas`（文本框）→ `HighlightsCanvas`（持久高亮，不参与命中）→ `PdfTextSelectionCanvas`（PDF 文本选择，默认 Collapsed）→ `SelectionOverlayCanvas`（选区变换层）→ `HiddenInkCanvas`（学习遮罩，仅其 Polyline 子项命中）→ `EraserCanvas`（橡皮光圈指示器 Ellipse）→ `LaserInkCanvas`（**Task 20 激光层，最顶层视觉**；IsHitTestVisible=false，输入由 Laser 模式下 InkCanvas 的 handler 捕获）。外层 RootGrid 有独立投影 Border。
-- **Hidden Ink（学习遮罩）**：`CustomInkInputProcessingMode.HiddenInk` 复用 InkCanvas 的自由手绘采样作为临时预览；抬笔后立即把 Stroke 从普通 `InkCanvas.Strokes` 移除，转换为 `HiddenInkAnnotation`，再在独立 `HiddenInkCanvas` 上渲染为圆头、圆角、纯色 Polyline。默认颜色为白色/纸张色，默认宽度为 28 DIP，alpha 为不透明，因此关键词下方内容在隐藏状态不可见；空白 Canvas 没有背景，不会吞掉普通页面点击。
+- **层级结构**（PdfPageControl.xaml，自底向上）：`PdfImage`（位图）→ `PdfImageOverlay`（Task 12.2 位图交换覆盖层，与 PdfImage 同布局槽、Opacity 0、不参与命中，仅 SwapPageSource 过程中短暂可见）→ `ImageOverlayCanvas`（Task 19/26 图片与 Sticky 注释层，背景为 null；仅 Sticky marker 子容器命中，图片/markup/area visuals 不命中，避免吞 PDF 绘制）→ `InkCanvas`（墨迹）→ `ShapePreviewCanvas`（形状拖拽虚线预览，不参与命中）→ `TextOverlayCanvas`（文本框）→ `HighlightsCanvas`（持久高亮，不参与命中）→ `PdfTextSelectionCanvas`（PDF 文本选择，默认 Collapsed）→ `SelectionOverlayCanvas`（选区变换层）→ `HiddenInkCanvas`（学习遮罩，仅其 Polyline 子项命中）→ `EraserCanvas`（橡皮光圈指示器 Ellipse）→ `LaserInkCanvas`（**Task 20 激光层，最顶层视觉**；IsHitTestVisible=false，输入由 Laser 模式下 InkCanvas 的 handler 捕获）。外层 RootGrid 有独立投影 Border。
+- **Sticky Note marker（Task 26）**：`AddStickyNote` creates a semantic 36-DIP-or-larger note icon with stable Id, editable text tooltip, marker size/colour, AutomationId/Name/HelpText and a right-click Delete menu. Mouse/stylus gestures capture on the marker itself, clamp to page bounds in DIP, and emit one `StickyNoteMoved` event on release; Enter/Space reopens the editor, Delete/context-menu raises `StickyNoteDeleteRequested`, and arrows nudge 4 DIP (Shift=16 DIP). Quiet position/text setters are used by undo/redo, selection moves, copy/paste and duplicate; unloading removes handlers and z-order hooks before reattachment. `ScaleItemsDirectly` persists marker width/height and re-clamps X/Y after resizing; localized marker Automation Name/HelpText and Delete-menu metadata are refreshed with the active catalog.
+- **Hidden Ink（学习遮罩）**：`CustomInkInputProcessingMode.HiddenInk` 复用 InkCanvas 的自由手绘采样作为临时预览；抬笔后立即把 Stroke 从普通 `InkCanvas.Strokes` 移除，转换为 `HiddenInkAnnotation`，再在独立 `HiddenInkCanvas` 上渲染为圆头、圆角、纯色 Polyline。新遮罩默认使用不透明中性灰 `#C7CDD4`，已加载的显式颜色（包括 legacy white）保持原值，默认宽度为 28 DIP，alpha 为不透明，因此关键词下方内容在隐藏状态不可见；空白 Canvas 没有背景，不会吞掉普通页面点击。
 - **Hidden Ink reveal / eraser**：每个 Polyline 自己接收鼠标与触控笔点击；Hidden Ink 工具或普通模式点击只折叠该遮罩并启动独立 `DispatcherTimer`，使用 `RevealDurationMs`（默认 3000ms）到期后重新显示。重复点击会先停止旧 timer 再重新计时。切换到 Erasing 后由底层 InkCanvas 接管拖拽擦除，擦除命中用线段与膨胀矩形相交测试，避免仅用轴对齐 bounds 误删斜线遮罩；一整个拖拽手势累积所有移除项，抬笔/抬鼠标时一次性发出 `HiddenInksRemoved`。清空页面时同时停止所有 reveal timer、移除视觉和模型项。Reveal 仅为会话态，不改变保存数据。
 - **位图两层交换**（Task 12.2，`SwapPageSource`，OnPageSourceChanged 唯一入口）：直接 `PdfImage.Source = 新位图` 会闪（旧位图释放/新位图尚在解码合成 + HighQuality 重插值瞬间可见）。两层交换：新位图先入 `PdfImageOverlay`（Opacity 0.001——全透明视觉可能被渲染走查跳过，必须保证预热帧真实合成位图；0.1% alpha 视觉不可见）→ 链式两次 `BeginInvoke(Render)`（每次在该帧渲染 pass 前执行，即预热 2 帧）→ 同帧 `Overlay.Opacity=1` + `PdfImage.Source=新位图`（覆盖层全遮盖，底下换源不可见）→ 下一帧清 overlay（Source=null/Opacity=0；主图已完整渲染新位图一帧）。**generation 计数器**（`_pageSourceSwapGeneration`）每次 PageSource 变更自增，旧回调比对失配即 no-op（快速缩放/滚动连发时旧交换链安全作废，主图始终持有最后**已提交**位图）。布局零变化：两 Image 均 Stretch=Uniform 于固定尺寸页内。初始渲染（LoadPdf/滚动懒渲染）与缩放重渲染（ReRenderPagesAsync）共用此 DP 回调路径。`PageSource=null`（卸载清空）直接清两层。
 - **自定义墨迹集合**（.cs 行 150-159）：`private readonly StrokeCollection _strokes` 直接赋给 `InkCanvas.Strokes`——**防止 WPF 在 EditingMode/可见性切换时清空笔迹**（注释行 150-151 明示）。构造器把 `EditingMode/EditingModeInverted` 均设为 `None`（行 177-178），禁用原生倒置橡皮，走自定义逻辑。
@@ -15,7 +54,7 @@
 - **Shift 直线约束（Task 21）**：`InkCanvas_StrokeCollected` 最前（PreserveTapStroke 之后、形状识别/墨水模拟之前）若 `IsShiftHeld()`（`(Keyboard.Modifiers & Shift)==Shift`，"含 Shift"语义）→ `StraightenShiftStroke`：整笔替换为首尾两点直线 Stroke（attrs 克隆保 Color/Width/IsHighlighter，`FitToCurve=false`），`_strokes[index]=replacement` 原位换入（ApplyInkSimulation 同款模式，**单步 undo 覆盖、无额外 undo 事件**）；2 点笔迹天然跳过形状识别（<8 点门）与墨水模拟（<3 点门）——用户显式意图优先于启发式。**已知限制（有意为之，per-stroke 而非 live）**：拉直与否由抬笔瞬间 Shift 状态决定，不追踪笔中途松/按 Shift；WPF InkCanvas 逐点收集无法低成本逐点拦截。
 - **直尺吸附（Task 22）**：`InkCanvas_StrokeCollected` 最前（PreserveTapStroke 之后、Shift 拉直/形状识别/墨水模拟之前）且 `_currentMode == Inking`（仅 Pen/Highlighter 自由手写；Shape/Laser 手动提交不走此事件、橡皮不收集，gate 显式化契约）时跑 `SnapStrokeToRuler`：查询 `GetRulerEdgeInPageCoords` delegate（EditorPage 在 LoadPdf 建页时注入，闭包内 `TranslatePoint` 实时把 viewport 坐标的尺边换算到该页 RootGrid 坐标——滚动/缩放/移尺后永不过期；null=尺隐藏）；非 null 时先 `RootGrid.TranslatePoint` 转成 InkCanvas 坐标（stylus points 的度量系），**两遍扫描**：第一遍算每点到线段的距离（t clamp 到 [0,1]，超出尺端的行程计入距离）取 max，≥24px（`RulerSnapTolerancePx`）整笔不动；第二遍把每点投影到线段（t clamp 保 PressureFactor），克隆 DrawingAttributes 生成替换 Stroke，`_strokes[index]=replacement` 原位换入（ApplyInkSimulation 同款模式）→ 沿尺的完美直线；替换后笔迹继续走既有管线（InkMutated dirty + StrokeCollectedUndoable 单步 undo + GetStrokeData 保存全自动）。**吸附目标是尺的上边缘而非中线**（决策见下）。退化为单点的 tap（PreserveTapStroke 补点后 2 点）靠近尺边也会吸附为贴边短线段，行为合理。
 - **笔迹平滑（Task 24）**：`StrokeSmoothingLevel` 属性（0=关/1=低/2=中/3=高，默认 2，EditorPage 每次 ApplyToolToAllPages 从 AppSettings.StrokeSmoothing 同步并 Math.Clamp）。`InkCanvas_StrokeCollected` 处理链位：**尺吸附 → Shift 拉直 → 平滑 → 形状识别 → 墨水模拟**（平滑在尺吸附/Shift 拉直之后——它们的输出是用户意图轨迹（共线点均值仍共线，无害）；在识别/墨水模拟之前——降噪后的点对识别的几何门更有利，模拟读最终点集）。`ApplySmoothing(stroke)`：**档 0（关）**点集原样，但把笔迹原位替换为 attrs 克隆 `FitToCurve=false` 的副本（WPF 的 FitToCurve 是渲染期曲线拟合，不关它"关"档看到的仍是平滑曲线；已 false 的笔迹（如 Shift 拉直线）跳过替换）；**档 1-3** 滑动窗口均值 w=1/2/4（每侧邻居数，索引端点 clamp），newPts[i]=avg(pts[i-w..i+w])，**PressureFactor 取原中心点**，attrs 克隆 FitToCurve=true 原位换入（ApplyInkSimulation 同款 `_strokes[index]=replacement` 模式——单步 undo、保存管线全自动）。防护：count<3（tap/拉直线）不动；**短笔迹有效窗口钳制 w≤(count-1)/2**（否则窗口≥笔长时所有输出点坍缩到质心把笔画缩成点）。平滑对 Pen/Highlighter 均生效（无 IsHighlighter 门——平滑的是轨迹而非墨水）；高亮笔迹同样平滑。设置入口在 pen popup 分段行（EditorPage），设置页入口 Task 38。
-- **涂鸦形状识别**（Task 4，#region 行 1108-1445）：`ShapeRecognitionEnabled`（行 219，EditorPage 每次 ApplyToolToAllPages 从设置同步）开启时 `InkCanvas_StrokeCollected`（行 320）对**非高亮、点数≥8** 的笔迹**先于墨水模拟**跑 `TryRecognizeShape`（命中则整体替换、跳过墨水模拟）。流程：点集→纯点 bounds（非 GetBounds，后者含笔宽膨胀）→ diag<24px 拒 → 周长与闭合判定（首尾距 <0.15·perimeter）→ 开口走 `LooksLikeLine`（到首尾弦的平均垂距 <6%·diag）；闭合走 `LooksLikeRectangle`（方向桶游程法，**先于椭圆**）再 `LooksLikeEllipse`（质心距离 circularity>0.82 + 排序 atan2 角覆盖 ≥300°）。命中→ 复用 Task 3 的 `BuildShapeOutline` 生成理想形状（line=原始首尾点；rect/ellipse=bounds 对角点，椭圆中心取 bounds 中心）→ 克隆原 DrawingAttributes 改 FitToCurve=false/IgnorePressure=true → `ReplaceRecognizedStroke` 按 ApplyInkSimulation 同款 `_strokes[index]=ideal` 原位替换 → 发 `InkMutated` + **`StrokeRecognized`**（original/ideal payload，代替 StrokeCollectedUndoable）。矩形识别（`LooksLikeRectangle`）：逐点 5 点窗方向→`DirectionBucket` 量化为 4 个 45° 桶（mod 180°，上下同桶、垂直差恒为 2 桶）→ 连续同桶游程 → 丢弃 <6% 点数的噪声游程并合并同桶邻居 → **恰 4 条主导边**（闭合笔迹从边中起笔时首尾两条同桶游程 wrap 合并算 1 边）→ 相邻边桶号差恒为 2（垂直）→ 游程覆盖 ≥80% 点数 → 每边平均垂距 <6%·边弦长 → 检测角（相邻边过渡区中点）与 bounds 四角**双向**就近匹配 <12%·diag（拒菱形/梯形/旋转矩形）。
+- **涂鸦形状识别**（Task 4，#region 行 1108-1445）：`ShapeRecognitionEnabled`（行 219，EditorPage 每次 ApplyToolToAllPages 从设置同步）开启时 `InkCanvas_StrokeCollected`（行 320）对**非高亮、点数≥8** 的笔迹**先于墨水模拟**跑 `TryRecognizeShape`（命中则整体替换、跳过墨水模拟）。流程：点集→纯点 bounds（非 GetBounds，后者含笔宽膨胀）→ diag<24px 拒 → 周长与闭合判定（首尾距 <0.15·perimeter）→ 开口走 `LooksLikeLine`（到首尾弦的平均垂距 <6%·diag）；闭合走 `LooksLikeRectangle`（方向桶游程法，**先于椭圆**）再 `LooksLikeEllipse`（质心距离 circularity>0.82 + 排序 atan2 角覆盖 ≥300°）。命中→ 复用 Task 3 的 `BuildShapeOutline` 生成理想形状（line=原始首尾点；rect/ellipse=bounds 对角点，椭圆中心取 bounds 中心）→ 克隆原 DrawingAttributes 改 FitToCurve=false/IgnorePressure=true → `ReplaceRecognizedStroke` 以同一 session `Guid` token 和不可变 original/ideal snapshots 原位替换，通过 `TryReplaceStrokeQuiet` 验证 token/side，成功才发 `InkMutated` + **`StrokeRecognized`**（事件只携带 token/index/snapshots，代替 `StrokeCollectedUndoable`）；缺 token 永不追加 ideal。矩形识别（`LooksLikeRectangle`）：逐点 5 点窗方向→`DirectionBucket` 量化为 4 个 45° 桶（mod 180°，上下同桶、垂直差恒为 2 桶）→ 连续同桶游程 → 丢弃 <6% 点数的噪声游程并合并同桶邻居 → **恰 4 条主导边**（闭合笔迹从边中起笔时首尾两条同桶游程 wrap 合并算 1 边）→ 相邻边桶号差恒为 2（垂直）→ 游程覆盖 ≥80% 点数 → 每边平均垂距 <6%·边弦长 → 检测角（相邻边过渡区中点）与 bounds 四角**双向**就近匹配 <12%·diag（拒菱形/梯形/旋转矩形）。
 - **形状工具**（Task 3，#region 行 869-1064）：`CustomInkInputProcessingMode.Shape`（枚举行 15）时 InkCanvas `EditingMode=None` + 命中开启 + Cross 光标，由控件自处理输入——StylusDown（行 691，倒置笔/侧键 shouldErase 优先仍走擦除）→ BeginShapeDrag（CaptureStylus），StylusMove/Up 更新/提交；鼠标路径走 MouseLeftButtonDown（行 784）/MouseMove/MouseUp（CaptureMouse），且鼠标处理器以 `e.StylusDevice != null` 守卫跳过笔触提升合成的鼠标事件（触控提升走 Stylus 分支，与自由手写行为一致）。预览：`ShapePreviewCanvas` 上的 Polyline（DashArray 4,2、颜色=ShapeColor、Opacity 0.6、StrokeThickness=max(1,ShapeStrokeSize)），箭头为 2 条（线身+头部 V）；拖拽中只重赋 Points 不重建元素。提交 `CommitShape`（行 1021）：Line=2 点 / Rect=5 点闭合 / 椭圆=64 段参数多边形 / 箭头=线身 2 点 + 头部 V 3 点共 **2 个 Stroke**；DrawingAttributes `{FitToCurve=false, IgnorePressure=true, IsHighlighter=false}`（每笔 Clone），手动 `InkCanvas.Strokes.Add` + `InkMutated` + 逐笔 `StrokeCollectedUndoable`——形状笔迹即普通 Stroke，选区/undo/复制粘贴/GetStrokeData 保存加载管线全自动。拖拽 <4px（ShapeDragThreshold）视为点击不提交；SetInputMode 离开 Shape 模式时清拖拽状态与预览层。**Shift 约束（Task 21）**：`UpdateShapeDrag`/`EndShapeDrag` 两个入口统一经 `ConstrainShapeEndpoints(start, end, kind, isShift)`（静态 helper）——Line/Arrow：方向吸附最近 45° 倍数（`round(atan2/45°)·45°`，终点按原长度重投影）；Rect/Ellipse：正方/正圆（side=max(|dx|,|dy|)，拖拽方向符号保留，sign(0) 取 +）；isShift=false 原样返回。**preview 与 commit 共用同一 helper（一处计算）**，所见即所得；阈值判定用原始 position（约束前）。
 - **激光笔（Task 20，#region "Laser pointer"）**：`CustomInkInputProcessingMode.Laser` 时 InkCanvas `EditingMode=None` + **命中开启**（捕获手势）+ Cross 光标——与 Shape 同款输入契约。输入处理镜像 Shape 的管线：StylusDown/Move/Up + MouseDown/Move/Up（鼠标处理器 `e.StylusDevice != null` 守卫），`BeginLaserStroke`（CaptureStylus/CaptureMouse）/`UpdateLaserStroke`/`EndLaserStroke`。**无 pen-only 守卫（有意）**：鼠标激光是主用例，ShouldBlockNonPenInk 不适用。绘制：普通 Polyline（激光红 #FF3B30、粗 3、Round caps/join、IsHitTestVisible=false）落在 `LaserInkCanvas`，live 追加点（<0.5px 重复点跳过）；抬笔（EndLaserStroke）→ `DoubleAnimation` Opacity 1→0（900ms，BeginTime 150ms 延迟）→ Completed 移除 Polyline。**live 上限 60 条**（`MaxLiveLaserPolylines`，超出立即移除最旧）。**关键隔离（20.2）**：激光笔迹纯视觉——不碰 `InkCanvas.Strokes`、不发 `InkMutated`/`StrokeCollectedUndoable`/`StrokeRecognized`、不 MarkDirty、不推 undo；保存路径 `GetStrokeData`（只读 InkCanvas.Strokes）/CollectAnnotations 天然不含激光层（20.3 已 code-reading 验证）。SetInputMode 离开 Laser 时清 in-flight 拖拽状态（`_isLaserDrawing=false`），**已在渐隐的 polyline 不动**（自行移除）；ClearAllAnnotations 亦不清激光层（自愈式设计，最大隔离）。
 - **点切割橡皮**：`EraseStrokesAtPoints(StylusPointCollection)`——先 `CreateEraserRects`（每触点生成 `_eraserSize` 见方矩形）取并集预筛候选笔迹（`GetBounds().IntersectsWith`），再分模式：**像素模式**（`WholeStrokeEraser=false`，默认）用 `PointHitsEraser` 确认有采样点落入橡皮，命中则 `ClipStrokeByErasers` 按**采样点级切割**（被覆盖点丢弃，剩余连续段 >1 点重建为带克隆 DrawingAttributes 的新 Stroke）；**整笔模式**（`WholeStrokeEraser=true`，行 180）只要 `stroke.GetBounds()` 与任一**单个**橡皮矩形相交即整笔移除（`ApplyErasedStroke(stroke, 空列表)`，无碎片）。倒置笔/侧键路径同走此方法，自动遵循模式。
@@ -34,8 +73,9 @@
 - **PDF 文本选择层**：`SetPdfTextSelectionEnabled`（行 804-823）启用时禁 InkCanvas 命中并 IBeam 光标；`SetPdfTextSelectionRects`（行 825）绘制 80 alpha 蓝色圆角矩形。
 - **图片注释（Task 19）**：图片以 **Grid 容器（Tag="imageContainer"）** 落在 `ImageOverlayCanvas`（InkCanvas 之下），**注册进既有选区管线**（进入 `_selectedTextContainers` 列表，与文本容器同型）。`AddImage(byte[], Point, double? explicitWidth, double? explicitHeight)`：BitmapImage（CacheOption.OnLoad 解码后脱流+Freeze）→ 显式尺寸（装载/粘贴副本路径）或按 40% 页宽高保纵横比自适应 → Grid 包 Image（Stretch=Uniform，IsHitTestVisible=false）→ 顶层左角落点并 clamp 页内 → 入 `_imageContainers` 列表 + `_imageDataById`（Dictionary<Grid, byte[]> 原始编码字节，保存时免重编码）→ 发 `ImagesChanged`（EditorPage → MarkDirty；装载期由 EditorPage `_isLoadingAnnotations` 抑制）。**集中式容器移除**：`RemoveTextContainerQuiet`/`AddTextContainerQuiet` 感知层级（image 容器 ↔ ImageOverlayCanvas，文本 ↔ TextOverlayCanvas）——所有 undo/删除/跨页动作走同一 API；quiet 移除只从 `_imageContainers` 删列表项、**字典保留 payload**（同页 undo 重加免数据搬家）；跨页转移由 EditorPage `SelectionCrossPageMoveAction.TransferImageData` 显式搬运字节（字典 per-control）。`ClearAllAnnotations` 整体清层+列表+字典。选区集成：框选完成（矩形/套索两分支）与 Ctrl+点击（HandleCtrlClickToggle，文本→图片→笔迹的 z 序）都迭代 `ImageOverlayCanvas.Children`；`ScaleItemsDirectly` 对 image 容器缩放 **Grid Width/Height**（非 FontSize——image 容器无 TextBox）；移动（Canvas.SetLeft/Top）、逐项描边、删除、GetSelectionBounds 均容器通用（bounds 用 ActualWidth 失效时回退显式 Width，粘贴即选时首帧 bbox 正确）。
 - **高亮**：`AddHighlightAnnotation`（行 1643，A=120 固定半透明）/`AddHighlight`（行 1662）→ `RenderHighlightVisual` 自绘到 HighlightsCanvas。
+- **区域高亮预览**：`BeginAreaHighlightDrag` 的虚线边框/填充都使用当前 `AreaHighlightColor` 与 `AreaHighlightOpacity`；因此主拖拽预览与 EditorPage 的 6 模式 preview（fill alpha 76、stroke alpha 220）共享生产 opacity，不再保留独立的 48 alpha。
 - **模式**：`SetMode(bool isTextMode)`（行 795-802）仅文本工具下 TextOverlayCanvas 参与命中；`SetInputMode(CustomInkInputProcessingMode)`（行 1327）切换 None/Inking/Erasing/Shape/Laser 并更新橡皮光圈样式（行 640-665）；离开 Shape 模式时清形状拖拽状态与预览层；离开 Laser 模式时清激光拖拽状态（渐隐中的 polyline 不动）；Laser case 与 Shape 同款（命中开启 + EditingMode=None + Cross 光标）。
-- **事件**（行 107-118）：`InkMutated`、`StrokeCollectedUndoable`、`StrokesErased`（擦除手势完成，带 StrokesErasedEventArgs：RemovedStrokes/AddedStrokes）、`StrokeRecognized`（形状识别命中，带 StrokeRecognizedEventArgs：OriginalStroke/IdealStroke，**代替** StrokeCollectedUndoable 发出；EditorPage 据此推 StrokeReplacedAction）、`ModeChanged`、`SelectionChanged`、`SelectionMoveCompleted`、`SelectionResizeCompleted`、文本/PDF 文本选择的 Pointer 系列。
+- **事件**（行 107-118）：`InkMutated`、`StrokeCollectedUndoable`、`StrokesErased`（擦除手势完成，带 StrokesErasedEventArgs：RemovedStrokes/AddedStrokes）、`StrokeRecognized`（形状识别命中，带 `StrokeRecognizedEventArgs` 的 token/index/original snapshot/ideal snapshot，**代替** `StrokeCollectedUndoable` 发出；EditorPage 据此推仅保存 token/snapshot/index 的 `StrokeReplacedAction`）、`ModeChanged`、`SelectionChanged`、`SelectionMoveCompleted`、`SelectionResizeCompleted`、文本/PDF 文本选择的 Pointer 系列。
 
 ## Public API / 关键成员（表）
 | 成员 | 行号 | 说明 |
@@ -58,7 +98,7 @@
 | `AddStroke(StrokeAnnotation)` / `AddStrokeQuiet` / `RemoveStrokeQuiet` | 996-1016 | 笔迹装载（加载注释 / undo 静默版） |
 | `AddHighlightAnnotation(rects,color)` / `AddHighlight` | 1643/1662 | 高亮 |
 | `AddImage(bytes, pos, w?, h?)` | Task 19 | 图片注释装载（返回 Grid 容器；显式尺寸或 40% 页自适应；Tag="imageContainer"） |
-| `ImageContainers` / `GetImageData(Grid)` / `SetImageData(Grid, bytes)` | Task 19 | 图片容器列表与原始字节存取（保存收集/跨页转移用）；`IsImageContainer(Grid)` internal 判定 |
+| `ImageContainers` / `GetImageData(Grid)` / `SetImageData(Grid, bytes)` / `RemoveImageData(Grid)` | Task 19 | 图片容器列表与原始字节存取（保存收集/跨页转移与事务回滚用）；`IsImageContainer(Grid)` internal 判定 |
 | `ImagesChanged` 事件 | Task 19 | AddImage 时发出（EditorPage→MarkDirty，装载期抑制） |
 | `MoveItemsDirectly` / `ScaleItemsDirectly` | 1072/1107 | undo 重放变换 |
 | `GetSelectionBounds()` / `HasSelection` / `SelectedStrokes` / `SelectedTextContainers` | 1147-1180 | 选区查询 |
@@ -68,7 +108,7 @@
 | `GetHiddenInkData()` | Task 49 | 返回 Hidden Ink 的深拷贝列表；临时 reveal 状态不包含在结果中 |
 | `HiddenInkCreated` / `HiddenInkRemoved` | Task 49 | 新遮罩与擦除移除事件；EditorPage 用于 dirty/undo 接线 |
 | `HiddenInksRemoved` | Task 49 | 一次擦除手势结束时批量报告被移除的 Hidden Ink 深拷贝；EditorPage 为整个手势推一个 undo action |
-| `HiddenInkMaskColor` / `HiddenInkSize` / `HiddenInkRevealDurationMs` | Task 49 | 新遮罩的纯色、DIP 宽度和 reveal 时长（默认白色、28 DIP、3000ms） |
+| `HiddenInkMaskColor` / `HiddenInkSize` / `HiddenInkRevealDurationMs` | Task 49/Wave 2 | 新遮罩的纯色、DIP 宽度和 reveal 时长（默认中性灰 `#C7CDD4`、28 DIP、3000ms；已加载显式颜色不被覆盖） |
 | `SetPenService(WindowsPenService)` | 214 | 注入笔服务，同步 Pressure/TiltEnabled |
 | `PressureEnabled` / `TiltEnabled` | 143/148 | 压感/倾斜开关（属性，默认 true） |
 
@@ -77,6 +117,9 @@
 - 被 `Pages/EditorPage.xaml.cs` 大量使用（工具应用、undo 重放、注释装载）。
 
 ## Open Threads / Resume Context
+
+ - **Wave 2 complete for automated scope:** New Hidden Ink masks use opaque `#C7CDD4` in model/control/editor defaults. Existing loaded annotation RGB values remain untouched; reveal is still visibility/timer-only. `RenderHiddenInkVisual` retains round caps and isolated HiddenInkCanvas hit testing. Expanded coordinator/Hidden Ink/PDF tests pass 32/32 and full suite passes 127/127 with no ownership/coordinate changes.
+ - **Wave 1 quality follow-up:** Shape recognition uses session `Guid` tokens plus immutable snapshots, but erase/delete/cross-page undo must also preserve placement identity (token, side, original index and page owner), pressure/IgnorePressure, and protected stroke access. `ReplaceRecognizedStroke` must continue replacing in place and return failure without appending when the token is absent.
 - **Status:** performance lifecycle complete.
 - `SetHostActive(false)` stops the selection `CompositionTarget.Rendering` subscription, Hidden Ink reveal timers, and transient laser visuals without mutating annotations; reactivation rebuilds selection visuals. `SetBitmapScalingMode` lets EditorPage use cheaper interpolation during motion. First/eviction renders assign the bitmap directly, while replacements keep the guarded two-layer swap. `Unloaded` performs the same transient cleanup to avoid static-event retention.
 - Control-side implementation for ordinary ink, selection, ruler, PenOnly, laser, smoothing, text/image containers and Hidden Ink is complete; the current solution builds with 0 errors and 5 documented warnings.
@@ -93,7 +136,7 @@
   - **方向桶 mod 180°**（上/下同桶）：垂直方向恒差 2 桶，"相邻边桶号差=2"即严格垂直判定；同时"上下往返描同一条线"合并为单游程被"恰 4 边"自然拒绝。
   - 阈值取值：闭合 0.15·perimeter、线平均垂距 6%·diag、椭圆 circularity 0.82 + 300° 覆盖、噪声游程 <6% 点数、覆盖 ≥80%、边直度 6%·弦长、角容差 12%·diag（双向匹配）。调参目标（spec）：随手直线/毛糙圆/认真矩形 → 识别；乱涂/锯齿 → 不动。锯齿波幅 <12% 长度时会被拉直（此时视觉上本就近直线，可接受）。
   - **理想形状几何**：line=原始首尾点；rect/ellipse=原始**纯点 bounds**（非 GetBounds——后者含笔宽膨胀会放大形状）；椭圆中心取 bounds 中心而非 centroid（与 rx/ry=bounds/2 自洽，spec 允许 v1 近似）。轴对齐 v1：旋转矩形/菱形/梯形被角匹配门有意拒绝（理想形状是 bounds 拟合，非旋转拟合）。
-  - **事件设计**：命中时发 `StrokeRecognized`(original, ideal) **代替** `StrokeCollectedUndoable`（否则 undo 只删 ideal 不还原 original）；InkMutated 照发（dirty）。undo 语义在 EditorPage 的 StrokeReplacedAction。识别先于墨水模拟（命中即整体替换，模拟无意义）。
+  - **事件设计**：命中时发带 token/snapshot/index 的 `StrokeRecognized` **代替** `StrokeCollectedUndoable`（否则 undo 只删 ideal 不还原 original）；InkMutated 照发（dirty）。undo 语义在 EditorPage 的 snapshot-only `StrokeReplacedAction`，其 quiet replacement 在用户擦除/其它动作已移除 token 后安全 no-op。识别先于墨水模拟（命中即整体替换，模拟无意义）。
   - 识别入口即 InkCanvas_StrokeCollected 既有后处理位（与墨水模拟同位），鼠标绘制笔迹同样生效。
 - Task 6 决策（逐项动画描边）：
   - **单一 CompositionTarget.Rendering 驱动**而非每 rect 一个 Storyboard/DoubleAnimation：N 个动画钟在 50+ 项时开销与 GC 压力不可控；复用 EditorPage 滚动动画的既有 tick 模式（DateTime.UtcNow 计时）。每 tick 只写 StrokeDashOffset（render-only DP，无布局失效）。
@@ -148,23 +191,33 @@
 
 ## OpenNotes Completion Pass
 
-- **Status:** ready_for_next
+- **Status:** in_progress
 - Text geometry is persisted by EditorPage/PdfService, not by the PDF bitmap layer. Keep image/ink/selection layer ordering and page DIP coordinates unchanged.
+
+## Wave 1 quality follow-up
+
+- Production tests must exercise `PdfPageControl` on an STA thread and invoke the actual nested undo actions (or a single production-used pure core), not only a parallel fixture or source-string contract.
+- Every stroke undo action that removes/re-adds a live stroke must carry `StrokePlacement` identity: stable token, original side, original index and owning page. Cross-page transfer creates an explicit target placement and restores the source placement before shape undo.
+- Snapshot points preserve `PressureFactor`; snapshots preserve `DrawingAttributes.IgnorePressure` so freehand undo restores pressure-sensitive rendering while ideal shapes remain uniform.
+- `GetStrokes()` must no longer expose the live mutable collection; existing callers must retain read/enumeration compatibility while mutations go through quiet APIs.
 
 ## V5 Completion Status
 
 - Tasks 25-27 add text-markup, sticky-note and rectangular-area-highlight overlay behavior while preserving the existing DIP coordinate, selection, movement and deletion contracts.
 - `SelectAllAnnotations` covers strokes, text, images and custom overlay containers for Ctrl+A.
-- Open threads: no required V5 control implementation remains.
+- Open threads: no required V5 control implementation remains; Wave5 render-hash coverage confirms the PDF bitmap is unaffected by Neutral/Paper/Slate workspace backdrop selection.
 
 ## Hidden Ink code-level status
 
 - 普通 InkCanvas、选择层和 HiddenInkCanvas 彼此隔离：隐藏遮罩不会进入普通笔迹集合，普通选择/擦除逻辑也不会意外修改答案。
+- `SetDocumentInputEnabled(bool)` 是 EditorPage 关闭/导航 admission 的输入闸门：禁用页面控件的 WPF 输入但保留渲染，避免排队的 ink/text/selection mutation 在最终快照后进入模型。
 - `HiddenInkCreated` 与 `HiddenInkRemoved` 只在用户创建/单个点击移除时触发；拖动擦除使用 `HiddenInksRemoved` 一次性发送整个手势的深拷贝列表。装载和 undo/redo 使用 quiet API，避免重复产生 undo 命令。
 - PDF 页的 HiddenInkCanvas 位于选择层之上、橡皮指示器之下；只有 Polyline 路径可命中，页面空白区域仍交给普通编辑/滚动输入。
 - Hidden Ink 擦除使用线段-矩形相交（Liang–Barsky clipping）而不是只比较点或轴对齐 bounds，斜向遮罩也能按真实几何命中。
 
 ## Change History
+- 2026-08-24: Wave5 review closure keeps the PDF display layer independent from workspace decoration. Laser fade and selection-dash animation now consume `ThemeService.GetAnimationDuration`/`ShouldAnimate`, while `PdfImage` and `PdfImageOverlay` remain bitmap-only hosts. The real STA `PdfPageControl` composite probe wraps a known non-white bitmap and annotation overlay in Neutral/Paper/Slate workspace parents and confirms the page crop is byte-stable; this is complementary to the PDF service hash contract and must not be replaced by tinting the page.
+- 2026-08-24: Wave5 review chrome follow-up routes eraser/text-selection/selection-handle visuals through live `ThemeAccentBrush`, `ThemeFocusBrush`, `ThemeSelectionBrush`, and `ThemeSurfaceBrush` resource references. The marching-ants phase may switch between the current accent/focus resources, but no frozen blue/cyan brush captures a palette; PDF bitmap pixels and user annotation colors remain untouched.
 - 2026-08-18: 建立镜像文档（Task 0）。
 - 2026-08-20: Hidden Ink（Task 49）——新增 HiddenInkCanvas、HiddenInk 输入模式、3 秒点击 reveal、擦除移除事件、定时器清理和独立模型 API；保存/加载由 EditorPage/PdfService 负责。
 - 2026-08-20: Hidden Ink 完成回归——拖动擦除改为手势级批量 `HiddenInksRemoved`，使用线段与膨胀矩形相交判定；`FitToCurve` 在 GetStrokeData/AddStroke 间往返；逐项选择描边移除原有 200 项上限。
@@ -182,4 +235,10 @@
 - 2026-08-18: Task 20 激光笔——`CustomInkInputProcessingMode` 增 `Laser`；XAML 新增 `LaserInkCanvas`（最顶层，EraserCanvas 之上，IsHitTestVisible=false）；新增 #region Laser pointer（BeginLaserStroke/UpdateLaserStroke/EndLaserStroke + 常量 LaserColor #FF3B30/粗 3/延迟 150ms/渐隐 900ms/上限 60）；InkCanvas 六个输入 handler（StylusDown/Move/Up + MouseDown/Move/Up）各加 Laser 分支（镜像 Shape 管线，无 pen-only 守卫）；SetInputMode 增 Laser case（命中开 + EditingMode=None + Cross）+ 离开 Laser 清拖拽状态。隔离：零事件、零 Strokes 写入、保存路径不含激光层。构建 0 错误 + 21/21 测试通过。
 - 2026-08-18: Task 21 Shift 约束——新增静态 helper `ConstrainShapeEndpoints`（Line/Arrow 45° 吸附重投影；Rect/Ellipse 正方/正圆保方向）+ `IsShiftHeld`；接入 UpdateShapeDrag/EndShapeDrag（preview/commit 一处计算一致）；新增 `StraightenShiftStroke`（InkCanvas_StrokeCollected 最前，Shift 按住时整笔拉直为首尾两点直线，attrs 克隆 + FitToCurve=false，_strokes 原位替换，单步 undo；跳过形状识别/墨水模拟）。构建 0 错误 + 21/21 测试通过。
 - 2026-08-18: Task 22 直尺吸附——新增 `GetRulerEdgeInPageCoords`（`Func<(Point A, Point B)?>` delegate，EditorPage LoadPdf 注入）+ `RulerSnapTolerancePx=24` 常量 + `SnapStrokeToRuler`（两遍扫描：全点距线段 <24px 才整笔投影，t clamp 保 PressureFactor，`_strokes` 原位替换）；`InkCanvas_StrokeCollected` 在 Shift 拉直前挂钩（`_currentMode == Inking` gate）。尺本体（视觉/拖动/旋转/吸附几何）全在 EditorPage overlay，见其镜像。构建 0 错误 + 21/21 测试通过。
+- 2026-08-23: Wave 1 形状识别撤销——普通 Stroke 由 reference-identity 字典分配 session token；识别事件改为 token/index/immutable snapshots，`TryReplaceStrokeQuiet` 原位替换并在 token 缺失或 side 不符时 no-op，整笔擦除/清理同步移除 metadata；focused shape contract 4/4、Wave 1 integration 31/31、full suite 107/107 通过。专用 shape pointer smoke 脚本尚不存在，故不宣称手动结果。
+- 2026-08-23: Wave 1 quality follow-up——placement owner/token/side/index metadata now flows through erase/delete/cross-page actions; snapshots preserve pressure and IgnorePressure; production `StrokeReplacementState` is shared by page operations; `GetStrokes()` returns a defensive legacy-typed copy. Production 5/5 and full suite 113/113 pass; pointer foreground evidence remains open.
+- 2026-08-23: Wave 2 plan — switch only new Hidden Ink defaults to `#C7CDD4` while preserving explicit legacy white values and transient reveal semantics; no layer-order, ownership-prefix, or PDF coordinate changes.
+- 2026-08-23: Wave 2 implementation — model/control/editor defaults now use `#C7CDD4`; explicit white annotations remain white through load/save, while `/CA 1`, `wna_hidden_`, `/WNARevealMs`, round caps and reveal timers remain unchanged.
+- 2026-08-23: Wave 2 final review — `SetDocumentInputEnabled` now participates in the shared editor close admission; page input is disabled before final save/release and restored only after a cancelled/recoverable navigation or close.
+- 2026-08-23: Wave 2 transactional follow-up — `RemoveImageData` lets cross-page selection rollback clear a copied image payload from the target page while preserving the source owner.
 - 2026-08-18: Task 24 笔迹平滑——新增 `StrokeSmoothingLevel` 属性（默认 2）+ `ApplySmoothing(stroke)`（档 0=FitToCurve=false 原位替换保原始轨迹；档 1-3=滑动窗口均值 w=1/2/4、PressureFactor 取原中心点、短笔迹窗口钳制防质心坍缩）；`InkCanvas_StrokeCollected` 链位插在 Shift 拉直之后、形状识别/墨水模拟之前。设置 UI（pen popup 分段行）在 EditorPage，见其镜像。构建 0 错误 + 21/21 测试通过。

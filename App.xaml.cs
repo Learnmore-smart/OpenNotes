@@ -27,6 +27,15 @@ namespace Caelum
             mainWindow.Show();
         }
 
+        protected override void OnExit(ExitEventArgs e)
+        {
+            // ThemeService subscribes to the process-wide Windows preference
+            // event so open windows can follow System/HighContrast changes.
+            // Always detach it before WPF tears down the dispatcher.
+            ThemeService.Shutdown();
+            base.OnExit(e);
+        }
+
         private static void EnsurePdfiumDllPath()
         {
             string baseDir = AppContext.BaseDirectory;

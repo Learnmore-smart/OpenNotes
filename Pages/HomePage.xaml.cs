@@ -9,6 +9,8 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
 using System.Windows.Input;
+using System.Windows.Media;
+using System.Windows.Media.Animation;
 using Microsoft.Win32;
 using Caelum.Services;
 
@@ -48,6 +50,76 @@ namespace Caelum.Pages
             DragOver += HomePage_DragOver;
             Drop += HomePage_Drop;
             DragLeave += HomePage_DragLeave;
+        }
+
+        private void TileScale_MouseEnter(object sender, MouseEventArgs e)
+        {
+            AnimateTileScale(sender as Button, isHovered: true);
+        }
+
+        private void TileScale_MouseLeave(object sender, MouseEventArgs e)
+        {
+            AnimateTileScale(sender as Button, isHovered: false);
+        }
+
+        private static FrameworkElement FindNamedVisual(DependencyObject root, string name)
+        {
+            if (root is FrameworkElement element && string.Equals(element.Name, name, StringComparison.Ordinal))
+                return element;
+
+            int count = VisualTreeHelper.GetChildrenCount(root);
+            for (int i = 0; i < count; i++)
+            {
+                var match = FindNamedVisual(VisualTreeHelper.GetChild(root, i), name);
+                if (match != null)
+                    return match;
+            }
+
+            return null;
+        }
+
+        private static void AnimateTileScale(Button button, bool isHovered)
+        {
+            if (button == null)
+                return;
+
+            string targetName = button.Template?.FindName("AddTileGrid", button) != null
+                ? "AddTileGrid"
+                : button.FindName("FolderIconGrid") != null
+                    ? "FolderIconGrid"
+                    : "IconGrid";
+            var target = button.Template?.FindName(targetName, button) as FrameworkElement
+                ?? button.FindName(targetName) as FrameworkElement
+                ?? FindNamedVisual(button, targetName);
+            if (target?.RenderTransform is not ScaleTransform scale)
+                return;
+
+            double targetScale = isHovered
+                ? (targetName == "FolderIconGrid" ? 1.06 : 1.08)
+                : 1.0;
+            scale.BeginAnimation(ScaleTransform.ScaleXProperty, null);
+            scale.BeginAnimation(ScaleTransform.ScaleYProperty, null);
+            if (!ThemeService.ShouldAnimate)
+            {
+                scale.ScaleX = targetScale;
+                scale.ScaleY = targetScale;
+                return;
+            }
+
+            var duration = ThemeService.GetAnimationDuration(
+                TimeSpan.FromMilliseconds(isHovered ? 200 : 300));
+            if (duration == TimeSpan.Zero)
+            {
+                scale.ScaleX = targetScale;
+                scale.ScaleY = targetScale;
+                return;
+            }
+
+            var easing = new CubicEase { EasingMode = EasingMode.EaseOut };
+            scale.BeginAnimation(ScaleTransform.ScaleXProperty,
+                new DoubleAnimation(targetScale, duration) { EasingFunction = easing });
+            scale.BeginAnimation(ScaleTransform.ScaleYProperty,
+                new DoubleAnimation(targetScale, duration) { EasingFunction = easing });
         }
 
         public bool IsInsideFolder => !string.IsNullOrWhiteSpace(_currentFolderId);
@@ -351,7 +423,7 @@ namespace Caelum.Pages
 
             menu.Items.Add(new Separator { Margin = new Thickness(0, 4, 0, 4) });
 
-            var removeItem = CreateMenuItem(LocalizationService.Get("Home.Context.Remove"), "\uE74D", new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(211, 47, 47)));
+            var removeItem = CreateMenuItem(LocalizationService.Get("Home.Context.Remove"), "\uE74D", foregroundResourceKey: "ThemeDangerBrush");
             removeItem.Click += async (_, _) => await RemoveFileTileAsync(tile);
             menu.Items.Add(removeItem);
 
@@ -383,7 +455,7 @@ namespace Caelum.Pages
 
             menu.Items.Add(new Separator { Margin = new Thickness(0, 4, 0, 4) });
 
-            var removeItem = CreateMenuItem(LocalizationService.Get("Home.Context.RemoveFolder"), "\uE74D", new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(211, 47, 47)));
+            var removeItem = CreateMenuItem(LocalizationService.Get("Home.Context.RemoveFolder"), "\uE74D", foregroundResourceKey: "ThemeDangerBrush");
             removeItem.Click += async (_, _) =>
             {
                 RecentFilesService.RemoveFolder(tile.Id);
@@ -461,7 +533,7 @@ namespace Caelum.Pages
             }
         }
 
-        private MenuItem CreateMenuItem(string text, string icon, System.Windows.Media.Brush foreground = null)
+        private MenuItem CreateMenuItem(string text, string icon, System.Windows.Media.Brush foreground = null, string foregroundResourceKey = null)
         {
             var item = new MenuItem { Padding = new Thickness(8, 6, 16, 6) };
             var stack = new StackPanel { Orientation = Orientation.Horizontal };
@@ -487,8 +559,12 @@ namespace Caelum.Pages
             }
             else
             {
-                iconText.Foreground = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(60, 60, 60));
-                textBlock.Foreground = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(30, 30, 30));
+                string resourceKey = string.IsNullOrWhiteSpace(foregroundResourceKey)
+                    ? "ThemeTextBrush"
+                    : foregroundResourceKey;
+                item.SetResourceReference(MenuItem.ForegroundProperty, resourceKey);
+                iconText.SetResourceReference(TextBlock.ForegroundProperty, resourceKey);
+                textBlock.SetResourceReference(TextBlock.ForegroundProperty, resourceKey);
             }
 
             stack.Children.Add(iconText);
@@ -501,12 +577,14 @@ namespace Caelum.Pages
         {
             var style = new Style(typeof(ContextMenu));
             style.Setters.Add(new Setter(ContextMenu.BackgroundProperty,
-                new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromArgb(248, 255, 255, 255))));
+                new System.Windows.DynamicResourceExtension("ThemeSurfaceBrush")));
             style.Setters.Add(new Setter(ContextMenu.BorderBrushProperty,
-                new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromArgb(30, 0, 0, 0))));
+                new System.Windows.DynamicResourceExtension("ThemeBorderBrush")));
             style.Setters.Add(new Setter(ContextMenu.BorderThicknessProperty, new Thickness(1)));
             style.Setters.Add(new Setter(ContextMenu.PaddingProperty, new Thickness(4, 8, 4, 8)));
             style.Setters.Add(new Setter(ContextMenu.FontSizeProperty, 13.0));
+            style.Setters.Add(new Setter(UIElement.OpacityProperty,
+                new System.Windows.DynamicResourceExtension("ThemeSurfaceOpacity")));
 
             var template = new ControlTemplate(typeof(ContextMenu));
             var border = new FrameworkElementFactory(typeof(Border));
@@ -519,7 +597,7 @@ namespace Caelum.Pages
             {
                 BlurRadius = 16,
                 ShadowDepth = 4,
-                Opacity = 0.15,
+                Opacity = ThemeService.GetShadowOpacity(),
                 Color = System.Windows.Media.Colors.Black
             });
 
@@ -608,19 +686,20 @@ namespace Caelum.Pages
 
             var mainBorder = new Border
             {
-                Background = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(253, 253, 253)),
                 CornerRadius = new CornerRadius(8),
                 BorderThickness = new Thickness(1),
-                BorderBrush = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(220, 220, 220)),
                 Margin = new Thickness(14),
                 Effect = new System.Windows.Media.Effects.DropShadowEffect
                 {
                     BlurRadius = 14,
                     ShadowDepth = 4,
-                    Opacity = 0.15,
+                    Opacity = ThemeService.GetShadowOpacity(),
                     Color = System.Windows.Media.Colors.Black
                 }
             };
+            mainBorder.SetResourceReference(Border.BackgroundProperty, "ThemeToolbarBrush");
+            mainBorder.SetResourceReference(Border.BorderBrushProperty, "ThemeBorderBrush");
+            mainBorder.SetResourceReference(UIElement.OpacityProperty, "ThemeSurfaceOpacity");
 
             var grid = new Grid { Margin = new Thickness(24) };
             grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
@@ -633,27 +712,27 @@ namespace Caelum.Pages
                 Text = title,
                 FontSize = 18,
                 FontWeight = FontWeights.SemiBold,
-                Foreground = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(30, 30, 30)),
                 Margin = new Thickness(0, 0, 0, 16)
             };
+            titleLabel.SetResourceReference(TextBlock.ForegroundProperty, "ThemeTextBrush");
             Grid.SetRow(titleLabel, 0);
 
             var promptLabel = new TextBlock
             {
                 Text = prompt,
                 FontSize = 14,
-                Foreground = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(80, 80, 80)),
                 Margin = new Thickness(0, 0, 0, 8)
             };
+            promptLabel.SetResourceReference(TextBlock.ForegroundProperty, "ThemeSubtleTextBrush");
             Grid.SetRow(promptLabel, 1);
 
             var textBoxBorder = new Border
             {
                 CornerRadius = new CornerRadius(6),
-                BorderBrush = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(200, 200, 200)),
                 BorderThickness = new Thickness(1),
-                Background = System.Windows.Media.Brushes.White
             };
+            textBoxBorder.SetResourceReference(Border.BorderBrushProperty, "ThemeBorderBrush");
+            textBoxBorder.SetResourceReference(Border.BackgroundProperty, "ThemeControlBrush");
             Grid.SetRow(textBoxBorder, 2);
 
             var inputBox = new TextBox
@@ -665,6 +744,7 @@ namespace Caelum.Pages
                 BorderThickness = new Thickness(0),
                 Background = System.Windows.Media.Brushes.Transparent
             };
+            inputBox.SetResourceReference(TextBox.ForegroundProperty, "ThemeTextBrush");
             inputBox.SelectAll();
             textBoxBorder.Child = inputBox;
 
@@ -1166,7 +1246,15 @@ namespace Caelum.Pages
             _scrollAnimationTarget = _targetVerticalOffset;
             _scrollAnimationStart = HomeScrollViewer.VerticalOffset;
             _scrollAnimationStartTime = DateTime.UtcNow;
-            _scrollAnimationDuration = TimeSpan.FromMilliseconds(180);
+            _scrollAnimationDuration = ThemeService.GetAnimationDuration(TimeSpan.FromMilliseconds(180));
+
+            if (_scrollAnimationDuration == TimeSpan.Zero)
+            {
+                _isScrollAnimating = false;
+                System.Windows.Media.CompositionTarget.Rendering -= HomeCompositionTarget_Rendering;
+                HomeScrollViewer.ScrollToVerticalOffset(_scrollAnimationTarget);
+                return;
+            }
 
             if (!_isScrollAnimating)
             {
@@ -1177,6 +1265,14 @@ namespace Caelum.Pages
 
         private void HomeCompositionTarget_Rendering(object sender, EventArgs e)
         {
+            if (_scrollAnimationDuration == TimeSpan.Zero || !ThemeService.ShouldAnimate)
+            {
+                HomeScrollViewer.ScrollToVerticalOffset(_scrollAnimationTarget);
+                _isScrollAnimating = false;
+                System.Windows.Media.CompositionTarget.Rendering -= HomeCompositionTarget_Rendering;
+                return;
+            }
+
             var elapsed = DateTime.UtcNow - _scrollAnimationStartTime;
             double progress = Math.Min(1.0, elapsed.TotalMilliseconds / _scrollAnimationDuration.TotalMilliseconds);
             double easedProgress = 1.0 - Math.Pow(1.0 - progress, 3);

@@ -642,6 +642,86 @@ public class PdfServiceAnnotationSavingTests
         Assert.That(foreignKept.Elements.GetRectangle("/Rect").Width, Is.EqualTo(50d).Within(0.01));
     }
 
+    [Test]
+    public async Task LoadSaveReopen_PreservesLegacyWhiteHiddenInkAndOwnStreamLifecycle()
+    {
+        string filePath = Path.Combine(_tempDirectory, "legacy-white-reopen.pdf");
+        CreateTestPdf(filePath);
+        var legacyWhite = new HiddenInkAnnotation
+        {
+            Id = "legacy-white-pdf",
+            R = 255,
+            G = 255,
+            B = 255,
+            A = 255,
+            Points = new List<double[]> { new[] { 96d, 120d }, new[] { 144d, 120d } }
+        };
+
+        var service = new PdfService();
+        await service.SaveAnnotationsToPdfAsync(
+            filePath,
+            new Dictionary<int, PageAnnotation>
+            {
+                [0] = new PageAnnotation { HiddenInks = new List<HiddenInkAnnotation> { legacyWhite } }
+            });
+        await service.LoadPdfAsync(filePath);
+
+        var loaded = service.ExtractedAnnotations[0].HiddenInks.Single();
+        Assert.Multiple(() =>
+        {
+            Assert.That(loaded.Id, Is.EqualTo("legacy-white-pdf"));
+            Assert.That(loaded.R, Is.EqualTo(255));
+            Assert.That(loaded.G, Is.EqualTo(255));
+            Assert.That(loaded.B, Is.EqualTo(255));
+        });
+
+        // Save again through the loaded service to exercise backing-stream
+        // ownership, then dispose and reopen with a fresh service.
+        await service.SaveAnnotationsToPdfAsync(filePath, service.ExtractedAnnotations);
+        await service.DisposeAsync();
+
+        var reopened = new PdfService();
+        for (int iteration = 0; iteration < 2; iteration++)
+        {
+            await reopened.LoadPdfAsync(filePath);
+            var roundTrip = reopened.ExtractedAnnotations[0].HiddenInks.Single();
+            Assert.Multiple(() =>
+            {
+                Assert.That(roundTrip.R, Is.EqualTo(255));
+                Assert.That(roundTrip.G, Is.EqualTo(255));
+                Assert.That(roundTrip.B, Is.EqualTo(255));
+            });
+
+            await reopened.SaveAnnotationsToPdfAsync(filePath, reopened.ExtractedAnnotations);
+            await reopened.DisposeAsync();
+            reopened = new PdfService();
+        }
+
+        await reopened.DisposeAsync();
+        File.Delete(filePath);
+        Assert.That(File.Exists(filePath), Is.False, "backing stream must be released before the PDF is deleted");
+    }
+
+    [Test]
+    public async Task LoadPdfAsync_MissingHiddenInkColorUsesNeutralGrayProductionDefault()
+    {
+        string filePath = Path.Combine(_tempDirectory, "missing-hidden-color.pdf");
+        CreateHiddenInkPdfWithoutColor(filePath);
+
+        var service = new PdfService();
+        await service.LoadPdfAsync(filePath);
+        var hidden = service.ExtractedAnnotations[0].HiddenInks.Single();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(hidden.R, Is.EqualTo(199));
+            Assert.That(hidden.G, Is.EqualTo(205));
+            Assert.That(hidden.B, Is.EqualTo(212));
+            Assert.That(hidden.RevealDurationMs, Is.EqualTo(HiddenInkRevealState.DefaultRevealDurationMs));
+        });
+        await service.DisposeAsync();
+    }
+
     private static PdfDictionary? GetAppearanceFont(PdfDictionary annotation)
     {
         var appearance = annotation.Elements.GetDictionary("/AP");
@@ -666,6 +746,36 @@ public class PdfServiceAnnotationSavingTests
         var page = document.AddPage();
         page.Width = 612; // 8.5 x 72
         page.Height = 792; // 11 x 72
+        document.Save(filePath);
+    }
+
+    private static void CreateHiddenInkPdfWithoutColor(string filePath)
+    {
+        using var document = new PdfDocument();
+        var page = document.AddPage();
+        page.Width = 612;
+        page.Height = 792;
+
+        var annotation = new PdfDictionary(document);
+        annotation.Elements.SetName("/Type", "/Annot");
+        annotation.Elements.SetName("/Subtype", "/Ink");
+        annotation.Elements.SetString("/NM", "wna_hidden_missing-color");
+        annotation.Elements.SetInteger("/F", 4);
+        var border = new PdfDictionary(document);
+        border.Elements.SetReal("/W", 2.0);
+        annotation.Elements["/BS"] = border;
+        var points = new PdfArray();
+        points.Elements.Add(new PdfReal(72));
+        points.Elements.Add(new PdfReal(648));
+        points.Elements.Add(new PdfReal(108));
+        points.Elements.Add(new PdfReal(648));
+        var inkList = new PdfArray();
+        inkList.Elements.Add(points);
+        annotation.Elements.Add("/InkList", inkList);
+        document.Internals.AddObject(annotation);
+        var annots = new PdfArray(document);
+        annots.Elements.Add(annotation.Reference);
+        page.Elements.Add("/Annots", annots);
         document.Save(filePath);
     }
 }

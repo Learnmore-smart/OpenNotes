@@ -78,6 +78,23 @@ public sealed class LocalizationCoverageTests
     }
 
     [Test]
+    public void ToolbarObsoleteEntriesAreNotExposedByAnyLanguageCatalog()
+    {
+        var catalog = LocalizationService.GetCatalog();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(catalog.ContainsKey("Editor.InkAnalysisUnavailable"), Is.False);
+            Assert.That(catalog.ContainsKey("Editor.InkAnalysisTooltip"), Is.False);
+            Assert.That(catalog.ContainsKey("Editor.FitWidthTooltip"), Is.False);
+            Assert.That(catalog.ContainsKey("Editor.FitPageTooltip"), Is.False);
+            Assert.That(catalog.ContainsKey("Editor.PresetTooltip"), Is.False);
+            Assert.That(catalog.ContainsKey("Editor.PresetClickApply"), Is.False);
+            Assert.That(catalog.ContainsKey("Editor.PresetRightClickSave"), Is.False);
+        });
+    }
+
+    [Test]
     public void OpenPagesRefreshLocalizationThroughTheirLoadedLifecycle()
     {
         var projectRoot = FindProjectRoot();

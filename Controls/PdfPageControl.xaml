@@ -30,7 +30,7 @@
                  Sits below the ink layer so strokes draw over images; selection
                  happens through SelectionOverlayCanvas, never directly. -->
             <Canvas x:Name="ImageOverlayCanvas" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
-                    Background="Transparent" IsHitTestVisible="False"/>
+                    Background="{x:Null}" IsHitTestVisible="True"/>
 
         <!-- Ink Layer (WPF InkCanvas) -->
         <InkCanvas x:Name="InkCanvas" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Background="Transparent"
@@ -67,9 +67,9 @@
             <Ellipse x:Name="EraserIndicator"
                      Width="20"
                      Height="20"
-                     Stroke="#0078D4"
+                     Stroke="{DynamicResource ThemeAccentBrush}"
                      StrokeThickness="1"
-                     Fill="#100078D4"
+                     Fill="{DynamicResource ThemeSelectionBrush}"
                      Visibility="Collapsed"
                      IsHitTestVisible="False"/>
         </Canvas>

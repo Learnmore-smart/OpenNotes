@@ -1,17 +1,130 @@
 # Pages/EditorPage.xaml.cs
-> Last updated: 2026-08-22（Hidden Ink/text resize/save/immersive/i18n/theme/accessibility/performance lifecycle）| Protection: STANDARD
+
+## Wave6 async stale-operation P2 (2026-08-24) — audit continuation
+
+Version History, sidebar/page context, PDF structural/context operations, search,
+autosave, and Undo/Redo use a shared `DocumentOperationSession` lease. Each
+operation captures session/path/model identity and validates after awaits and
+before any UI/model/undo/dirty/error publication. `LoadPdf`, release/unload, and
+inactive tab transitions cancel the old session. Deferred Version History clicks
+hold edit admission; PDF/sidebar context capture rejects blocked/inactive hosts;
+thumbnail load markers are session-scoped so recycled rows cannot suppress a
+replacement page. Live same-session operations retain existing save-coordinator
+behavior.
+
+- **Audit result:** RED-first contracts exposed the missing Version History
+  post-toast `MarkDirty` guard, stale thumbnail exception/marker publication,
+  PDF-search selection exceptions, autosave diagnostic ordering, and deferred
+  context-menu admission. All are now guarded; stale callbacks return silently
+  without old-document UI/model/undo/dirty/error publication.
+
+## Wave6 Sticky/transient lifecycle (2026-08-24)
+
+- **Status:** green for focused automated scope. Sticky Note editing now exposes explicit
+  Save/Cancel/Delete controls; Save pushes one dirty-only text action, Cancel (including
+  outside click, Escape, tab switch, deactivation, navigation, unload and release) restores
+  original text/position, and Delete is reversible.
+- `CloseTransientUi(reason)` owns a weak Popup/ContextMenu/ComboBox registry and closes
+  editor search/tool/color/sticky/context surfaces plus marker menus. It is called on
+  Escape/outside click, inactive-tab/navigation/release barriers and page unload; ordinary
+  text sessions and save dialogs are intentionally outside the sweep. MainWindow.Deactivated
+  calls it for every retained editor, and the active editor can reopen popups after resume.
+- Sticky marker move/delete/keyboard/copy/paste/duplicate flows use page-owned quiet APIs
+  and stable note Ids, so undo/redo never holds a stale popup reference. PDF /Text `/NM`
+  stores the Id plus additive marker width/height/colour metadata; legacy PDFs still load
+  through `/Rect` and default visual values. Selection resize updates sticky width/height
+  and re-clamps its serialized X/Y; cross-page selection transfer/rollback also transfers
+  the page-owned overlay payload so sticky text, position, size and colour survive the move.
+
+## Wave6 dual-review follow-up (2026-08-24) — GREEN closure
+
+- **Root cause/fix:** page/editor interactions now share `IInteractionCancellation`; LostCapture,
+  Escape, inactive-tab/deactivation, navigation/reload and unload restore the opening snapshot
+  before release. `CloseTransientUi` and `LoadPdf` cancel before page detach/clear, and
+  `SetHostActive(false)` reaches every live page. Normal pointer/stylus-up remains the only
+  completion path that records one undo/dirty action.
+- **Session/popup fix:** Sticky Save/Cancel/Delete validate the live page/container/model and
+  `_loadSessionId`; stale popup state cannot mutate a replacement document. All Popup, ContextMenu
+  and ComboBox z-order hooks are explicitly Unfixed at close/release/unload and re-established
+  idempotently for a live reopen. Save/Cancel/Delete share localized Content/Tooltip/UIA
+  metadata, 32-DIP targets and the ThemeFocus/HighContrast 2-DIP focus cue.
+- **Evidence:** deterministic STA/source/PDF contracts and the focused Sticky/transient filter
+  pass `20/20`; full suite passes `241/241`; i18n passes `279` catalog entries/`468` calls/`0`
+  hard-coded visible strings. External foreground/Alt-Tab/device/visual checks remain explicit
+  blockers; ordinary text-edit sessions, save dialogs and multi-tab ownership remain outside
+  the transient sweep.
+> Last updated: 2026-08-24（Wave6 Sticky/transient lifecycle plus Wave5 motion/runtime chrome/PDF composite GREEN; foreground/device visual boundary remains external）| Protection: STANDARD
+Wave 1 note: shape replacement undo stores only session token/index and immutable snapshots; `StrokeReplacedAction` must never retain live `Stroke` fields. Other stroke actions carry placement identity when restoring live strokes.
+
+## Wave 1 quality follow-up（2026-08-23）
+
+- `StrokeAddedAction`, `StrokesErasedAction`, `ItemsAddedAction`, `ItemsRemovedAction`, and `SelectionCrossPageMoveAction` store `StrokePlacement` records for token/side/index/page ownership. Their page calls resolve the current live stroke by stable token/side/owner, so shape redo can replace the historical reference without making erase/delete/move redo silently fail; repeated calls are no-op safe and cannot duplicate strokes.
+- Cross-page transfer records source placements and the target placements returned by the target page. Initial multi-selection transfer, undo and redo are transactions: a source capture, target owner/token/side conflict, or counterpart add/remove failure rolls back every earlier stroke and leaves `LastOperationSucceeded=false`; callers do not push or move the undo/redo stacks on that result. Successful undo/redo uses the placement currently resolved by each page, and moves those current live strokes through `MoveItemsDirectly`. Source ownership/index and target ownership/index remain stable, while `MoveItemsDirectly` preserves pressure.
+- `StrokeReplacedAction` remains the only snapshot-only shape action and now is exercised through the real private production action in `StrokeReplacementProductionTests`; shape undo after erase/delete/cross-page restore goes through `PdfPageControl.TryReplaceStrokeQuiet`, while subsequent placement redo resolves the replacement's fresh live reference by token.
 （同目录 `EditorPage.xaml` 为其 UI 布局；partial 类另见 `EditorPage.Selectable.cs`（stub）与 `EditorPage.Utilities.cs`，后者另有镜像 `.ai/Pages/EditorPage.Utilities.md`）
+
+## Wave 3 toolbar implementation（2026-08-23）
+
+- Toolbar buttons use semantic vector `Path` geometry with stable `Editor.*` AutomationIds, localized ToolTip/Automation Name/HelpText, a shared non-shifting focus ring, and 32 DIP minimum targets. Checked/disabled states use theme resources and opacity/active-bar cues that remain visible across palettes.
+- Shape popup choices (`Editor.Shape.Line`, `.Rectangle`, `.Ellipse`, `.Arrow`) are keyboard-selectable `ToggleButton`s with geometry previews and `IsChecked` state. Highlighter mode choices use freehand/text/underline/strikeout/squiggly/area stroke previews, and each preview refreshes from `_highlighterColor` while the popup remains open.
+- Laser uses an explicit beam/dot vector; Hidden Ink keeps its card/answer vector and `HiddenInkToolButton` id. Pen/highlighter/eraser/ruler/select/text/save/history/zoom/rotate/immersive controls no longer rely on MDL2 glyph semantics.
+- `ApplyToolbarAccessibilityMetadata()` reapplies localized metadata after language refresh and `CreateToolPopups()` rebuilds localized dynamic choices. `Services/LocalizationService` no longer exposes Fit Width/Fit Page or Ink Analysis-unavailable keys.
+- Pen preset JSON compatibility remains in `AppSettingsService`/`AppSettings.PenPresets`; no toolbar slot is created and no empty list is populated or reset.
+
+## Wave 3 dual-review continuation（2026-08-23）
+
+- **Status:** complete for automated source/build/test scope. Existing source contracts cover six live highlighter previews, dynamic Button/ToggleButton peers, checked cues, marker contrast, popup lifecycle and the five editor smoke entry points.
+- **Intent/result:** `PopupZOrderHelper` registration is idempotent and explicitly detachable during `ApplyLocalization()` popup replacement; the static mark shares the production highlighter alpha; and page/viewer/handle smoke IDs are centralized through `OpenNotesEditorAutomationIds.ps1`.
+- **Constraints:** preserve the existing PopupZOrderHelper Win32 behavior, do not add global deactivation dismissal, do not change Hidden Ink's compatibility ID, and do not alter PDF/annotation or preset model compatibility.
+
+## Wave 3 P2 continuation（2026-08-23）
+
+- **Result:** the inline text-alignment array is now a localized `TextAlignmentOption` model. `RefreshTextAlignmentOptions()` replaces labels on `LanguageChanged` while restoring the selected `TextAlignment` value, and `verify-i18n.ps1` rejects the former literal alignment array.
+- **Result:** shape/filter/mode choices are semantic `ToggleButton`s with real checked peers, checkmark/active-bar cues, keyboard tab/activation, 32 DIP minimum targets, and shared theme focus/disabled/hover/pressed resources. `CreateIconButtonTemplate` and page chrome templates use dynamic Theme resource keys; palette/recent markers use `ThemeFocusBrush` plus `ThemeSurfaceBrush` contrast instead of fixed white.
+- **Theme-token continuation:** `SetRulerVisible` uses live `ThemeAccentBrush`/`ThemeForegroundBrush` references for visible/hidden state. Text font-group, color-indicator border, preview/separator/header, palette and recent-swatch state surfaces use semantic resources without hard-coded theme-color initializers; selected text/palette content backgrounds remain the actual user color.
+- **Result:** `EditorPopupAutomationTests` constructs the production popups on an STA dispatcher and validates localized IDs/names/help text, TogglePattern state/activation, target sizes, and slider focus metadata without foreground ownership. Required Editor smoke IDs now throw/non-zero on omission and the optional list is explicit.
+- **Evidence:** focused `EditorToolbarVisualSourceTests|EditorPopupAutomationTests` passed `22/22`; full `dotnet test` passed `189/189`; solution build passed with `0` errors and the existing 2 NU1701 warnings; i18n passed `268` catalog / `420` calls / `0` hard-coded visible strings; explicit-fixture Editor UIA smoke passed with all required production IDs and tool toggles, and isolated cleanup was true.
+- **Constraint:** Wave6 global transient teardown remains out of scope; visual screenshots, device/foreground pointer checks and third-party viewer checks remain external.
+
+## Wave 4 navigation continuation（2026-08-23）
+
+- **Status:** review follow-up in_progress. The follow-up contracts are now green; the status stays open for the parent wave's final review bookkeeping and the documented foreground/device visual boundary. Ownership remains limited to the page jump and document sidebar sections in `EditorPage.xaml(.cs)`; toolbar, PDF rendering/coordinates, MainWindow lifecycle, and Sticky Note behavior remain unchanged.
+- **Page jump result:** removed the mouse-only `PageJumpBorder` activation path. `PageNumberTextBox` is the compact always-visible `Editor.PageJump` TextBox, so WPF exposes ValuePattern and keyboard focus. Its XAML starts at one and construction suppresses the initial `TextChanged`, leaving `_isPageJumpEditing=false`; empty documents retain a safe `1 / 0` field. Enter commits, Escape restores the opening value, LostFocus commits valid values, invalid text restores the current page with a localized accessible validation message, and out-of-range values clamp.
+- **Sidebar result:** replaced native TabControl/TabItem chrome with localized Pages/Outline/Bookmarks command buttons, explicit selected/focus cues, a shared state host, bounded resize thumb, and collapse behavior. Existing thumbnail/outline/bookmark controls and persistence handlers remain the data/interaction source of truth; dynamic items now expose stable localized metadata.
+- **Constraints honored:** no MainWindow deactivation lifecycle changes, no Sticky Note popup lifecycle changes, no FitPage/FitWidth entry points, and no PDF bitmap/coordinate changes.
+- **Baseline evidence:** `EditorNavigationSourceTests` failed first against the old Border/TabControl contract, then passed 3/3 with STA peer assertions. The follow-up expanded this to 12/12, with full-suite/build/i18n and three-page UIA smoke evidence recorded below; manual foreground/device/visual checks remain unclaimed.
+
+## Wave 4 review follow-up evidence（2026-08-24）
+
+- **PageJump:** the edit state is re-entered from `TextChanged`, so a field that remains visible can be edited again after Enter, Escape, invalid input, out-of-range clamping, LostFocus or Tab. `SelectionBrush`/`SelectionTextBrush` are live theme resources, and invalid/range feedback restores a safe value while exposing localized UIA HelpText.
+- **Sidebar data path:** page/bookmark/outline rows are `ObservableCollection` view models bound through recycling `ItemsControl` templates. Thumbnail loading and context-menu construction are deferred to realized containers. Outline refresh uses cancellation plus a session/path gate and a run-continuation-safe TCS, preventing a late old-document result from replacing the active document.
+- **Sidebar semantics:** fallback outline rows use the same `SidebarOutlineItem` model and `TreeViewItem` metadata as real outline rows; both SelectionItem and Invoke providers reach `JumpToPage(1)` in the STA peer contract. Because WPF's external `TreeViewItem` provider retains its native TreeItem pattern set, each realized row also has a localized, keyboard/UIA-invokable 32 DIP `.Invoke` Button that reaches the identical command path. Resize is a 32 DIP focusable transparent hit target with `IRangeValueProvider`, Home/End and arrow/Shift-arrow commands. Collapse hides nav/content and restores them on expand; widths at or below 375 DIP auto-collapse and toolbar content scrolls horizontally.
+- **Theme/i18n/UIA:** ListBoxItem/TreeViewItem and template labels use DynamicResource foreground/state tokens. Bookmark is a real ToggleButton with localized Add/Remove metadata and ToggleState. EN/ZH/FR labels cover validation, resize, collapse and toolbar overflow; high-contrast runtime peer checks pass.
+- **Evidence:** final follow-up navigation tests passed 14/14; full suite passed 203/203; `dotnet build OpenNotes.csproj -c Debug --no-restore` passed with 0 errors (existing PdfiumViewer/HDPI warnings); `verify-i18n.ps1` passed 274 catalog entries / 454 calls / 0 hard-coded visible strings. A generated three-page PDF smoke exposed initial `Editor.PageJump` value `1`, invoked `Editor.Sidebar.Outline.Page.2.Invoke` to page 2, selected `Editor.Sidebar.Outline.Page.2` to page 2, toggled tools and cleaned its isolated data root. `Test-OpenNotesCrossPageKeyboardSmoke.ps1` was attempted but stopped before input with `REAL_SCREEN_INPUT_UNAVAILABLE` (`foregroundHwnd=0`, `foregroundPid=0`); no real-screen/device/visual pass is claimed.
+- **Scope guard:** no `MainWindow` lifecycle/global popup dismiss, Sticky Note behavior, Wave5 theme/backdrop, FitPage/FitWidth entry point, or PDF canvas geometry/zoom code was changed in this follow-up.
+
+## Wave 4 recycled sidebar menu follow-up（2026-08-24）
+
+- **Bug:** recycling can reuse a `ListBoxItem` whose `ContextMenu` still contains handlers closed over the previous page/bookmark index. `SidebarListBoxItem_Unloaded` did not clear that menu, `DataContext` changes did not invalidate it, and both Opening handlers skipped rebuilding whenever `ContextMenu != null`.
+- **GREEN:** one idempotent container cleanup path now runs on `Unloaded` and `DataContextChanged`; it unfixes the old popup hook, detaches named menu handlers, clears old menu items and nulls the container menu. Every Opening rebuilds from the current stable `SidebarPageItem`/`SidebarBookmarkItem` identity, sets `PlacementTarget`, `Tag` and `CommandParameter`, and rejects a stale binding before invoking a command. Pages and Bookmarks share the same lifecycle audit; no document/PDF geometry or Wave6 lifecycle code is involved.
+- **TDD evidence:** the real STA test recycles one `ListBoxItem` through page 1 → page 2 and bookmark A → bookmark B, raises retained old and current menu commands, asserts only the current model binding remains, and verifies old handlers/items are cleared. Focused navigation tests pass 15/15; the full suite passes 204/204.
+
+## Wave 5 review follow-up（2026-08-24）
+
+- Home/Editor smooth scrolling now consumes `ThemeService.GetAnimationDuration` and checks `ShouldAnimate`; a zero duration removes the Rendering subscription and applies the target offset immediately. Toast fades use the same helper plus cancellation, laser fade removes immediately under ReduceMotion, and selection dash animation does not subscribe when motion is reduced.
+- Runtime page insert/delete buttons and thumbnail menus use `SetResourceReference` for control, accent, danger, focus, opacity and text tokens. Text annotation selection/caret/drag/resize chrome follows live focus/accent/control/border resources; user text/annotation foreground colors remain the data colors.
+- The real WPF composite contract mounts `PdfPageControl` with a non-white bitmap plus annotation rectangle under Neutral/Paper/Slate workspace borders and compares the page crop. `PdfImage`/overlay source, opacity and effects remain independent of the outer workspace.
 
 ## Purpose（一句话）
 单标签页的 PDF 笔记编辑器主页：持有工具栏、undo/redo 命令栈、缩放/平滑滚动/懒渲染管线、粘贴与自动保存，并把所有页面级操作委派给 `PdfPageControl`；同时负责 Hidden Ink 的工具选择、收集/加载和撤销接线。
 
 ## What It Does（关键机制，含行号引用）
-- **工具枚举**（行 29）：`private enum ToolType { None, Pen, Highlighter, Eraser, Shape, Laser, Text, Select, TextHighlight }`。默认 `_currentTool=None`、`_previousTool=Pen`。形状工具状态 `_shapeKind/_shapeColor/_shapeSize`（行 39-42）**会话级不持久化**（spec 无持久化要求）。**笔预设槽（Task 23，#region "Task 23: pen preset slots"）**：工具栏荧光笔与橡皮之间 `PresetSlotsPanel`（XAML 占位 StackPanel，ctor `InitializePenPresetSlots` 代码填 3 个 22×22 圆形 Border 槽位，字段 `_presetSlots[3]` + `PenPresetSlotCount=3`）；每槽显示预设颜色填充 + P/H 小字母（亮度对比自动黑白字），tooltip 双语含槽号/工具/色值/尺寸/操作说明。**左键（MouseLeftButtonUp）=应用**：`ApplyPenPreset`——把 preset.Tool/ColorHex/Size 写入 `_penColor/_penSize`（或 `_highlighterColor/_highlighterSize`）→ CloseToolPopups → `ActivateTool(tool)`（不同工具，含按钮态同步+ApplyToolToAllPages）或直接 `ApplyToolToAllPages()`（同工具）→ UpdateToolIconColors → UpdatePresetSlotVisuals → **回写 popup 滑条与预览线**（`_penPopupSizeSlider.Value=_penSize` 等——BuildToolPopup 新增 `out Slider sizeSlider` 参数暴露滑条引用；滑条 Value 赋值会重触发 popup 自身 sizeChanged handler，幂等）。**右键（MouseRightButtonUp）=捕获**：`CapturePenPreset`——当前工具必须 Pen/Highlighter（否则 toast「请先选择画笔或荧光笔」），把当前 tool/color（`#RRGGBB`）/size 存入槽位（`SaveSetting` + `NormalizePenPresets` 归一化 3 槽后整体落盘），toast「槽位 N 已保存」；**长按捕获未实现（右键已覆盖捕获语义，v1 简化）**。**激活环**：`UpdatePresetSlotVisuals`（ApplyToolToAllPages 内统一收口调用——任何工具/颜色/尺寸变化路径都过此收口）给匹配当前 (tool,color,size)（颜色 ==、尺寸 |Δ|<0.001）的槽位 #2563EB 2px 环，其余 1px 灰环。**默认值**：`InitializePenPresetSlots` 首载发现 PenPresets 空列表时填 3 默认（Pen 黑 2 / Highlighter 黄 8 / Pen 红 3）并 Save——**加载期填充而非 Sanitize**（spec 明确）；部分列表由 `NormalizePenPresets` 内存补齐（不落盘）。持久化模型 `AppSettings.PenPresets`（List\<PenPreset\>，见 AppSettings.md）。**笔迹平滑（Task 24）**：pen popup 末尾 `AddPenSmoothingSection`——「平滑 Smoothing」标题 + 4 段互斥钮（关 Off/低 Low/中 Mid/高 High，`BuildModeToggleButton` 新增可选 `width` 参数复用 54px 窄钮 + `StyleModeToggleButton` 既有样式）；点击 → `SaveSetting(s.StrokeSmoothing=level)` + `ApplyToolToAllPages`（传播 `page.StrokeSmoothingLevel = Math.Clamp(settings.StrokeSmoothing,0,3)`，新页经 LoadPdf 建页后的 ApplyToolToAllPages 同步）+ 分段视觉刷新；平滑本体（ApplySmoothing 滑动窗口）在 PdfPageControl，见其镜像。设置页入口 Task 38 补。**激光笔（Task 20）**：`LaserToolButton`（XAML，Shape 之后，E790 图标 #FF3B30 tint）→ `LaserToolButton_Click` → `ToggleToolButton(Laser, LaserToolButton)`——**popup 参数省略（null）**，ToggleToolButton 签名 `Popup popup = null` 且内部 `else if (popup != null)` 判空，null 安全（激光无任何选项）；激活后 `ApplyToolToAllPages` Laser 分支只做 `SetInputMode(Laser)`（无墨迹属性、无 undo、无 dirty，渐隐本体全在 PdfPageControl）；`IsImmediateDrawingToolActive` 含 Laser（popup 打开时点击页面不吞指针）；ESC→None 既有路径自动覆盖。
+- **工具枚举与 Wave 3 toolbar（当前实现）**：保留 `ToolType` 与既有命令状态；XAML 工具栏改用 `Path` 几何图标（含显式 Laser beam/dot、当前 `_highlighterColor` 的 HighlighterIcon），移除可见 `PresetSlotsPanel`、Fit Width/Fit Page 控件与 Ink Analysis unavailable 入口。旧 `InitializePenPresetSlots`/`BuildDefaultPenPresets` 仅保留为只读兼容符号，不在构造函数调用，也不填充/写回空 `AppSettings.PenPresets`。
 - **直尺工具（Task 22，#region "Task 22: on-screen ruler"）**：`RulerToolButton`/`SetRulerVisible` 提供 session-only 的全视口 overlay，不改变当前 ToolType；尺身可移动、端帽/右键可旋转并以 15° 吸附，`GetRulerEdgeEndpoints` 返回上边缘，页面通过实时 delegate 做吸附几何换算。尺本体不进入注释/undo/save 管线；沉浸模式不会隐藏 `RulerOverlayCanvas`，但会隐藏并恢复工具栏、文档侧栏和 PDF 搜索面板。完整交互与 24px 线段容差见 `PdfPageControl.md`。
 - **Undo/Redo 命令栈**（行 98-545）：接口 `IUndoAction { bool LeavesDocumentDirty; Task UndoAsync(); Task RedoAsync(); }`（行 99），栈为 `List<IUndoAction> _undoStack/_redoStack`。除既有笔迹/文本/页面动作外，Hidden Ink 还提供新增和移除两类专用动作：
   1. `StrokeAddedAction`（行 106）— 单笔迹增删（RemoveStrokeQuiet/AddStrokeQuiet）
   2. `StrokesErasedAction`（行 125）— 擦除手势（移除的原笔迹 + 产生的切割碎片；Undo 移碎片还原笔迹，Redo 反向）
-  3. `StrokeReplacedAction`（行 157，Task 4）— 形状识别替换（Undo 移 ideal 还原 original 手绘原笔迹，Redo 反向；订阅 PageControl.StrokeRecognized）
+  3. `StrokeReplacedAction`（行 157，Task 4/Wave 1）— 形状识别替换（仅保存 token/index 与 immutable original/ideal snapshots；Undo/Redo 通过 page quiet replacement 原位互换，缺 token/side 时 no-op；订阅 PageControl.StrokeRecognized）
   4. `ItemsAddedAction`（行 184）— 批量笔迹+文本容器新增（粘贴用）；Undo 移除项前先清该页选区（Task 8 粘贴自动选中后的悬空引用防护）
   5. `ItemsRemovedAction`（行 212）— 批量删除（反向恢复）
   6. `TextBoxAddedAction`（行 240）— 文本框新增（用户点击创建；粘贴/加载路径 select:false 不推入）
@@ -46,7 +159,8 @@
 - **文本框创建/尺寸** `CreateTextBox`：Grid 容器（chrome 边框 + TextBox + 移动/八方向缩放把手），旧注释 `Width/Height=0` 走自动尺寸，新/调整后的矩形保存正值；`TextAnnotationGeometry.ClampToPage` 将 live resize 限制在页面表面和最小 120×48 DIP 内。`select:true` 创建后推 `TextBoxAddedAction`；GotFocus→`BeginTextEditSession`，LostFocus/保存前→`CommitTextEditSession`；resize 的 mouse/stylus/keyboard 路径共用边界和 undo 语义，Esc 恢复起始矩形，卸载释放 capture。`EditorPage_PreviewKeyDown` 在文本框 nudge 分支前让 `TextResizeHandleBorder` 的方向键继续路由到 handle 自身，避免页面级预览事件抢先消费键盘缩放。
 - **运行时页面/文本可访问性**：`LoadPdfAsync` 创建每个 `PdfPageControl` 后设置非可见稳定 AutomationId `PdfPageControl.{i}`，桌面 UIA smoke 可以获取真实页面控件 bounds，不必从 outer ScrollViewer 或内部位图 bounds 猜测页面坐标；`CreateTextBox` 的移动手柄设置稳定 `TextAnnotationDragHandle` AutomationId 和 `Editor.MoveTextBox` 本地化名称，跨页拖动 smoke 无需猜右侧手柄像素。
 - **保存** `SaveAnnotationsToPdfAsync`：保存前提交活动文本编辑会话并收集 `Stroke/Highlight/Text/Image/HiddenInk` 等模型；先 await PDF 原子写入成功，再 await `VersionControlService.SaveVersionAsync`，成功后清 dirty，避免失败 PDF 留下误导性的历史快照。
-- **自动保存** `AutoSaveAsync`：`!_isDirty` 或无路径直接 false；同样提交文本会话、先保存 PDF 再保存版本，异常仍 catch 静默 return false（不弹窗）。
+- **自动保存** `AutoSaveAsync`：无路径直接 false；不再先用 coordinator clean state 短路，因为成功回调会在 task 完成前清 dirty，必须让 `SaveCurrentDocumentAsync` 加入该 completion window。Wave 2 uses `DocumentSaveCoordinator` plus the shared `_autoSaveInFlight` task/gate for both manual save and autosave, so timer re-entry/coincident manual saves coalesce. The core receives the captured dirty generation, commits text, saves PDF then version sidecar, and leaves the coordinator dirty when a new edit arrives during the operation; exceptions remain observable through the existing manual dialog/autosave toast paths.
+- **关闭/导航保存协议**：`PrepareForNavigationAsync` 停止 timer、以 final-close admission 等待最新 generation，并在禁用页面输入后用异步 Dispatcher barrier 排空已排队的 WPF 输入；`PrepareForCloseAsync` 同样以 final-close 模式阻止 late edits，失败时恢复 timer/编辑状态。`ReleaseResourcesAsync` 只有在协议成功后才停钩子、释放 PdfService。MainWindow 的 CloseTab/NavBack/NavHome 和同步 `OnClosing` 都检查 false，不移除 tab 或提前退出。
 - **Popup 焦点修复**（Task 10 起迁至 `Services/PopupZOrderHelper`，EditorPage 处仅委派调用）：`FixPopupTopmost(popup)` 在 Popup.Opened 时 `SetWindowPos(HWND_NOTOPMOST=-2)` 去掉 WPF 透明 Popup 的 topmost（Alt-Tab 后不再悬浮于其他应用之上），并 `SetWindowLong` 加 `WS_EX_NOACTIVATE`（0x08000000）防止 Popup 抢主窗口焦点导致工具栏"要点两下"。Task 10 覆盖：5 个工具 popup + colorPopup（InitializeTextBoxPopup 内创建处，行 4415-4416）+ PdfViewerContextMenu（XAML 命名，构造函数接入）与版本历史菜单（VersionHistory_Click 代码构建，IsOpen=true 前接入），后两者走 `FixContextMenuTopmost`（Opened 后 Dispatcher(Render) 一帧再取菜单 hwnd）。MainWindow Sort/More 菜单与 SettingsWindow LanguageComboBox 下拉见各自文件。
 - **工具切换** `ToggleToolButton`（再次点击同工具→None）→ `ActivateTool`（同步各 ToggleButton.IsChecked 含 LaserToolButton、清选区/文本焦点）→ `ApplyToolToAllPages`（行 4164）：每页先同步五开关（`PressureEnabled`/`WholeStrokeEraser`/`InkSimulationEnabled`/`ShapeRecognitionEnabled`/`PenOnlyMode`，均来自 `AppSettingsService.Load()`，Sanitize bug 已修复、真实持久化）、`SetMode(Text)`、`SetPdfTextSelectionEnabled(None||TextHighlight)`、`SetSelectionMode(Select)`、`ShapeMode=(tool==Shape)`、按工具写 `DrawingAttributes`（Pen/Highlighter 颜色宽度、IsHighlighter，经 `SetInkAttributes` 应用 `IgnorePressure=!PressureEnabled`；Shape 分支写 `CurrentShape/ShapeColor/ShapeStrokeSize` + `SetInputMode(Shape)`；**Laser 分支（Task 20）仅 `SetInputMode(Laser)`**，笔迹生成逻辑在 PdfPageControl）。
 - **工具弹窗** `CreateToolPopups`（行 2130）→ `BuildToolPopup`（行 3099，尺寸滑条+HSV 调色盘通用模板，Task 14 起带可选 `Func<List<string>> recentColors` 参数）：pen popup 追加 `AddPenBehaviourToggles`（「压感 Pressure」/「墨水模拟 Ink sim」/「形状识别 Shape recogn」三行 toggle，`BuildSettingToggleRow` 构建，#2563EB 高亮态，点击 → `SaveSetting` 持久化 + `ApplyToolToAllPages`）；eraser popup 顶部插入 `AddEraserModeSection`（「像素擦除」/「整笔擦除」互斥两钮，`BuildModeToggleButton`/`StyleModeToggleButton`，选中态 #2563EB 边框，选择持久化到 `AppSettings.WholeStrokeEraser` 并立即应用全页）；shape popup 复用 BuildToolPopup（尺寸 1-20 步进 0.5 + HSV 调色盘，**不传 recentColors**——形状颜色会话级）+ 顶部插入 `AddShapeSubTypeSection`（直线/矩形/椭圆/箭头 2×2 互斥钮，复用 BuildModeToggleButton/StyleModeToggleButton，会话级选择立即 ApplyToolToAllPages，不持久化）。`ShapeToolButton_Click` 走标准 ToggleToolButton(Shape, ShapeToolButton, _shapePopup)；`_shapePopup` 已纳入 CloseToolPopups/ShouldClosePopupOnPointerDown popup 数组/FixPopupTopmost/`IsImmediateDrawingToolActive`（popup 打开时点击页面关闭弹窗且事件穿透，与 Pen 行为一致）。
@@ -56,7 +170,7 @@
 ## Hidden Ink 学习工具（Task 49）
 
 - `ToolType` 当前包含 `HiddenInk`；Hidden Ink 的撤销模型区分新增、单击移除和拖动擦除手势批量移除，批量手势由 `HiddenInksRemovedAction` 作为一个命令整体撤销/重做。
-- 工具栏通过 `HiddenInkToolButton`/`HiddenInkToolButton_Click` 激活 `ToolType.HiddenInk`，随后 `ApplyToolToAllPages` 为每页设置白色不透明遮罩、28 DIP 宽度和 `HiddenInkRevealState.DefaultRevealDurationMs`（3000ms），并切入 `CustomInkInputProcessingMode.HiddenInk`。
+- 工具栏通过 `HiddenInkToolButton`/`HiddenInkToolButton_Click` 激活 `ToolType.HiddenInk`，随后 `ApplyToolToAllPages` 为每页设置新的中性灰 `#C7CDD4` 不透明遮罩、28 DIP 宽度和 `HiddenInkRevealState.DefaultRevealDurationMs`（3000ms），并切入 `CustomInkInputProcessingMode.HiddenInk`；已加载显式颜色不被覆盖。
 - 页面抬笔后 `PdfPageControl` 发出 `HiddenInkCreated`，EditorPage 以 `HiddenInkAddedAction` 推入 undo 栈；擦除模式点击遮罩发出 `HiddenInkRemoved`，以 `HiddenInkRemovedAction` 推入 undo 栈。加载与 undo/redo 使用 quiet API，不会重复生成动作。
 - `CollectAnnotations`/`LoadAnnotationsFromPdfServiceAsync` 分别保存和恢复 `PageAnnotation.HiddenInks`。点击 reveal 只折叠页面视觉并启动 3 秒计时器，不改变模型；保存时仍写入遮罩，重开后默认再次隐藏。
 
@@ -96,7 +210,11 @@
 - WPF Ink（Stroke/DrawingAttributes）、PdfiumViewer（别名 `PdfiumPdfDocument`）。
 
 ## Open Threads / Resume Context
-**Status:** performance lifecycle complete. Full-page bitmaps use a profile-bounded visible working set; sidebar thumbnails render at true 0.22x scale and use a 24-entry LRU; inactive/minimized/navigated-away editors cancel render work and clear display-only bitmaps; reactivation restores only the visible working set; final close stops timers/hooks and awaits `PdfService.DisposeAsync`. Unload stops (but retains) autosave timer wiring so forward navigation can restart autosave without duplicate handlers. Existing annotation controls and save/undo behavior are preserved.
+- **Status:** complete for Wave 3 P2 automated scope; visual screenshots and foreground/device checks remain external.
+- **Intent/result:** highlighter previews, dynamic popup UIA/keyboard, marker contrast, production smoke IDs, popup rebuild z-order/handler lifecycle, and high-contrast pen visuals are covered by source/runtime contracts and explicit-fixture smoke evidence without changing later-wave ownership.
+- **Next steps:** keep Wave6 global transient teardown and later-wave sidebar/theme work out of this scope; perform visual/device/third-party checks only with their own evidence.
+- **Constraints:** keep PenPresets JSON-only compatibility, single-frame editor architecture, existing PopupZOrderHelper contract, and no Wave 4+ sidebar/theme/transient redesign.
+**Status:** complete for Wave 3 source/build/test scope — toolbar XAML/runtime popup construction and metadata are implemented. Visible preset slots, Fit Width/Fit Page and Ink Analysis unavailable entry points are removed while `AppSettings.PenPresets`, zoom core and supported selection actions remain. Semantic vector Paths, live `_highlighterColor` previews, localized ToolTip/Name/HelpText/AutomationId metadata, theme-token state colors, semantic Toggle peers, and focus/min-target styling are verified; explicit-fixture editor UIA smoke is green, while screenshots/device/foreground checks remain external.
 
 ## Recent i18n synchronization
 
@@ -116,7 +234,8 @@
 - `ApplyToolToAllPages` 每次调用都重新读设置并全页应用——新增工具时在此 switch 扩展。
 - Task 2/5 决策：橡皮模式/压感/墨水模拟三开关均走「popup 即时改 → `AppSettingsService.Save` → `ApplyToolToAllPages` 全页重应用」链路（与橡皮尺寸滑条同模式）；toggle UI 用 Border+TextBlock 自绘（#2563EB 激活态）而非系统 CheckBox，标签用中英双语裸字符串（其余 popup 标签走 LocalizationService，此两处按 spec 从简）。
 - Task 3 决策：形状子类型/颜色/粗细**会话级不持久化**（spec 无要求，跳过 AppSettings）；子类型选择器复用 Task 2 的 BuildModeToggleButton/StyleModeToggleButton（2×2 布局）；工具栏图标用 Segoe MDL2 &#xE8A9;（E7A6 已被 Redo 占用）；箭头 = 2 Stroke 2 步 undo（详见 PdfPageControl.md 决策）。
-- Task 4 决策：形状识别开关走 Task 2/5 同款链路（popup 即时改 → SaveSetting → ApplyToolToAllPages，持久化 `AppSettings.ShapeRecognition` 默认关）；undo 用新 action `StrokeReplacedAction`（original↔ideal 互换）而非复用 StrokeAddedAction——因为替换已在 PdfPageControl 内完成，undo 必须还原**原始手绘**笔迹；订阅 `PageControl.StrokeRecognized`（LoadPdf 处订阅 + DetachAllPageControlEvents 退订），dirty 由既有 InkMutated 承担。
+- Task 4/Wave 1 决策：形状识别开关走 Task 2/5 同款链路（popup 即时改 → SaveSetting → ApplyToolToAllPages，持久化 `AppSettings.ShapeRecognition` 默认关）；识别成功后 `PdfPageControl` 以 session token 和 immutable snapshots 原位替换并发 `StrokeRecognized`，`StrokeReplacedAction` 只持有 token/index/snapshots；undo/redo 找不到 token 或 side 已被其它动作改变时安静 no-op，普通擦除仍可删除还原后的原笔迹；dirty 由既有 `InkMutated` 承担。
+- **Wave 1 quality follow-up:** `StrokesErasedAction`, `ItemsRemovedAction`, `ItemsAddedAction` and `SelectionCrossPageMoveAction` must carry `StrokePlacement` records rather than reconstructing identity from a live stroke after removal. A shape action remains snapshot-only; placement records are only for ordinary live-stroke restoration and page ownership transfer.
 - Task 9 决策：文本 dragHandle 跨页复用 `SelectionCrossPageMoveAction`（单容器 + 空笔迹列表），delta=拖动实际位移（end−start，源页坐标），adjust=−targetOriginInSource，undo 数学与选区路径同构（Undo→start，Redo→目标页视觉同位）。**关键前提**：`DragHandle_MouseMove` 原有 clamp（限制在源页 Canvas 内）必须去掉——否则容器中心永不出源页、跨页永不触发；选区跨页可行的原因正是 `MoveItemsDirectly` 无 clamp。副作用处理：拖动中容器可溢出源页（视觉上被相邻页覆盖，与选区拖动一致）；松手无目标页命中（页间隙/文档外）或命中源页自身时，**clamp 回源页边界**再推 TextBoxMovedAction（保底文本框永不丢页外——比 spec 的"留在当前位置"更稳，避免页外坐标被保存）。防御性选区清除用 `HasSelection && SelectedTextContainers.Contains(container)` 精确判断（Text 工具下本不该有选区，无条件 ClearSelection 会误清）。
 - Task 13 决策：**活对象克隆而非剪贴板/JSON 往返**——`CopySelection→PasteSelection` 路径会丢 PressureFactor（StrokeAnnotation.Points 只存 X,Y），Ctrl+D 直接 `new StylusPoint(x+20, y+20, pt.PressureFactor)` + `DrawingAttributes.Clone()` 保真度更高；文本容器不新写克隆构造器，直接复用 `CreateTextBox(select:false)`（它本就带 text/fontSize/color/position 模板参数，与粘贴副本同路径，事件钩子逐字一致——任务建议的"提取 helper"已被现有参数化签名满足）。undo 单步性靠把全部克隆塞进一个 `ItemsAddedAction`；选区切换顺序与 PasteSelection 完全同构（先 push、再清他页、再 SelectItems）。
 - Task 14 决策：**RecordRecentColor 只做纯列表变异、持久化由调用方 SaveSetting 承担**——`AppSettingsService.Load()` 返回克隆（Sanitize+CopyColorList 每次新列表），helper 内部无法凭 list 引用反查所属 settings 对象落盘；调用点统一 `SaveSetting(s => RecordRecentColor(s.RecentXxxColors, c))`（复用 Task 2 模式）。最近行刷新选 **popup.Opened 重填**（任务给的二选一）而非持有引用增量维护——popup 内容静态一次性构建，Opened 重读设置最简单且天然覆盖跨会话。swatch 点击 = 该 popup 调色盘单元格的同一 apply 回调（pen/highlighter 传 colorChanged 本身、文本传共享局部函数 ApplyTextColor），点击最近色会再次记录置顶（MRU 自洽）。shape popup 不接最近行（颜色会话级，与三个持久化列表语义不符）。
@@ -144,7 +263,7 @@
 
 - **Status:** ready_for_next
 - i18n, Hidden Ink, resizable text boxes, theme/popup coverage and static website implementation are synchronized and pass automated checks.
-- The current solution verification is 0 build errors with 2 documented NU1701 warnings and 100 passing tests; see `.ai/PROJECT_CONTEXT.md` for the complete command evidence.
+- The current solution verification is 0 build errors with 2 documented NU1701 warnings and the latest full test count recorded in `.ai/PROJECT_CONTEXT.md`; see that file for complete command evidence.
 - Popup coverage includes the editor popups, MainWindow menus, all four SettingsWindow ComboBoxes and the three dynamically created HomePage menus; desktop Alt-Tab behavior remains manual.
 - Immersive mode currently hides/restores `ToolbarBorder`, `DocumentSidebar` and `PdfSearchPanel`; the older ruler note that mentioned only the toolbar is superseded.
  - Page bookmark persistence is wired for toggle/jump, structural page edits, and external PDF/image imports; the remaining checks are real WPF import and undo/redo interaction.
@@ -163,6 +282,15 @@
 - **2026-08-20:** `PenOnlyButton_Click` now keeps the loaded settings snapshot after saving, so the new touch gate observes the button state immediately instead of being reset from a stale `_applicationSettings` object.
 - **2026-08-20 correction:** The older ruler paragraph saying immersive mode only hides `ToolbarBorder` is superseded: current `ToggleImmersiveMode` also hides/restores `DocumentSidebar` and `PdfSearchPanel`; the ruler overlay remains independently interactive.
 - **2026-08-20:** Text resize uses shared mouse/stylus handlers, page clamping, Escape cancellation and `TextBoxResizedAction`; save/autosave now commit text edits and await PDF-before-version ordering.
+- **2026-08-23:** Wave 2 save gate decision: one `_autoSaveInFlight` task is the per-editor coalescing boundary shared by manual save and autosave; timer re-entry is ignored while a tick is already awaiting that task. A generation mismatch is a normal dirty result, not a second concurrent write or a success claim.
+- **2026-08-23:** Wave 2 implementation: `SaveCurrentDocumentCoreAsync` captures the generation before PDF write, writes the version sidecar only after PDF success, and returns false/keeps dirty on concurrent edits; manual errors still use the dialog and autosave errors still use the toast.
+- **2026-08-23 revision:** `DocumentSaveCoordinator` provides executable manual/autosave coalescing and latest-generation retry; `PrepareForCloseAsync`/`PrepareForNavigationAsync` are awaited by MainWindow before tab/content/resource transitions, and PdfService disposal joins the coordinated save path.
+- **2026-08-23 final review:** `DocumentEditAdmission` blocks page input and commands during close/navigation, waits already-admitted edits to quiesce, and reopens on a failed/timeout release. `CommitTextEditSession` runs before `SaveAsync` captures a generation, while late WPF model notifications are retained as a dirty generation for a final retry. `ReleaseResourcesAsync` coalesces callers and only sets `_resourcesReleased` after every owner, including PdfService, succeeds; a failed release remains retryable.
+- **2026-08-23 final review follow-up:** Sticky Note Popup sessions are committed and closed before the admission barrier and flushed again after the dispatcher barrier, so a queued activation cannot leave a detached editor interactive; whole-page `IsEnabled` blocks toolbar/routed commands alongside page input. Autosave joins an active task even when its completion has already cleared the dirty bit. Active-frame navigation calls `ResumeDocumentInteraction()`, which reopens both the edit admission and coordinator close state so the first edit after returning is persisted.
+- **2026-08-23 structural reload follow-up:** Editor-owned `DocumentSnapshotAction` byte replacements acquire `PdfSaveCoordinator`; `PdfService.LoadPdfAsync` acquires the same path lease for the native reload, closing the direct snapshot/annotation-save race without changing the strip/rebuild pipeline.
+- **2026-08-23 WPF retry follow-up:** `SaveCurrentDocumentCoreAsync` marshals `CollectAnnotations()` back to the editor Dispatcher when a generation-retry callback resumes on the thread pool; PDF and version I/O remain asynchronous, and the real close/navigation STA regressions persist late text safely.
+- **2026-08-23 navigation re-entry:** a successfully prepared editor stays blocked while in the frame back stack; `ResumeDocumentInteraction()` reopens the admission and autosave timer only when `Frame_Navigated` makes that editor active again.
+- **2026-08-23 destination/source-write follow-up:** draft Save-As copies now acquire sorted normalized leases for both the old/source and new/target path around directory creation and atomic `PdfAtomicFile.CopyFile`, so neither a source rewrite nor a destination replacement can race the copy.
 - **2026-08-20:** Immersive mode now hides/restores the toolbar, document sidebar and search panel and is reachable from the localized toolbar button as well as F11/ESC.
 
 ## Change History
@@ -182,6 +310,12 @@
   - Open threads: no required code implementation remains in this page; real isolated PDF editor loading, text resize/Undo/Redo pointer interaction and text save/reopen are verified, while drawing/eraser, cross-page movement, device/Edge visual checks, third-party viewers, live Pages and Codex AppData migration remain environment-dependent. The final suite has 96 passing tests.
 
 - Hidden Ink 已达到代码级实现：遮罩 reveal 是临时视觉状态，保存/加载始终以隐藏状态重建；本文不把完整回归或真实设备验收标为通过。
+- Wave 2 final-close admission now flushes both inline text sessions and the Sticky Note Popup before blocking input; the popup is closed explicitly because Popup content is outside the page `IsEnabled` subtree. `SetDocumentInteractionBlocked` disables the whole editor command/input subtree, and active-frame/window restore calls `ResumeDocumentInteraction` so a prepared navigation can be edited again.
+
+- **2026-08-23 final timeout/atomic follow-up:** `DocumentReleaseState` remains non-resumable through a timed-out or partially failed release; MainWindow keeps tab/window workflow guards installed while a background release task settles, and only then removes the tab or requests `Close()`. Failed continuations cancel only unreleased prepared suffix editors, leaving the failed editor blocked for explicit retry. Snapshot bytes, print copies, and Save-As use same-directory temp/flush/atomic replacement; Save-As holds source+destination path leases.
+- **2026-08-24 Wave5 review:** Home/Editor smooth scroll, loading, and PdfPageControl visual animation paths consume `ThemeService.GetAnimationDuration`/`ShouldAnimate`. The loading spinner is started/stopped in code so reduced motion disables it cleanly; no fixed-duration Editor storyboard remains. Runtime page chrome continues to use DynamicResource semantic aliases while annotation/data colors remain explicit.
+- The review follow-up also routes the ruler body/ticks/center cue, text selection border/fill, resize-handle dots, and eraser preview through live accent/focus/surface/subtle resources. Text/document colors and annotation colors remain explicit data colors.
+- **2026-08-23 Wave 2 transactional follow-up plan:** a failed multi-selection cross-page transfer must roll back every stroke already moved, preserve exact source/target identity and indexes, and expose unsuccessful initial/undo/redo results so callers leave the undo/redo stacks unchanged. Release preparation recovery must only re-enable interaction for a true pre-cleanup failure.
 
 ## Change History
 - 2026-08-18: 建立镜像文档（Task 0，基于当日源码阅读，行号以当时文件为准）。
@@ -208,3 +342,5 @@
 - 2026-08-21: `tools/Test-OpenNotesEditorSmoke.ps1` 预置真实 PDF 最近文件并经主页文件卡片打开，真实加载 `EditorPage`，UIA 暴露主要工具、保存和滚动控件；临时 sidecar 2 个并在 PASS 后清理。
 - 2026-08-22: 编辑器动态控件主题收口：模式/设置行支持焦点与 Enter/Space，动态工具/选择/文本弹窗的根面、标题、分隔线、筛选选中态、文本颜色面板和字体/对齐 ComboBox 使用 `Theme*` 资源；Sticky Note popup 注册 `PopupZOrderHelper`，并保留八向文本框 resize UIA peer。构建 0 错误、95 个测试通过。
 - 2026-08-22: 键盘缩放路由修复：`EditorPage_PreviewKeyDown` 对焦点/原始源为 `TextResizeHandleBorder` 的方向键提前放行，使八向句柄的 `KeyDown` 能执行尺寸变化，而不是被页面级文本框 nudge 分支抢先消费；新增源级回归合约。
+- 2026-08-23: Wave 1 shape-recognition/settings compatibility remains green; Wave 3 removes the visible preset-slot fallback and leaves only the uncalled read-only legacy initializer symbols so `AppSettings.PenPresets` JSON round-trip tests remain intact. Focused toolbar/settings/theme 20/20, full suite 170/170; pointer/editor visual smoke remains external.
+- 2026-08-23: Wave 1 quality follow-up——ordinary stroke undo actions now store `StrokePlacement` records and cross-page transfer tracks target ownership/index; real `StrokeReplacedAction` plus erase/delete/cross-page STA tests pass 5/5, shape/settings focused pass 13/13, full suite passes 113/113. Pointer smoke remains blocked by foreground ownership; no dedicated shape smoke exists.

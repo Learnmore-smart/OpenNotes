@@ -1,5 +1,5 @@
 # installer.iss
-> Last updated: 2026-08-23 | Protection: STANDARD
+> Last updated: 2026-08-24（5.0.0 release metadata） | Protection: STANDARD
 
 ## Purpose
 
@@ -8,9 +8,10 @@ Defines the Inno Setup package for the OpenNotes Windows desktop application.
 ## Open Threads / Resume Context
 
 - **Status:** complete
-- The installer consumes `Assets/app-icon.ico`. A clean Release publish produced `installer_output/OpenNotes-Setup-4.0.0-local.exe` (53.19 MiB; SHA-256 `F9BFA878428346186371379D6E2C6B0BFC564A6421B5227BEF15670D1AD4DBAF`). A temporary silent install/uninstall passed with no `Caelum.*` payload files. The installer is intentionally unsigned and local-only.
+- The installer consumes `Assets/app-icon.ico`; Inno Setup 6.7.3 produced `D:\Noah\文档\Coding\1. Open-Source\OpenNotes\installer_output\OpenNotes-Setup-5.0.0.exe` (56,085,133 bytes / 53.49 MiB; SHA-256 `4CA53AB10482267FB98172515AD8C6A607D035FE598F62FD82C0E6EB2CCA390B`). The source and publish ICO SHA-256 both equal `43E914B687B5325DE1276A69E6568E9803541862097755BA8A111E1B239AC45E`. The installer is intentionally unsigned.
+- A unique temporary `/VERYSILENT /NOICONS` installation launched the installed `OpenNotes.exe` with `OPENNOTES_DATA_ROOT` isolation; its ProductVersion was `5.0.0+9d08051ff91b79be30063ea01d0fa181c7bd7685` and FileVersion `5.0.0.0`. The process was stopped after startup, uninstaller exit code was 0, and the temporary install/data directories were removed.
 
 ## Important Notes / NEVER Change
 
 - Keep upgrade/application identifiers stable so existing installations are not stranded.
-- Do not publish the generated installer without an explicit later request.
+- Publish only the requested GitHub Release asset; do not deploy Pages or add a new website download page.
