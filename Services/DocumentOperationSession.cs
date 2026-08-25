@@ -127,7 +127,12 @@ public sealed class DocumentOperationSession : IDisposable
             current = _sessionCancellation;
         }
 
-        CancelAndDispose(current);
+        // Keep the current source alive while the session is inactive. Capture
+        // is allowed to race this boundary so it can return an already-cancelled
+        // lease for validation to reject; disposing here made Token access throw
+        // before the following Begin installed its replacement. Begin/Dispose
+        // retire the source once it is no longer the current capture target.
+        CancelWithoutDispose(current);
     }
 
     public static string NormalizePath(string path)
@@ -201,6 +206,22 @@ public sealed class DocumentOperationSession : IDisposable
                 // Idempotent release is required for unload/deactivation and
                 // a concurrent Begin/Cancel pair.
             }
+        }
+    }
+
+    private static void CancelWithoutDispose(CancellationTokenSource source)
+    {
+        if (source == null)
+            return;
+
+        try
+        {
+            source.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+            // Begin or Dispose retired the source after Cancel released the
+            // session gate. The replacement/current lifecycle owns cleanup.
         }
     }
 }

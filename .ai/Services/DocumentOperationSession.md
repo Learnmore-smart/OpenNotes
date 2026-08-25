@@ -42,10 +42,16 @@ commit is made.
 
 ## Open Threads / Resume Context
 
-- **Status:** complete for the approved Wave6 automated scope
-- **Intent:** finish the Wave6 P2 audit without redoing the existing lease wiring.
-- **Next steps:** run the final full test, solution build, i18n, diff check, and
-  three-page Editor UIA smoke; record any external foreground/device blockers.
-- **Blockers / notes:** do not change PDF annotation format, save coordination,
-  Wave7+ files, or commit. External foreground/deactivation evidence remains
-  unclaimed unless a real run is available.
+- **Status:** complete (2026-08-25 OpenNotes 5.2.1 large-PDF crash hotfix)
+- Windows event 1026 identified autosave capturing the session between `Cancel`
+  and the following `Begin`. `Cancel` now cancels without disposing the current
+  CTS; `Begin`/`Dispose` remain its retirement owners, so a racing capture returns
+  a cancelled lease that validation rejects instead of terminating the process.
+- The exact 50.04 MiB, 1,353-page textbook opened in the Release build and stayed
+  alive for a 90-second hold across the 60-second autosave tick with no .NET crash.
+
+## Bug Fixes
+
+| Date | Bug | Cause | Fix |
+|---|---|---|---|
+| 2026-08-25 | Large PDF load could terminate OpenNotes during autosave | `Cancel` disposed the current CTS before `Begin` replaced it, so `Capture().Token` threw `ObjectDisposedException` | Keep the inactive current CTS cancelled-but-alive until `Begin` or `Dispose` retires it |

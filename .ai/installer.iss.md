@@ -13,5 +13,7 @@ Builds the self-contained per-user OpenNotes installer.
 
 ## Current Status
 
+- Default version is `5.2.1` for the large-PDF crash hotfix; AppId and
+  per-user upgrade behavior remain unchanged.
 - Default installer version is `5.2.0`; AppId and per-user upgrade behavior are preserved.
 - Default installer version is `5.1.2`; output remains a self-contained per-user upgrade-compatible installer.

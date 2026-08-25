@@ -12,7 +12,7 @@ Single source of truth for the visible OpenNotes brand and the compatibility ide
 - `LegacyAppxIdentity`: `WindowsNotesApp`
 - `RepositoryUrl`: `https://github.com/Learnmore-smart/Windows-Notes`
 - `WebsiteUrl`: `https://learnmore-smart.github.io/Windows-Notes/`
-- `Version`: `5.2.0`
+- `Version`: `5.2.1`
 - `Description`: localized through `LocalizationService.Get("Product.Description")`
 
 ## Important Notes / NEVER Change
@@ -25,6 +25,9 @@ Single source of truth for the visible OpenNotes brand and the compatibility ide
 
 ## Open Threads / Resume Context
 
+- **Status:** ready_for_release (5.2.1 large-PDF crash hotfix)
+- Only the visible version advances to `5.2.1`; compatibility names, data root
+  and URLs remain unchanged.
 - **Status:** ready_for_release (5.2.0 feature release)
 - Only the visible product version changed to `5.2.0`; compatibility names, data root and URLs are preserved.
 - **Status:** complete (5.1.2 patch release)
@@ -43,3 +46,4 @@ Single source of truth for the visible OpenNotes brand and the compatibility ide
 - 2026-08-24: Bumped the visible version to `5.1.1` for the Settings-menu crash and Light-background patch.
 - 2026-08-24: Bumped the visible version to `5.1.2` for the application-wide Lucide icon release.
 - 2026-08-24: Bumped the visible version to `5.2.0` for the toolbar, shapes and page-template feature release.
+- 2026-08-25: Bumped the visible version to `5.2.1` for the large-PDF session-lifecycle crash hotfix.

@@ -137,6 +137,23 @@ public sealed class DocumentOperationSessionTests
         Assert.That(session.Validate(lease, 31, path, model), Is.False);
     }
 
+    [Test]
+    public void CaptureAfterCancelReturnsInvalidLeaseWithoutThrowing()
+    {
+        using var session = new DocumentOperationSession();
+        var model = new object();
+        const string path = @"C:\Docs\large-document.pdf";
+        session.Begin(41, path, model);
+
+        session.Cancel();
+
+        Assert.DoesNotThrow(() =>
+        {
+            using var lease = session.Capture(41, path, model);
+            Assert.That(session.Validate(lease, 41, path, model), Is.False);
+        });
+    }
+
     private static async Task<bool> ResumeAfterAwaitAsync(
         DocumentOperationSession session,
         DocumentOperationLease lease,

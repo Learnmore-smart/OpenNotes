@@ -7,6 +7,8 @@ Verify the visible OpenNotes brand while protecting the Caelum data-directory an
 
 ## Open Threads / Resume Context
 
+- **Status:** complete (5.2.1 hotfix release)
+- Advance only the visible-version contract to `5.2.1`; keep every compatibility assertion.
 - **Status:** complete (5.2.0 release)
 - The visible-version assertion is `5.2.0`; every OpenNotes/Caelum/WindowsNotesApp compatibility contract remains intact.
 - **Status:** complete (5.1.0 release)
@@ -22,6 +24,7 @@ Verify the visible OpenNotes brand while protecting the Caelum data-directory an
 
 | Date | Change | Author |
 |---|---|---|
+| 2026-08-25 | Updated the visible-version assertion to 5.2.1 for the large-PDF crash hotfix. | Codex |
 | 2026-08-24 | Updated the visible-version assertion to 5.2.0 without changing compatibility contracts. | Codex |
 | 2026-08-24 | Updated the visible-version assertion to 5.1.0 without changing compatibility contracts. | Codex |
 | 2026-08-24 | Added the 5.0.0 visible-version assertion for the release. | Codex |
