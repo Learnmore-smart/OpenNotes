@@ -242,7 +242,7 @@
                                 Background="{TemplateBinding Background}"
                                 BorderBrush="{TemplateBinding BorderBrush}"
                                 BorderThickness="{TemplateBinding BorderThickness}"
-                                CornerRadius="7"
+                                CornerRadius="8"
                                 Padding="{TemplateBinding Padding}">
                             <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
                                               VerticalAlignment="{TemplateBinding VerticalContentAlignment}"/>
@@ -251,7 +251,7 @@
                             <Trigger Property="IsSelected" Value="True">
                                 <Setter TargetName="SidebarItemRoot" Property="Background" Value="{DynamicResource ThemeSelectionBrush}"/>
                                 <Setter TargetName="SidebarItemRoot" Property="BorderBrush" Value="{DynamicResource ThemeAccentBrush}"/>
-                                <Setter TargetName="SidebarItemRoot" Property="BorderThickness" Value="2,1,1,1"/>
+                                <Setter TargetName="SidebarItemRoot" Property="BorderThickness" Value="2"/>
                             </Trigger>
                             <Trigger Property="IsKeyboardFocusWithin" Value="True">
                                 <Setter TargetName="SidebarItemRoot" Property="BorderBrush" Value="{DynamicResource ThemeFocusBrush}"/>
@@ -282,7 +282,7 @@
                 <Trigger Property="IsSelected" Value="True">
                     <Setter Property="Background" Value="{DynamicResource ThemeSelectionBrush}"/>
                     <Setter Property="BorderBrush" Value="{DynamicResource ThemeAccentBrush}"/>
-                    <Setter Property="BorderThickness" Value="2,1,1,1"/>
+                    <Setter Property="BorderThickness" Value="2"/>
                     <Setter Property="FontWeight" Value="SemiBold"/>
                 </Trigger>
                 <Trigger Property="IsKeyboardFocusWithin" Value="True">
@@ -292,19 +292,28 @@
         </Style>
 
         <DataTemplate x:Key="SidebarPageItemTemplate">
-            <StackPanel>
-                <Image Width="132"
-                       Height="170"
-                       Margin="4"
-                       Stretch="Uniform"
-                       Source="{Binding Thumbnail}"
-                       AutomationProperties.IsOffscreenBehavior="FromClip"/>
-                <TextBlock Text="{Binding PageLabel}"
+            <StackPanel Margin="2">
+                <Border CornerRadius="6" Background="{DynamicResource ThemeSurfaceBrush}" BorderBrush="{DynamicResource ThemeBorderBrush}" BorderThickness="1" Margin="2" Padding="2" HorizontalAlignment="Center">
+                    <Image Width="132"
+                           Height="170"
+                           Stretch="Uniform"
+                           Source="{Binding Thumbnail}"
+                           AutomationProperties.IsOffscreenBehavior="FromClip"/>
+                </Border>
+                <TextBlock x:Name="PageLabelText"
+                           Text="{Binding PageLabel}"
                            HorizontalAlignment="Center"
-                           Margin="0,2,0,4"
+                           Margin="0,4,0,2"
                            Foreground="{DynamicResource ThemeSubtleForegroundBrush}"
+                           FontSize="12"
                            TextTrimming="CharacterEllipsis"/>
             </StackPanel>
+            <DataTemplate.Triggers>
+                <DataTrigger Binding="{Binding IsSelected, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="True">
+                    <Setter TargetName="PageLabelText" Property="Foreground" Value="{DynamicResource ThemeAccentBrush}"/>
+                    <Setter TargetName="PageLabelText" Property="FontWeight" Value="SemiBold"/>
+                </DataTrigger>
+            </DataTemplate.Triggers>
         </DataTemplate>
 
         <DataTemplate x:Key="SidebarBookmarkItemTemplate">
@@ -833,6 +842,7 @@
                                   ItemsSource="{Binding SidebarPageItems, RelativeSource={RelativeSource AncestorType=Page}}"
                                   ScrollViewer.CanContentScroll="True"
                                   ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                  ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                                   VirtualizingPanel.IsVirtualizing="True"
                                   VirtualizingPanel.VirtualizationMode="Recycling"
                                   VirtualizingPanel.IsVirtualizingWhenGrouping="True"
@@ -865,6 +875,7 @@
                                   ItemsSource="{Binding SidebarOutlineItems, RelativeSource={RelativeSource AncestorType=Page}}"
                                   ScrollViewer.CanContentScroll="True"
                                   ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                  ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                                   VirtualizingPanel.IsVirtualizing="True"
                                   VirtualizingPanel.VirtualizationMode="Recycling"
                                   VirtualizingPanel.IsVirtualizingWhenGrouping="True"
@@ -906,6 +917,7 @@
                                      ItemsSource="{Binding SidebarBookmarkItems, RelativeSource={RelativeSource AncestorType=Page}}"
                                      ScrollViewer.CanContentScroll="True"
                                      ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                     ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                                      VirtualizingPanel.IsVirtualizing="True"
                                      VirtualizingPanel.VirtualizationMode="Recycling"
                                      VirtualizingPanel.IsVirtualizingWhenGrouping="True"

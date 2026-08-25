@@ -5730,9 +5730,28 @@ namespace Caelum.Controls
 
         private static bool HitStroke(Stroke stroke, Point point)
         {
-            // GetBounds covers interior clicks on closed shapes;
-            // HitTest(Point, diameter) adds 2px forgiveness near the ink path.
-            return stroke.GetBounds().Contains(point) || stroke.HitTest(point, 2);
+            // 1. Hit-test along the stroke path with an 8px diameter tolerance
+            if (stroke.HitTest(point, 8))
+                return true;
+
+            // 2. If it's a closed shape (first and last vertices meet), check if the point is inside the shape polygon
+            var pts = stroke.StylusPoints;
+            if (pts.Count >= 4)
+            {
+                var pFirst = new Point(pts[0].X, pts[0].Y);
+                var pLast = new Point(pts[pts.Count - 1].X, pts[pts.Count - 1].Y);
+                if (Math.Abs(pFirst.X - pLast.X) < 4.0 && Math.Abs(pFirst.Y - pLast.Y) < 4.0)
+                {
+                    var poly = new System.Windows.Media.PointCollection(pts.Count);
+                    for (int i = 0; i < pts.Count; i++)
+                        poly.Add(new Point(pts[i].X, pts[i].Y));
+
+                    if (IsPointInPolygon(poly, point))
+                        return true;
+                }
+            }
+
+            return stroke.GetBounds().Contains(point) && (stroke.GetBounds().Width <= 16 || stroke.GetBounds().Height <= 16);
         }
 
         private void ToggleStrokeSelection(Stroke stroke)
@@ -5911,7 +5930,62 @@ namespace Caelum.Controls
                 _selectedStrokes.Clear();
                 _selectedTextContainers.Clear();
 
-                if (_selectionShape == SelectionShape.FreeForm && _freeSelectionPoints?.Count > 2)
+                bool isClick = false;
+                if (_selectionShape == SelectionShape.FreeForm)
+                {
+                    isClick = _freeSelectionPoints == null || _freeSelectionPoints.Count <= 2;
+                }
+                else
+                {
+                    isClick = _selectionRect == null || (_selectionRect.Width < 4 && _selectionRect.Height < 4);
+                }
+
+                if (isClick)
+                {
+                    Point clickPoint = _selectionStartPoint;
+                    bool hitSomething = false;
+
+                    if (_selectionFilter != SelectionFilter.DrawingsOnly)
+                    {
+                        for (int i = TextOverlayCanvas.Children.Count - 1; i >= 0; i--)
+                        {
+                            if (TextOverlayCanvas.Children[i] is Grid container && HitTextContainer(container, clickPoint))
+                            {
+                                _selectedTextContainers.Add(container);
+                                hitSomething = true;
+                                break;
+                            }
+                        }
+
+                        if (!hitSomething)
+                        {
+                            for (int i = ImageOverlayCanvas.Children.Count - 1; i >= 0; i--)
+                            {
+                                if (ImageOverlayCanvas.Children[i] is Grid container && HitTextContainer(container, clickPoint))
+                                {
+                                    _selectedTextContainers.Add(container);
+                                    hitSomething = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    if (!hitSomething && _selectionFilter != SelectionFilter.TextOnly)
+                    {
+                        for (int i = InkCanvas.Strokes.Count - 1; i >= 0; i--)
+                        {
+                            var stroke = InkCanvas.Strokes[i];
+                            if (HitStroke(stroke, clickPoint))
+                            {
+                                _selectedStrokes.Add(stroke);
+                                hitSomething = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+                else if (_selectionShape == SelectionShape.FreeForm && _freeSelectionPoints?.Count > 2)
                 {
                     var polygon = _freeSelectionPoints;
 
@@ -5919,7 +5993,7 @@ namespace Caelum.Controls
                     {
                         foreach (var stroke in InkCanvas.Strokes)
                         {
-                            if (IsRectInsidePolygon(polygon, stroke.GetBounds()))
+                            if (IsStrokeInsidePolygon(polygon, stroke))
                                 _selectedStrokes.Add(stroke);
                         }
                     }
@@ -5931,7 +6005,7 @@ namespace Caelum.Controls
                             if (element is Grid container)
                             {
                                 var containerRect = new Rect(Canvas.GetLeft(container), Canvas.GetTop(container), container.ActualWidth, container.ActualHeight);
-                                if (IsRectInsidePolygon(polygon, containerRect))
+                                if (IsContainerInsidePolygon(polygon, containerRect))
                                     _selectedTextContainers.Add(container);
                             }
                         }
@@ -5943,14 +6017,11 @@ namespace Caelum.Controls
                             if (element is Grid container)
                             {
                                 var containerRect = new Rect(Canvas.GetLeft(container), Canvas.GetTop(container), container.ActualWidth, container.ActualHeight);
-                                if (IsRectInsidePolygon(polygon, containerRect))
+                                if (IsContainerInsidePolygon(polygon, containerRect))
                                     _selectedTextContainers.Add(container);
                             }
                         }
                     }
-
-                    _freeSelectionPath = null;
-                    _freeSelectionPoints = null;
                 }
                 else if (_selectionRect != null)
                 {
@@ -5962,7 +6033,7 @@ namespace Caelum.Controls
                     {
                         foreach (var stroke in InkCanvas.Strokes)
                         {
-                            if (selRect.Contains(stroke.GetBounds()))
+                            if (IsStrokeInsideRect(selRect, stroke))
                                 _selectedStrokes.Add(stroke);
                         }
                     }
@@ -5991,9 +6062,11 @@ namespace Caelum.Controls
                             }
                         }
                     }
-
-                    _selectionRect = null;
                 }
+
+                _freeSelectionPath = null;
+                _freeSelectionPoints = null;
+                _selectionRect = null;
 
                 // Auto-clear visuals if nothing was caught
                 if (_selectedStrokes.Count == 0 && _selectedTextContainers.Count == 0)
@@ -6026,6 +6099,60 @@ namespace Caelum.Controls
                    IsPointInPolygon(polygon, rect.TopRight) &&
                    IsPointInPolygon(polygon, rect.BottomLeft) &&
                    IsPointInPolygon(polygon, rect.BottomRight);
+        }
+
+        private static bool IsStrokeInsidePolygon(System.Windows.Media.PointCollection polygon, Stroke stroke)
+        {
+            if (IsRectInsidePolygon(polygon, stroke.GetBounds()))
+                return true;
+
+            var pts = stroke.StylusPoints;
+            if (pts.Count == 0) return false;
+
+            int insideCount = 0;
+            foreach (var pt in pts)
+            {
+                if (IsPointInPolygon(polygon, new Point(pt.X, pt.Y)))
+                    insideCount++;
+            }
+
+            return (double)insideCount / pts.Count >= 0.6 || (pts.Count <= 3 && insideCount == pts.Count);
+        }
+
+        private static bool IsContainerInsidePolygon(System.Windows.Media.PointCollection polygon, Rect containerRect)
+        {
+            if (IsRectInsidePolygon(polygon, containerRect))
+                return true;
+
+            var center = new Point(containerRect.Left + containerRect.Width / 2, containerRect.Top + containerRect.Height / 2);
+            if (IsPointInPolygon(polygon, center))
+                return true;
+
+            int cornersIn = 0;
+            if (IsPointInPolygon(polygon, containerRect.TopLeft)) cornersIn++;
+            if (IsPointInPolygon(polygon, containerRect.TopRight)) cornersIn++;
+            if (IsPointInPolygon(polygon, containerRect.BottomLeft)) cornersIn++;
+            if (IsPointInPolygon(polygon, containerRect.BottomRight)) cornersIn++;
+
+            return cornersIn >= 2;
+        }
+
+        private static bool IsStrokeInsideRect(Rect selRect, Stroke stroke)
+        {
+            if (selRect.Contains(stroke.GetBounds()))
+                return true;
+
+            var pts = stroke.StylusPoints;
+            if (pts.Count == 0) return false;
+
+            int insideCount = 0;
+            foreach (var pt in pts)
+            {
+                if (selRect.Contains(new Point(pt.X, pt.Y)))
+                    insideCount++;
+            }
+
+            return (double)insideCount / pts.Count >= 0.7;
         }
 
         private void SelectionOverlayCanvas_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)

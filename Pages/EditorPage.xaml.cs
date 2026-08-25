@@ -4824,24 +4824,6 @@ namespace Caelum.Pages
 
         private static Grid CreateSelectionToggleContent(UIElement visual)
         {
-            var checkMark = new Path
-            {
-                Width = 10,
-                Height = 10,
-                Stretch = Stretch.Uniform,
-                Fill = Brushes.Transparent,
-                StrokeThickness = 2,
-                StrokeStartLineCap = PenLineCap.Round,
-                StrokeEndLineCap = PenLineCap.Round,
-                Data = Geometry.Parse("M2,5 L4.5,8 L9,2"),
-                HorizontalAlignment = HorizontalAlignment.Right,
-                VerticalAlignment = VerticalAlignment.Top,
-                Margin = new Thickness(0, 1, 1, 0),
-                Tag = "CheckMark",
-                Visibility = Visibility.Collapsed
-            };
-            checkMark.SetResourceReference(Path.StrokeProperty, "ThemeFocusBrush");
-
             var activeBar = new Border
             {
                 Height = 2,
@@ -4863,7 +4845,7 @@ namespace Caelum.Pages
 
             return new Grid
             {
-                Children = { visual, checkMark, activeBar }
+                Children = { visual, activeBar }
             };
         }
 
@@ -4883,12 +4865,7 @@ namespace Caelum.Pages
             {
                 foreach (var element in grid.Children)
                 {
-                    if (element is Path path && Equals(path.Tag, "CheckMark"))
-                    {
-                        path.Visibility = isActive ? Visibility.Visible : Visibility.Collapsed;
-                        path.SetResourceReference(Path.StrokeProperty, "ThemeFocusBrush");
-                    }
-                    else if (element is Border border && Equals(border.Tag, "ActiveBar"))
+                    if (element is Border border && Equals(border.Tag, "ActiveBar"))
                     {
                         border.Visibility = isActive ? Visibility.Visible : Visibility.Collapsed;
                         border.SetResourceReference(Border.BackgroundProperty, "ThemeFocusBrush");
@@ -7402,13 +7379,14 @@ namespace Caelum.Pages
             }
         }
 
-        private void UpdateThumbnailSelection()
+        private void UpdateThumbnailSelection(bool forceCenter = false)
         {
             if (ThumbnailListBox == null || ThumbnailListBox.Items.Count == 0)
                 return;
             int current = GetCurrentPageIndex();
             if (current >= 0 && current < ThumbnailListBox.Items.Count)
             {
+                bool indexChanged = ThumbnailListBox.SelectedIndex != current;
                 _isSynchronizingThumbnailSelection = true;
                 try
                 {
@@ -7418,7 +7396,61 @@ namespace Caelum.Pages
                 {
                     _isSynchronizingThumbnailSelection = false;
                 }
+
+                if (indexChanged || forceCenter)
+                {
+                    ScrollThumbnailItemToCenter(current);
+                }
             }
+        }
+
+        private void ScrollThumbnailItemToCenter(int index)
+        {
+            if (ThumbnailListBox == null || index < 0 || index >= ThumbnailListBox.Items.Count)
+                return;
+
+            if (_sidebarTab != SidebarTab.Pages || _sidebarCollapsed)
+                return;
+
+            var itemData = ThumbnailListBox.Items[index];
+            ThumbnailListBox.ScrollIntoView(itemData);
+
+            Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, new Action(() =>
+            {
+                if (ThumbnailListBox == null || index < 0 || index >= ThumbnailListBox.Items.Count)
+                    return;
+
+                var scrollViewer = FindVisualChildren<ScrollViewer>(ThumbnailListBox).FirstOrDefault();
+                if (scrollViewer == null)
+                    return;
+
+                if (ThumbnailListBox.ItemContainerGenerator.ContainerFromIndex(index) is ListBoxItem container && container.IsLoaded)
+                {
+                    try
+                    {
+                        var transform = container.TransformToAncestor(scrollViewer);
+                        var pos = transform.Transform(new Point(0, 0));
+                        double containerCenter = pos.Y + container.ActualHeight / 2.0;
+                        double viewportCenter = scrollViewer.ViewportHeight / 2.0;
+                        double delta = containerCenter - viewportCenter;
+                        if (Math.Abs(delta) > 2.0)
+                        {
+                            double targetOffset = Math.Max(0, Math.Min(scrollViewer.ScrollableHeight, scrollViewer.VerticalOffset + delta));
+                            scrollViewer.ScrollToVerticalOffset(targetOffset);
+                        }
+                    }
+                    catch
+                    {
+                        // Ignore any visual tree detachment during layout transitions
+                    }
+                }
+                else if (scrollViewer.ScrollableHeight > 0 && ThumbnailListBox.Items.Count > 0)
+                {
+                    double avgItemHeight = scrollViewer.ExtentHeight / ThumbnailListBox.Items.Count;
+                    double estimatedTarget = (index + 0.5) * avgItemHeight - (scrollViewer.ViewportHeight / 2.0);
+                    scrollViewer.ScrollToVerticalOffset(Math.Max(0, Math.Min(scrollViewer.ScrollableHeight, estimatedTarget)));
+                }
+            }));
         }
 
         private void RefreshBookmarks()
@@ -7584,6 +7616,11 @@ namespace Caelum.Pages
             ApplySidebarButtonState(SidebarPagesButton, tab == SidebarTab.Pages, LocalizationService.Get("Editor.PagesTab"));
             ApplySidebarButtonState(SidebarOutlineButton, tab == SidebarTab.Outline, LocalizationService.Get("Editor.OutlineTab"));
             ApplySidebarButtonState(SidebarBookmarksButton, tab == SidebarTab.Bookmarks, LocalizationService.Get("Editor.BookmarksTab"));
+
+            if (tab == SidebarTab.Pages && !_sidebarCollapsed)
+            {
+                UpdateThumbnailSelection(forceCenter: true);
+            }
         }
 
         private void ApplySidebarButtonState(Button button, bool selected, string label)
@@ -7717,7 +7754,8 @@ namespace Caelum.Pages
             if (_sidebarCollapsed || SidebarResizeThumb == null)
                 return;
 
-            double step = (Keyboard.Modifiers & ModifierKeys.Shift) != 0
+            var modifiers = e.KeyboardDevice != null ? e.KeyboardDevice.Modifiers : Keyboard.Modifiers;
+            double step = (modifiers & ModifierKeys.Shift) != 0
                 ? SidebarResizeLargeStep : SidebarResizeStep;
             double value = SidebarResizeThumb.Value;
             switch (e.Key)
@@ -10866,6 +10904,8 @@ namespace Caelum.Pages
             PdfScrollViewer.UpdateLayout();
             SyncSmoothScrollState();
             UpdatePageNumberIndicator();
+            UpdateThumbnailSelection(forceCenter: true);
+            UpdateBookmarkButton();
             UpdateSelectedTextBoxPopupVisibility(forceRefresh: true);
         }
 
@@ -11493,17 +11533,16 @@ namespace Caelum.Pages
                     if (child is Border b && !b.IsHitTestVisible && b.Tag is string tag && tag == "chrome")
                     {
                         b.BorderThickness = isSelected ? new Thickness(1.5) : new Thickness(0);
+                        b.ClearValue(Border.BackgroundProperty);
+                        b.Background = Brushes.Transparent;
                         if (isSelected)
                         {
                             b.SetResourceReference(Border.BorderBrushProperty, "ThemeFocusBrush");
-                            b.SetResourceReference(Border.BackgroundProperty, "ThemeSelectionBrush");
                         }
                         else
                         {
                             b.ClearValue(Border.BorderBrushProperty);
                             b.BorderBrush = Brushes.Transparent;
-                            b.ClearValue(Border.BackgroundProperty);
-                            b.Background = Brushes.Transparent;
                         }
                     }
                     else if (child is Border handle && handle.Cursor == Cursors.SizeAll)

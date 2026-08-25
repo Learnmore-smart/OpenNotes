@@ -330,7 +330,9 @@ public sealed class EditorToolbarVisualSourceTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(source, Does.Contain("CheckMark"));
+            Assert.That(source, Does.Contain("ActiveBar"));
+            Assert.That(source, Does.Not.Contain("CheckMark"));
+            Assert.That(source, Does.Not.Contain("M2,5 L4.5,8 L9,2"));
             Assert.That(source, Does.Contain("Visibility.Visible"));
             Assert.That(source, Does.Contain("StyleVectorModeToggleButton"));
             Assert.That(source, Does.Contain("IsChecked = active"));
