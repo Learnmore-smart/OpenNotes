@@ -11,7 +11,7 @@ public static class ProductInfo
     public const string LegacyAppxIdentity = "WindowsNotesApp";
     public const string RepositoryUrl = "https://github.com/Learnmore-smart/Windows-Notes";
     public const string WebsiteUrl = "https://learnmore-smart.github.io/Windows-Notes/";
-    public const string Version = "5.0.0";
+    public const string Version = "5.0.1";
     public const string DataRootOverrideEnvironmentVariable = "OPENNOTES_DATA_ROOT";
     public static string Description => LocalizationService.Get("Product.Description");
 

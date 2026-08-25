@@ -12,7 +12,7 @@ Single source of truth for the visible OpenNotes brand and the compatibility ide
 - `LegacyAppxIdentity`: `WindowsNotesApp`
 - `RepositoryUrl`: `https://github.com/Learnmore-smart/Windows-Notes`
 - `WebsiteUrl`: `https://learnmore-smart.github.io/Windows-Notes/`
-- `Version`: `5.0.0`
+- `Version`: `5.0.1`
 - `Description`: localized through `LocalizationService.Get("Product.Description")`
 
 ## Important Notes / NEVER Change
@@ -25,6 +25,8 @@ Single source of truth for the visible OpenNotes brand and the compatibility ide
 
 ## Open Threads / Resume Context
 
+- **Status:** complete (5.0.1 startup-crash patch)
+- Only the visible version changed; every compatibility identifier and URL remains intact.
 - **Status:** ready_for_next
 - `GetDataDirectory()` is implemented and used by settings, recent files, bookmarks, and version history. The opt-in override is only for isolated test/diagnostic processes; the production default remains `%LOCALAPPDATA%\Caelum`.
 
@@ -32,3 +34,4 @@ Single source of truth for the visible OpenNotes brand and the compatibility ide
 
 - 2026-08-21: Added `OPENNOTES_DATA_ROOT` as an opt-in isolated-run root while preserving the legacy production directory.
 - 2026-08-24: Bumped the visible product version to `5.0.0`; legacy namespace, storage path, AppX identity, repository and website URLs remain unchanged.
+- 2026-08-24: Bumped the visible product version to `5.0.1` for the home-hover startup-crash patch; compatibility identifiers and URLs remain unchanged.

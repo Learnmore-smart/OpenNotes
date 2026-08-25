@@ -94,6 +94,12 @@ namespace Caelum.Pages
             if (target?.RenderTransform is not ScaleTransform scale)
                 return;
 
+            if (scale.IsFrozen)
+            {
+                scale = (ScaleTransform)scale.CloneCurrentValue();
+                target.RenderTransform = scale;
+            }
+
             double targetScale = isHovered
                 ? (targetName == "FolderIconGrid" ? 1.06 : 1.08)
                 : 1.0;

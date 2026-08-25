@@ -7,6 +7,7 @@ Exercise the second-pass Wave5 acceptance contracts that source-only palette tes
 
 ## RED/GREEN evidence
 
+- 2026-08-24 startup-crash hotfix: `HomeTileHoverClonesFrozenTemplateScaleBeforeAnimating` uses the real private `HomePage.AnimateTileScale` path and a frozen template-style transform. RED reproduced the exact `InvalidOperationException` at line 100; GREEN proves hover replaces it with a mutable instance. Full suite passes 259/259.
 - RED was captured before the review fixes for the missing production animation helper consumers, unused semantic aliases, Settings focus/disabled/responsive contracts, HighContrast refresh lifecycle, runtime chrome literals, and the missing page-level composite probe.
 - GREEN `ThemeReviewContractTests` passes 11/11 on an STA fixture. The fixture calls `ThemeService.ResetForTests()` after every case so injected SystemEvents overrides and event subscriptions cannot leak across tests.
 - The motion contract also scans Home/Editor XAML for fixed `Duration="0:0:*"` storyboard literals: Home hover scale uses the interruptible `AnimateTileScale` helper, and the Editor loading spinner is a code-behind animation gated by `ShouldAnimate`.

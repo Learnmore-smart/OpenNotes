@@ -89,6 +89,54 @@ public sealed class ThemeReviewContractTests
     }
 
     [Test]
+    public void HomeTileHoverClonesFrozenTemplateScaleBeforeAnimating()
+    {
+        EnsureApplicationResources();
+        ThemeService.Apply("Light", reduceMotion: false, reduceTransparency: false);
+
+        var frozenScale = new ScaleTransform(1.0, 1.0);
+        frozenScale.Freeze();
+        var iconGrid = new Grid
+        {
+            Name = "IconGrid",
+            Width = 120,
+            Height = 160,
+            RenderTransform = frozenScale
+        };
+        var button = new Button { Content = iconGrid };
+        var window = new Window
+        {
+            Width = 240,
+            Height = 240,
+            ShowInTaskbar = false,
+            Content = button
+        };
+
+        window.Show();
+        window.UpdateLayout();
+        try
+        {
+            MethodInfo animate = typeof(Caelum.Pages.HomePage).GetMethod(
+                "AnimateTileScale",
+                BindingFlags.Static | BindingFlags.NonPublic)
+                ?? throw new AssertionException("HomePage.AnimateTileScale was not found.");
+
+            Assert.DoesNotThrow(() => animate.Invoke(null, new object[] { button, true }),
+                "Hovering a home tile must not animate a frozen WPF template Freezable.");
+            Assert.Multiple(() =>
+            {
+                Assert.That(iconGrid.RenderTransform, Is.TypeOf<ScaleTransform>());
+                Assert.That(iconGrid.RenderTransform, Is.Not.SameAs(frozenScale));
+                Assert.That(((ScaleTransform)iconGrid.RenderTransform).IsFrozen, Is.False);
+            });
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [Test]
     public void SemanticAliasesAreConsumedByProductionDynamicResources()
     {
         string root = FindProjectRoot();

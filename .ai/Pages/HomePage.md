@@ -23,6 +23,8 @@ Displays the document/folder home surface inside the MainWindow tab shell.
 
 ## Open Threads
 
+- **Status:** complete (2026-08-24 startup crash hotfix)
+- `AnimateTileScale` now replaces only a frozen template `ScaleTransform` with `CloneCurrentValue()` on its owning tile before clearing/starting animations. ReduceMotion behavior, target scale values, lookup and layout are unchanged. The real STA regression reproduced the event-log exception before the fix and passes afterward; full suite is 259/259, and an installed 5.0.1 startup remained alive with zero new Windows crash events.
 - **Status:** complete for localization, paper/ink surface and Wave5 review work
 - Every live HomePage subscribes to `LocalizationService.LanguageChanged` while loaded, unsubscribes while unloaded, and refreshes once when it is loaded again. The current pass keeps the page refresh idempotent while MainWindow updates tab chrome.
 - All three dynamically created HomePage menus register the helper immediately before opening. Their refresh path resolves each catalog key at the call site, keeping the static i18n verifier able to prove every key while preserving already-open menu updates.
@@ -30,6 +32,7 @@ Displays the document/folder home surface inside the MainWindow tab shell.
 
 ## Agent Decisions / Thoughts
 
+- **2026-08-24:** Windows `.NET Runtime` event 1026 identifies the launch crash at `HomePage.AnimateTileScale` line 100: `BeginAnimation` is called on a frozen `ScaleTransform`. The fix must replace the frozen Freezable at its owning element rather than catch/suppress the exception.
 - **2026-08-20:** The helper is called immediately before `IsOpen = true`, matching the existing EditorPage dynamic-menu pattern and avoiding any changes to menu construction.
 - **2026-08-21:** Replaced HomePage tile chrome literals with `DynamicResource` theme tokens while preserving content-specific folder/file artwork colors.
 - **2026-08-21:** Added the lifecycle-bound language-change subscription plan for open HomePage instances.
@@ -40,4 +43,5 @@ Displays the document/folder home surface inside the MainWindow tab shell.
 
 ## Change History
 
+- **2026-08-24:** Fixed the OpenNotes 5.0 home hover startup crash caused by animating a frozen WPF template transform.
 - **2026-08-20:** Added z-order registration for add-tile, file, and folder context menus.
