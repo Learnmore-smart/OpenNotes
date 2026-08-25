@@ -19,6 +19,40 @@
         <TextBlock x:Key="ThemeMarginBrushToken" Visibility="Collapsed"
                    Foreground="{DynamicResource ThemeMarginBrush}"/>
 
+        <!-- WPF equivalent of a CSS tooltip: one compact, themed visual for
+             every localized ToolTip string attached to editor controls. -->
+        <Style x:Key="EditorToolTipStyle" TargetType="{x:Type ToolTip}">
+            <Setter Property="Placement" Value="Bottom"/>
+            <Setter Property="VerticalOffset" Value="8"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="HasDropShadow" Value="False"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="{x:Type ToolTip}">
+                        <Border Background="{DynamicResource ThemeSurfaceBrush}"
+                                BorderBrush="{DynamicResource ThemeBorderBrush}"
+                                BorderThickness="1"
+                                CornerRadius="7"
+                                Padding="9,5"
+                                SnapsToDevicePixels="True">
+                            <Border.Effect>
+                                <DropShadowEffect BlurRadius="12"
+                                                  ShadowDepth="3"
+                                                  Opacity="{DynamicResource ThemeShadowOpacity}"
+                                                  Color="#000000"/>
+                            </Border.Effect>
+                            <ContentPresenter TextElement.Foreground="{DynamicResource ThemeTextBrush}"
+                                              TextElement.FontSize="12"
+                                              TextOptions.TextFormattingMode="Display"/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style TargetType="{x:Type ToolTip}" BasedOn="{StaticResource EditorToolTipStyle}"/>
+
         <Style x:Key="ToolbarIconPathStyle" TargetType="Path">
             <Setter Property="Width" Value="19"/>
             <Setter Property="Height" Value="19"/>
@@ -41,6 +75,9 @@
             <Setter Property="MinHeight" Value="32"/>
             <Setter Property="FocusVisualStyle" Value="{StaticResource ToolbarFocusVisualStyle}"/>
             <Setter Property="ToolTipService.ShowOnDisabled" Value="True"/>
+            <Setter Property="ToolTipService.InitialShowDelay" Value="350"/>
+            <Setter Property="ToolTipService.BetweenShowDelay" Value="75"/>
+            <Setter Property="ToolTipService.ShowDuration" Value="8000"/>
             <Setter Property="Cursor" Value="Hand"/>
             <Setter Property="Template">
                 <Setter.Value>
@@ -87,6 +124,9 @@
             <Setter Property="MinHeight" Value="32"/>
             <Setter Property="FocusVisualStyle" Value="{StaticResource ToolbarFocusVisualStyle}"/>
             <Setter Property="ToolTipService.ShowOnDisabled" Value="True"/>
+            <Setter Property="ToolTipService.InitialShowDelay" Value="350"/>
+            <Setter Property="ToolTipService.BetweenShowDelay" Value="75"/>
+            <Setter Property="ToolTipService.ShowDuration" Value="8000"/>
             <Setter Property="Cursor" Value="Hand"/>
             <Setter Property="Template">
                 <Setter.Value>
@@ -318,13 +358,9 @@
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="{x:Type local:SidebarResizeThumb}">
-                        <Grid Background="Transparent">
-                            <Border Width="2"
-                                    HorizontalAlignment="Center"
-                                    VerticalAlignment="Stretch"
-                                    Background="{DynamicResource ThemeBorderBrush}"
-                                    CornerRadius="1"/>
-                        </Grid>
+                        <!-- Keep the full 32-DIP drag/range target without
+                             painting a divider over the document edge. -->
+                        <Grid Background="Transparent"/>
                     </ControlTemplate>
                 </Setter.Value>
             </Setter>
@@ -417,7 +453,7 @@
                         Style="{StaticResource UndoRedoButtonStyle}"
                         Width="42" Height="36" Margin="2,0" IsEnabled="False"
                         AutomationProperties.AutomationId="Editor.UndoButton">
-                    <controls:LucideIcon Kind="Undo2" Width="19" Height="19"
+                    <controls:LucideIcon Kind="Undo2" Width="18" Height="18"
                                          Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
                 </Button>
 
@@ -426,7 +462,7 @@
                         Style="{StaticResource UndoRedoButtonStyle}"
                         Width="42" Height="36" Margin="2,0" IsEnabled="False"
                         AutomationProperties.AutomationId="Editor.RedoButton">
-                    <controls:LucideIcon Kind="Redo2" Width="19" Height="19"
+                    <controls:LucideIcon Kind="Redo2" Width="18" Height="18"
                                          Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
                 </Button>
 
@@ -438,19 +474,15 @@
                         Style="{StaticResource ToolbarToggleButtonStyle}"
                         Width="42" Height="36" Margin="2,0"
                         AutomationProperties.AutomationId="Editor.PenToolButton">
-                    <Grid Width="24" Height="24">
-                        <!-- Contrast backplate/ring keeps a black selected pen
-                             visible on dark and high-contrast surfaces. -->
-                        <Border x:Name="PenIconBackplate" Width="24" Height="24"
-                                CornerRadius="7"
-                                Background="{DynamicResource ThemeSurfaceAltBrush}"
-                                BorderBrush="{DynamicResource ThemeFocusBrush}"
-                                BorderThickness="1"/>
-                        <controls:LucideIcon x:Name="PenIconContrast" Kind="PenLine" Width="19" Height="19"
-                               Stroke="{DynamicResource ThemeFocusBrush}"
-                               StrokeThickness="3"/>
-                        <controls:LucideIcon x:Name="PenIcon" Kind="PenLine" Width="19" Height="19"
-                                             Stroke="{DynamicResource ThemeForegroundBrush}"/>
+                    <Grid Width="22" Height="22">
+                        <controls:LucideIcon x:Name="PenIcon" Kind="PenLine" Width="18" Height="18"
+                                             VerticalAlignment="Top"
+                                             Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=ToggleButton}}"/>
+                        <Border x:Name="PenColorIndicator"
+                                Width="12" Height="2.5"
+                                VerticalAlignment="Bottom"
+                                CornerRadius="1.25"
+                                Background="#000000"/>
                     </Grid>
                 </ToggleButton>
 
@@ -459,8 +491,16 @@
                         Style="{StaticResource ToolbarToggleButtonStyle}"
                         Width="42" Height="36" Margin="2,0"
                         AutomationProperties.AutomationId="Editor.HighlighterToolButton">
-                    <controls:LucideIcon x:Name="HighlighterIcon" Kind="Highlighter" Width="19" Height="19"
-                                         Stroke="{DynamicResource ThemeForegroundBrush}"/>
+                    <Grid Width="22" Height="22">
+                        <controls:LucideIcon x:Name="HighlighterIcon" Kind="Highlighter" Width="18" Height="18"
+                                             VerticalAlignment="Top"
+                                             Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=ToggleButton}}"/>
+                        <Border x:Name="HighlighterColorIndicator"
+                                Width="12" Height="2.5"
+                                VerticalAlignment="Bottom"
+                                CornerRadius="1.25"
+                                Background="#8CFFFF00"/>
+                    </Grid>
                 </ToggleButton>
 
                 <!-- Study mode: freehand opaque mask, click to reveal briefly. -->
@@ -470,8 +510,8 @@
                          AutomationProperties.AutomationId="HiddenInkToolButton">
                     <!-- A card/answer mark communicates covering a response and
                          its temporary reveal without using eye semantics. -->
-                    <controls:LucideIcon Kind="PanelTop" Width="19" Height="19"
-                                         Stroke="{DynamicResource ThemeSubtleForegroundBrush}"/>
+                    <controls:LucideIcon Kind="PanelTop" Width="18" Height="18"
+                                         Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=ToggleButton}}"/>
                 </ToggleButton>
 
                 <!-- Task 26: place a collapsible sticky-note annotation. -->
@@ -479,8 +519,8 @@
                         Style="{StaticResource ToolbarToggleButtonStyle}"
                         Width="42" Height="36" Margin="2,0"
                         AutomationProperties.AutomationId="Editor.StickyNoteToolButton">
-                    <controls:LucideIcon Kind="StickyNote" Width="19" Height="19"
-                                         Stroke="{DynamicResource ThemeMarkBrush}"/>
+                    <controls:LucideIcon Kind="StickyNote" Width="18" Height="18"
+                                         Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=ToggleButton}}"/>
                 </ToggleButton>
 
                 <!-- Eraser -->
@@ -488,8 +528,8 @@
                         Style="{StaticResource ToolbarToggleButtonStyle}"
                         Width="42" Height="36" Margin="2,0"
                         AutomationProperties.AutomationId="Editor.EraserToolButton">
-                    <controls:LucideIcon x:Name="EraserIcon" Kind="Eraser" Width="19" Height="19"
-                                         Stroke="{DynamicResource ThemeForegroundBrush}"/>
+                    <controls:LucideIcon x:Name="EraserIcon" Kind="Eraser" Width="18" Height="18"
+                                         Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=ToggleButton}}"/>
                 </ToggleButton>
 
                 <!-- Shape -->
@@ -497,8 +537,8 @@
                         Style="{StaticResource ToolbarToggleButtonStyle}"
                         Width="42" Height="36" Margin="2,0"
                         AutomationProperties.AutomationId="Editor.ShapeToolButton">
-                    <controls:LucideIcon x:Name="ShapeIcon" Kind="Shapes" Width="19" Height="19"
-                                         Stroke="{DynamicResource ThemeForegroundBrush}"/>
+                    <controls:LucideIcon x:Name="ShapeIcon" Kind="Shapes" Width="18" Height="18"
+                                         Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=ToggleButton}}"/>
                 </ToggleButton>
 
                 <!-- Laser pointer (ephemeral ink that fades away; never saved) -->
@@ -506,8 +546,8 @@
                         Style="{StaticResource ToolbarToggleButtonStyle}"
                         Width="42" Height="36" Margin="2,0"
                         AutomationProperties.AutomationId="Editor.LaserToolButton">
-                    <controls:LucideIcon x:Name="LaserIcon" Kind="WandSparkles" Width="19" Height="19"
-                                         Stroke="{DynamicResource ThemeMarginBrush}"/>
+                    <controls:LucideIcon x:Name="LaserIcon" Kind="WandSparkles" Width="18" Height="18"
+                                         Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=ToggleButton}}"/>
                 </ToggleButton>
 
                 <!-- Task 22: on-screen ruler toggle. Overlay only — independent
@@ -517,8 +557,8 @@
                         Style="{StaticResource ToolbarToggleButtonStyle}"
                         Width="42" Height="36" Margin="2,0"
                         AutomationProperties.AutomationId="Editor.RulerToolButton">
-                    <controls:LucideIcon x:Name="RulerIcon" Kind="Ruler" Width="19" Height="19"
-                                         Stroke="{DynamicResource ThemeForegroundBrush}"/>
+                    <controls:LucideIcon x:Name="RulerIcon" Kind="Ruler" Width="18" Height="18"
+                                         Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=ToggleButton}}"/>
                 </ToggleButton>
 
                 <!-- Select -->
@@ -526,8 +566,8 @@
                         Style="{StaticResource ToolbarToggleButtonStyle}"
                         Width="42" Height="36" Margin="2,0"
                         AutomationProperties.AutomationId="Editor.SelectToolButton">
-                    <controls:LucideIcon x:Name="SelectIcon" Kind="MousePointer2" Width="19" Height="19"
-                                         Stroke="{DynamicResource ThemeForegroundBrush}"/>
+                    <controls:LucideIcon x:Name="SelectIcon" Kind="MousePointer2" Width="18" Height="18"
+                                         Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=ToggleButton}}"/>
                 </ToggleButton>
 
                 <Border Width="1" Background="{DynamicResource ThemeMenuSeparatorBrush}" Margin="4,8"/>
@@ -537,8 +577,8 @@
                         Style="{StaticResource ToolbarToggleButtonStyle}"
                         Width="42" Height="36" Margin="2,0"
                         AutomationProperties.AutomationId="Editor.TextToolButton">
-                    <controls:LucideIcon Kind="Type" Width="19" Height="19"
-                                         Stroke="{DynamicResource ThemeForegroundBrush}"/>
+                    <controls:LucideIcon Kind="Type" Width="18" Height="18"
+                                         Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=ToggleButton}}"/>
                 </ToggleButton>
 
                 <!-- Save -->
@@ -546,8 +586,8 @@
                         Style="{StaticResource ToolbarButtonStyle}"
                         Width="42" Height="36" Margin="2,0"
                         AutomationProperties.AutomationId="Editor.SavePdfButton">
-                    <controls:LucideIcon Kind="Save" Width="19" Height="19"
-                                         Stroke="{DynamicResource ThemeForegroundBrush}"/>
+                    <controls:LucideIcon Kind="Save" Width="18" Height="18"
+                                         Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
                 </Button>
 
                 <!-- Version History -->
@@ -555,8 +595,8 @@
                         Style="{StaticResource ToolbarButtonStyle}"
                         Width="42" Height="36" Margin="2,0"
                         AutomationProperties.AutomationId="Editor.VersionHistoryButton">
-                    <controls:LucideIcon Kind="History" Width="19" Height="19"
-                                         Stroke="{DynamicResource ThemeForegroundBrush}"/>
+                    <controls:LucideIcon Kind="History" Width="18" Height="18"
+                                         Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
                 </Button>
 
                 <!-- Separator -->
@@ -648,7 +688,7 @@
                         Width="36" Height="36" Margin="2,0"
                         AutomationProperties.AutomationId="Editor.PenOnlyButton">
                     <controls:LucideIcon x:Name="PenOnlyIcon" Kind="PenLine" Width="18" Height="18"
-                                         Stroke="{DynamicResource ThemeForegroundBrush}"/>
+                                         Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=ToggleButton}}"/>
                 </ToggleButton>
 
                 <!-- Zoom Out -->
@@ -716,9 +756,9 @@
                 Width="184"
                 MinWidth="154"
                 MaxWidth="320"
-                 Background="{DynamicResource ThemeSidebarBrush}"
+                Background="{DynamicResource ThemeSidebarBrush}"
                 BorderBrush="{DynamicResource ThemeBorderBrush}"
-                BorderThickness="1"
+                BorderThickness="1,1,0,1"
                 CornerRadius="12"
                 Panel.ZIndex="20">
             <Grid KeyboardNavigation.TabNavigation="Local">

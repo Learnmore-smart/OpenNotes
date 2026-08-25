@@ -12,7 +12,7 @@ Modal picker used by page insertion and notebook creation. It returns a `PageIns
 
 ## Open Threads
 
-- **Status: complete for the paper/ink redesign.** The picker code-behind remains unchanged; global `ThemeService` resources drive the XAML surface.
+- **Status: complete.** Checklist and Two-column selections map one-to-one to appended enum values; localization, selection state and existing insertion/notebook flows are preserved.
 
 ## Agent Decisions / Thoughts
 
@@ -26,6 +26,7 @@ Modal picker used by page insertion and notebook creation. It returns a `PageIns
 |---|---|---|
 | 2026-08-20 | Converted picker surfaces, paper previews, and interaction states to dynamic theme resources with focus contrast. | Codex |
 | 2026-08-22 | Aligned page previews with the new Desk/Paper/Ink/Margin material system. | Codex |
+| 2026-08-24 | Expanded the picker to nine templates in a resizable, independently scrollable 3×3 gallery. | Codex |
 
 ## V5 Completion Status
 

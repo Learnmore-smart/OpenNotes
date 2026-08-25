@@ -66,6 +66,7 @@ PDF 核心服务：PdfiumViewer 负责加载/渲染"剥离注释后的干净流"
 - 被 EditorPage（加载/保存/渲染/分页）与 DocumentSnapshotAction（经 ApplyDocumentSnapshotAsync 重载字节流）使用。
 
 ## Open Threads / Resume Context
+- Checklist renders repeated checkbox rows and TwoColumn renders a central divider with parallel writing rules. Both use the existing vector page-template path; annotation/save/coordinate/atomic replacement behavior is unchanged.
 - **Status:** ready_for_next — Wave 2 final save/dispose/structural-write review is green for automated scope.
 - `SaveAnnotationsToPdfAsync` and every structural write acquire `PdfSaveCoordinator` before the `_lifetimeGate` → `_documentLock` pair; optional Pdfium reload remains inside both leases and checks `ThrowIfDisposed()` before/after native load. `DisposeAsync` joins admitted work; a path/lifetime waiter fails before reload/create after disposing. A failed disposal restores the active state and replaces its completion source so editor resource release can retry. Focused/expanded save, load/reopen, legacy-white, missing-`/C`, stream-ownership, structural-gate and disposal-race tests are green.
 - Public `LoadPdfAsync` also joins the normalized path lease, so external reloads cannot observe a concurrent structural/annotation replacement halfway through. Internal write helpers continue to use the already-held path/lifetime/document order without recursive coordinator acquisition.

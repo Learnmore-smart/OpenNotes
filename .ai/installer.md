@@ -7,6 +7,8 @@ Defines the Inno Setup package for the OpenNotes Windows desktop application.
 
 ## Open Threads / Resume Context
 
+- **Status:** ready_for_release (5.2.0)
+- The default version is `5.2.0`; the tag-triggered workflow will build and publish the installer and portable ZIP from the release commit.
 - **Status:** ready_for_release (5.1.2)
 - The default `MyAppOutputBaseFilename` concatenates the preprocessor version value, producing `OpenNotes-Setup-5.1.2.exe` instead of a literal brace expression when no workflow override is supplied.
 - Version metadata and the full suite are green. Build the final self-contained installer from the release commit, install/start it with isolated data, and publish only through GitHub Release; record the final hash externally with the Release.

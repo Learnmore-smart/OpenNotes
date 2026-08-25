@@ -8,6 +8,8 @@ namespace Caelum.Models
         Quadrille,
         Dotted,
         Music,
-        Cornell
+        Cornell,
+        Checklist,
+        TwoColumn
     }
 }

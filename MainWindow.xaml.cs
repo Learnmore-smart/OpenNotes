@@ -1330,14 +1330,19 @@ namespace Caelum
         }
 
         // 鈹€鈹€鈹€ Toast 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
-        public async void ShowToast(string message, string icon = "Check", int durationMs = 2500)
+        private enum ToastIconKind
+        {
+            Check
+        }
+
+        public async void ShowToast(string message, string icon = null, int durationMs = 2500)
         {
             _toastCts?.Cancel();
             _toastCts?.Dispose();
             _toastCts = new CancellationTokenSource();
             CancellationToken toastToken = _toastCts.Token;
 
-            ToastIcon.Kind = icon;
+            ToastIcon.Kind = string.IsNullOrWhiteSpace(icon) ? nameof(ToastIconKind.Check) : icon;
             ToastText.Text = message;
             ToastBorder.Visibility = Visibility.Visible;
 

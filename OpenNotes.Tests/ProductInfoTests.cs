@@ -11,7 +11,7 @@ public sealed class ProductInfoTests
     public void VisibleBrandUsesOpenNotesWhileLegacyStorageIdentityRemainsStable()
     {
         Assert.That(ProductInfo.DisplayName, Is.EqualTo("OpenNotes"));
-        Assert.That(ProductInfo.Version, Is.EqualTo("5.1.2"));
+        Assert.That(ProductInfo.Version, Is.EqualTo("5.2.0"));
         Assert.That(ProductInfo.LegacyName, Is.EqualTo("Caelum"));
         Assert.That(ProductInfo.LegacyDataDirectoryName, Is.EqualTo("Caelum"));
         Assert.That(ProductInfo.LegacyAppxIdentity, Is.EqualTo("WindowsNotesApp"));

@@ -3,6 +3,8 @@
 
 ## Wave6 Open Thread
 
+- **2026-08-24 shape result:** `ShapeKind` and `BuildShapeOutline` now include Triangle, Diamond, Parallelogram, Pentagon and Hexagon. Each produces one closed, bounded ordinary ink stroke, so existing undo, selection, copy/paste and save behavior is inherited unchanged; Shift applies equal width/height bounds. Production geometry tests pass for all five shapes.
+
 - **Status:** green for focused automated scope. `ImageOverlayCanvas` has a null
   background and only Sticky marker containers are hit-testable; image/markup/area
   visuals remain non-hit-testable so PDF drawing is not swallowed.

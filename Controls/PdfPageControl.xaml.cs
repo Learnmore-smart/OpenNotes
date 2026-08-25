@@ -23,7 +23,18 @@ namespace Caelum.Controls
     public enum SelectionShape { Rectangle, FreeForm }
 
     /// <summary>Sub-type of the shape tool (drag-to-draw shapes).</summary>
-    public enum ShapeKind { Line, Rectangle, Ellipse, Arrow }
+    public enum ShapeKind
+    {
+        Line,
+        Rectangle,
+        Ellipse,
+        Arrow,
+        Triangle,
+        Diamond,
+        Parallelogram,
+        Pentagon,
+        Hexagon
+    }
 
     public sealed class SelectionMoveCompletedEventArgs : EventArgs
     {
@@ -2354,6 +2365,11 @@ namespace Caelum.Controls
                 }
                 case ShapeKind.Rectangle:
                 case ShapeKind.Ellipse:
+                case ShapeKind.Triangle:
+                case ShapeKind.Diamond:
+                case ShapeKind.Parallelogram:
+                case ShapeKind.Pentagon:
+                case ShapeKind.Hexagon:
                 {
                     // Square / circle: the larger extent wins; sign(0)
                     // defaults to + so pure vertical/horizontal drags still
@@ -2427,10 +2443,86 @@ namespace Caelum.Controls
                         points.Add(new Point(cx + rx * Math.Cos(t), cy + ry * Math.Sin(t)));
                     }
                     return points;
+                case ShapeKind.Triangle:
+                {
+                    double left = Math.Min(start.X, end.X);
+                    double right = Math.Max(start.X, end.X);
+                    double top = Math.Min(start.Y, end.Y);
+                    double bottom = Math.Max(start.Y, end.Y);
+                    var apex = new Point((left + right) / 2, top);
+                    return new List<Point>
+                    {
+                        apex,
+                        new Point(right, bottom),
+                        new Point(left, bottom),
+                        apex
+                    };
+                }
+                case ShapeKind.Diamond:
+                {
+                    double left = Math.Min(start.X, end.X);
+                    double right = Math.Max(start.X, end.X);
+                    double top = Math.Min(start.Y, end.Y);
+                    double bottom = Math.Max(start.Y, end.Y);
+                    double diamondCx = (left + right) / 2;
+                    double diamondCy = (top + bottom) / 2;
+                    var first = new Point(diamondCx, top);
+                    return new List<Point>
+                    {
+                        first,
+                        new Point(right, diamondCy),
+                        new Point(diamondCx, bottom),
+                        new Point(left, diamondCy),
+                        first
+                    };
+                }
+                case ShapeKind.Parallelogram:
+                {
+                    double left = Math.Min(start.X, end.X);
+                    double right = Math.Max(start.X, end.X);
+                    double top = Math.Min(start.Y, end.Y);
+                    double bottom = Math.Max(start.Y, end.Y);
+                    double inset = (right - left) * 0.24;
+                    var first = new Point(left + inset, top);
+                    return new List<Point>
+                    {
+                        first,
+                        new Point(right, top),
+                        new Point(right - inset, bottom),
+                        new Point(left, bottom),
+                        first
+                    };
+                }
+                case ShapeKind.Pentagon:
+                    return BuildRegularPolygonOutline(start, end, 5);
+                case ShapeKind.Hexagon:
+                    return BuildRegularPolygonOutline(start, end, 6);
                 case ShapeKind.Line:
                 default:
                     return new List<Point> { start, end };
             }
+        }
+
+        private static List<Point> BuildRegularPolygonOutline(Point start, Point end, int sides)
+        {
+            double left = Math.Min(start.X, end.X);
+            double right = Math.Max(start.X, end.X);
+            double top = Math.Min(start.Y, end.Y);
+            double bottom = Math.Max(start.Y, end.Y);
+            double cx = (left + right) / 2;
+            double cy = (top + bottom) / 2;
+            double rx = (right - left) / 2;
+            double ry = (bottom - top) / 2;
+            var points = new List<Point>(sides + 1);
+
+            for (int i = 0; i < sides; i++)
+            {
+                double angle = -Math.PI / 2 + (2 * Math.PI * i / sides);
+                points.Add(new Point(cx + rx * Math.Cos(angle), cy + ry * Math.Sin(angle)));
+            }
+
+            points.Add(points[0]);
+            return points;
         }
 
         /// <summary>

@@ -3744,9 +3744,8 @@ namespace Caelum.Pages
         }
 
         /// <summary>
-        /// Prepends the mutually-exclusive shape sub-type selector (直线 /
-        /// 矩形 / 椭圆 / 箭头) to the shape popup. Selection is session-only
-        /// and re-applied to all pages immediately.
+        /// Prepends the mutually-exclusive 3×3 shape selector to the popup.
+        /// Selection is session-only and re-applied to all pages immediately.
         /// </summary>
         private void AddShapeSubTypeSection(Popup popup)
         {
@@ -3761,31 +3760,37 @@ namespace Caelum.Pages
                 Margin = new Thickness(0, 0, 0, 10)
             });
 
-            var row1 = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 8) };
-            var row2 = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 14) };
-            ToggleButton lineButton = null!;
-            ToggleButton rectButton = null!;
-            ToggleButton ellipseButton = null!;
-            ToggleButton arrowButton = null!;
-            lineButton = BuildVectorModeToggleButton(
-                LocalizationService.Get("Editor.ShapeLine"), "Editor.Shape.Line", BuildShapePreview(ShapeKind.Line),
-                new Thickness(0, 0, 8, 0), activated: () => SelectKind(ShapeKind.Line));
-            rectButton = BuildVectorModeToggleButton(
-                LocalizationService.Get("Editor.ShapeRectangle"), "Editor.Shape.Rectangle", BuildShapePreview(ShapeKind.Rectangle),
-                new Thickness(0), activated: () => SelectKind(ShapeKind.Rectangle));
-            ellipseButton = BuildVectorModeToggleButton(
-                LocalizationService.Get("Editor.ShapeEllipse"), "Editor.Shape.Ellipse", BuildShapePreview(ShapeKind.Ellipse),
-                new Thickness(0, 0, 8, 0), activated: () => SelectKind(ShapeKind.Ellipse));
-            arrowButton = BuildVectorModeToggleButton(
-                LocalizationService.Get("Editor.ShapeArrow"), "Editor.Shape.Arrow", BuildShapePreview(ShapeKind.Arrow),
-                new Thickness(0), activated: () => SelectKind(ShapeKind.Arrow));
+            var shapeGrid = new UniformGrid { Columns = 3 };
+            var buttons = new Dictionary<ShapeKind, ToggleButton>();
+            var choices = new (ShapeKind Kind, string Label, string AutomationId)[]
+            {
+                (ShapeKind.Line, LocalizationService.Get("Editor.ShapeLine"), "Editor.Shape.Line"),
+                (ShapeKind.Rectangle, LocalizationService.Get("Editor.ShapeRectangle"), "Editor.Shape.Rectangle"),
+                (ShapeKind.Ellipse, LocalizationService.Get("Editor.ShapeEllipse"), "Editor.Shape.Ellipse"),
+                (ShapeKind.Arrow, LocalizationService.Get("Editor.ShapeArrow"), "Editor.Shape.Arrow"),
+                (ShapeKind.Triangle, LocalizationService.Get("Editor.ShapeTriangle"), "Editor.Shape.Triangle"),
+                (ShapeKind.Diamond, LocalizationService.Get("Editor.ShapeDiamond"), "Editor.Shape.Diamond"),
+                (ShapeKind.Parallelogram, LocalizationService.Get("Editor.ShapeParallelogram"), "Editor.Shape.Parallelogram"),
+                (ShapeKind.Pentagon, LocalizationService.Get("Editor.ShapePentagon"), "Editor.Shape.Pentagon"),
+                (ShapeKind.Hexagon, LocalizationService.Get("Editor.ShapeHexagon"), "Editor.Shape.Hexagon")
+            };
+
+            foreach (var choice in choices)
+            {
+                var button = BuildVectorModeToggleButton(
+                    choice.Label,
+                    choice.AutomationId,
+                    BuildShapePreview(choice.Kind),
+                    new Thickness(4),
+                    activated: () => SelectKind(choice.Kind));
+                buttons[choice.Kind] = button;
+                shapeGrid.Children.Add(button);
+            }
 
             void ApplyVisual()
             {
-                 StyleVectorModeToggleButton(lineButton, _shapeKind == ShapeKind.Line);
-                 StyleVectorModeToggleButton(rectButton, _shapeKind == ShapeKind.Rectangle);
-                 StyleVectorModeToggleButton(ellipseButton, _shapeKind == ShapeKind.Ellipse);
-                 StyleVectorModeToggleButton(arrowButton, _shapeKind == ShapeKind.Arrow);
+                foreach (var pair in buttons)
+                    StyleVectorModeToggleButton(pair.Value, _shapeKind == pair.Key);
             }
 
             void SelectKind(ShapeKind kind)
@@ -3798,14 +3803,8 @@ namespace Caelum.Pages
                     ApplyToolToAllPages();
             }
 
-            row1.Children.Add(lineButton);
-            row1.Children.Add(rectButton);
-            row2.Children.Add(ellipseButton);
-            row2.Children.Add(arrowButton);
-
             // Sub-type section sits above the size slider.
-            panel.Children.Insert(0, row2);
-            panel.Children.Insert(0, row1);
+            panel.Children.Insert(0, shapeGrid);
             panel.Children.Insert(0, header);
             ApplyVisual();
         }
@@ -3964,29 +3963,10 @@ namespace Caelum.Pages
                 Cursor = Cursors.Hand,
                 Focusable = true,
                 Tag = preview,
-                ToolTip = label
+                ToolTip = label,
+                Content = preview
             };
             ApplyToolbarPopupToggleStyle(button);
-            var CheckMark = new Path
-            {
-                Width = 10,
-                Height = 10,
-                Stretch = Stretch.Uniform,
-                Fill = Brushes.Transparent,
-                StrokeThickness = 2,
-                StrokeStartLineCap = PenLineCap.Round,
-                StrokeEndLineCap = PenLineCap.Round,
-                Data = Geometry.Parse("M2,5 L4.5,8 L9,2"),
-                HorizontalAlignment = HorizontalAlignment.Right,
-                VerticalAlignment = VerticalAlignment.Top,
-                Margin = new Thickness(0, 1, 1, 0),
-                Visibility = Visibility.Collapsed
-            };
-            CheckMark.SetResourceReference(Path.StrokeProperty, "ThemeFocusBrush");
-            button.Content = new Grid
-            {
-                Children = { preview, CheckMark }
-            };
             ToolTipService.SetToolTip(button, label);
             AutomationProperties.SetAutomationId(button, automationId);
             AutomationProperties.SetName(button, label);
@@ -4011,11 +3991,6 @@ namespace Caelum.Pages
             if (button.Tag is Path preview)
                 preview.SetResourceReference(Path.StrokeProperty,
                     active ? "ThemeAccentBrush" : "ThemeForegroundBrush");
-            if (button.Content is Grid grid && grid.Children.Count > 1 && grid.Children[1] is Path CheckMark)
-            {
-                CheckMark.Visibility = active ? Visibility.Visible : Visibility.Collapsed;
-                CheckMark.SetResourceReference(Path.StrokeProperty, "ThemeFocusBrush");
-            }
         }
 
         private void UpdateHighlighterModePreviewVisuals()
@@ -4090,6 +4065,11 @@ namespace Caelum.Pages
                 ShapeKind.Rectangle => "M4,4 L28,4 L28,18 L4,18 Z",
                 ShapeKind.Ellipse => "M16,4 A12,7 0 1 1 15.99,4",
                 ShapeKind.Arrow => "M4,11 L26,11 M19,5 L26,11 L19,17",
+                ShapeKind.Triangle => "M16,3 L29,20 L3,20 Z",
+                ShapeKind.Diamond => "M16,2 L29,11 L16,20 L3,11 Z",
+                ShapeKind.Parallelogram => "M9,3 H29 L23,20 H3 Z",
+                ShapeKind.Pentagon => "M16,2 L29,9 L24,20 L8,20 L3,9 Z",
+                ShapeKind.Hexagon => "M9,3 H23 L29,11 L23,20 H9 L3,11 Z",
                 _ => "M4,17 L27,5"
             };
 
@@ -7546,7 +7526,9 @@ namespace Caelum.Pages
                 icon.SetResourceReference(Shape.FillProperty, "ThemeAccentBrush");
             var label = new TextBlock
             {
-                Text = LocalizationService.Get(bookmarked ? "Editor.UnbookmarkCurrentPage" : "Editor.BookmarkCurrentPage"),
+                Text = bookmarked
+                    ? LocalizationService.Get("Editor.UnbookmarkCurrentPage")
+                    : LocalizationService.Get("Editor.BookmarkCurrentPage"),
                 Margin = new Thickness(7, 0, 0, 0),
                 VerticalAlignment = VerticalAlignment.Center
             };
@@ -8619,21 +8601,15 @@ namespace Caelum.Pages
 
         private void UpdateToolIconColors()
         {
-            PenIconContrast?.SetResourceReference(Path.StrokeProperty, "ThemeFocusBrush");
-            if (PenIcon != null)
-                PenIcon.Stroke = new SolidColorBrush(_penColor);
-            PenIconBackplate?.SetResourceReference(Border.BackgroundProperty, "ThemeSurfaceBrush");
-            PenIconBackplate?.SetResourceReference(Border.BorderBrushProperty, "ThemeFocusBrush");
-            if (HighlighterIcon != null)
-            {
-                // Match the actual freehand highlighter alpha used by the page
-                // control and the live popup preview while preserving the user's
-                // selected RGB color.
-                var highlighterBrush = new SolidColorBrush(
+            // Keep every Lucide glyph monochrome and theme-owned. Data colors
+            // remain visible as small bars, so black ink no longer needs a
+            // doubled icon/backplate and bright highlighter colors do not make
+            // one toolbar glyph visually heavier than the others.
+            if (PenColorIndicator != null)
+                PenColorIndicator.Background = new SolidColorBrush(_penColor);
+            if (HighlighterColorIndicator != null)
+                HighlighterColorIndicator.Background = new SolidColorBrush(
                     GetHighlighterPreviewStrokeColor(HighlighterApplyMode.Freehand, _highlighterColor));
-                HighlighterIcon.Fill = highlighterBrush;
-                HighlighterIcon.Stroke = highlighterBrush;
-            }
 
             UpdateHighlighterModePreviewVisuals();
         }
@@ -13935,8 +13911,8 @@ namespace Caelum.Pages
 {
     /// <summary>
     /// Keyboard and UI Automation resize target for the document sidebar.  The
-    /// visual template is a narrow rail, while this control deliberately keeps
-    /// a 32-DIP hit/focus target for pointer, keyboard and touch users.
+    /// visual template is transparent, while this control deliberately keeps a
+    /// 32-DIP hit/focus target for pointer, keyboard and touch users.
     /// </summary>
     public sealed class SidebarResizeThumb : Thumb
     {

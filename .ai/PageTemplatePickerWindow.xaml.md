@@ -8,5 +8,5 @@ Defines the page-template picker dialog and its file/folder affordances.
 
 ## Open Threads / Resume Context
 
-- **Status:** complete (5.1.2)
-- Close and browse affordances use shared Lucide vectors with existing actions and focus behavior preserved.
+- **Status:** complete
+- The 980-DIP resizable dialog uses a three-column/three-row gallery inside a two-axis automatic ScrollViewer. Header, folder path and actions remain fixed while nine cards scroll independently.

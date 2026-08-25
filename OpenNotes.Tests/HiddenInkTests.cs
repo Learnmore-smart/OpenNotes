@@ -80,7 +80,8 @@ public class HiddenInkTests
         {
             Assert.That(button, Does.Contain("<controls:LucideIcon"));
             Assert.That(button, Does.Contain("Kind=\"PanelTop\""));
-            Assert.That(button, Does.Contain("ThemeSubtleForegroundBrush"));
+            Assert.That(button, Does.Contain("AncestorType=ToggleButton"));
+            Assert.That(button, Does.Not.Contain("ThemeSubtleForegroundBrush"));
             Assert.That(button, Does.Contain("AutomationProperties.AutomationId=\"HiddenInkToolButton\""));
             Assert.That(button, Does.Not.Contain("E890"));
         });

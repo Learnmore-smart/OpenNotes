@@ -15,4 +15,4 @@ Enumerates blank-page drawing templates shared by the page picker and PdfService
 
 ## Open Threads
 
-- No required V5 template implementation remains.
+- Checklist and TwoColumn are appended after the existing seven values, preserving their numeric compatibility.

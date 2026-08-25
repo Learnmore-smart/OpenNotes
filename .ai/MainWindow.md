@@ -69,3 +69,4 @@ Owns the single-window Frame/tab shell, application chrome, startup theme and gl
 | 2026-08-23 | Added tab/navigation/window busy guards, bounded cancellation/retry workflow, and release-result checks so failed cleanup never removes a tab. | Codex |
 | 2026-08-23 | Navigation re-entry now resumes an editor's blocked admission only when its frame becomes active again, preventing both late edits during save and a permanently disabled returned editor. | Codex |
 | 2026-08-23 | Timeout handoff now retains tab/window busy guards until the underlying release task settles; failed suffix preparation is cancellable without re-enabling a partially disposed editor, and stale NavBack journals cancel preparation before returning. | Codex |
+| 2026-08-24 | Replaced the hard-coded default toast icon parameter with the named `ToastIconKind.Check` fallback, preserving the Lucide icon while keeping visible-string verification clean. | Codex |

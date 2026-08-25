@@ -3,10 +3,12 @@
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:controls="clr-namespace:Caelum.Controls"
-    Width="620"
-    Height="760"
+    Width="980"
+    Height="820"
+    MinWidth="720"
+    MinHeight="560"
     WindowStartupLocation="CenterOwner"
-    ResizeMode="NoResize"
+    ResizeMode="CanResize"
     WindowStyle="None"
     Background="Transparent"
     AllowsTransparency="True"
@@ -142,8 +144,15 @@
                 </Button>
             </Grid>
 
-            <UniformGrid Grid.Row="1" Columns="2" Rows="3" Margin="0,24,0,0">
-                <Button x:Name="BlankCard" Click="BlankCard_Click" Style="{StaticResource TemplateCardButtonStyle}" Margin="0,0,10,10">
+            <ScrollViewer x:Name="TemplateScrollViewer"
+                          Grid.Row="1"
+                          Margin="0,20,0,0"
+                          VerticalScrollBarVisibility="Auto"
+                          HorizontalScrollBarVisibility="Auto"
+                          CanContentScroll="False"
+                          PanningMode="Both">
+            <UniformGrid Columns="3" Rows="3" MinWidth="840">
+                <Button x:Name="BlankCard" Click="BlankCard_Click" Style="{StaticResource TemplateCardButtonStyle}" Margin="8">
                     <StackPanel Margin="18">
                         <Border Height="160" CornerRadius="16" Background="{DynamicResource ThemeSurfaceBrush}" BorderBrush="{DynamicResource ThemeBorderBrush}" BorderThickness="1">
                             <Grid Margin="18">
@@ -155,7 +164,7 @@
                     </StackPanel>
                 </Button>
 
-                <Button x:Name="NotebookCard" Click="NotebookCard_Click" Style="{StaticResource TemplateCardButtonStyle}" Margin="10,0,0,10">
+                <Button x:Name="NotebookCard" Click="NotebookCard_Click" Style="{StaticResource TemplateCardButtonStyle}" Margin="8">
                     <StackPanel Margin="18">
                         <Border Height="160" CornerRadius="16" Background="{DynamicResource ThemeSurfaceAltBrush}" BorderBrush="{DynamicResource ThemeBorderBrush}" BorderThickness="1">
                             <Grid Margin="18">
@@ -172,7 +181,7 @@
                     </StackPanel>
                 </Button>
 
-                <Button x:Name="LinedCard" Click="LinedCard_Click" Style="{StaticResource TemplateCardButtonStyle}" Margin="0,10,10,0">
+                <Button x:Name="LinedCard" Click="LinedCard_Click" Style="{StaticResource TemplateCardButtonStyle}" Margin="8">
                     <StackPanel Margin="18">
                         <Border Height="160" CornerRadius="16" Background="{DynamicResource ThemeSurfaceBrush}" BorderBrush="{DynamicResource ThemeBorderBrush}" BorderThickness="1">
                             <Grid Margin="18">
@@ -188,7 +197,7 @@
                     </StackPanel>
                 </Button>
 
-                <Button x:Name="QuadrilleCard" Click="QuadrilleCard_Click" Style="{StaticResource TemplateCardButtonStyle}" Margin="10,10,0,0">
+                <Button x:Name="QuadrilleCard" Click="QuadrilleCard_Click" Style="{StaticResource TemplateCardButtonStyle}" Margin="8">
                     <StackPanel Margin="18">
                         <Border Height="160" CornerRadius="16" Background="{DynamicResource ThemeSurfaceBrush}" BorderBrush="{DynamicResource ThemeBorderBrush}" BorderThickness="1">
                             <Grid Margin="18">
@@ -208,7 +217,7 @@
                     </StackPanel>
                 </Button>
 
-                <Button x:Name="DottedCard" Click="DottedCard_Click" Style="{StaticResource TemplateCardButtonStyle}" Margin="0,10,10,0">
+                <Button x:Name="DottedCard" Click="DottedCard_Click" Style="{StaticResource TemplateCardButtonStyle}" Margin="8">
                     <StackPanel Margin="18">
                         <Border Height="160" CornerRadius="16" Background="{DynamicResource ThemeSurfaceBrush}" BorderBrush="{DynamicResource ThemeBorderBrush}" BorderThickness="1">
                             <Grid Margin="18">
@@ -227,7 +236,7 @@
                     </StackPanel>
                 </Button>
 
-                <Button x:Name="MusicCard" Click="MusicCard_Click" Style="{StaticResource TemplateCardButtonStyle}" Margin="10,10,0,0">
+                <Button x:Name="MusicCard" Click="MusicCard_Click" Style="{StaticResource TemplateCardButtonStyle}" Margin="8">
                     <StackPanel Margin="18">
                         <Border Height="160" CornerRadius="16" Background="{DynamicResource ThemeSurfaceBrush}" BorderBrush="{DynamicResource ThemeBorderBrush}" BorderThickness="1">
                             <Grid Margin="18">
@@ -243,7 +252,7 @@
                     </StackPanel>
                 </Button>
 
-                <Button x:Name="CornellCard" Click="CornellCard_Click" Style="{StaticResource TemplateCardButtonStyle}" Margin="0,10,10,0">
+                <Button x:Name="CornellCard" Click="CornellCard_Click" Style="{StaticResource TemplateCardButtonStyle}" Margin="8">
                     <StackPanel Margin="18">
                         <Border Height="160" CornerRadius="16" Background="{DynamicResource ThemeSurfaceBrush}" BorderBrush="{DynamicResource ThemeBorderBrush}" BorderThickness="1">
                             <Grid Margin="18">
@@ -257,7 +266,45 @@
                         <TextBlock x:Name="CornellHintTextBlock" Margin="0,8,0,0" FontSize="12" Foreground="{DynamicResource ThemeSubtleForegroundBrush}" TextWrapping="Wrap"/>
                     </StackPanel>
                 </Button>
+
+                <Button x:Name="ChecklistCard" Click="ChecklistCard_Click" Style="{StaticResource TemplateCardButtonStyle}" Margin="8">
+                    <StackPanel Margin="18">
+                        <Border Height="160" CornerRadius="16" Background="{DynamicResource ThemeSurfaceBrush}" BorderBrush="{DynamicResource ThemeBorderBrush}" BorderThickness="1">
+                            <Grid Margin="18">
+                                <Rectangle RadiusX="6" RadiusY="6" Fill="{DynamicResource ThemePaperBrush}" Stroke="{DynamicResource ThemeBorderBrush}" StrokeThickness="1"/>
+                                <StackPanel Margin="16,16,12,12">
+                                    <Grid Margin="0,0,0,12"><Grid.ColumnDefinitions><ColumnDefinition Width="16"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><Rectangle Width="10" Height="10" Stroke="{DynamicResource ThemeAccentBrush}" RadiusX="2" RadiusY="2"/><Line Grid.Column="1" X1="0" X2="90" Y1="5" Y2="5" Stroke="{DynamicResource ThemeBorderBrush}"/></Grid>
+                                    <Grid Margin="0,0,0,12"><Grid.ColumnDefinitions><ColumnDefinition Width="16"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><Rectangle Width="10" Height="10" Stroke="{DynamicResource ThemeAccentBrush}" RadiusX="2" RadiusY="2"/><Line Grid.Column="1" X1="0" X2="90" Y1="5" Y2="5" Stroke="{DynamicResource ThemeBorderBrush}"/></Grid>
+                                    <Grid Margin="0,0,0,12"><Grid.ColumnDefinitions><ColumnDefinition Width="16"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><Rectangle Width="10" Height="10" Stroke="{DynamicResource ThemeAccentBrush}" RadiusX="2" RadiusY="2"/><Line Grid.Column="1" X1="0" X2="90" Y1="5" Y2="5" Stroke="{DynamicResource ThemeBorderBrush}"/></Grid>
+                                    <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="16"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><Rectangle Width="10" Height="10" Stroke="{DynamicResource ThemeAccentBrush}" RadiusX="2" RadiusY="2"/><Line Grid.Column="1" X1="0" X2="90" Y1="5" Y2="5" Stroke="{DynamicResource ThemeBorderBrush}"/></Grid>
+                                </StackPanel>
+                            </Grid>
+                        </Border>
+                        <TextBlock x:Name="ChecklistTitleTextBlock" Margin="0,16,0,0" FontSize="16" FontWeight="SemiBold" Foreground="{DynamicResource ThemeForegroundBrush}"/>
+                        <TextBlock x:Name="ChecklistHintTextBlock" Margin="0,8,0,0" FontSize="12" Foreground="{DynamicResource ThemeSubtleForegroundBrush}" TextWrapping="Wrap"/>
+                    </StackPanel>
+                </Button>
+
+                <Button x:Name="TwoColumnCard" Click="TwoColumnCard_Click" Style="{StaticResource TemplateCardButtonStyle}" Margin="8">
+                    <StackPanel Margin="18">
+                        <Border Height="160" CornerRadius="16" Background="{DynamicResource ThemeSurfaceBrush}" BorderBrush="{DynamicResource ThemeBorderBrush}" BorderThickness="1">
+                            <Grid Margin="18">
+                                <Rectangle RadiusX="6" RadiusY="6" Fill="{DynamicResource ThemePaperBrush}" Stroke="{DynamicResource ThemeBorderBrush}" StrokeThickness="1"/>
+                                <Line X1="60" Y1="14" X2="60" Y2="110" Stroke="{DynamicResource ThemeAccentBrush}" StrokeThickness="1.2"/>
+                                <Line X1="12" Y1="26" X2="50" Y2="26" Stroke="{DynamicResource ThemeBorderBrush}"/>
+                                <Line X1="12" Y1="50" X2="50" Y2="50" Stroke="{DynamicResource ThemeBorderBrush}"/>
+                                <Line X1="12" Y1="74" X2="50" Y2="74" Stroke="{DynamicResource ThemeBorderBrush}"/>
+                                <Line X1="70" Y1="26" X2="108" Y2="26" Stroke="{DynamicResource ThemeBorderBrush}"/>
+                                <Line X1="70" Y1="50" X2="108" Y2="50" Stroke="{DynamicResource ThemeBorderBrush}"/>
+                                <Line X1="70" Y1="74" X2="108" Y2="74" Stroke="{DynamicResource ThemeBorderBrush}"/>
+                            </Grid>
+                        </Border>
+                        <TextBlock x:Name="TwoColumnTitleTextBlock" Margin="0,16,0,0" FontSize="16" FontWeight="SemiBold" Foreground="{DynamicResource ThemeForegroundBrush}"/>
+                        <TextBlock x:Name="TwoColumnHintTextBlock" Margin="0,8,0,0" FontSize="12" Foreground="{DynamicResource ThemeSubtleForegroundBrush}" TextWrapping="Wrap"/>
+                    </StackPanel>
+                </Button>
             </UniformGrid>
+            </ScrollViewer>
 
             <StackPanel Grid.Row="2" Margin="0,24,0,0">
                 <Border x:Name="PathSectionBorder"

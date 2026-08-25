@@ -13,4 +13,5 @@ Declares the compatible Windows package identity and release version.
 
 ## Current Status
 
+- Version is `5.2.0.0`; identity and publisher compatibility values are unchanged.
 - Version is `5.1.2.0`; identity and publisher compatibility values are unchanged.

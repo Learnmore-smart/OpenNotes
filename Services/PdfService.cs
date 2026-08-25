@@ -814,6 +814,12 @@ namespace Caelum.Services
                 case PageInsertTemplate.Cornell:
                     DrawCornellTemplate(gfx, width, height);
                     break;
+                case PageInsertTemplate.Checklist:
+                    DrawChecklistTemplate(gfx, width, height);
+                    break;
+                case PageInsertTemplate.TwoColumn:
+                    DrawTwoColumnTemplate(gfx, width, height);
+                    break;
             }
         }
 
@@ -957,6 +963,37 @@ namespace Caelum.Services
             gfx.DrawLine(pen, 28 + cueWidth, top, 28 + cueWidth, bottom);
             gfx.DrawLine(pen, 28, bottom, width - 28, bottom);
             gfx.DrawLine(faintPen, 28, height - 60, width - 28, height - 60);
+        }
+
+        private static void DrawChecklistTemplate(XGraphics gfx, double width, double height)
+        {
+            var boxPen = new XPen(XColor.FromArgb(255, 59, 130, 246), 1.0);
+            var linePen = new XPen(XColor.FromArgb(255, 203, 213, 225), 0.8);
+            const double left = 42;
+            const double boxSize = 11;
+            const double rowSpacing = 30;
+
+            for (double y = 42; y < height - 30; y += rowSpacing)
+            {
+                gfx.DrawRectangle(boxPen, left, y - boxSize + 1, boxSize, boxSize);
+                gfx.DrawLine(linePen, left + 22, y, width - 36, y);
+            }
+        }
+
+        private static void DrawTwoColumnTemplate(XGraphics gfx, double width, double height)
+        {
+            var dividerPen = new XPen(XColor.FromArgb(255, 147, 197, 253), 1.1);
+            var linePen = new XPen(XColor.FromArgb(255, 203, 213, 225), 0.8);
+            double center = width / 2.0;
+            const double outerMargin = 32;
+            const double gutter = 18;
+
+            gfx.DrawLine(dividerPen, center, 30, center, height - 30);
+            for (double y = 48; y < height - 26; y += 26)
+            {
+                gfx.DrawLine(linePen, outerMargin, y, center - gutter, y);
+                gfx.DrawLine(linePen, center + gutter, y, width - outerMargin, y);
+            }
         }
 
         private Dictionary<int, Models.PageAnnotation> ExtractAndStripAnnotations(Stream sourceStream, Stream outputStream, CancellationToken cancellationToken)

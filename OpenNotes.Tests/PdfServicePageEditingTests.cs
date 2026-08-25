@@ -148,6 +148,8 @@ public class PdfServicePageEditingTests
     [TestCase(PageInsertTemplate.Dotted)]
     [TestCase(PageInsertTemplate.Music)]
     [TestCase(PageInsertTemplate.Cornell)]
+    [TestCase(PageInsertTemplate.Checklist)]
+    [TestCase(PageInsertTemplate.TwoColumn)]
     public async Task CreateBlankPdfAsync_NewTemplatesWriteVectorContent(PageInsertTemplate template)
     {
         string filePath = Path.Combine(_tempDirectory, $"{template}.pdf");

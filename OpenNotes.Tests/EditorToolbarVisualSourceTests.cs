@@ -89,7 +89,8 @@ public sealed class EditorToolbarVisualSourceTests
             Assert.That(xaml, Does.Contain("<controls:LucideIcon x:Name=\"HighlighterIcon\""));
             Assert.That(xaml, Does.Not.Contain("Text=\"&#xE7E6;\""));
             Assert.That(highlighterBlock, Does.Not.Contain("ThemeMarkBrush"));
-            Assert.That(source, Does.Contain("HighlighterIcon.Fill"));
+            Assert.That(source, Does.Contain("HighlighterColorIndicator.Background"));
+            Assert.That(source, Does.Not.Contain("HighlighterIcon.Fill"));
             Assert.That(source, Does.Contain("_highlighterColor"));
             Assert.That(source, Does.Contain("_highlighterSize = v"));
             Assert.That(source, Does.Contain("_highlighterPopupSizePreview.StrokeThickness"));
@@ -100,10 +101,20 @@ public sealed class EditorToolbarVisualSourceTests
     }
 
     [Test]
-    public void ShapeAndHighlighterChoicesExposeVectorPreviewsAndCheckedMetadata()
+    public void ShapeAndHighlighterChoicesExposeVectorPreviewsWithoutCheckmarkOverlay()
     {
         var root = FindProjectRoot();
         var source = File.ReadAllText(Path.Combine(root, "Pages", "EditorPage.xaml.cs"));
+        int shapeSectionStart = source.IndexOf("private void AddShapeSubTypeSection", StringComparison.Ordinal);
+        int shapeSectionEnd = source.IndexOf("private void AddEraserModeSection", shapeSectionStart, StringComparison.Ordinal);
+        int vectorButtonStart = source.IndexOf("private static ToggleButton BuildVectorModeToggleButton", StringComparison.Ordinal);
+        int vectorButtonEnd = source.IndexOf("private static void StyleVectorModeToggleButton", vectorButtonStart, StringComparison.Ordinal);
+        Assert.That(shapeSectionStart, Is.GreaterThanOrEqualTo(0));
+        Assert.That(shapeSectionEnd, Is.GreaterThan(shapeSectionStart));
+        Assert.That(vectorButtonStart, Is.GreaterThanOrEqualTo(0));
+        Assert.That(vectorButtonEnd, Is.GreaterThan(vectorButtonStart));
+        string shapeSection = source.Substring(shapeSectionStart, shapeSectionEnd - shapeSectionStart);
+        string vectorButton = source.Substring(vectorButtonStart, vectorButtonEnd - vectorButtonStart);
 
         Assert.Multiple(() =>
         {
@@ -113,9 +124,71 @@ public sealed class EditorToolbarVisualSourceTests
             Assert.That(source, Does.Contain("Editor.Shape.Rectangle"));
             Assert.That(source, Does.Contain("Editor.Shape.Ellipse"));
             Assert.That(source, Does.Contain("Editor.Shape.Arrow"));
+            Assert.That(source, Does.Contain("Editor.Shape.Triangle"));
+            Assert.That(source, Does.Contain("Editor.Shape.Diamond"));
+            Assert.That(source, Does.Contain("Editor.Shape.Parallelogram"));
+            Assert.That(source, Does.Contain("Editor.Shape.Pentagon"));
+            Assert.That(source, Does.Contain("Editor.Shape.Hexagon"));
+            Assert.That(shapeSection, Does.Contain("new UniformGrid { Columns = 3 }"));
+            Assert.That(vectorButton, Does.Not.Contain("CheckMark"));
+            Assert.That(vectorButton, Does.Not.Contain("M2,5 L4.5,8 L9,2"));
             Assert.That(source, Does.Contain("IsChecked"));
             Assert.That(source, Does.Contain("AutomationProperties.SetAutomationId"));
             Assert.That(source, Does.Contain("ToolTipService.SetToolTip"));
+        });
+    }
+
+    [Test]
+    public void ToolbarPolishUsesCustomLocalizedTooltipsAndInvisibleResizeTarget()
+    {
+        var root = FindProjectRoot();
+        var xaml = File.ReadAllText(Path.Combine(root, "Pages", "EditorPage.xaml"));
+        var source = File.ReadAllText(Path.Combine(root, "Pages", "EditorPage.xaml.cs"));
+        var utilities = File.ReadAllText(Path.Combine(root, "Pages", "EditorPage.Utilities.cs"));
+
+        int resizeStart = xaml.IndexOf("<Style x:Key=\"SidebarResizeThumbStyle\"", StringComparison.Ordinal);
+        int resizeEnd = xaml.IndexOf("</Style>", resizeStart, StringComparison.Ordinal);
+        int sidebarStart = xaml.IndexOf("<Border x:Name=\"DocumentSidebar\"", StringComparison.Ordinal);
+        int sidebarEnd = xaml.IndexOf(">", sidebarStart, StringComparison.Ordinal);
+        int toolbarStart = xaml.IndexOf("<Border x:Name=\"ToolbarBorder\"", StringComparison.Ordinal);
+        int toolbarEnd = xaml.IndexOf("</Border>", xaml.IndexOf("</ScrollViewer>", toolbarStart, StringComparison.Ordinal), StringComparison.Ordinal);
+        int iconColorStart = source.IndexOf("private void UpdateToolIconColors", StringComparison.Ordinal);
+        int iconColorEnd = source.IndexOf("// Task 15: pen-only drawing", iconColorStart, StringComparison.Ordinal);
+        Assert.That(resizeStart, Is.GreaterThanOrEqualTo(0));
+        Assert.That(resizeEnd, Is.GreaterThan(resizeStart));
+        Assert.That(sidebarStart, Is.GreaterThanOrEqualTo(0));
+        Assert.That(sidebarEnd, Is.GreaterThan(sidebarStart));
+        Assert.That(toolbarStart, Is.GreaterThanOrEqualTo(0));
+        Assert.That(toolbarEnd, Is.GreaterThan(toolbarStart));
+        Assert.That(iconColorStart, Is.GreaterThanOrEqualTo(0));
+        Assert.That(iconColorEnd, Is.GreaterThan(iconColorStart));
+
+        string resizeStyle = xaml.Substring(resizeStart, resizeEnd - resizeStart);
+        string sidebarDeclaration = xaml.Substring(sidebarStart, sidebarEnd - sidebarStart);
+        string toolbar = xaml.Substring(toolbarStart, toolbarEnd - toolbarStart);
+        string iconColorMethod = source.Substring(iconColorStart, iconColorEnd - iconColorStart);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(xaml, Does.Contain("x:Key=\"EditorToolTipStyle\""));
+            Assert.That(xaml, Does.Contain("TargetType=\"{x:Type ToolTip}\""));
+            Assert.That(xaml, Does.Contain("ToolTipService.InitialShowDelay"));
+            Assert.That(utilities, Does.Contain("LocalizationService.Get(\"Editor.PenTooltip\")"));
+            Assert.That(utilities, Does.Contain("ToolTipService.SetToolTip(control, label)"));
+            Assert.That(resizeStyle, Does.Contain("Background=\"Transparent\""));
+            Assert.That(resizeStyle, Does.Not.Contain("Background=\"{DynamicResource ThemeBorderBrush}\""));
+            Assert.That(sidebarDeclaration, Does.Contain("BorderThickness=\"1,1,0,1\""));
+            Assert.That(toolbar, Does.Not.Contain("PenIconContrast"));
+            Assert.That(toolbar, Does.Not.Contain("PenIconBackplate"));
+            Assert.That(toolbar, Does.Not.Contain("Width=\"19\" Height=\"19\""));
+            Assert.That(toolbar, Does.Contain("x:Name=\"PenColorIndicator\""));
+            Assert.That(toolbar, Does.Contain("x:Name=\"HighlighterColorIndicator\""));
+            Assert.That(toolbar, Does.Not.Contain("Stroke=\"{DynamicResource ThemeMarkBrush}\""));
+            Assert.That(toolbar, Does.Not.Contain("Stroke=\"{DynamicResource ThemeMarginBrush}\""));
+            Assert.That(iconColorMethod, Does.Contain("PenColorIndicator"));
+            Assert.That(iconColorMethod, Does.Contain("HighlighterColorIndicator"));
+            Assert.That(iconColorMethod, Does.Not.Contain("PenIcon.Stroke"));
+            Assert.That(iconColorMethod, Does.Not.Contain("HighlighterIcon.Fill"));
         });
     }
 
@@ -315,7 +388,7 @@ public sealed class EditorToolbarVisualSourceTests
     }
 
     [Test]
-    public void HighContrastPenUsesThemeBackplateAndRing()
+    public void HighContrastPenUsesOwnerForegroundAndSeparateColorIndicator()
     {
         var root = FindProjectRoot();
         var xaml = File.ReadAllText(Path.Combine(root, "Pages", "EditorPage.xaml"));
@@ -324,13 +397,15 @@ public sealed class EditorToolbarVisualSourceTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(xaml, Does.Contain("PenIconBackplate"));
-            Assert.That(xaml, Does.Contain("PenIconContrast"));
-            Assert.That(xaml, Does.Contain("ThemeSurfaceAltBrush"));
+            Assert.That(xaml, Does.Not.Contain("PenIconBackplate"));
+            Assert.That(xaml, Does.Not.Contain("PenIconContrast"));
+            Assert.That(xaml, Does.Contain("x:Name=\"PenColorIndicator\""));
+            Assert.That(xaml, Does.Contain("AncestorType=ToggleButton"));
             Assert.That(xaml, Does.Contain("ThemeFocusBrush"));
-            Assert.That(source, Does.Contain("PenIcon.Stroke"));
-            Assert.That(source, Does.Contain("PenIconContrast"));
-            Assert.That(source, Does.Contain("PenIconBackplate"));
+            Assert.That(source, Does.Contain("PenColorIndicator.Background"));
+            Assert.That(source, Does.Not.Contain("PenIcon.Stroke"));
+            Assert.That(source, Does.Not.Contain("PenIconContrast"));
+            Assert.That(source, Does.Not.Contain("PenIconBackplate"));
             Assert.That(theme, Does.Contain("HighContrastPalette"));
             Assert.That(theme, Does.Contain("ThemeFocusBrush"));
         });
@@ -360,7 +435,7 @@ public sealed class EditorToolbarVisualSourceTests
     }
 
     [Test]
-    public void HighlighterToolbarMarkSharesProductionPreviewAlpha()
+    public void HighlighterToolbarColorIndicatorSharesProductionPreviewAlpha()
     {
         var root = FindProjectRoot();
         var source = File.ReadAllText(Path.Combine(root, "Pages", "EditorPage.xaml.cs"));
@@ -373,8 +448,9 @@ public sealed class EditorToolbarVisualSourceTests
         Assert.Multiple(() =>
         {
             Assert.That(block, Does.Contain("GetHighlighterPreviewStrokeColor(HighlighterApplyMode.Freehand, _highlighterColor)"));
-            Assert.That(block, Does.Contain("HighlighterIcon.Fill"));
-            Assert.That(block, Does.Contain("HighlighterIcon.Stroke"));
+            Assert.That(block, Does.Contain("HighlighterColorIndicator.Background"));
+            Assert.That(block, Does.Not.Contain("HighlighterIcon.Fill"));
+            Assert.That(block, Does.Not.Contain("HighlighterIcon.Stroke"));
         });
     }
 

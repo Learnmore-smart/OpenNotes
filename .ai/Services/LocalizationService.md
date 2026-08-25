@@ -6,6 +6,8 @@
 Central catalog for English, Simplified Chinese, and French UI strings and culture switching.
 
 ## Open Threads / Resume Context
+- **Complete:** Triangle, Diamond, Parallelogram, Pentagon, and Hexagon have EN/ZH/FR names in the editor shape picker. Literal lookup calls preserve the static i18n audit; live popup rebuild behavior remains unchanged.
+- Checklist and Two-column cards have complete placeholder-free EN/ZH/FR title and hint keys.
 - **Wave4 dependency:** baseline keys are present, but review follow-up remains open for localized resize Range/HelpText, collapsed Expand/Collapse labels and bookmark Toggle names/status across all three catalog languages with placeholder parity preserved.
 - **Status:** Wave 4 catalog follow-up is in_progress; model/JSON compatibility remains preserved.
 - **Intent/result:** removed only localization keys belonging to removed visible preset/Fit/Ink Analysis UI while retaining `PenPresets` settings data and serialization compatibility. Added localized alignment labels for the runtime `TextAlignmentOption` model and verified live refresh preserves the enum selection.

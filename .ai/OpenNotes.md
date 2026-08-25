@@ -12,6 +12,8 @@ Defines the .NET 8 WPF desktop build, assembly identity, release version, runtim
 
 ## Open Threads / Resume Context
 
+- **Status:** ready_for_release (5.2.0 feature release metadata)
+- Project, assembly, file and informational versions are aligned to `5.2.0`; the `Caelum` namespace and all compatibility identities remain unchanged.
 - **Status:** complete (5.1.2 Lucide icon patch metadata)
 - Project, assembly, file and informational versions are aligned to `5.1.2`; all compatibility identities remain unchanged.
 - **Status:** complete

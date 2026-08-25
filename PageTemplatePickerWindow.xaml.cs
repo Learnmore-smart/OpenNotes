@@ -62,6 +62,10 @@ namespace Caelum
             MusicHintTextBlock.Text = LocalizationService.Get("PageTemplate.MusicHint");
             CornellTitleTextBlock.Text = LocalizationService.Get("PageTemplate.CornellTitle");
             CornellHintTextBlock.Text = LocalizationService.Get("PageTemplate.CornellHint");
+            ChecklistTitleTextBlock.Text = LocalizationService.Get("PageTemplate.ChecklistTitle");
+            ChecklistHintTextBlock.Text = LocalizationService.Get("PageTemplate.ChecklistHint");
+            TwoColumnTitleTextBlock.Text = LocalizationService.Get("PageTemplate.TwoColumnTitle");
+            TwoColumnHintTextBlock.Text = LocalizationService.Get("PageTemplate.TwoColumnHint");
 
             PathLabelTextBlock.Text = LocalizationService.Get("Home.CreateNotebookPathLabel");
             BrowsePathButton.ToolTip = LocalizationService.Get("Home.CreateNotebookBrowseFolder");
@@ -78,7 +82,7 @@ namespace Caelum
         {
             PathSectionBorder.Visibility = _isNotebookCreationMode ? Visibility.Visible : Visibility.Collapsed;
             CreateButton.Visibility = _isNotebookCreationMode ? Visibility.Visible : Visibility.Collapsed;
-            Height = _isNotebookCreationMode ? 860 : 760;
+            Height = _isNotebookCreationMode ? 820 : 760;
         }
 
         private void UpdateSelectionVisualState()
@@ -90,6 +94,8 @@ namespace Caelum
             DottedCard.Tag = SelectedTemplate == PageInsertTemplate.Dotted;
             MusicCard.Tag = SelectedTemplate == PageInsertTemplate.Music;
             CornellCard.Tag = SelectedTemplate == PageInsertTemplate.Cornell;
+            ChecklistCard.Tag = SelectedTemplate == PageInsertTemplate.Checklist;
+            TwoColumnCard.Tag = SelectedTemplate == PageInsertTemplate.TwoColumn;
         }
 
         private void UpdateFolderPathText()
@@ -115,6 +121,8 @@ namespace Caelum
         private void DottedCard_Click(object sender, RoutedEventArgs e) => SelectTemplate(PageInsertTemplate.Dotted);
         private void MusicCard_Click(object sender, RoutedEventArgs e) => SelectTemplate(PageInsertTemplate.Music);
         private void CornellCard_Click(object sender, RoutedEventArgs e) => SelectTemplate(PageInsertTemplate.Cornell);
+        private void ChecklistCard_Click(object sender, RoutedEventArgs e) => SelectTemplate(PageInsertTemplate.Checklist);
+        private void TwoColumnCard_Click(object sender, RoutedEventArgs e) => SelectTemplate(PageInsertTemplate.TwoColumn);
 
         private void CancelButton_Click(object sender, RoutedEventArgs e)
         {
