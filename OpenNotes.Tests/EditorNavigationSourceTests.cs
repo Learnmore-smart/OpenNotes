@@ -74,14 +74,14 @@ public sealed class EditorNavigationSourceTests
             Assert.That(xaml, Does.Contain("Editor.Sidebar.Pages"));
             Assert.That(xaml, Does.Contain("Editor.Sidebar.Outline"));
             Assert.That(xaml, Does.Contain("Editor.Sidebar.Bookmarks"));
-            Assert.That(xaml, Does.Contain("MinWidth=\"154\""));
-            Assert.That(xaml, Does.Contain("MaxWidth=\"320\""));
-            Assert.That(xaml, Does.Contain("SidebarResizeThumb"));
+            Assert.That(xaml, Does.Contain("x:Name=\"DocumentSidebar\""));
+            Assert.That(xaml, Does.Contain("Width=\"184\""));
+            Assert.That(xaml, Does.Not.Contain("SidebarResizeThumb"));
             Assert.That(xaml, Does.Contain("ThumbnailListBox"));
             Assert.That(xaml, Does.Contain("OutlineTreeView"));
             Assert.That(xaml, Does.Contain("BookmarksListBox"));
             Assert.That(source, Does.Contain("SetSidebarTab"));
-            Assert.That(source, Does.Contain("SidebarResizeThumb_DragDelta"));
+            Assert.That(source, Does.Not.Contain("SidebarResizeThumb_DragDelta"));
             Assert.That(source, Does.Contain("Editor.Sidebar.Page."));
             Assert.That(source, Does.Contain("Editor.Sidebar.Bookmark."));
             Assert.That(source, Does.Contain("Editor.Sidebar.Outline."));
@@ -154,20 +154,13 @@ public sealed class EditorNavigationSourceTests
 
             var sidebar = GetNamed<Border>(editor, "DocumentSidebar");
             var collapse = FindByAutomationId<Button>(editor, "Editor.Sidebar.Collapse");
-            var resize = FindByAutomationId<Thumb>(editor, "Editor.Sidebar.Resize");
-            Assert.That(sidebar.MinWidth, Is.EqualTo(154).Within(0.1));
+            Assert.That(sidebar.Width, Is.EqualTo(184).Within(0.1));
             ((IInvokeProvider)UIElementAutomationPeer.CreatePeerForElement(collapse)!.GetPattern(PatternInterface.Invoke)!).Invoke();
             editor.Dispatcher.Invoke(System.Windows.Threading.DispatcherPriority.Background, new Action(() => { }));
             Assert.That(sidebar.Width, Is.EqualTo(38).Within(0.1));
-            Assert.That(sidebar.MinWidth, Is.EqualTo(38).Within(0.1));
             ((IInvokeProvider)UIElementAutomationPeer.CreatePeerForElement(collapse)!.GetPattern(PatternInterface.Invoke)!).Invoke();
             editor.Dispatcher.Invoke(System.Windows.Threading.DispatcherPriority.Background, new Action(() => { }));
-            Assert.That(sidebar.MinWidth, Is.EqualTo(154).Within(0.1));
-
-            resize.RaiseEvent(new DragDeltaEventArgs(200, 0) { RoutedEvent = Thumb.DragDeltaEvent });
-            Assert.That(sidebar.Width, Is.EqualTo(320).Within(0.1));
-            resize.RaiseEvent(new DragDeltaEventArgs(-400, 0) { RoutedEvent = Thumb.DragDeltaEvent });
-            Assert.That(sidebar.Width, Is.EqualTo(154).Within(0.1));
+            Assert.That(sidebar.Width, Is.EqualTo(184).Within(0.1));
         }
         finally
         {
@@ -475,7 +468,7 @@ public sealed class EditorNavigationSourceTests
 
     [Test]
     [Apartment(ApartmentState.STA)]
-    public void SidebarResizeExposesRangeKeyboardAndNarrowCollapseContracts()
+    public void SidebarKeepsFixedExpandedWidthAndNarrowCollapseContracts()
     {
         EnsureWpfEnvironment();
         var application = Application.Current ?? new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
@@ -493,32 +486,27 @@ public sealed class EditorNavigationSourceTests
             window.Show();
             window.UpdateLayout();
             var sidebar = GetNamed<Border>(editor, "DocumentSidebar");
-            var resize = FindByAutomationId<Thumb>(editor, "Editor.Sidebar.Resize");
-            var peer = UIElementAutomationPeer.CreatePeerForElement(resize);
-            var range = (IRangeValueProvider)peer!.GetPattern(PatternInterface.RangeValue)!;
-            Assert.That(range.Minimum, Is.EqualTo(154).Within(0.1));
-            Assert.That(range.Maximum, Is.EqualTo(320).Within(0.1));
-            range.SetValue(260);
-            Assert.That(sidebar.Width, Is.EqualTo(260).Within(0.1));
-
-            InvokePrivate(editor, "SidebarResizeThumb_KeyDown", resize, CreateKeyEventArgs(resize, Key.Right));
-            Assert.That(sidebar.Width, Is.EqualTo(268).Within(0.1));
-            InvokePrivate(editor, "SidebarResizeThumb_KeyDown", resize, CreateKeyEventArgs(resize, Key.Home));
-            Assert.That(sidebar.Width, Is.EqualTo(154).Within(0.1));
-            InvokePrivate(editor, "SidebarResizeThumb_KeyDown", resize, CreateKeyEventArgs(resize, Key.End));
-            Assert.That(sidebar.Width, Is.EqualTo(320).Within(0.1));
+            var toolbar = GetNamed<Border>(editor, "ToolbarBorder");
+            var centeredPageJump = GetNamed<Border>(editor, "CenteredPageJumpHost");
+            Assert.That(sidebar.Width, Is.EqualTo(184).Within(0.1));
+            Assert.That(centeredPageJump.ActualWidth, Is.GreaterThan(0));
+            double pageJumpCenter = centeredPageJump
+                .TranslatePoint(new Point(centeredPageJump.ActualWidth / 2, 0), toolbar).X;
+            Assert.That(pageJumpCenter, Is.EqualTo(toolbar.ActualWidth / 2).Within(1),
+                "The page navigator must remain centered in the floating toolbar at runtime.");
 
             var collapse = FindByAutomationId<Button>(editor, "Editor.Sidebar.Collapse");
             ((IInvokeProvider)UIElementAutomationPeer.CreatePeerForElement(collapse)!
                 .GetPattern(PatternInterface.Invoke)!).Invoke();
             editor.Dispatcher.Invoke(System.Windows.Threading.DispatcherPriority.Background, new Action(() => { }));
             Assert.That(GetNamed<FrameworkElement>(editor, "SidebarNavBar").Visibility, Is.EqualTo(Visibility.Collapsed));
-            Assert.That(resize.Visibility, Is.EqualTo(Visibility.Collapsed));
+            Assert.That(sidebar.Width, Is.EqualTo(38).Within(0.1));
 
             ((IInvokeProvider)UIElementAutomationPeer.CreatePeerForElement(collapse)!
                 .GetPattern(PatternInterface.Invoke)!).Invoke();
             editor.Dispatcher.Invoke(System.Windows.Threading.DispatcherPriority.Background, new Action(() => { }));
             Assert.That(GetNamed<FrameworkElement>(editor, "SidebarNavBar").Visibility, Is.EqualTo(Visibility.Visible));
+            Assert.That(sidebar.Width, Is.EqualTo(184).Within(0.1));
 
             window.Width = 360;
             window.UpdateLayout();
@@ -605,7 +593,7 @@ public sealed class EditorNavigationSourceTests
     }
 
     [Test]
-    public void SidebarReviewContractsRequireFallbackSelectionResizeBookmarkAndNarrowSemantics()
+    public void SidebarReviewContractsRequireFixedWidthBookmarkAndNarrowSemantics()
     {
         var root = FindProjectRoot();
         var xaml = File.ReadAllText(Path.Combine(root, "Pages", "EditorPage.xaml"));
@@ -616,16 +604,19 @@ public sealed class EditorNavigationSourceTests
             Assert.That(xaml, Does.Contain("Focusable=\"True\""));
             Assert.That(xaml, Does.Contain("KeyboardNavigation.IsTabStop=\"True\""));
             Assert.That(xaml, Does.Contain("MinWidth=\"32\""));
-            Assert.That(xaml, Does.Contain("SidebarResizeThumb_KeyDown"));
+            Assert.That(xaml, Does.Not.Contain("SidebarResizeThumb"));
             Assert.That(xaml, Does.Contain("SidebarHeaderGrid"));
             Assert.That(xaml, Does.Contain("SidebarNavBar.Visibility"));
             Assert.That(xaml, Does.Contain("ToolbarItemsScrollViewer"));
+            Assert.That(xaml, Does.Contain("x:Name=\"ToolbarOverlayGrid\""));
+            Assert.That(xaml, Does.Contain("x:Name=\"PageJumpReservedSpace\""));
+            Assert.That(xaml, Does.Contain("x:Name=\"CenteredPageJumpHost\""));
             Assert.That(xaml, Does.Contain("Editor.Sidebar.BookmarkToggle"));
             Assert.That(xaml, Does.Contain("ToggleButton x:Name=\"BookmarkToggleButton\""));
             Assert.That(xaml, Does.Contain("OutlineInvokeButton_Loaded"));
             Assert.That(xaml, Does.Contain("MinWidth=\"32\""));
             Assert.That(source, Does.Contain("ISelectionItemProvider"));
-            Assert.That(source, Does.Contain("IRangeValueProvider"));
+            Assert.That(source, Does.Not.Contain("SidebarResizeThumbAutomationPeer"));
             Assert.That(source, Does.Contain("OutlineTreeView_SelectedItemChanged"));
             Assert.That(source, Does.Contain("OutlineInvokeButton_Click"));
             Assert.That(source, Does.Contain("_isSynchronizingThumbnailSelection"));

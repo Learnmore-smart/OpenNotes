@@ -201,7 +201,6 @@ namespace Caelum.Services
             ["Editor.RotateCurrentPage"] = ("Rotate current page 90°", "\u65CB\u8F6C\u5F53\u524D\u9875 90°", "Tourner la page actuelle de 90°"),
             ["Editor.SidebarCollapse"] = ("Collapse panel", "\u6536\u8D77\u9762\u677F", "Réduire le panneau"),
             ["Editor.SidebarSelected"] = ("Selected", "\u5DF2\u9009\u62E9", "Sélectionné"),
-            ["Editor.SidebarResize"] = ("Resize panel", "\u8C03\u6574\u9762\u677F\u5BBD\u5EA6", "Redimensionner le panneau"),
             ["Editor.ToolbarScroll"] = ("Scroll toolbar to reveal more tools", "\u6EDA\u52A8\u5DE5\u5177\u680F\u67E5\u770B\u66F4\u591A\u5DE5\u5177", "Faire défiler la barre d’outils pour afficher plus d’outils"),
             ["Editor.PagesTab"] = ("Pages", "\u9875\u9762", "Pages"),
             ["Editor.OutlineTab"] = ("Outline", "\u5927\u7EB2", "Plan"),

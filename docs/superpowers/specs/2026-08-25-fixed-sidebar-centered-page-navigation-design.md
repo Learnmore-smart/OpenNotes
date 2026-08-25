@@ -8,7 +8,7 @@ Remove the document-sidebar resize affordance and keep the editable page navigat
 
 - The expanded sidebar keeps its existing 184-DIP width. Collapse/expand and the existing 38-DIP narrow-window collapsed rail remain unchanged.
 - Remove the resize thumb, cursor, tooltip/UIA range provider, drag/keyboard handlers, and dead resize-only state. There is no invisible resize hit target at the sidebar edge.
-- Wrap the toolbar content in an overlay `Grid`. The action row remains the existing horizontally scrollable `StackPanel`. A transparent, non-interactive spacer reserves the page navigator's footprint after Save, near the natural toolbar midpoint.
+- Wrap the toolbar content in an overlay `Grid`. The action row remains the existing horizontally scrollable `StackPanel`. A transparent, non-interactive 150-DIP spacer reserves the page navigator's footprint after Ruler and before Select, which is the action row's measured natural midpoint.
 - Move the existing page navigator border out of the scrolling action row and render it as a centered overlay sibling. Its previous/next buttons, editable one-based field, page count, localization, keyboard behavior, and AutomationIds are unchanged.
 - Narrow-window toolbar overflow remains available. Centering is relative to the floating toolbar rather than to whichever actions happen to precede the navigator.
 

@@ -1,6 +1,8 @@
 # Services/LocalizationService.cs
 > Last updated: 2026-08-24（Wave4 review-follow-up + Wave5 backdrop labels verified; parent Wave4 bookkeeping remains in progress） | Protection: STANDARD
 
+> 2026-08-25 GREEN: removed `Editor.SidebarResize` with the retired resize affordance; i18n passes 293 catalog entries / 480 calls / 0 hard-coded visible strings.
+
 ## Purpose
 
 Central catalog for English, Simplified Chinese, and French UI strings and culture switching.

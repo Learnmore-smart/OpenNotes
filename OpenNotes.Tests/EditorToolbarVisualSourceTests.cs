@@ -139,23 +139,19 @@ public sealed class EditorToolbarVisualSourceTests
     }
 
     [Test]
-    public void ToolbarPolishUsesCustomLocalizedTooltipsAndInvisibleResizeTarget()
+    public void ToolbarPolishUsesLocalizedTooltipsFixedSidebarAndCenteredPageJump()
     {
         var root = FindProjectRoot();
         var xaml = File.ReadAllText(Path.Combine(root, "Pages", "EditorPage.xaml"));
         var source = File.ReadAllText(Path.Combine(root, "Pages", "EditorPage.xaml.cs"));
         var utilities = File.ReadAllText(Path.Combine(root, "Pages", "EditorPage.Utilities.cs"));
 
-        int resizeStart = xaml.IndexOf("<Style x:Key=\"SidebarResizeThumbStyle\"", StringComparison.Ordinal);
-        int resizeEnd = xaml.IndexOf("</Style>", resizeStart, StringComparison.Ordinal);
         int sidebarStart = xaml.IndexOf("<Border x:Name=\"DocumentSidebar\"", StringComparison.Ordinal);
         int sidebarEnd = xaml.IndexOf(">", sidebarStart, StringComparison.Ordinal);
         int toolbarStart = xaml.IndexOf("<Border x:Name=\"ToolbarBorder\"", StringComparison.Ordinal);
         int toolbarEnd = xaml.IndexOf("</Border>", xaml.IndexOf("</ScrollViewer>", toolbarStart, StringComparison.Ordinal), StringComparison.Ordinal);
         int iconColorStart = source.IndexOf("private void UpdateToolIconColors", StringComparison.Ordinal);
         int iconColorEnd = source.IndexOf("// Task 15: pen-only drawing", iconColorStart, StringComparison.Ordinal);
-        Assert.That(resizeStart, Is.GreaterThanOrEqualTo(0));
-        Assert.That(resizeEnd, Is.GreaterThan(resizeStart));
         Assert.That(sidebarStart, Is.GreaterThanOrEqualTo(0));
         Assert.That(sidebarEnd, Is.GreaterThan(sidebarStart));
         Assert.That(toolbarStart, Is.GreaterThanOrEqualTo(0));
@@ -163,7 +159,6 @@ public sealed class EditorToolbarVisualSourceTests
         Assert.That(iconColorStart, Is.GreaterThanOrEqualTo(0));
         Assert.That(iconColorEnd, Is.GreaterThan(iconColorStart));
 
-        string resizeStyle = xaml.Substring(resizeStart, resizeEnd - resizeStart);
         string sidebarDeclaration = xaml.Substring(sidebarStart, sidebarEnd - sidebarStart);
         string toolbar = xaml.Substring(toolbarStart, toolbarEnd - toolbarStart);
         string iconColorMethod = source.Substring(iconColorStart, iconColorEnd - iconColorStart);
@@ -175,9 +170,17 @@ public sealed class EditorToolbarVisualSourceTests
             Assert.That(xaml, Does.Contain("ToolTipService.InitialShowDelay"));
             Assert.That(utilities, Does.Contain("LocalizationService.Get(\"Editor.PenTooltip\")"));
             Assert.That(utilities, Does.Contain("ToolTipService.SetToolTip(control, label)"));
-            Assert.That(resizeStyle, Does.Contain("Background=\"Transparent\""));
-            Assert.That(resizeStyle, Does.Not.Contain("Background=\"{DynamicResource ThemeBorderBrush}\""));
+            Assert.That(xaml, Does.Not.Contain("SidebarResizeThumbStyle"));
+            Assert.That(xaml, Does.Not.Contain("Editor.Sidebar.Resize"));
+            Assert.That(utilities, Does.Not.Contain("Editor.SidebarResize"));
+            Assert.That(sidebarDeclaration, Does.Contain("Width=\"184\""));
+            Assert.That(sidebarDeclaration, Does.Not.Contain("MinWidth="));
+            Assert.That(sidebarDeclaration, Does.Not.Contain("MaxWidth="));
             Assert.That(sidebarDeclaration, Does.Contain("BorderThickness=\"1,1,0,1\""));
+            Assert.That(toolbar, Does.Contain("x:Name=\"ToolbarOverlayGrid\""));
+            Assert.That(toolbar, Does.Contain("x:Name=\"PageJumpReservedSpace\""));
+            Assert.That(toolbar, Does.Contain("x:Name=\"CenteredPageJumpHost\""));
+            Assert.That(toolbar, Does.Contain("HorizontalAlignment=\"Center\""));
             Assert.That(toolbar, Does.Not.Contain("PenIconContrast"));
             Assert.That(toolbar, Does.Not.Contain("PenIconBackplate"));
             Assert.That(toolbar, Does.Not.Contain("Width=\"19\" Height=\"19\""));

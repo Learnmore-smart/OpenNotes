@@ -1,6 +1,8 @@
 # OpenNotes.csproj
 > Last updated: 2026-08-24（5.0.0 release metadata） | Protection: STANDARD
 
+> 2026-08-25 GREEN: package/assembly/file/informational metadata are 5.2.2/5.2.2.0 for the fixed-sidebar and centered-page-navigation patch; `RootNamespace=Caelum` and all storage/package compatibility identities are preserved.
+
 ## Purpose
 
 The build definition for the OpenNotes desktop application. The file name, assembly name, solution display name, release workflow and installer executable are OpenNotes; the `Caelum` root namespace remains only to preserve compiled XAML/type compatibility.

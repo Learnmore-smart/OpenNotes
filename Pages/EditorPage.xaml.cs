@@ -1718,7 +1718,6 @@ namespace Caelum.Pages
         private readonly LinkedList<int> _thumbnailCacheLru = new LinkedList<int>();
         private bool _isRefreshingThumbnails;
         private bool _isSynchronizingThumbnailSelection;
-        private bool _isApplyingSidebarResizeValue;
         private Point _thumbnailDragStartPoint;
         private int _thumbnailDragIndex = -1;
         private int _thumbnailDragSessionId = -1;
@@ -1732,12 +1731,8 @@ namespace Caelum.Pages
 
         private SidebarTab _sidebarTab = SidebarTab.Pages;
         private bool _sidebarCollapsed;
-        private double _sidebarExpandedWidth = 184.0;
-        private const double SidebarMinWidth = 154.0;
-        private const double SidebarMaxWidth = 320.0;
+        private const double SidebarExpandedWidth = 184.0;
         private const double SidebarCollapsedWidth = 38.0;
-        private const double SidebarResizeStep = 8.0;
-        private const double SidebarResizeLargeStep = 32.0;
         private readonly ObservableCollection<SidebarPageItem> _sidebarPageItems = new();
         private readonly ObservableCollection<SidebarBookmarkItem> _sidebarBookmarkItems = new();
         private readonly ObservableCollection<SidebarOutlineItem> _sidebarOutlineItems = new();
@@ -1822,8 +1817,6 @@ namespace Caelum.Pages
             _isPageJumpInitializing = false;
             if (OutlineTreeView != null)
                 OutlineTreeView.PageInvoker = JumpToPage;
-            if (SidebarResizeThumb != null)
-                SidebarResizeThumb.ValueChanged += SidebarResizeThumb_ValueChanged;
             InitializeTextBoxPopup();
             CreateToolPopups();
             ApplySettings(AppSettingsService.Load());
@@ -7662,8 +7655,6 @@ namespace Caelum.Pages
                 SidebarOutlineLabel.Visibility = _sidebarCollapsed ? Visibility.Collapsed : Visibility.Visible;
             if (SidebarBookmarksLabel != null)
                 SidebarBookmarksLabel.Visibility = _sidebarCollapsed ? Visibility.Collapsed : Visibility.Visible;
-            if (SidebarResizeThumb != null)
-                SidebarResizeThumb.Visibility = _sidebarCollapsed ? Visibility.Collapsed : Visibility.Visible;
             if (SidebarHeaderGrid != null)
                 SidebarHeaderGrid.Margin = _sidebarCollapsed
                     ? new Thickness(3)
@@ -7671,21 +7662,9 @@ namespace Caelum.Pages
 
             if (DocumentSidebar != null)
             {
-                if (_sidebarCollapsed)
-                {
-                    _sidebarExpandedWidth = Math.Max(SidebarMinWidth, Math.Min(SidebarMaxWidth, DocumentSidebar.Width));
-                    // The expanded rail has a usable 154 DIP minimum, but that
-                    // minimum must not prevent the compact collapsed affordance
-                    // from actually shrinking to its icon-only width.
-                    DocumentSidebar.MinWidth = SidebarCollapsedWidth;
-                }
-                else
-                {
-                    DocumentSidebar.MinWidth = SidebarMinWidth;
-                }
                 DocumentSidebar.Width = _sidebarCollapsed
                     ? SidebarCollapsedWidth
-                    : Math.Max(SidebarMinWidth, Math.Min(SidebarMaxWidth, _sidebarExpandedWidth));
+                    : SidebarExpandedWidth;
             }
 
             if (SidebarCollapseIcon != null)
@@ -7697,88 +7676,6 @@ namespace Caelum.Pages
             // Editor.SidebarCollapse after every state transition.
             ApplyStateAwareSidebarMetadata();
             SetSidebarTab(_sidebarTab);
-            if (SidebarResizeThumb != null)
-            {
-                _isApplyingSidebarResizeValue = true;
-                try
-                {
-                    SidebarResizeThumb.Value = DocumentSidebar?.Width ?? SidebarCollapsedWidth;
-                }
-                finally
-                {
-                    _isApplyingSidebarResizeValue = false;
-                }
-            }
-        }
-
-        private void SidebarResizeThumb_DragDelta(object sender, DragDeltaEventArgs e)
-        {
-            if (_sidebarCollapsed || DocumentSidebar == null)
-                return;
-
-            DocumentSidebar.Width = Math.Max(
-                SidebarMinWidth,
-                Math.Min(SidebarMaxWidth, DocumentSidebar.Width + e.HorizontalChange));
-            _sidebarExpandedWidth = DocumentSidebar.Width;
-            if (SidebarResizeThumb != null)
-                SidebarResizeThumb.Value = DocumentSidebar.Width;
-        }
-
-        private void SidebarResizeThumb_ValueChanged(object sender, EventArgs e)
-        {
-            if (_isApplyingSidebarResizeValue || _sidebarCollapsed || DocumentSidebar == null)
-                return;
-            SetSidebarWidthFromInput(SidebarResizeThumb.Value);
-        }
-
-        private void SetSidebarWidthFromInput(double value)
-        {
-            if (_sidebarCollapsed || DocumentSidebar == null)
-                return;
-            double width = Math.Max(SidebarMinWidth, Math.Min(SidebarMaxWidth, value));
-            DocumentSidebar.Width = width;
-            _sidebarExpandedWidth = width;
-            _isApplyingSidebarResizeValue = true;
-            try
-            {
-                SidebarResizeThumb.Value = width;
-            }
-            finally
-            {
-                _isApplyingSidebarResizeValue = false;
-            }
-        }
-
-        private void SidebarResizeThumb_KeyDown(object sender, KeyEventArgs e)
-        {
-            if (_sidebarCollapsed || SidebarResizeThumb == null)
-                return;
-
-            var modifiers = e.KeyboardDevice != null ? e.KeyboardDevice.Modifiers : Keyboard.Modifiers;
-            double step = (modifiers & ModifierKeys.Shift) != 0
-                ? SidebarResizeLargeStep : SidebarResizeStep;
-            double value = SidebarResizeThumb.Value;
-            switch (e.Key)
-            {
-                case Key.Left:
-                case Key.Down:
-                    SetSidebarWidthFromInput(value - step);
-                    e.Handled = true;
-                    break;
-                case Key.Right:
-                case Key.Up:
-                    SetSidebarWidthFromInput(value + step);
-                    e.Handled = true;
-                    break;
-                case Key.Home:
-                    SetSidebarWidthFromInput(SidebarMinWidth);
-                    e.Handled = true;
-                    break;
-                case Key.End:
-                    SetSidebarWidthFromInput(SidebarMaxWidth);
-                    e.Handled = true;
-                    break;
-            }
         }
 
         private void EditorPage_SizeChanged(object sender, SizeChangedEventArgs e)
@@ -13943,104 +13840,6 @@ namespace Caelum.Pages
 
 namespace Caelum.Pages
 {
-    /// <summary>
-    /// Keyboard and UI Automation resize target for the document sidebar.  The
-    /// visual template is transparent, while this control deliberately keeps a
-    /// 32-DIP hit/focus target for pointer, keyboard and touch users.
-    /// </summary>
-    public sealed class SidebarResizeThumb : Thumb
-    {
-        public static readonly DependencyProperty MinimumProperty =
-            DependencyProperty.Register(nameof(Minimum), typeof(double), typeof(SidebarResizeThumb),
-                new PropertyMetadata(154d));
-
-        public static readonly DependencyProperty MaximumProperty =
-            DependencyProperty.Register(nameof(Maximum), typeof(double), typeof(SidebarResizeThumb),
-                new PropertyMetadata(320d));
-
-        public static readonly DependencyProperty ValueProperty =
-            DependencyProperty.Register(nameof(Value), typeof(double), typeof(SidebarResizeThumb),
-                new FrameworkPropertyMetadata(184d, FrameworkPropertyMetadataOptions.BindsTwoWayByDefault));
-
-        public double Minimum
-        {
-            get => (double)GetValue(MinimumProperty);
-            set => SetValue(MinimumProperty, value);
-        }
-
-        public double Maximum
-        {
-            get => (double)GetValue(MaximumProperty);
-            set => SetValue(MaximumProperty, value);
-        }
-
-        public double Value
-        {
-            get => (double)GetValue(ValueProperty);
-            set => SetValue(ValueProperty, Math.Max(Minimum, Math.Min(Maximum, value)));
-        }
-
-        internal event EventHandler ValueChanged;
-
-        internal void SetAutomationValue(double value)
-        {
-            Value = value;
-            ValueChanged?.Invoke(this, EventArgs.Empty);
-        }
-
-        protected override AutomationPeer OnCreateAutomationPeer()
-        {
-            return new SidebarResizeThumbAutomationPeer(this);
-        }
-    }
-
-    internal sealed class SidebarResizeThumbAutomationPeer : FrameworkElementAutomationPeer, IRangeValueProvider
-    {
-        private new SidebarResizeThumb Owner => (SidebarResizeThumb)base.Owner;
-
-        public SidebarResizeThumbAutomationPeer(SidebarResizeThumb owner)
-            : base(owner)
-        {
-        }
-
-        public double Value => Owner.Value;
-        bool IRangeValueProvider.IsReadOnly => false;
-        public double Maximum => Owner.Maximum;
-        public double Minimum => Owner.Minimum;
-        public double SmallChange => 8;
-        public double LargeChange => 32;
-
-        void IRangeValueProvider.SetValue(double value)
-        {
-            if (double.IsNaN(value) || value < Minimum || value > Maximum)
-                throw new ArgumentOutOfRangeException(nameof(value));
-            Owner.SetAutomationValue(value);
-        }
-
-        protected override AutomationControlType GetAutomationControlTypeCore() => AutomationControlType.Thumb;
-
-        protected override string GetClassNameCore() => nameof(SidebarResizeThumb);
-
-        protected override string GetNameCore()
-        {
-            var name = AutomationProperties.GetName(Owner);
-            return string.IsNullOrWhiteSpace(name) ? "Sidebar resize" : name;
-        }
-
-        protected override string GetHelpTextCore()
-        {
-            var help = AutomationProperties.GetHelpText(Owner);
-            return string.IsNullOrWhiteSpace(help) ? GetNameCore() : help;
-        }
-
-        public override object GetPattern(PatternInterface patternInterface)
-        {
-            return patternInterface == PatternInterface.RangeValue
-                ? this
-                : base.GetPattern(patternInterface);
-        }
-    }
-
     /// <summary>
     /// Keeps the outline tree's normal TreeView selection semantics while
     /// supplying a custom item container whose peer can also be invoked.

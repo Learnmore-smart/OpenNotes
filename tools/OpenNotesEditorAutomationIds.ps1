@@ -21,7 +21,6 @@ $EditorAutomationIds = [ordered]@{
     SidebarOutline = 'Editor.Sidebar.Outline'
     SidebarBookmarks = 'Editor.Sidebar.Bookmarks'
     SidebarCollapse = 'Editor.Sidebar.Collapse'
-    SidebarResize = 'Editor.Sidebar.Resize'
     SidebarPagePrefix = 'Editor.Sidebar.Page.'
     SidebarBookmarkPrefix = 'Editor.Sidebar.Bookmark.'
     SidebarOutlinePrefix = 'Editor.Sidebar.Outline.'

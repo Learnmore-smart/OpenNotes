@@ -320,7 +320,7 @@ try {
         $EditorAutomationIds.Laser, $EditorAutomationIds.Ruler, $EditorAutomationIds.Select, $EditorAutomationIds.Text,
         $EditorAutomationIds.Save, $EditorAutomationIds.PageJump, $EditorAutomationIds.SidebarPages,
         $EditorAutomationIds.SidebarOutline, $EditorAutomationIds.SidebarBookmarks, $EditorAutomationIds.SidebarCollapse,
-        $EditorAutomationIds.SidebarResize, $EditorAutomationIds.PdfScrollViewer,
+        $EditorAutomationIds.PdfScrollViewer,
         "$($EditorAutomationIds.SidebarPagePrefix)1"
     )
     # Keep this list explicit. A control belongs here only when the production

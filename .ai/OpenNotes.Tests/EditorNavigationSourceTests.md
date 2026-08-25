@@ -1,6 +1,8 @@
 # OpenNotes.Tests/EditorNavigationSourceTests.cs
 > Last updated: 2026-08-24 | Protection: STANDARD
 
+> 2026-08-25 RED/GREEN: new contracts require a fixed 184-DIP expanded sidebar, 38-DIP collapse/auto-collapse, no resize surface/provider/handlers, and a centered `PageJumpGroup` toolbar overlay with a reserved action-row footprint. The focused slice failed against the pre-change implementation; the live STA layout now also proves the page-jump center matches the floating toolbar center within one DIP.
+
 ## Purpose
 
 Wave4 source and WPF contract tests for the compact page jump and custom document navigation rail.

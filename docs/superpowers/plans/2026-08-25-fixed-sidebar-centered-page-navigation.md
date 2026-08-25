@@ -14,7 +14,9 @@
 
 **Files:**
 - Modify: `OpenNotes.Tests/EditorNavigationSourceTests.cs`
+- Modify: `OpenNotes.Tests/EditorToolbarVisualSourceTests.cs`
 - Modify: `.ai/OpenNotes.Tests/EditorNavigationSourceTests.md`
+- Modify: `.ai/OpenNotes.Tests/EditorToolbarVisualSourceTests.md`
 
 - [ ] **Step 1: Replace resize expectations with fixed-sidebar and centered-overlay expectations**
 
@@ -35,7 +37,12 @@ Expected: failure because the current XAML/source still exposes the resize thumb
 **Files:**
 - Modify: `Pages/EditorPage.xaml`
 - Modify: `Pages/EditorPage.xaml.cs`
+- Modify: `Pages/EditorPage.Utilities.cs`
+- Modify: `Services/LocalizationService.cs`
+- Modify: `tools/OpenNotesEditorAutomationIds.ps1`
+- Modify: `tools/Test-OpenNotesEditorSmoke.ps1`
 - Modify: `.ai/Pages/EditorPage.md`
+- Modify the corresponding `.ai/` mirrors for Utilities, localization, and tools
 
 - [ ] **Step 1: Remove the resize UI and implementation**
 
@@ -58,12 +65,14 @@ Move the unchanged `PageJumpGroup` into `CenteredPageJumpHost`. Replace its old 
 
 ```xml
 <Border x:Name="PageJumpReservedSpace"
-        Width="132"
+        Width="150"
         Height="36"
         Margin="2,0"
         Background="Transparent"
         IsHitTestVisible="False"/>
 ```
+
+Place the reserved space immediately after `RulerToolButton`, before `SelectToolButton`, so it occupies the action row's natural visual midpoint behind the centered overlay.
 
 - [ ] **Step 3: Run focused tests and verify GREEN**
 

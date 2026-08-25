@@ -1,6 +1,8 @@
 # tools/Test-OpenNotesEditorSmoke.ps1
 > Last updated: 2026-08-24（Wave4 review follow-up in progress）| Protection: STANDARD
 
+> 2026-08-25 GREEN: the fixed-width sidebar intentionally removes `Editor.Sidebar.Resize` from the required smoke IDs; collapse and all document-navigation checks remain required. The user's 1,353-page textbook reached the real editor, exposed required fixed-sidebar/page-jump/viewer controls, committed page 2 and remained alive for about three minutes. The script then exited non-zero only because this real outlined book lacks the generated-fixture `Editor.Sidebar.Outline.Page.2` fallback ID; isolated cleanup passed.
+
 ## Purpose
 
 Run a reproducible real WPF editor-load check without writing the user's `%LOCALAPPDATA%\Caelum` data. The script launches the built OpenNotes executable with unique temporary `LOCALAPPDATA`, `APPDATA`, and `OPENNOTES_DATA_ROOT` values, pre-seeds a real PDF as a temporary library entry, opens it through the real library tile flow, and verifies that editor toolbar controls become visible.
@@ -13,7 +15,7 @@ Run a reproducible real WPF editor-load check without writing the user's `%LOCAL
 - Does not draw, save, modify the source PDF, change settings, or touch Codex/AppData state.
 - Cleans the unique temporary environment directory and reports whether cleanup succeeded.
 - A PASS proves startup, real library navigation, PDF load, toolbar exposure, initial compact page-jump UIA Value `1`, a multi-page page-2 commit, fallback-outline page-2 SelectionItem, the separate localized 32 DIP fallback row `.Invoke` button reaching page 2, and sidebar command invocation; it does not prove mouse/stylus geometry, PDF export fidelity, third-party viewers, or Codex migration.
-- Baseline Wave4 required IDs include `Editor.PageJump`, `Editor.Sidebar.Pages`, `Editor.Sidebar.Outline`, `Editor.Sidebar.Bookmarks`, `Editor.Sidebar.Collapse`, `Editor.Sidebar.Resize`, `PdfScrollViewer` and dynamic page/outline items. Review follow-up also covers thumbnail selection guards, keyboard resize/range metadata, theme/HC refresh and narrow/collapsed layout; those remain separately evidenced by STA tests.
+- Current required IDs include `Editor.PageJump`, `Editor.Sidebar.Pages`, `Editor.Sidebar.Outline`, `Editor.Sidebar.Bookmarks`, `Editor.Sidebar.Collapse`, `PdfScrollViewer` and dynamic page/outline items. The retired resize ID/range metadata are absent; theme/HC refresh and narrow/collapsed layout remain separately evidenced by STA tests.
 - Required production IDs now fail closed: a missing control throws and the script exits non-zero. Any future optional surface must be listed separately and may only emit an informational `OPTIONAL_CONTROL_MISSING` line.
 
 ## Evidence

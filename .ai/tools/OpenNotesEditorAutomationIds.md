@@ -1,6 +1,8 @@
 # tools/OpenNotesEditorAutomationIds.ps1
 > Last updated: 2026-08-24 (Wave4 review follow-up in progress) | Protection: STANDARD
 
+> 2026-08-25 GREEN: removed `Editor.Sidebar.Resize` from the alias map because the sidebar is fixed-width; all page-jump, sidebar navigation/collapse, viewer and dynamic-row IDs remain stable.
+
 ## Purpose
 
 Single source of truth for production editor toolbar AutomationId aliases used by the editor, pointer, advanced-pointer, Hidden Ink and cross-page smoke scripts.

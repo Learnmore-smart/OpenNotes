@@ -356,24 +356,6 @@
             </Grid>
         </HierarchicalDataTemplate>
 
-        <Style x:Key="SidebarResizeThumbStyle" TargetType="{x:Type local:SidebarResizeThumb}">
-            <Setter Property="Width" Value="32"/>
-            <Setter Property="MinWidth" Value="32"/>
-            <Setter Property="MinHeight" Value="32"/>
-            <Setter Property="Focusable" Value="True"/>
-            <Setter Property="Background" Value="Transparent"/>
-            <Setter Property="Foreground" Value="{DynamicResource ThemeBorderBrush}"/>
-            <Setter Property="FocusVisualStyle" Value="{StaticResource ToolbarFocusVisualStyle}"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="{x:Type local:SidebarResizeThumb}">
-                        <!-- Keep the full 32-DIP drag/range target without
-                             painting a divider over the document edge. -->
-                        <Grid Background="Transparent"/>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
     </Page.Resources>
 
     <Grid>
@@ -451,6 +433,7 @@
             <Border.Effect>
                 <DropShadowEffect BlurRadius="18" ShadowDepth="5" Opacity="{DynamicResource ThemeShadowOpacity}" Color="#000"/>
             </Border.Effect>
+            <Grid x:Name="ToolbarOverlayGrid">
              <ScrollViewer x:Name="ToolbarItemsScrollViewer"
                            HorizontalScrollBarVisibility="Auto"
                            VerticalScrollBarVisibility="Hidden"
@@ -570,6 +553,14 @@
                                          Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=ToggleButton}}"/>
                 </ToggleButton>
 
+                <!-- Reserve the toolbar midpoint for the centered page navigator. -->
+                <Border x:Name="PageJumpReservedSpace"
+                        Width="150"
+                        Height="36"
+                        Margin="2,0"
+                        Background="Transparent"
+                        IsHitTestVisible="False"/>
+
                 <!-- Select -->
                 <ToggleButton x:Name="SelectToolButton" Click="SelectToolButton_Click"
                         Style="{StaticResource ToolbarToggleButtonStyle}"
@@ -607,86 +598,6 @@
                     <controls:LucideIcon Kind="History" Width="18" Height="18"
                                          Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
                 </Button>
-
-                <!-- Separator -->
-                <Border Width="1" Background="{DynamicResource ThemeMenuSeparatorBrush}" Margin="4,8"/>
-
-                <!-- Wave4: compact page jump. The editable field is always
-                     visible and owns the stable UIA id, so Tab/Enter/Escape
-                     work without a mouse-only Border activation path. -->
-                <Border Margin="5,0"
-                        MinHeight="34"
-                        Background="{DynamicResource ThemeSurfaceAltBrush}"
-                        BorderBrush="{DynamicResource ThemeBorderBrush}"
-                        BorderThickness="1"
-                        CornerRadius="9">
-                <Grid x:Name="PageJumpGroup"
-                      Margin="2"
-                      VerticalAlignment="Center"
-                      AutomationProperties.AutomationId="Editor.PageJumpGroup">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="30"/>
-                        <ColumnDefinition Width="36"/>
-                        <ColumnDefinition Width="Auto"/>
-                        <ColumnDefinition Width="30"/>
-                    </Grid.ColumnDefinitions>
-                    <Button x:Name="PreviousPageButton"
-                            Grid.Column="0"
-                            Width="30" Height="30" MinWidth="30" MinHeight="30"
-                            Style="{StaticResource ToolbarButtonStyle}"
-                            Click="PreviousPageButton_Click"
-                            AutomationProperties.AutomationId="Editor.PreviousPageButton">
-                        <controls:LucideIcon Kind="ChevronLeft" Width="16" Height="16"
-                                             Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
-                    </Button>
-                    <TextBox x:Name="PageNumberTextBox"
-                             Grid.Column="1"
-                             FontSize="13"
-                             FontWeight="SemiBold"
-                             Foreground="{DynamicResource ThemeForegroundBrush}"
-                             Background="Transparent"
-                             BorderBrush="Transparent"
-                             BorderThickness="0"
-                             VerticalAlignment="Center"
-                             Width="36"
-                             Height="32"
-                             MinHeight="32"
-                             Text="1"
-                             TextAlignment="Center"
-                             Padding="2,0"
-                             FocusVisualStyle="{StaticResource ToolbarFocusVisualStyle}"
-                              CaretBrush="{DynamicResource ThemeAccentBrush}"
-                              SelectionBrush="{DynamicResource ThemeSelectionBrush}"
-                              SelectionTextBrush="{DynamicResource ThemeSelectionForegroundBrush}"
-                              KeyboardNavigation.IsTabStop="True"
-                              AutomationProperties.AutomationId="Editor.PageJump"
-                              GotKeyboardFocus="PageNumberTextBox_GotKeyboardFocus"
-                              TextChanged="PageNumberTextBox_TextChanged"
-                              KeyDown="PageNumberTextBox_KeyDown"
-                             LostFocus="PageNumberTextBox_LostFocus"/>
-                    <TextBlock x:Name="PageNumberLabel"
-                               Grid.Column="1"
-                               Text="0"
-                               Visibility="Collapsed"
-                               IsHitTestVisible="False"/>
-                    <TextBlock x:Name="PageCountText"
-                               Grid.Column="2"
-                               Text="/ 0"
-                               Margin="3,0,4,0"
-                               FontSize="13"
-                               Foreground="{DynamicResource ThemeSubtleTextBrush}"
-                               VerticalAlignment="Center"/>
-                    <Button x:Name="NextPageButton"
-                            Grid.Column="3"
-                            Width="30" Height="30" MinWidth="30" MinHeight="30"
-                            Style="{StaticResource ToolbarButtonStyle}"
-                            Click="NextPageButton_Click"
-                            AutomationProperties.AutomationId="Editor.NextPageButton">
-                        <controls:LucideIcon Kind="ChevronRight" Width="16" Height="16"
-                                             Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
-                    </Button>
-                </Grid>
-                </Border>
 
                 <!-- Separator -->
                 <Border Width="1" Background="{DynamicResource ThemeMenuSeparatorBrush}" Margin="4,8"/>
@@ -742,6 +653,86 @@
 
                  </StackPanel>
              </ScrollViewer>
+
+                <!-- The editable, one-based page navigator stays centered even
+                     when toolbar actions are added, removed, or scrolled. -->
+                <Border x:Name="CenteredPageJumpHost"
+                        HorizontalAlignment="Center"
+                        VerticalAlignment="Center"
+                        MinHeight="34"
+                        Panel.ZIndex="1"
+                        Background="{DynamicResource ThemeSurfaceAltBrush}"
+                        BorderBrush="{DynamicResource ThemeBorderBrush}"
+                        BorderThickness="1"
+                        CornerRadius="9">
+                    <Grid x:Name="PageJumpGroup"
+                          Margin="2"
+                          VerticalAlignment="Center"
+                          AutomationProperties.AutomationId="Editor.PageJumpGroup">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="30"/>
+                            <ColumnDefinition Width="36"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="30"/>
+                        </Grid.ColumnDefinitions>
+                        <Button x:Name="PreviousPageButton"
+                                Grid.Column="0"
+                                Width="30" Height="30" MinWidth="30" MinHeight="30"
+                                Style="{StaticResource ToolbarButtonStyle}"
+                                Click="PreviousPageButton_Click"
+                                AutomationProperties.AutomationId="Editor.PreviousPageButton">
+                            <controls:LucideIcon Kind="ChevronLeft" Width="16" Height="16"
+                                                 Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
+                        </Button>
+                        <TextBox x:Name="PageNumberTextBox"
+                                 Grid.Column="1"
+                                 FontSize="13"
+                                 FontWeight="SemiBold"
+                                 Foreground="{DynamicResource ThemeForegroundBrush}"
+                                 Background="Transparent"
+                                 BorderBrush="Transparent"
+                                 BorderThickness="0"
+                                 VerticalAlignment="Center"
+                                 Width="36"
+                                 Height="32"
+                                 MinHeight="32"
+                                 Text="1"
+                                 TextAlignment="Center"
+                                 Padding="2,0"
+                                 FocusVisualStyle="{StaticResource ToolbarFocusVisualStyle}"
+                                 CaretBrush="{DynamicResource ThemeAccentBrush}"
+                                 SelectionBrush="{DynamicResource ThemeSelectionBrush}"
+                                 SelectionTextBrush="{DynamicResource ThemeSelectionForegroundBrush}"
+                                 KeyboardNavigation.IsTabStop="True"
+                                 AutomationProperties.AutomationId="Editor.PageJump"
+                                 GotKeyboardFocus="PageNumberTextBox_GotKeyboardFocus"
+                                 TextChanged="PageNumberTextBox_TextChanged"
+                                 KeyDown="PageNumberTextBox_KeyDown"
+                                 LostFocus="PageNumberTextBox_LostFocus"/>
+                        <TextBlock x:Name="PageNumberLabel"
+                                   Grid.Column="1"
+                                   Text="0"
+                                   Visibility="Collapsed"
+                                   IsHitTestVisible="False"/>
+                        <TextBlock x:Name="PageCountText"
+                                   Grid.Column="2"
+                                   Text="/ 0"
+                                   Margin="3,0,4,0"
+                                   FontSize="13"
+                                   Foreground="{DynamicResource ThemeSubtleTextBrush}"
+                                   VerticalAlignment="Center"/>
+                        <Button x:Name="NextPageButton"
+                                Grid.Column="3"
+                                Width="30" Height="30" MinWidth="30" MinHeight="30"
+                                Style="{StaticResource ToolbarButtonStyle}"
+                                Click="NextPageButton_Click"
+                                AutomationProperties.AutomationId="Editor.NextPageButton">
+                            <controls:LucideIcon Kind="ChevronRight" Width="16" Height="16"
+                                                 Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
+                        </Button>
+                    </Grid>
+                </Border>
+            </Grid>
         </Border>
 
         <!-- Wave4: custom document navigation rail. It remains an overlay so
@@ -753,8 +744,6 @@
                 VerticalAlignment="Stretch"
                 Margin="12,70,0,12"
                 Width="184"
-                MinWidth="154"
-                MaxWidth="320"
                 Background="{DynamicResource ThemeSidebarBrush}"
                 BorderBrush="{DynamicResource ThemeBorderBrush}"
                 BorderThickness="1,1,0,1"
@@ -936,23 +925,6 @@
                         </Grid>
                     </Grid>
                 </Grid>
-
-                 <local:SidebarResizeThumb x:Name="SidebarResizeThumb"
-                        Grid.RowSpan="3"
-                        Style="{StaticResource SidebarResizeThumbStyle}"
-                        Width="32"
-                        HorizontalAlignment="Right"
-                        VerticalAlignment="Stretch"
-                        Cursor="SizeWE"
-                        DragDelta="SidebarResizeThumb_DragDelta"
-                        KeyDown="SidebarResizeThumb_KeyDown"
-                        Focusable="True"
-                        KeyboardNavigation.IsTabStop="True"
-                         AutomationProperties.AutomationId="Editor.Sidebar.Resize"
-                         Minimum="154"
-                         Maximum="320"
-                         Value="184"
-                         MinHeight="32"/>
             </Grid>
         </Border>
 

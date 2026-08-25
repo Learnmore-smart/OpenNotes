@@ -2,6 +2,13 @@
 
 > V5.1.2 dynamic page controls, bookmarks and notifications use Lucide vectors; PenOnly remains PenLine.
 
+## Fixed sidebar / centered page navigation (2026-08-25) — GREEN
+
+- Remove the sidebar resize thumb, range automation peer, resize handlers and resize-only width state. Expanded width is fixed at 184 DIPs; explicit and narrow-window collapse remains 38 DIPs and expands back to 184.
+- Keep the toolbar action row horizontally scrollable, reserve a transparent 150-DIP slot after the ruler action, and host the unchanged `PageJumpGroup` in a centered overlay sibling so action order no longer shifts the page number.
+- Preserve page-jump one-based editing, previous/next commands, page count, localization, and existing AutomationIds.
+- STA layout evidence proves the page navigator center matches the floating toolbar center within one DIP. The user's 50.04-MiB, 1,353-page PDF opened in the 5.2.2 Release executable, accepted a page-2 jump, and remained alive for about three minutes; the generic smoke then stopped only because the textbook's real outline does not expose its synthetic fallback `Outline.Page.2` fixture ID.
+
 ## Wave6 async stale-operation P2 (2026-08-24) — audit continuation
 
 Version History, sidebar/page context, PDF structural/context operations, search,

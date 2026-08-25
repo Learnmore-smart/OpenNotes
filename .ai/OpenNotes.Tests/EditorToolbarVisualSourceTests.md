@@ -1,6 +1,8 @@
 # OpenNotes.Tests/EditorToolbarVisualSourceTests.cs
 > Last updated: 2026-08-23 (Wave 3 P2 theme-token TDD RED/GREEN source contract) | Protection: STANDARD
 
+> 2026-08-25 RED/GREEN: toolbar polish rejects the obsolete resize style/metadata and requires a fixed sidebar plus centered page-jump overlay markers while retaining localized tooltips and existing icon contracts. The focused 23-test class passes.
+
 ## Purpose
 
 Source-level contracts for the Wave 3 editor toolbar affordance repair. These tests protect the visible toolbar boundary without requiring a WPF desktop session: obsolete Fit/preset/Ink Analysis entry points must be absent, laser and highlighter visuals must be vector-backed, shape/highlighter popup choices must expose real previews, and toolbar metadata must remain localizable and stable.

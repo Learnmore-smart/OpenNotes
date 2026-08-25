@@ -147,7 +147,6 @@ namespace Caelum.Pages
             SetToolbarMetadata(SidebarOutlineButton, "Editor.Sidebar.Outline", LocalizationService.Get("Editor.OutlineTab"));
             SetToolbarMetadata(SidebarBookmarksButton, "Editor.Sidebar.Bookmarks", LocalizationService.Get("Editor.BookmarksTab"));
             SetToolbarMetadata(SidebarCollapseButton, "Editor.Sidebar.Collapse", LocalizationService.Get("Editor.SidebarCollapse"));
-            SetToolbarMetadata(SidebarResizeThumb, "Editor.Sidebar.Resize", LocalizationService.Get("Editor.SidebarResize"));
             SetToolbarMetadata(BookmarkToggleButton, "Editor.Sidebar.BookmarkToggle",
                 LocalizationService.Get("Editor.BookmarkCurrentPage"));
             SetToolbarMetadata(ToolbarItemsScrollViewer, "Editor.ToolbarOverflow",
@@ -373,8 +372,6 @@ namespace Caelum.Pages
                 OutlineEmptyState.Text = LocalizationService.Get("Editor.NoDocumentLoaded");
             if (BookmarksEmptyState != null)
                 BookmarksEmptyState.Text = LocalizationService.Get("Editor.SidebarNoBookmarks");
-            if (SidebarResizeThumb != null)
-                SetToolbarMetadata(SidebarResizeThumb, "Editor.Sidebar.Resize", LocalizationService.Get("Editor.SidebarResize"));
             SetToolbarMetadata(ToolbarItemsScrollViewer, "Editor.ToolbarOverflow", LocalizationService.Get("Editor.ToolbarScroll"));
             SetSidebarTab(_sidebarTab);
             ApplyStateAwareSidebarMetadata();
