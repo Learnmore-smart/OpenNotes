@@ -17,10 +17,10 @@ namespace Caelum.Services
         private static readonly IReadOnlyDictionary<string, string> LightPalette =
             new Dictionary<string, string>(StringComparer.Ordinal)
             {
-                ["ThemeWindowBackgroundBrush"] = "#F3F4F6",
+                ["ThemeWindowBackgroundBrush"] = "#FFFFFF",
                 ["ThemeSurfaceBrush"] = "#FFFFFF",
                 ["ThemeSurfaceAltBrush"] = "#F8F9FA",
-                ["ThemeCanvasBrush"] = "#E5E7EB",
+                ["ThemeCanvasBrush"] = "#FFFFFF",
                 ["ThemeBorderBrush"] = "#D1D5DB",
                 ["ThemeForegroundBrush"] = "#1F2937",
                 ["ThemeSubtleForegroundBrush"] = "#4B5563",
@@ -38,7 +38,7 @@ namespace Caelum.Services
                 ["ThemeScrollbarThumbPressedBrush"] = "#E8212D38",
                 ["ThemeSliderTrackBrush"] = "#221C5D99",
                 ["ThemeMenuSeparatorBrush"] = "#1F1E2933",
-                ["ThemeDeskBrush"] = "#E5E7EB",
+                ["ThemeDeskBrush"] = "#FFFFFF",
                 ["ThemePaperBrush"] = "#FFFFFF",
                 ["ThemePaperAltBrush"] = "#F8F9FA",
                 ["ThemeInkBrush"] = "#2563EB",
@@ -420,7 +420,7 @@ namespace Caelum.Services
                 // cream/yellow and remains distinct from the PDF page layer.
                 "Paper" => "#F1F3F5",
                 "Slate" => "#D7DBE1",
-                _ => "#E5E7EB"
+                _ => "#FFFFFF"
             };
         }
 

@@ -58,7 +58,7 @@ namespace Caelum.Services
             {
                 ApplyNoTopmost(
                     PresentationSource.FromVisual(popup.Child) as HwndSource,
-                    Window.GetWindow(popup.PlacementTarget));
+                    ResolveOwnerWindow(popup.PlacementTarget));
             };
             popup.Opened += handler;
             PopupOpenedHandlers.Add(popup, handler);
@@ -95,7 +95,7 @@ namespace Caelum.Services
                 {
                     ApplyNoTopmost(
                         PresentationSource.FromVisual(menu) as HwndSource,
-                        Window.GetWindow(menu.PlacementTarget));
+                        ResolveOwnerWindow(menu.PlacementTarget));
                 }));
             };
             menu.Opened += handler;
@@ -182,6 +182,17 @@ namespace Caelum.Services
             // toolbar buttons appear to require two clicks.
             int exStyle = GetWindowLong(source.Handle, GWL_EXSTYLE);
             SetWindowLong(source.Handle, GWL_EXSTYLE, exStyle | WS_EX_NOACTIVATE);
+        }
+
+        private static Window ResolveOwnerWindow(DependencyObject placementTarget)
+        {
+            // Programmatically opened ContextMenus do not receive a PlacementTarget
+            // automatically, and a deferred Render callback may also run after its
+            // target has been detached. Window.GetWindow rejects null, so leave the
+            // owner unchanged; programmatic callers should set PlacementTarget.
+            return placementTarget != null
+                ? Window.GetWindow(placementTarget)
+                : null;
         }
 
         private static T FindVisualChild<T>(DependencyObject parent) where T : DependencyObject

@@ -8,6 +8,7 @@ Guard the visual boundary between the editor workspace/backdrop and the rendered
 ## Open Threads / Resume Context
 
 - **Status:** complete for Wave5 automated scope.
+- V5.1.1 keeps Neutral as the persisted/default backdrop identifier but maps its Light surround to white, while Paper/Slate remain explicit alternate decorations and the PDF render-byte contract remains unchanged.
 - **Intent/result:** RED-first coverage now verifies neutral palette declarations, semantic token coverage, Settings sizing/scroll/backdrop controls, runtime DynamicResource usage, and a known PDF render hash/byte sequence across Neutral/Paper/Slate.
 - The source verifier also rejects the retired warm Light literals in production chrome so a future palette edit cannot silently restore the screenshot defect.
 - Desktop screenshot/foreground/device visual review remains an external manual boundary; no screenshot PASS is claimed here.

@@ -7,7 +7,8 @@ Defines the Inno Setup package for the OpenNotes Windows desktop application.
 
 ## Open Threads / Resume Context
 
-- **Status:** ready_for_release (5.1.0)
+- **Status:** ready_for_release (5.1.1)
+- The default `MyAppOutputBaseFilename` concatenates the preprocessor version value, producing `OpenNotes-Setup-5.1.1.exe` instead of a literal brace expression when no workflow override is supplied.
 - Version metadata and the full suite are green. Build the final self-contained installer from the release commit, install/start it with isolated data, and publish only through GitHub Release; record the final hash externally with the Release.
 - **Status:** complete (5.0.1 startup-crash patch)
 - The self-contained 5.0.1 installer upgraded the current per-user installation successfully; the installed executable reported file version 5.0.1.0, stayed alive for the startup smoke, and produced zero new Windows `.NET Runtime`/`Application Error` crash events. The final asset is regenerated from the committed source and its hash is recorded with the Release.

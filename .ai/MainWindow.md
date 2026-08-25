@@ -30,6 +30,7 @@ Owns the single-window Frame/tab shell, application chrome, startup theme and gl
 
 ## V5 Changes
 
+- V5.1.1 anchors programmatically opened Sort/More context menus to their owning button before setting `IsOpen`, preserving popup ownership and preventing the Settings-menu crash.
 - Applies the persisted `ThemeService` palette before localization at startup.
 - Applies the persisted `WorkspaceBackdrop` to editor workspace chrome at startup; the PDF page surface remains an independent opaque layer.
 - `Ctrl+Tab` and `Ctrl+Shift+Tab` cycle the existing `_tabs` list without replacing the active Frame.

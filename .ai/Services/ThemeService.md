@@ -45,7 +45,8 @@ Owns the application-level chrome palette used by the MainWindow, editor, settin
 
 ## Wave5 Decisions
 
-- Light uses the design-approved cool neutral values (`#F3F4F6`, `#FFFFFF`, `#F8F9FA`, `#E5E7EB`, `#D1D5DB`, `#1F2937`, `#2563EB`, `#D9A72E`, `#C2414B`); no cream/yellow desk defaults.
+- V5.1.1 makes the Light/Neutral window, desk, canvas and workspace surround opaque white in response to the shipped gray-background defect; alternate surfaces, borders and controls retain cool-neutral separation, and PDF pixels remain untouched.
+- Light uses white primary surfaces with cool neutral alternates (`#FFFFFF`, `#F8F9FA`, `#D1D5DB`, `#1F2937`, `#2563EB`, `#D9A72E`, `#C2414B`); no cream/yellow desk defaults.
 - Backdrop is a resource-level chrome choice (`Neutral`, `Paper`, `Slate`) and never an image effect, opacity tint, or overlay on `PdfImage`/`PdfImageOverlay`.
 - Runtime tests render a known blank PDF before and after all three backdrop choices and verify identical PNG SHA-256/bytes; no screenshot or foreground/device visual PASS is claimed.
 - When Windows High Contrast is active, core chrome plus scrollbars, slider, separators, focus and selection resolve from `SystemColors`; explicit HighContrast while the OS mode is off keeps the deterministic readable fallback palette for existing tests.

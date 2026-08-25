@@ -6,7 +6,7 @@
   #define MyAppName "OpenNotes"
 #endif
 #ifndef MyAppVersion
-  #define MyAppVersion "5.1.0"
+#define MyAppVersion "5.1.1"
 #endif
 #ifndef MyAppPublisher
   #define MyAppPublisher "Learnmore_smart"
@@ -18,7 +18,7 @@
   #define MyAppExeName "OpenNotes.exe"
 #endif
 #ifndef MyAppOutputBaseFilename
-  #define MyAppOutputBaseFilename "OpenNotes-Setup-{#MyAppVersion}"
+  #define MyAppOutputBaseFilename "OpenNotes-Setup-" + MyAppVersion
 #endif
 
 [Setup]

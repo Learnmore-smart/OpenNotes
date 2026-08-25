@@ -137,6 +137,64 @@ public sealed class ThemeReviewContractTests
     }
 
     [Test]
+    public void ManuallyOpenedMoreMenuSurvivesMissingPlacementTarget()
+    {
+        EnsureApplicationResources();
+        ThemeService.Apply("Light", reduceMotion: true, reduceTransparency: false);
+
+        var menu = new ContextMenu();
+        menu.Items.Add(new MenuItem { Header = "Settings" });
+        var button = new Button { Content = "More", ContextMenu = menu };
+        var window = new Window
+        {
+            Width = 240,
+            Height = 160,
+            ShowInTaskbar = false,
+            Content = button
+        };
+
+        PopupZOrderHelper.FixContextMenuTopmost(menu);
+        window.Show();
+        window.UpdateLayout();
+        try
+        {
+            Assert.That(menu.PlacementTarget, Is.Null,
+                "This fixture must match MainWindow's programmatic IsOpen path.");
+            menu.IsOpen = true;
+
+            Assert.DoesNotThrow(
+                () => menu.Dispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle),
+                "The deferred popup z-order callback must tolerate a menu without a placement target.");
+        }
+        finally
+        {
+            menu.IsOpen = false;
+            PopupZOrderHelper.UnfixContextMenuTopmost(menu);
+            window.Close();
+        }
+    }
+
+    [Test]
+    public void LightNeutralUsesWhiteWindowDeskAndWorkspace()
+    {
+        EnsureApplicationResources();
+        ThemeService.Apply("Light", reduceMotion: true, reduceTransparency: false, workspaceBackdrop: "Neutral");
+
+        Assert.Multiple(() =>
+        {
+            foreach (string resourceKey in new[]
+            {
+                "ThemeWindowBrush", "ThemeDeskBrush", "ThemeCanvasBrush", "ThemeWorkspaceBackdropBrush"
+            })
+            {
+                var brush = Application.Current!.Resources[resourceKey] as SolidColorBrush;
+                Assert.That(brush, Is.Not.Null, resourceKey);
+                Assert.That(brush!.Color, Is.EqualTo(Colors.White), resourceKey);
+            }
+        });
+    }
+
+    [Test]
     public void SemanticAliasesAreConsumedByProductionDynamicResources()
     {
         string root = FindProjectRoot();

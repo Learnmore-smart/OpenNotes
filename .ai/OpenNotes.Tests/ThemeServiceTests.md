@@ -8,6 +8,7 @@ Verify theme normalization and application chrome resource tokens without requir
 ## Open Threads / Resume Context
 
 - **Status:** complete
+- V5.1.1 updates the exact Light palette contract so window, canvas and desk resolve to `#FFFFFF`; alternate controls and borders retain their neutral contrast.
 - Red-first contracts now cover the six material theme resources and their deliberate use by the shell, home, editor, settings and template picker.
 - Resource-level coverage is complete; visual high-contrast, popup, and restart checks remain desktop/manual.
 - The HomePage audit reads the source XAML and requires hover, selection, foreground and subtle-foreground states to use existing ThemeService resources rather than fixed light-only literals.

@@ -35,16 +35,16 @@
             <SolidColorBrush x:Key="ThemeSliderTrackBrush" Color="#221C5D99"/>
             <SolidColorBrush x:Key="ThemeMenuSeparatorBrush" Color="#1F1E2933"/>
             <SolidColorBrush x:Key="ThemeFocusBrush" Color="#154F86"/>
-            <SolidColorBrush x:Key="ThemeDeskBrush" Color="#E5E7EB"/>
+            <SolidColorBrush x:Key="ThemeDeskBrush" Color="#FFFFFF"/>
             <SolidColorBrush x:Key="ThemePaperBrush" Color="#FFFFFF"/>
             <SolidColorBrush x:Key="ThemePaperAltBrush" Color="#F8F9FA"/>
             <SolidColorBrush x:Key="ThemeInkBrush" Color="#2563EB"/>
             <SolidColorBrush x:Key="ThemeMarginBrush" Color="#C2414B"/>
             <SolidColorBrush x:Key="ThemeMarkBrush" Color="#D9A72E"/>
             <!-- Wave5 semantic aliases. ThemeService replaces these at runtime. -->
-            <SolidColorBrush x:Key="ThemeWindowBrush" Color="#F3F4F6"/>
-            <SolidColorBrush x:Key="ThemeWorkspaceBackdropBrush" Color="#E5E7EB"/>
-            <SolidColorBrush x:Key="ThemeWorkspaceBrush" Color="#E5E7EB"/>
+            <SolidColorBrush x:Key="ThemeWindowBrush" Color="#FFFFFF"/>
+            <SolidColorBrush x:Key="ThemeWorkspaceBackdropBrush" Color="#FFFFFF"/>
+            <SolidColorBrush x:Key="ThemeWorkspaceBrush" Color="#FFFFFF"/>
             <SolidColorBrush x:Key="ThemeSidebarBrush" Color="#F8F9FA"/>
             <SolidColorBrush x:Key="ThemeToolbarBrush" Color="#FFFFFF"/>
             <SolidColorBrush x:Key="ThemeControlBrush" Color="#F8F9FA"/>

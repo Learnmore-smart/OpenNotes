@@ -15,10 +15,10 @@ public sealed class ThemeServiceTests
     private static readonly IReadOnlyDictionary<string, string> LightPalette =
         new Dictionary<string, string>
         {
-            ["ThemeWindowBackgroundBrush"] = "#F3F4F6",
+            ["ThemeWindowBackgroundBrush"] = "#FFFFFF",
             ["ThemeSurfaceBrush"] = "#FFFFFF",
             ["ThemeSurfaceAltBrush"] = "#F8F9FA",
-            ["ThemeCanvasBrush"] = "#E5E7EB",
+            ["ThemeCanvasBrush"] = "#FFFFFF",
             ["ThemeBorderBrush"] = "#D1D5DB",
             ["ThemeForegroundBrush"] = "#1F2937",
             ["ThemeSubtleForegroundBrush"] = "#4B5563",
@@ -36,7 +36,7 @@ public sealed class ThemeServiceTests
             ["ThemeScrollbarThumbPressedBrush"] = "#E8212D38",
             ["ThemeSliderTrackBrush"] = "#221C5D99",
             ["ThemeMenuSeparatorBrush"] = "#1F1E2933",
-            ["ThemeDeskBrush"] = "#E5E7EB",
+            ["ThemeDeskBrush"] = "#FFFFFF",
             ["ThemePaperBrush"] = "#FFFFFF",
             ["ThemePaperAltBrush"] = "#F8F9FA",
             ["ThemeInkBrush"] = "#2563EB",

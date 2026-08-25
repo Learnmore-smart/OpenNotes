@@ -7,9 +7,11 @@ Exercise the second-pass Wave5 acceptance contracts that source-only palette tes
 
 ## RED/GREEN evidence
 
+- 2026-08-24 Settings-menu crash regression: `ManuallyOpenedMoreMenuSurvivesMissingPlacementTarget` opens a real WPF `ContextMenu` through the same programmatic `IsOpen` path as `MainWindow.MoreButton_Click`, leaves `PlacementTarget` null, and drains the deferred Render callback. RED reproduces the `ArgumentNullException` from `Window.GetWindow(null)` reported by the runtime event log.
+- 2026-08-24 Light-background regression: `LightNeutralUsesWhiteWindowDeskAndWorkspace` requires the Light/Neutral window, desk, canvas and workspace surround to resolve to opaque white, matching the user-visible expectation without tinting PDF page pixels.
 - 2026-08-24 startup-crash hotfix: `HomeTileHoverClonesFrozenTemplateScaleBeforeAnimating` uses the real private `HomePage.AnimateTileScale` path and a frozen template-style transform. RED reproduced the exact `InvalidOperationException` at line 100; GREEN proves hover replaces it with a mutable instance. Full suite passes 259/259.
 - RED was captured before the review fixes for the missing production animation helper consumers, unused semantic aliases, Settings focus/disabled/responsive contracts, HighContrast refresh lifecycle, runtime chrome literals, and the missing page-level composite probe.
-- GREEN `ThemeReviewContractTests` passes 11/11 on an STA fixture. The fixture calls `ThemeService.ResetForTests()` after every case so injected SystemEvents overrides and event subscriptions cannot leak across tests.
+- GREEN `ThemeReviewContractTests` passes 13/13 on an STA fixture, and the full suite passes 261/261. The fixture calls `ThemeService.ResetForTests()` after every case so injected SystemEvents overrides and event subscriptions cannot leak across tests.
 - The motion contract also scans Home/Editor XAML for fixed `Duration="0:0:*"` storyboard literals: Home hover scale uses the interruptible `AnimateTileScale` helper, and the Editor loading spinner is a code-behind animation gated by `ShouldAnimate`.
 - The runtime-chrome scan also covers Editor/PdfPageControl text selection, resize, ruler and eraser visuals, rejecting the retired fixed `#0078D4`/alpha-blue expressions while preserving explicit user/annotation colors as the data-color allowlist.
 - ReduceTransparency is checked beyond the XAML token declaration: App popup shadows use `ThemeShadowOpacity`, and code-created Home/Editor/PdfPageControl chrome reads `ThemeService.GetShadowOpacity()` when constructing effects.
@@ -31,4 +33,4 @@ Run:
 dotnet test OpenNotes.Tests\OpenNotes.Tests.csproj --no-restore --filter "FullyQualifiedName~ThemeReviewContractTests"
 ~~~
 
-Expected: 11 passed, 0 failed, 0 skipped. Desktop screenshot review remains an external/manual boundary and is not claimed without artifacts.
+Expected: 13 passed, 0 failed, 0 skipped. Desktop screenshot review remains an external/manual boundary and is not claimed without artifacts.
