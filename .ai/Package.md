@@ -11,5 +11,7 @@ Preserves the legacy Windows package identity and version metadata for compatibl
 
 ## Open Threads / Resume Context
 
+- **Status:** complete (5.1.0 release)
+- Only the package version changed to `5.1.0.0`; identity and publisher remain unchanged.
 - **Status:** complete
 - Identity remains unchanged; only the version was aligned to `5.0.1.0` for the startup-crash patch release.
