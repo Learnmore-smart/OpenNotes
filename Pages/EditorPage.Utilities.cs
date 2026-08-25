@@ -96,6 +96,10 @@ namespace Caelum.Pages
                 ZoomLabel.ToolTip = LocalizationService.Get("Editor.ZoomEditTooltip");
             if (PageNumberTextBox != null)
                 PageNumberTextBox.ToolTip = LocalizationService.Get("Editor.PageJumpTooltip");
+            if (PreviousPageButton != null)
+                PreviousPageButton.ToolTip = LocalizationService.Get("Editor.PreviousPage");
+            if (NextPageButton != null)
+                NextPageButton.ToolTip = LocalizationService.Get("Editor.NextPage");
             if (RotatePageButton != null)
                 RotatePageButton.ToolTip = LocalizationService.Get("Editor.RotateTooltip");
             if (ImmersiveModeButton != null)
@@ -139,6 +143,8 @@ namespace Caelum.Pages
             SetToolbarMetadata(VersionHistoryButton, "Editor.VersionHistoryButton", LocalizationService.Get("Editor.VersionHistoryTooltip"));
             SetToolbarMetadata(PenOnlyButton, "Editor.PenOnlyButton", LocalizationService.Get("Editor.PenOnlyTooltip"));
             SetToolbarMetadata(PageNumberTextBox, "Editor.PageJump", LocalizationService.Get("Editor.PageJumpTooltip"));
+            SetToolbarMetadata(PreviousPageButton, "Editor.PreviousPageButton", LocalizationService.Get("Editor.PreviousPage"));
+            SetToolbarMetadata(NextPageButton, "Editor.NextPageButton", LocalizationService.Get("Editor.NextPage"));
             SetToolbarMetadata(SidebarPagesButton, "Editor.Sidebar.Pages", LocalizationService.Get("Editor.PagesTab"));
             SetToolbarMetadata(SidebarOutlineButton, "Editor.Sidebar.Outline", LocalizationService.Get("Editor.OutlineTab"));
             SetToolbarMetadata(SidebarBookmarksButton, "Editor.Sidebar.Bookmarks", LocalizationService.Get("Editor.BookmarksTab"));

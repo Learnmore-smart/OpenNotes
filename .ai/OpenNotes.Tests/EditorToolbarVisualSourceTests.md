@@ -6,6 +6,8 @@
 Source-level contracts for the Wave 3 editor toolbar affordance repair. These tests protect the visible toolbar boundary without requiring a WPF desktop session: obsolete Fit/preset/Ink Analysis entry points must be absent, laser and highlighter visuals must be vector-backed, shape/highlighter popup choices must expose real previews, and toolbar metadata must remain localizable and stable.
 
 ## Open Threads / Resume Context
+
+- Screenshot-driven editor RED contract requires a named, font-independent Lucide vector renderer, previous/next page buttons around the editable one-based field, and a non-colliding three-column sidebar selector while preserving handlers and automation IDs.
 - **Status:** Wave 3 P2 source-contract work complete; external visual/device/foreground checks remain separate.
 - **Intent/result:** contracts cover highlighter size/opacity refresh (including the area-highlight main drag preview), localized alignment ItemsSource/selection preservation, live ruler/font/color/popup theme-token state colors, real Button/ToggleButton popup peers and keyboard paths, marker contrast, smoke ID drift, detachable/idempotent popup lifecycle, context/ComboBox duplicate-hook guards, and high-contrast pen visuals.
 - **Coverage:** no visible preset slots/Fit/Ink Analysis entry points; explicit laser/highlighter vector paths; geometry/checked shape and highlighter popup choices (selection shape/filter and text-toolbar controls also receive stable metadata); localized tooltip/UIA helper path; no default PenPresets write.
@@ -29,3 +31,4 @@ Source-level contracts for the Wave 3 editor toolbar affordance repair. These te
 | Date | Change | Author |
 |---|---|---|
 | 2026-08-23 | Added Wave 3 toolbar visual/accessibility TDD RED contract and verified it GREEN after implementation. | Codex |
+| 2026-08-24 | Added a named Lucide renderer/page-navigator/sidebar-strip contract and updated live laser/highlighter expectations to the new vector control. | Codex |

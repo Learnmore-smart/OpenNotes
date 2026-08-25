@@ -397,8 +397,14 @@ namespace Caelum.Services
         {
             if (string.Equals(backdrop?.Trim(), "Paper", StringComparison.OrdinalIgnoreCase))
                 return "Paper";
+            if (string.Equals(backdrop?.Trim(), "Mist", StringComparison.OrdinalIgnoreCase))
+                return "Mist";
+            if (string.Equals(backdrop?.Trim(), "Warm", StringComparison.OrdinalIgnoreCase))
+                return "Warm";
             if (string.Equals(backdrop?.Trim(), "Slate", StringComparison.OrdinalIgnoreCase))
                 return "Slate";
+            if (string.Equals(backdrop?.Trim(), "Midnight", StringComparison.OrdinalIgnoreCase))
+                return "Midnight";
             return "Neutral";
         }
 
@@ -409,7 +415,10 @@ namespace Caelum.Services
                 return backdrop switch
                 {
                     "Paper" => "#202A35",
+                    "Mist" => "#22303A",
+                    "Warm" => "#302B28",
                     "Slate" => "#2A3440",
+                    "Midnight" => "#070B10",
                     _ => "#151D26"
                 };
             }
@@ -419,7 +428,10 @@ namespace Caelum.Services
                 // Paper is cool and almost white; it is deliberately not
                 // cream/yellow and remains distinct from the PDF page layer.
                 "Paper" => "#F1F3F5",
+                "Mist" => "#EAF2F6",
+                "Warm" => "#F1E7DA",
                 "Slate" => "#D7DBE1",
+                "Midnight" => "#101722",
                 _ => "#FFFFFF"
             };
         }

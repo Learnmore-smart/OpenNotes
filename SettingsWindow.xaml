@@ -16,6 +16,63 @@
     AllowsTransparency="True"
     ShowInTaskbar="False">
 
+    <Window.Resources>
+        <Style x:Key="SettingsSwitchStyle" TargetType="CheckBox">
+            <Setter Property="Foreground" Value="{DynamicResource ThemeTextBrush}"/>
+            <Setter Property="FocusVisualStyle" Value="{StaticResource SettingsFocusVisualStyle}"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="MinHeight" Value="32"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="CheckBox">
+                        <Grid MinWidth="96" Height="32">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="48"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <Border x:Name="SwitchTrack"
+                                    Width="44" Height="24"
+                                    HorizontalAlignment="Left"
+                                    VerticalAlignment="Center"
+                                    CornerRadius="12"
+                                    Background="{DynamicResource ThemeControlBrush}"
+                                    BorderBrush="{DynamicResource ThemeBorderBrush}"
+                                    BorderThickness="1.5">
+                                <Ellipse x:Name="SwitchThumb"
+                                         Width="18" Height="18"
+                                         Margin="2"
+                                         HorizontalAlignment="Left"
+                                         Fill="{DynamicResource ThemeSubtleTextBrush}"/>
+                            </Border>
+                            <ContentPresenter Grid.Column="1"
+                                              Margin="8,0,0,0"
+                                              VerticalAlignment="Center"
+                                              RecognizesAccessKey="True"/>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="SwitchTrack" Property="Background" Value="{DynamicResource ThemeAccentBrush}"/>
+                                <Setter TargetName="SwitchTrack" Property="BorderBrush" Value="{DynamicResource ThemeAccentBrush}"/>
+                                <Setter TargetName="SwitchThumb" Property="HorizontalAlignment" Value="Right"/>
+                                <Setter TargetName="SwitchThumb" Property="Fill" Value="White"/>
+                            </Trigger>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="SwitchTrack" Property="BorderBrush" Value="{DynamicResource ThemeFocusBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                                <Setter TargetName="SwitchTrack" Property="BorderBrush" Value="{DynamicResource ThemeFocusBrush}"/>
+                                <Setter TargetName="SwitchTrack" Property="BorderThickness" Value="2"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.5"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+
     <Border Background="{DynamicResource ThemePaperBrush}" CornerRadius="18" Padding="24" BorderBrush="{DynamicResource ThemeBorderBrush}" BorderThickness="1">
         <ScrollViewer x:Name="SettingsScrollViewer" Style="{StaticResource SleekScrollViewer}" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Padding="0">
             <Grid>
@@ -127,8 +184,6 @@
                                     <RowDefinition Height="Auto"/>
                                     <RowDefinition Height="Auto"/>
                                     <RowDefinition Height="Auto"/>
-                                    <RowDefinition Height="Auto"/>
-                                    <RowDefinition Height="Auto"/>
                                 </Grid.RowDefinitions>
 
                                 <TextBlock x:Name="AutoSaveIntervalLabelTextBlock" VerticalAlignment="Center" Foreground="{DynamicResource ThemeTextBrush}" TextWrapping="Wrap" Margin="0,6"/>
@@ -136,43 +191,39 @@
 
                                 <TextBlock x:Name="PressureLabelTextBlock" Grid.Row="1" VerticalAlignment="Center" Foreground="{DynamicResource ThemeTextBrush}" TextWrapping="Wrap" Margin="0,6"/>
                                 <CheckBox x:Name="PressureCheckBox" Grid.Row="1" Grid.Column="1" VerticalAlignment="Center"
-                                          Foreground="{DynamicResource ThemeTextBrush}"
-                                          Background="{DynamicResource ThemeControlBrush}"
-                                          BorderBrush="{DynamicResource ThemeBorderBrush}"/>
+                                          Style="{StaticResource SettingsSwitchStyle}"/>
 
                                 <TextBlock x:Name="SmoothingLabelTextBlock" Grid.Row="2" VerticalAlignment="Center" Foreground="{DynamicResource ThemeTextBrush}" TextWrapping="Wrap" Margin="0,6"/>
                                 <ComboBox x:Name="SmoothingComboBox" Grid.Row="2" Grid.Column="1" Height="32" Style="{StaticResource ModernComboBox}" Margin="0,3"/>
 
-                                <TextBlock x:Name="DefaultPenColorLabelTextBlock" Grid.Row="3" VerticalAlignment="Center" Foreground="{DynamicResource ThemeTextBrush}" TextWrapping="Wrap" Margin="0,6"/>
-                                <TextBox x:Name="DefaultPenColorTextBox" Grid.Row="3" Grid.Column="1" Height="32" Padding="8,4" Text="#000000"
-                                         Foreground="{DynamicResource ThemeTextBrush}"
-                                         Background="{DynamicResource ThemeControlBrush}"
-                                         BorderBrush="{DynamicResource ThemeBorderBrush}"/>
+                                <TextBlock x:Name="ThemeLabelTextBlock" Grid.Row="3" VerticalAlignment="Center" Foreground="{DynamicResource ThemeTextBrush}" TextWrapping="Wrap" Margin="0,6"/>
+                                <ComboBox x:Name="ThemeComboBox" Grid.Row="3" Grid.Column="1" Height="32" Style="{StaticResource ModernComboBox}" Margin="0,3"/>
 
-                                <TextBlock x:Name="DefaultPenSizeLabelTextBlock" Grid.Row="4" VerticalAlignment="Center" Foreground="{DynamicResource ThemeTextBrush}" TextWrapping="Wrap" Margin="0,6"/>
-                                <TextBox x:Name="DefaultPenSizeTextBox" Grid.Row="4" Grid.Column="1" Height="32" Padding="8,4" Text="1.5"
-                                         Foreground="{DynamicResource ThemeTextBrush}"
-                                         Background="{DynamicResource ThemeControlBrush}"
-                                         BorderBrush="{DynamicResource ThemeBorderBrush}"/>
+                                <TextBlock x:Name="PerformanceModeLabelTextBlock" Grid.Row="4" VerticalAlignment="Center" Foreground="{DynamicResource ThemeTextBrush}" TextWrapping="Wrap" Margin="0,6"/>
+                                <ComboBox x:Name="PerformanceModeComboBox" Grid.Row="4" Grid.Column="1" Height="32" Style="{StaticResource ModernComboBox}" Margin="0,3"/>
 
-                                <TextBlock x:Name="ThemeLabelTextBlock" Grid.Row="5" VerticalAlignment="Center" Foreground="{DynamicResource ThemeTextBrush}" TextWrapping="Wrap" Margin="0,6"/>
-                                <ComboBox x:Name="ThemeComboBox" Grid.Row="5" Grid.Column="1" Height="32" Style="{StaticResource ModernComboBox}" Margin="0,3"/>
-
-                                <TextBlock x:Name="PerformanceModeLabelTextBlock" Grid.Row="6" VerticalAlignment="Center" Foreground="{DynamicResource ThemeTextBrush}" TextWrapping="Wrap" Margin="0,6"/>
-                                <ComboBox x:Name="PerformanceModeComboBox" Grid.Row="6" Grid.Column="1" Height="32" Style="{StaticResource ModernComboBox}" Margin="0,3"/>
-
-                                <StackPanel Grid.Row="7" VerticalAlignment="Center" Margin="0,4">
+                                <StackPanel Grid.Row="5" VerticalAlignment="Center" Margin="0,6">
                                     <TextBlock x:Name="WorkspaceBackdropLabelTextBlock" Foreground="{DynamicResource ThemeTextBrush}" TextWrapping="Wrap"/>
                                     <TextBlock x:Name="WorkspaceBackdropHintTextBlock" Margin="0,2,12,0" FontSize="10" Foreground="{DynamicResource ThemeSubtleTextBrush}" TextWrapping="Wrap"/>
                                 </StackPanel>
-                                <ComboBox x:Name="WorkspaceBackdropComboBox" Grid.Row="7" Grid.Column="1" Height="32" Style="{StaticResource ModernComboBox}" Margin="0,3"
-                                          AutomationProperties.AutomationId="WorkspaceBackdropComboBox"/>
+                                <ComboBox x:Name="WorkspaceBackdropComboBox" Grid.Row="5" Grid.Column="1" Height="36" Style="{StaticResource ModernComboBox}" Margin="0,5"
+                                          AutomationProperties.AutomationId="WorkspaceBackdropComboBox">
+                                    <ComboBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <StackPanel Orientation="Horizontal">
+                                                <Border Width="18" Height="18" CornerRadius="5" Margin="0,0,8,0"
+                                                        Background="{Binding PreviewBrush}"
+                                                        BorderBrush="{DynamicResource ThemeBorderBrush}"
+                                                        BorderThickness="1"/>
+                                                <TextBlock Text="{Binding DisplayName}" VerticalAlignment="Center"/>
+                                            </StackPanel>
+                                        </DataTemplate>
+                                    </ComboBox.ItemTemplate>
+                                </ComboBox>
 
-                                <TextBlock x:Name="PenOnlyLabelTextBlock" Grid.Row="8" VerticalAlignment="Center" Foreground="{DynamicResource ThemeTextBrush}" TextWrapping="Wrap" Margin="0,6"/>
-                                <CheckBox x:Name="PenOnlyCheckBox" Grid.Row="8" Grid.Column="1" VerticalAlignment="Center"
-                                          Foreground="{DynamicResource ThemeTextBrush}"
-                                          Background="{DynamicResource ThemeControlBrush}"
-                                          BorderBrush="{DynamicResource ThemeBorderBrush}"/>
+                                <TextBlock x:Name="PenOnlyLabelTextBlock" Grid.Row="6" VerticalAlignment="Center" Foreground="{DynamicResource ThemeTextBrush}" TextWrapping="Wrap" Margin="0,6"/>
+                                <CheckBox x:Name="PenOnlyCheckBox" Grid.Row="6" Grid.Column="1" VerticalAlignment="Center"
+                                          Style="{StaticResource SettingsSwitchStyle}"/>
                             </Grid>
                         </StackPanel>
                     </Border>

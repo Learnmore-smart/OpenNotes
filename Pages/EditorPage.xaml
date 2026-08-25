@@ -3,6 +3,7 @@
       xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
       xmlns:wfi="clr-namespace:System.Windows.Forms.Integration;assembly=WindowsFormsIntegration"
       xmlns:local="clr-namespace:Caelum.Pages"
+      xmlns:controls="clr-namespace:Caelum.Controls"
       Background="{DynamicResource ThemeWindowBrush}"
       AllowDrop="True"
       SizeChanged="EditorPage_SizeChanged"
@@ -132,11 +133,11 @@
             <Setter Property="BorderThickness" Value="1"/>
             <Setter Property="Foreground" Value="{DynamicResource ThemeForegroundBrush}"/>
             <Setter Property="FontSize" Value="12"/>
-            <Setter Property="Padding" Value="6,4"/>
-            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+            <Setter Property="Padding" Value="3"/>
+            <Setter Property="HorizontalContentAlignment" Value="Center"/>
             <Setter Property="MinWidth" Value="32"/>
-            <Setter Property="MinHeight" Value="40"/>
-            <Setter Property="Margin" Value="2"/>
+            <Setter Property="MinHeight" Value="54"/>
+            <Setter Property="Margin" Value="1"/>
             <Setter Property="FocusVisualStyle" Value="{StaticResource ToolbarFocusVisualStyle}"/>
             <Setter Property="ToolTipService.ShowOnDisabled" Value="True"/>
             <Setter Property="Cursor" Value="Hand"/>
@@ -153,10 +154,10 @@
                                 <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" VerticalAlignment="Center"/>
                             </Border>
                             <Border x:Name="NavSelectionCue"
-                                    Width="3"
-                                    HorizontalAlignment="Left"
-                                    VerticalAlignment="Stretch"
-                                    Margin="1,6,0,6"
+                                    Height="3"
+                                    HorizontalAlignment="Stretch"
+                                    VerticalAlignment="Bottom"
+                                    Margin="7,0,7,2"
                                     CornerRadius="2"
                                     Background="{DynamicResource ThemeAccentBrush}"
                                     Visibility="Collapsed"/>
@@ -174,7 +175,7 @@
                             <Trigger Property="Tag" Value="Selected">
                                 <Setter Property="Background" Value="{DynamicResource ThemeSelectionBrush}"/>
                                 <Setter Property="BorderBrush" Value="{DynamicResource ThemeAccentBrush}"/>
-                                <Setter Property="BorderThickness" Value="2,1,1,1"/>
+                                <Setter Property="BorderThickness" Value="1"/>
                                 <Setter Property="FontWeight" Value="SemiBold"/>
                                 <Setter TargetName="NavSelectionCue" Property="Visibility" Value="Visible"/>
                             </Trigger>
@@ -416,8 +417,8 @@
                         Style="{StaticResource UndoRedoButtonStyle}"
                         Width="42" Height="36" Margin="2,0" IsEnabled="False"
                         AutomationProperties.AutomationId="Editor.UndoButton">
-                    <Path Style="{StaticResource ToolbarIconPathStyle}"
-                          Data="M20,7 A8,8 0 1 0 19,15 M20,7 L20,2 M20,7 L15,7"/>
+                    <controls:LucideIcon Kind="Undo2" Width="19" Height="19"
+                                         Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
                 </Button>
 
                 <!-- Redo -->
@@ -425,8 +426,8 @@
                         Style="{StaticResource UndoRedoButtonStyle}"
                         Width="42" Height="36" Margin="2,0" IsEnabled="False"
                         AutomationProperties.AutomationId="Editor.RedoButton">
-                    <Path Style="{StaticResource ToolbarIconPathStyle}"
-                          Data="M4,7 A8,8 0 1 1 5,15 M4,7 L4,2 M4,7 L9,7"/>
+                    <controls:LucideIcon Kind="Redo2" Width="19" Height="19"
+                                         Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
                 </Button>
 
                 <!-- Separator -->
@@ -445,12 +446,11 @@
                                 Background="{DynamicResource ThemeSurfaceAltBrush}"
                                 BorderBrush="{DynamicResource ThemeFocusBrush}"
                                 BorderThickness="1"/>
-                        <Path x:Name="PenIconContrast" Style="{StaticResource ToolbarIconPathStyle}"
-                              Stroke="{DynamicResource ThemeFocusBrush}"
-                              StrokeThickness="3"
-                              Data="M4,16 L14,6 L18,10 L8,20 Z M12,8 L16,12 M4,16 L8,20"/>
-                        <Path x:Name="PenIcon" Style="{StaticResource ToolbarIconPathStyle}"
-                              Data="M4,16 L14,6 L18,10 L8,20 Z M12,8 L16,12 M4,16 L8,20"/>
+                        <controls:LucideIcon x:Name="PenIconContrast" Kind="PenLine" Width="19" Height="19"
+                               Stroke="{DynamicResource ThemeFocusBrush}"
+                               StrokeThickness="3"/>
+                        <controls:LucideIcon x:Name="PenIcon" Kind="PenLine" Width="19" Height="19"
+                                             Stroke="{DynamicResource ThemeForegroundBrush}"/>
                     </Grid>
                 </ToggleButton>
 
@@ -459,8 +459,8 @@
                         Style="{StaticResource ToolbarToggleButtonStyle}"
                         Width="42" Height="36" Margin="2,0"
                         AutomationProperties.AutomationId="Editor.HighlighterToolButton">
-                    <Path x:Name="HighlighterIcon" Style="{StaticResource ToolbarIconPathStyle}"
-                          Data="M3,15 L13,5 L18,10 L8,20 Z M11,7 L16,12 M3,15 L8,20"/>
+                    <controls:LucideIcon x:Name="HighlighterIcon" Kind="Highlighter" Width="19" Height="19"
+                                         Stroke="{DynamicResource ThemeForegroundBrush}"/>
                 </ToggleButton>
 
                 <!-- Study mode: freehand opaque mask, click to reveal briefly. -->
@@ -470,12 +470,8 @@
                          AutomationProperties.AutomationId="HiddenInkToolButton">
                     <!-- A card/answer mark communicates covering a response and
                          its temporary reveal without using eye semantics. -->
-                    <Path Width="18" Height="18" Stretch="Uniform"
-                          Fill="Transparent"
-                          Stroke="{DynamicResource ThemeSubtleForegroundBrush}"
-                          StrokeThickness="1.5"
-                          StrokeLineJoin="Round"
-                          Data="M3,4.5 L17,4.5 L17,15.5 L3,15.5 Z M5.5,7.5 L14.5,7.5 M5.5,10.5 L12,10.5 M5.5,13 L9.5,13"/>
+                    <controls:LucideIcon Kind="PanelTop" Width="19" Height="19"
+                                         Stroke="{DynamicResource ThemeSubtleForegroundBrush}"/>
                 </ToggleButton>
 
                 <!-- Task 26: place a collapsible sticky-note annotation. -->
@@ -483,9 +479,8 @@
                         Style="{StaticResource ToolbarToggleButtonStyle}"
                         Width="42" Height="36" Margin="2,0"
                         AutomationProperties.AutomationId="Editor.StickyNoteToolButton">
-                    <Path Style="{StaticResource ToolbarIconPathStyle}"
-                          Data="M4,3 L18,3 L18,17 L4,17 Z M7,7 L15,7 M7,10 L15,10 M7,13 L12,13"
-                          Stroke="{DynamicResource ThemeMarkBrush}"/>
+                    <controls:LucideIcon Kind="StickyNote" Width="19" Height="19"
+                                         Stroke="{DynamicResource ThemeMarkBrush}"/>
                 </ToggleButton>
 
                 <!-- Eraser -->
@@ -493,8 +488,8 @@
                         Style="{StaticResource ToolbarToggleButtonStyle}"
                         Width="42" Height="36" Margin="2,0"
                         AutomationProperties.AutomationId="Editor.EraserToolButton">
-                    <Path x:Name="EraserIcon" Style="{StaticResource ToolbarIconPathStyle}"
-                          Data="M5,12 L12,5 L19,12 L12,19 Z M8,15 L15,8"/>
+                    <controls:LucideIcon x:Name="EraserIcon" Kind="Eraser" Width="19" Height="19"
+                                         Stroke="{DynamicResource ThemeForegroundBrush}"/>
                 </ToggleButton>
 
                 <!-- Shape -->
@@ -502,8 +497,8 @@
                         Style="{StaticResource ToolbarToggleButtonStyle}"
                         Width="42" Height="36" Margin="2,0"
                         AutomationProperties.AutomationId="Editor.ShapeToolButton">
-                    <Path x:Name="ShapeIcon" Style="{StaticResource ToolbarIconPathStyle}"
-                          Data="M4,4 L20,4 L20,20 L4,20 Z M8,16 L16,8"/>
+                    <controls:LucideIcon x:Name="ShapeIcon" Kind="Shapes" Width="19" Height="19"
+                                         Stroke="{DynamicResource ThemeForegroundBrush}"/>
                 </ToggleButton>
 
                 <!-- Laser pointer (ephemeral ink that fades away; never saved) -->
@@ -511,9 +506,8 @@
                         Style="{StaticResource ToolbarToggleButtonStyle}"
                         Width="42" Height="36" Margin="2,0"
                         AutomationProperties.AutomationId="Editor.LaserToolButton">
-                    <Path x:Name="LaserIcon" Style="{StaticResource ToolbarIconPathStyle}"
-                          Stroke="{DynamicResource ThemeMarginBrush}"
-                          Data="M3,17 L12,8 L16,12 L21,7 M5,18 A2,2 0 1 1 5,14 A2,2 0 1 1 5,18"/>
+                    <controls:LucideIcon x:Name="LaserIcon" Kind="WandSparkles" Width="19" Height="19"
+                                         Stroke="{DynamicResource ThemeMarginBrush}"/>
                 </ToggleButton>
 
                 <!-- Task 22: on-screen ruler toggle. Overlay only — independent
@@ -523,8 +517,8 @@
                         Style="{StaticResource ToolbarToggleButtonStyle}"
                         Width="42" Height="36" Margin="2,0"
                         AutomationProperties.AutomationId="Editor.RulerToolButton">
-                    <Path x:Name="RulerIcon" Style="{StaticResource ToolbarIconPathStyle}"
-                          Data="M3,6 L21,6 M3,10 L21,10 M3,14 L21,14 M3,18 L21,18 M7,4 L7,8 M12,4 L12,8 M17,4 L17,8"/>
+                    <controls:LucideIcon x:Name="RulerIcon" Kind="Ruler" Width="19" Height="19"
+                                         Stroke="{DynamicResource ThemeForegroundBrush}"/>
                 </ToggleButton>
 
                 <!-- Select -->
@@ -532,8 +526,8 @@
                         Style="{StaticResource ToolbarToggleButtonStyle}"
                         Width="42" Height="36" Margin="2,0"
                         AutomationProperties.AutomationId="Editor.SelectToolButton">
-                    <Path x:Name="SelectIcon" Style="{StaticResource ToolbarIconPathStyle}"
-                          Data="M4,3 L8,20 L12,14 L18,20 L20,18 L14,12 L20,10 Z"/>
+                    <controls:LucideIcon x:Name="SelectIcon" Kind="MousePointer2" Width="19" Height="19"
+                                         Stroke="{DynamicResource ThemeForegroundBrush}"/>
                 </ToggleButton>
 
                 <Border Width="1" Background="{DynamicResource ThemeMenuSeparatorBrush}" Margin="4,8"/>
@@ -543,8 +537,8 @@
                         Style="{StaticResource ToolbarToggleButtonStyle}"
                         Width="42" Height="36" Margin="2,0"
                         AutomationProperties.AutomationId="Editor.TextToolButton">
-                    <Path Style="{StaticResource ToolbarIconPathStyle}"
-                          Data="M4,20 L12,4 L20,20 M7,14 L17,14"/>
+                    <controls:LucideIcon Kind="Type" Width="19" Height="19"
+                                         Stroke="{DynamicResource ThemeForegroundBrush}"/>
                 </ToggleButton>
 
                 <!-- Save -->
@@ -552,8 +546,8 @@
                         Style="{StaticResource ToolbarButtonStyle}"
                         Width="42" Height="36" Margin="2,0"
                         AutomationProperties.AutomationId="Editor.SavePdfButton">
-                    <Path Style="{StaticResource ToolbarIconPathStyle}"
-                          Data="M4,4 L17,4 L20,7 L20,20 L4,20 Z M7,4 L7,10 L16,10 L16,4 M8,14 L16,14 L16,18 L8,18 Z"/>
+                    <controls:LucideIcon Kind="Save" Width="19" Height="19"
+                                         Stroke="{DynamicResource ThemeForegroundBrush}"/>
                 </Button>
 
                 <!-- Version History -->
@@ -561,8 +555,8 @@
                         Style="{StaticResource ToolbarButtonStyle}"
                         Width="42" Height="36" Margin="2,0"
                         AutomationProperties.AutomationId="Editor.VersionHistoryButton">
-                    <Path Style="{StaticResource ToolbarIconPathStyle}"
-                          Data="M12,3 A9,9 0 1 1 11.99,3 M12,7 L12,12 L16,14"/>
+                    <controls:LucideIcon Kind="History" Width="19" Height="19"
+                                         Stroke="{DynamicResource ThemeForegroundBrush}"/>
                 </Button>
 
                 <!-- Separator -->
@@ -571,28 +565,44 @@
                 <!-- Wave4: compact page jump. The editable field is always
                      visible and owns the stable UIA id, so Tab/Enter/Escape
                      work without a mouse-only Border activation path. -->
+                <Border Margin="5,0"
+                        MinHeight="34"
+                        Background="{DynamicResource ThemeSurfaceAltBrush}"
+                        BorderBrush="{DynamicResource ThemeBorderBrush}"
+                        BorderThickness="1"
+                        CornerRadius="9">
                 <Grid x:Name="PageJumpGroup"
-                      Margin="6,0"
-                      MinHeight="32"
+                      Margin="2"
                       VerticalAlignment="Center"
                       AutomationProperties.AutomationId="Editor.PageJumpGroup">
                     <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="38"/>
+                        <ColumnDefinition Width="30"/>
+                        <ColumnDefinition Width="36"/>
                         <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="30"/>
                     </Grid.ColumnDefinitions>
+                    <Button x:Name="PreviousPageButton"
+                            Grid.Column="0"
+                            Width="30" Height="30" MinWidth="30" MinHeight="30"
+                            Style="{StaticResource ToolbarButtonStyle}"
+                            Click="PreviousPageButton_Click"
+                            AutomationProperties.AutomationId="Editor.PreviousPageButton">
+                        <controls:LucideIcon Kind="ChevronLeft" Width="16" Height="16"
+                                             Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
+                    </Button>
                     <TextBox x:Name="PageNumberTextBox"
-                             Grid.Column="0"
+                             Grid.Column="1"
                              FontSize="13"
                              FontWeight="SemiBold"
                              Foreground="{DynamicResource ThemeForegroundBrush}"
-                             Background="{DynamicResource ThemeSurfaceAltBrush}"
-                             BorderBrush="{DynamicResource ThemeBorderBrush}"
-                             BorderThickness="1"
+                             Background="Transparent"
+                             BorderBrush="Transparent"
+                             BorderThickness="0"
                              VerticalAlignment="Center"
-                             Width="38"
+                             Width="36"
                              Height="32"
                              MinHeight="32"
-                              Text="1"
+                             Text="1"
                              TextAlignment="Center"
                              Padding="2,0"
                              FocusVisualStyle="{StaticResource ToolbarFocusVisualStyle}"
@@ -606,18 +616,28 @@
                               KeyDown="PageNumberTextBox_KeyDown"
                              LostFocus="PageNumberTextBox_LostFocus"/>
                     <TextBlock x:Name="PageNumberLabel"
-                               Grid.Column="0"
+                               Grid.Column="1"
                                Text="0"
                                Visibility="Collapsed"
                                IsHitTestVisible="False"/>
                     <TextBlock x:Name="PageCountText"
-                               Grid.Column="1"
+                               Grid.Column="2"
                                Text="/ 0"
-                               Margin="5,0,0,0"
+                               Margin="3,0,4,0"
                                FontSize="13"
                                Foreground="{DynamicResource ThemeSubtleTextBrush}"
                                VerticalAlignment="Center"/>
+                    <Button x:Name="NextPageButton"
+                            Grid.Column="3"
+                            Width="30" Height="30" MinWidth="30" MinHeight="30"
+                            Style="{StaticResource ToolbarButtonStyle}"
+                            Click="NextPageButton_Click"
+                            AutomationProperties.AutomationId="Editor.NextPageButton">
+                        <controls:LucideIcon Kind="ChevronRight" Width="16" Height="16"
+                                             Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
+                    </Button>
                 </Grid>
+                </Border>
 
                 <!-- Separator -->
                 <Border Width="1" Background="{DynamicResource ThemeMenuSeparatorBrush}" Margin="4,8"/>
@@ -627,8 +647,8 @@
                         Style="{StaticResource ToolbarToggleButtonStyle}"
                         Width="36" Height="36" Margin="2,0"
                         AutomationProperties.AutomationId="Editor.PenOnlyButton">
-                    <Path x:Name="PenOnlyIcon" Style="{StaticResource ToolbarIconPathStyle}"
-                          Data="M4,16 L14,6 L18,10 L8,20 Z M12,8 L16,12 M4,16 L8,20"/>
+                    <controls:LucideIcon x:Name="PenOnlyIcon" Kind="PenLine" Width="18" Height="18"
+                                         Stroke="{DynamicResource ThemeForegroundBrush}"/>
                 </ToggleButton>
 
                 <!-- Zoom Out -->
@@ -636,8 +656,8 @@
                         Style="{StaticResource ToolbarButtonStyle}"
                         Width="36" Height="36" Margin="2,0"
                         AutomationProperties.AutomationId="Editor.ZoomOutButton">
-                    <Path Style="{StaticResource ToolbarIconPathStyle}"
-                          Data="M4,12 L20,12"/>
+                    <controls:LucideIcon Kind="Minus" Width="18" Height="18"
+                                         Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
                 </Button>
 
                 <!-- Zoom Percentage (click to edit) -->
@@ -660,15 +680,15 @@
                         Style="{StaticResource ToolbarButtonStyle}"
                         Width="36" Height="36" Margin="2,0"
                         AutomationProperties.AutomationId="Editor.ZoomInButton">
-                    <Path Style="{StaticResource ToolbarIconPathStyle}"
-                          Data="M4,12 L20,12 M12,4 L12,20"/>
+                    <controls:LucideIcon Kind="Plus" Width="18" Height="18"
+                                         Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
                 </Button>
                 <Button x:Name="RotatePageButton" Click="RotateCurrentPage_Click"
                         Style="{StaticResource ToolbarButtonStyle}"
                         Width="42" Height="36" Margin="2,0"
                         AutomationProperties.AutomationId="Editor.RotatePageButton">
-                    <Path Style="{StaticResource ToolbarIconPathStyle}"
-                          Data="M6,8 A8,8 0 1 1 6,16 M6,8 L6,3 M6,8 L11,8"/>
+                    <controls:LucideIcon Kind="RotateCcw" Width="18" Height="18"
+                                         Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
                 </Button>
 
                 <!-- Task 16: keyboard-accessible immersive reading mode. -->
@@ -676,8 +696,8 @@
                         Style="{StaticResource ToolbarButtonStyle}"
                         Width="42" Height="36" Margin="2,0"
                         AutomationProperties.AutomationId="Editor.ImmersiveModeButton">
-                    <Path Style="{StaticResource ToolbarIconPathStyle}"
-                          Data="M4,9 L4,4 L9,4 M15,4 L20,4 L20,9 M4,15 L4,20 L9,20 M15,20 L20,20 L20,15"/>
+                    <controls:LucideIcon Kind="Maximize" Width="18" Height="18"
+                                         Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
                 </Button>
 
 
@@ -730,54 +750,47 @@
                             Style="{StaticResource ToolbarButtonStyle}"
                             Click="SidebarCollapseButton_Click"
                             AutomationProperties.AutomationId="Editor.Sidebar.Collapse">
-                        <Path x:Name="SidebarCollapseIcon"
-                              Width="14"
-                              Height="14"
-                              Stretch="Uniform"
-                              Stroke="{DynamicResource ThemeForegroundBrush}"
-                              StrokeThickness="1.8"
-                              Data="M14,3 L6,7 L14,11"/>
+                        <controls:LucideIcon x:Name="SidebarCollapseIcon" Kind="PanelLeftClose"
+                                             Width="17" Height="17"
+                                             Stroke="{DynamicResource ThemeForegroundBrush}"/>
                     </Button>
                 </Grid>
 
                 <!-- SidebarNavBar.Visibility is updated by SetSidebarCollapsed
                      so collapsed mode leaves only the 32-DIP expand control. -->
-                <StackPanel x:Name="SidebarNavBar"
+                <UniformGrid x:Name="SidebarNavBar"
                             Grid.Row="1"
-                            Orientation="Vertical"
+                            Columns="3"
                             Margin="8,2,8,6"
                             KeyboardNavigation.TabNavigation="Local">
                     <Button x:Name="SidebarPagesButton"
                             Style="{StaticResource DocumentSidebarNavButtonStyle}"
                             Click="SidebarPagesButton_Click"
                             AutomationProperties.AutomationId="Editor.Sidebar.Pages">
-                        <StackPanel>
-                            <Path Width="15" Height="15" Stretch="Uniform" Stroke="{DynamicResource ThemeForegroundBrush}" StrokeThickness="1.5"
-                                  Data="M3,3 L21,3 L21,21 L3,21 Z M7,8 L17,8 M7,12 L17,12 M7,16 L14,16"/>
-                            <TextBlock x:Name="SidebarPagesLabel" HorizontalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+                        <StackPanel HorizontalAlignment="Center">
+                            <controls:LucideIcon Kind="Files" Width="17" Height="17" Stroke="{DynamicResource ThemeForegroundBrush}"/>
+                            <TextBlock x:Name="SidebarPagesLabel" Margin="0,3,0,0" FontSize="10" HorizontalAlignment="Center" TextTrimming="CharacterEllipsis"/>
                         </StackPanel>
                     </Button>
                     <Button x:Name="SidebarOutlineButton"
                             Style="{StaticResource DocumentSidebarNavButtonStyle}"
                             Click="SidebarOutlineButton_Click"
                             AutomationProperties.AutomationId="Editor.Sidebar.Outline">
-                        <StackPanel>
-                            <Path Width="15" Height="15" Stretch="Uniform" Stroke="{DynamicResource ThemeForegroundBrush}" StrokeThickness="1.5"
-                                  Data="M5,5 L7,5 M10,5 L19,5 M5,12 L7,12 M10,12 L19,12 M5,19 L7,19 M10,19 L19,19"/>
-                            <TextBlock x:Name="SidebarOutlineLabel" HorizontalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+                        <StackPanel HorizontalAlignment="Center">
+                            <controls:LucideIcon Kind="ListTree" Width="17" Height="17" Stroke="{DynamicResource ThemeForegroundBrush}"/>
+                            <TextBlock x:Name="SidebarOutlineLabel" Margin="0,3,0,0" FontSize="10" HorizontalAlignment="Center" TextTrimming="CharacterEllipsis"/>
                         </StackPanel>
                     </Button>
                     <Button x:Name="SidebarBookmarksButton"
                             Style="{StaticResource DocumentSidebarNavButtonStyle}"
                             Click="SidebarBookmarksButton_Click"
                             AutomationProperties.AutomationId="Editor.Sidebar.Bookmarks">
-                        <StackPanel>
-                            <Path Width="15" Height="15" Stretch="Uniform" Stroke="{DynamicResource ThemeForegroundBrush}" StrokeThickness="1.5"
-                                  Data="M5,3 L19,3 L19,21 L12,17 L5,21 Z"/>
-                            <TextBlock x:Name="SidebarBookmarksLabel" HorizontalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+                        <StackPanel HorizontalAlignment="Center">
+                            <controls:LucideIcon Kind="Bookmark" Width="17" Height="17" Stroke="{DynamicResource ThemeForegroundBrush}"/>
+                            <TextBlock x:Name="SidebarBookmarksLabel" Margin="0,3,0,0" FontSize="10" HorizontalAlignment="Center" TextTrimming="CharacterEllipsis"/>
                         </StackPanel>
                     </Button>
-                </StackPanel>
+                </UniformGrid>
 
                 <Grid x:Name="SidebarContentHost" Grid.Row="2" Margin="6,0,6,6">
                     <Grid x:Name="PagesSidebarContent">

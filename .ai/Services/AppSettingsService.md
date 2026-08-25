@@ -50,3 +50,4 @@ Wave 1 note: preserve legacy `PenPresets` JSON entries, deep-copy lists, and nev
 - 2026-08-23: Wave 1 compatibility regression confirms `PenPresets` JSON entries survive sanitize/clone/save/load, list entries are defensively copied, and empty/missing lists are never populated by the service. Focused 3/3 and full 107/107 tests pass.
 - 2026-08-23: Quality follow-up removed static settings-path initialization; the per-operation root regression passes, while legacy JSON/clone behavior remains intact. Focused settings 4/4 and full suite 113/113 pass.
 - 2026-08-24: Wave5 `WorkspaceBackdrop` sanitize/clone/save/load compatibility is green for Neutral/Paper/Slate and invalid-value fallback, with `%LOCALAPPDATA%\Caelum` compatibility preserved.
+- 2026-08-24: Expanded backdrop validation to Neutral/Paper/Mist/Warm/Slate/Midnight while retaining Neutral fallback and existing JSON/data-directory compatibility.

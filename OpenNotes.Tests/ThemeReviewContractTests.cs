@@ -429,8 +429,6 @@ public sealed class ThemeReviewContractTests
                 window.AutoSaveIntervalLabelTextBlock,
                 window.PressureLabelTextBlock,
                 window.SmoothingLabelTextBlock,
-                window.DefaultPenColorLabelTextBlock,
-                window.DefaultPenSizeLabelTextBlock,
                 window.ThemeLabelTextBlock,
                 window.PerformanceModeLabelTextBlock,
                 window.WorkspaceBackdropLabelTextBlock,

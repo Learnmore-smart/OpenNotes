@@ -50,3 +50,4 @@ Owns the application-level chrome palette used by the MainWindow, editor, settin
 - Backdrop is a resource-level chrome choice (`Neutral`, `Paper`, `Slate`) and never an image effect, opacity tint, or overlay on `PdfImage`/`PdfImageOverlay`.
 - Runtime tests render a known blank PDF before and after all three backdrop choices and verify identical PNG SHA-256/bytes; no screenshot or foreground/device visual PASS is claimed.
 - When Windows High Contrast is active, core chrome plus scrollbars, slider, separators, focus and selection resolve from `SystemColors`; explicit HighContrast while the OS mode is off keeps the deterministic readable fallback palette for existing tests.
+- 2026-08-24: workspace normalization and chrome resources now cover `Mist`, `Warm`, and `Midnight` in addition to the compatible `Neutral`, `Paper`, and `Slate` values; PDF page pixels remain isolated from all six.

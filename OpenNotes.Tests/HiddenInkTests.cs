@@ -78,7 +78,8 @@ public class HiddenInkTests
         string button = xaml.Substring(start, end - start);
         Assert.Multiple(() =>
         {
-            Assert.That(button, Does.Contain("<Path"));
+            Assert.That(button, Does.Contain("<controls:LucideIcon"));
+            Assert.That(button, Does.Contain("Kind=\"PanelTop\""));
             Assert.That(button, Does.Contain("ThemeSubtleForegroundBrush"));
             Assert.That(button, Does.Contain("AutomationProperties.AutomationId=\"HiddenInkToolButton\""));
             Assert.That(button, Does.Not.Contain("E890"));

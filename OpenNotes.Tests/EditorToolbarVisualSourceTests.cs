@@ -53,10 +53,10 @@ public sealed class EditorToolbarVisualSourceTests
         Assert.Multiple(() =>
         {
             Assert.That(xaml, Does.Contain("x:Name=\"LaserIcon\""));
-            Assert.That(xaml, Does.Contain("<Path x:Name=\"LaserIcon\""));
+            Assert.That(xaml, Does.Contain("<controls:LucideIcon x:Name=\"LaserIcon\""));
             Assert.That(xaml, Does.Not.Contain("Text=\"&#xE790;\""));
             Assert.That(xaml, Does.Contain("x:Name=\"HighlighterIcon\""));
-            Assert.That(xaml, Does.Contain("<Path x:Name=\"HighlighterIcon\""));
+            Assert.That(xaml, Does.Contain("<controls:LucideIcon x:Name=\"HighlighterIcon\""));
             Assert.That(xaml, Does.Not.Contain("Text=\"&#xE7E6;\""));
             Assert.That(highlighterBlock, Does.Not.Contain("ThemeMarkBrush"));
             Assert.That(source, Does.Contain("HighlighterIcon.Fill"));
@@ -602,6 +602,29 @@ public sealed class EditorToolbarVisualSourceTests
             Assert.That(smoke, Does.Contain("throw"));
             Assert.That(smoke, Does.Contain("optionalAutomationIds"));
             Assert.That(smoke, Does.Contain("OPTIONAL_CONTROL_MISSING"));
+        });
+    }
+
+    [Test]
+    public void EditorChromeUsesNamedLucideVectorsAndACompletePageNavigator()
+    {
+        var root = FindProjectRoot();
+        var xaml = File.ReadAllText(Path.Combine(root, "Pages", "EditorPage.xaml"));
+        var source = File.ReadAllText(Path.Combine(root, "Pages", "EditorPage.xaml.cs"));
+        var iconPath = Path.Combine(root, "Controls", "LucideIcon.cs");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(File.Exists(iconPath), Is.True, "The editor must use a font-independent named vector renderer.");
+            Assert.That(xaml, Does.Contain("controls:LucideIcon"));
+            Assert.That(xaml, Does.Contain("Kind=\"Undo2\""));
+            Assert.That(xaml, Does.Contain("Kind=\"PenLine\""));
+            Assert.That(xaml, Does.Contain("Kind=\"PanelLeftClose\""));
+            Assert.That(xaml, Does.Contain("x:Name=\"PreviousPageButton\""));
+            Assert.That(xaml, Does.Contain("x:Name=\"NextPageButton\""));
+            Assert.That(xaml, Does.Contain("<UniformGrid x:Name=\"SidebarNavBar\""));
+            Assert.That(source, Does.Contain("PreviousPageButton_Click"));
+            Assert.That(source, Does.Contain("NextPageButton_Click"));
         });
     }
 

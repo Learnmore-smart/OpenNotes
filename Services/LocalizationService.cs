@@ -46,6 +46,8 @@ namespace Caelum.Services
             ["Editor.PageDeleted"] = ("Page deleted", "\u9875\u9762\u5DF2\u5220\u9664", "Page supprim\u00E9e"),
             ["Editor.PageDeleteBlocked"] = ("The document must keep at least one page", "\u6587\u6863\u81F3\u5C11\u9700\u8981\u4FDD\u7559\u4E00\u9875", "Le document doit conserver au moins une page"),
             ["Editor.PageJumpTooltip"] = ("Click to jump to a page", "\u70B9\u51FB\u8DF3\u8F6C\u5230\u6307\u5B9A\u9875", "Cliquer pour aller \u00E0 une page"),
+            ["Editor.PreviousPage"] = ("Previous page", "\u4E0A\u4E00\u9875", "Page pr\u00E9c\u00E9dente"),
+            ["Editor.NextPage"] = ("Next page", "\u4E0B\u4E00\u9875", "Page suivante"),
             ["Editor.PageJumpInvalid"] = ("Enter a whole page number.", "\u8BF7\u8F93\u5165\u6574\u6570\u9875\u7801\u3002", "Saisissez un numéro de page entier."),
             ["Editor.PageJumpOutOfRange"] = ("Page adjusted; enter a page number between 1 and {0}.", "\u9875\u7801\u5DF2\u8C03\u6574\uFF1B\u8BF7\u8F93\u5165 1 \u5230 {0} \u4E4B\u95F4\u7684\u9875\u7801\u3002", "Page ajustée ; saisissez un numéro entre 1 et {0}."),
             ["Editor.PageTemplateBlank"] = ("Blank", "\u7A7A\u767D\u9875", "Vierge"),
@@ -293,9 +295,12 @@ namespace Caelum.Services
             ["Settings.ThemeHighContrast"] = ("High contrast", "\u9AD8\u5BF9\u6BD4\u5EA6", "Contraste élevé"),
             ["Settings.WorkspaceBackdrop"] = ("Workspace backdrop", "\u5DE5\u4F5C\u533A\u80CC\u666F", "Fond de l’espace de travail"),
             ["Settings.WorkspaceBackdropHint"] = ("Changes the desk around PDF pages, never the PDF itself.", "\u4EC5\u6539\u53D8 PDF \u9875\u9762\u5468\u56F4\u7684\u5DE5\u4F5C\u533A\uFF0C\u4E0D\u4F1A\u6539\u53D8 PDF \u5185\u5BB9\u3002", "Modifie le bureau autour des pages PDF, jamais le PDF lui-même."),
-            ["Settings.WorkspaceBackdropNeutral"] = ("Neutral", "\u4E2D\u6027", "Neutre"),
+            ["Settings.WorkspaceBackdropNeutral"] = ("White", "\u767D\u8272", "Blanc"),
             ["Settings.WorkspaceBackdropPaper"] = ("Paper", "\u7EB8\u5F20", "Papier"),
-            ["Settings.WorkspaceBackdropSlate"] = ("Slate", "\u677F\u5CA9", "Ardoise")
+            ["Settings.WorkspaceBackdropMist"] = ("Mist", "\u96FE\u84DD", "Brume"),
+            ["Settings.WorkspaceBackdropWarm"] = ("Warm paper", "\u6696\u7EB8", "Papier chaud"),
+            ["Settings.WorkspaceBackdropSlate"] = ("Slate", "\u677F\u5CA9", "Ardoise"),
+            ["Settings.WorkspaceBackdropMidnight"] = ("Midnight", "\u5348\u591C", "Minuit")
         };
 
         public static AppLanguage CurrentLanguage { get; private set; } = AppLanguage.English;

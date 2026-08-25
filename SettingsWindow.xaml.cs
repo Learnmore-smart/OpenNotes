@@ -13,6 +13,10 @@ namespace Caelum
     {
         private readonly AppSettings _originalSettings;
         private bool _isApplyingLocalization;
+        private static readonly string[] WorkspaceBackdropValues =
+        {
+            "Neutral", "Paper", "Mist", "Warm", "Slate", "Midnight"
+        };
 
         public SettingsWindow(AppSettings currentSettings)
         {
@@ -40,8 +44,6 @@ namespace Caelum
             PressureCheckBox.IsChecked = currentSettings.EnablePressure;
             PenOnlyCheckBox.IsChecked = currentSettings.PenOnlyMode;
             var smoothingIndex = Math.Max(0, Math.Min(3, currentSettings.StrokeSmoothing));
-            DefaultPenColorTextBox.Text = currentSettings.DefaultPenColorHex;
-            DefaultPenSizeTextBox.Text = currentSettings.DefaultPenSize.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
             var themeIndex = GetThemeIndex(currentSettings.Theme);
             var performanceModeIndex = GetPerformanceModeIndex(currentSettings.PerformanceMode);
             var workspaceBackdropIndex = GetWorkspaceBackdropIndex(currentSettings.WorkspaceBackdrop);
@@ -86,8 +88,6 @@ namespace Caelum
                 PenOnlyLabelTextBlock.Text = LocalizationService.Get("Settings.PenOnly");
                 PenOnlyCheckBox.Content = LocalizationService.Get("Settings.Enabled");
                 SmoothingLabelTextBlock.Text = LocalizationService.Get("Settings.Smoothing");
-                DefaultPenColorLabelTextBlock.Text = LocalizationService.Get("Settings.DefaultPenColor");
-                DefaultPenSizeLabelTextBlock.Text = LocalizationService.Get("Settings.DefaultPenSize");
                 PerformanceModeLabelTextBlock.Text = LocalizationService.Get("Settings.Performance");
                 ThemeLabelTextBlock.Text = LocalizationService.Get("Settings.Theme");
                 CancelButton.Content = LocalizationService.Get("Common.Cancel");
@@ -113,10 +113,10 @@ namespace Caelum
 
                 ThemeComboBox.ItemsSource = new[]
                 {
-                    $"☀  {LocalizationService.Get("Settings.ThemeLight")}",
-                    $"◐  {LocalizationService.Get("Settings.ThemeDark")}",
-                    $"◌  {LocalizationService.Get("Settings.ThemeSystem")}",
-                    $"▣  {LocalizationService.Get("Settings.ThemeHighContrast")}"
+                    LocalizationService.Get("Settings.ThemeLight"),
+                    LocalizationService.Get("Settings.ThemeDark"),
+                    LocalizationService.Get("Settings.ThemeSystem"),
+                    LocalizationService.Get("Settings.ThemeHighContrast")
                 };
                 ThemeComboBox.SelectedIndex = Math.Max(0, Math.Min(3, themeIndex));
 
@@ -124,13 +124,8 @@ namespace Caelum
                 WorkspaceBackdropHintTextBlock.Text = LocalizationService.Get("Settings.WorkspaceBackdropHint");
                 AutomationProperties.SetName(WorkspaceBackdropComboBox, WorkspaceBackdropLabelTextBlock.Text);
                 AutomationProperties.SetHelpText(WorkspaceBackdropComboBox, WorkspaceBackdropHintTextBlock.Text);
-                WorkspaceBackdropComboBox.ItemsSource = new[]
-                {
-                    LocalizationService.Get("Settings.WorkspaceBackdropNeutral"),
-                    LocalizationService.Get("Settings.WorkspaceBackdropPaper"),
-                    LocalizationService.Get("Settings.WorkspaceBackdropSlate")
-                };
-                WorkspaceBackdropComboBox.SelectedIndex = Math.Max(0, Math.Min(2, workspaceBackdropIndex));
+                WorkspaceBackdropComboBox.ItemsSource = CreateWorkspaceBackdropOptions();
+                WorkspaceBackdropComboBox.SelectedIndex = Math.Max(0, Math.Min(WorkspaceBackdropValues.Length - 1, workspaceBackdropIndex));
             }
             finally
             {
@@ -146,16 +141,6 @@ namespace Caelum
 
             int autoSaveInterval = AutoSaveIntervalComboBox.SelectedItem is int interval ? interval : 60;
             int smoothing = Math.Max(0, Math.Min(3, SmoothingComboBox.SelectedIndex < 0 ? 2 : SmoothingComboBox.SelectedIndex));
-            double penSize = 1.5;
-            if (!double.TryParse(DefaultPenSizeTextBox.Text, System.Globalization.NumberStyles.Float,
-                    System.Globalization.CultureInfo.InvariantCulture, out penSize))
-            {
-                penSize = _originalSettings.DefaultPenSize;
-            }
-
-            string colorHex = DefaultPenColorTextBox.Text?.Trim();
-            if (!TryParseColor(colorHex))
-                colorHex = _originalSettings.DefaultPenColorHex;
 
             var selected = CloneSettings(_originalSettings);
             selected.Language = selectedLanguage;
@@ -163,8 +148,6 @@ namespace Caelum
             selected.EnablePressure = PressureCheckBox.IsChecked != false;
             selected.PenOnlyMode = PenOnlyCheckBox.IsChecked == true;
             selected.StrokeSmoothing = smoothing;
-            selected.DefaultPenColorHex = colorHex;
-            selected.DefaultPenSize = Math.Max(0.5, Math.Min(24, penSize));
             selected.PerformanceMode = GetPerformanceModeValue(PerformanceModeComboBox.SelectedIndex);
             selected.Theme = GetThemeValue(ThemeComboBox.SelectedIndex);
             selected.WorkspaceBackdrop = GetWorkspaceBackdropValue(WorkspaceBackdropComboBox.SelectedIndex);
@@ -173,22 +156,36 @@ namespace Caelum
 
         private static int GetWorkspaceBackdropIndex(string value)
         {
-            return value?.Trim().ToLowerInvariant() switch
-            {
-                "paper" => 1,
-                "slate" => 2,
-                _ => 0
-            };
+            string normalized = ThemeService.NormalizeWorkspaceBackdrop(value);
+            int index = Array.FindIndex(WorkspaceBackdropValues,
+                candidate => string.Equals(candidate, normalized, StringComparison.Ordinal));
+            return Math.Max(0, index);
         }
 
         private static string GetWorkspaceBackdropValue(int index)
         {
-            return index switch
+            return index >= 0 && index < WorkspaceBackdropValues.Length
+                ? WorkspaceBackdropValues[index]
+                : "Neutral";
+        }
+
+        private static WorkspaceBackdropOption[] CreateWorkspaceBackdropOptions()
+        {
+            string[] keys =
             {
-                1 => "Paper",
-                2 => "Slate",
-                _ => "Neutral"
+                "Settings.WorkspaceBackdropNeutral",
+                "Settings.WorkspaceBackdropPaper",
+                "Settings.WorkspaceBackdropMist",
+                "Settings.WorkspaceBackdropWarm",
+                "Settings.WorkspaceBackdropSlate",
+                "Settings.WorkspaceBackdropMidnight"
             };
+            string[] previewColors = { "#FFFFFF", "#F5F3EE", "#EAF2F6", "#F1E7DA", "#D7DEE7", "#101722" };
+
+            return WorkspaceBackdropValues.Select((value, index) => new WorkspaceBackdropOption(
+                value,
+                LocalizationService.Get(keys[index]),
+                new SolidColorBrush((Color)ColorConverter.ConvertFromString(previewColors[index])))).ToArray();
         }
 
         private static int GetPerformanceModeIndex(string value)
@@ -234,20 +231,20 @@ namespace Caelum
             };
         }
 
-        private static bool TryParseColor(string value)
+        private sealed class WorkspaceBackdropOption
         {
-            if (string.IsNullOrWhiteSpace(value))
-                return false;
+            public WorkspaceBackdropOption(string value, string displayName, Brush previewBrush)
+            {
+                Value = value;
+                DisplayName = displayName;
+                PreviewBrush = previewBrush;
+            }
 
-            try
-            {
-                _ = (Color)ColorConverter.ConvertFromString(value);
-                return true;
-            }
-            catch
-            {
-                return false;
-            }
+            public string Value { get; }
+            public string DisplayName { get; }
+            public Brush PreviewBrush { get; }
+
+            public override string ToString() => DisplayName;
         }
 
         private static AppSettings CloneSettings(AppSettings source)

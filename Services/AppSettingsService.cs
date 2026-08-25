@@ -199,8 +199,14 @@ namespace Caelum.Services
         {
             if (string.Equals(value?.Trim(), "Paper", StringComparison.OrdinalIgnoreCase))
                 return "Paper";
+            if (string.Equals(value?.Trim(), "Mist", StringComparison.OrdinalIgnoreCase))
+                return "Mist";
+            if (string.Equals(value?.Trim(), "Warm", StringComparison.OrdinalIgnoreCase))
+                return "Warm";
             if (string.Equals(value?.Trim(), "Slate", StringComparison.OrdinalIgnoreCase))
                 return "Slate";
+            if (string.Equals(value?.Trim(), "Midnight", StringComparison.OrdinalIgnoreCase))
+                return "Midnight";
             return "Neutral";
         }
 

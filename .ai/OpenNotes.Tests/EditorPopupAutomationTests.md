@@ -20,3 +20,4 @@ Exercise the production `EditorPage` popup construction on an STA dispatcher wit
 
 - Focused `EditorToolbarVisualSourceTests|EditorPopupAutomationTests`: `22/22` passed.
 - Full `OpenNotes.Tests`: `189/189` passed.
+- 2026-08-24: the live ruler color contract now targets the shared `Shape` abstraction so the named `LucideIcon` renderer is covered without weakening dynamic-resource assertions.

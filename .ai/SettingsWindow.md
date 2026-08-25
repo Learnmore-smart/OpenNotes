@@ -24,11 +24,13 @@ Modal editor for persisted application settings. It previews language/theme and 
 
 ## Open Threads / Resume Context
 
+- **Status:** in_progress for screenshot-driven visual repair.
+- Remove only the visible default pen color/size rows; retain their `AppSettings` fields and clone/persistence behavior for backward compatibility. Add six localized backdrop choices with immediate preview, and restyle Boolean controls as rounded switches without changing their bindings or saved values.
 - **Status:** complete for the automated Wave5 review scope.
 - The localized performance-mode and workspace-backdrop ComboBoxes follow the utility-row, preview/cancel, complete-clone, and PopupZOrderHelper patterns. Balanced and Neutral are defaults; Battery saver/Best quality and Paper/Slate are explicit opt-ins. UIA save/reopen and Cancel rollback pass in the isolated smoke.
 - The settings surface uses `ThemePaperBrush` with a margin-red rail and quieter rule/spacing groups instead of nested card chrome. Control bindings, localization, preview/cancel semantics and persistence are unchanged; UIA save/reopen verification passes.
 
 ## V5 Completion Status
 
-- The dialog exposes auto-save interval, pressure, PenOnly, smoothing, default pen color/size, performance mode and Light/Dark/System/HighContrast theme controls. Live preview, cancel restoration and complete snapshot saving are wired.
-- Wave5 also exposes localized Neutral/Paper/Slate workspace backdrop choices in a bounded resizable/scrollable form; backdrop preview is chrome-only and Cancel restores the original setting snapshot.
+- The dialog exposes auto-save interval, pressure, PenOnly, smoothing, performance mode and Light/Dark/System/HighContrast theme controls. Legacy default pen color/size values remain in the persisted snapshot for compatibility but are no longer shown as raw text fields.
+- The workspace selector now exposes localized White/Paper/Mist/Warm/Slate/Midnight choices with swatches in a bounded resizable/scrollable form. Checkboxes use a rounded 44×24 switch while retaining keyboard/UIA semantics; preview is chrome-only and Cancel restores the original snapshot.

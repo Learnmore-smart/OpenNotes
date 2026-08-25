@@ -185,6 +185,46 @@ public sealed class ThemeSurfaceSourceTests
         });
     }
 
+    [Test]
+    public void SettingsUsesPillSwitchesAndHidesLegacyPenDefaults()
+    {
+        string root = FindProjectRoot();
+        string xaml = File.ReadAllText(Path.Combine(root, "SettingsWindow.xaml"));
+        string source = File.ReadAllText(Path.Combine(root, "SettingsWindow.xaml.cs"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(xaml, Does.Contain("x:Key=\"SettingsSwitchStyle\""));
+            Assert.That(xaml, Does.Contain("CornerRadius=\"12\""));
+            Assert.That(xaml, Does.Contain("Style=\"{StaticResource SettingsSwitchStyle}\""));
+            Assert.That(xaml, Does.Not.Contain("DefaultPenColorTextBox"));
+            Assert.That(xaml, Does.Not.Contain("DefaultPenSizeTextBox"));
+            Assert.That(source, Does.Not.Contain("DefaultPenColorTextBox"));
+            Assert.That(source, Does.Not.Contain("DefaultPenSizeTextBox"));
+        });
+    }
+
+    [Test]
+    public void WorkspaceBackdropSupportsSixPersistedChoices()
+    {
+        string root = FindProjectRoot();
+        string settingsSource = File.ReadAllText(Path.Combine(root, "SettingsWindow.xaml.cs"));
+        string localization = File.ReadAllText(Path.Combine(root, "Services", "LocalizationService.cs"));
+
+        foreach (string value in new[] { "Neutral", "Paper", "Mist", "Warm", "Slate", "Midnight" })
+        {
+            Assert.That(ThemeService.NormalizeWorkspaceBackdrop(value), Is.EqualTo(value), value);
+            Assert.That(settingsSource, Does.Contain($"\"{value}\""), value);
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(localization, Does.Contain("Settings.WorkspaceBackdropMist"));
+            Assert.That(localization, Does.Contain("Settings.WorkspaceBackdropWarm"));
+            Assert.That(localization, Does.Contain("Settings.WorkspaceBackdropMidnight"));
+        });
+    }
+
     private static string ApplicationResource(string key)
     {
         var application = System.Windows.Application.Current ?? throw new InvalidOperationException("WPF application is not initialized.");

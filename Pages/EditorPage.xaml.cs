@@ -7640,9 +7640,7 @@ namespace Caelum.Pages
 
             if (SidebarCollapseIcon != null)
             {
-                SidebarCollapseIcon.Data = Geometry.Parse(_sidebarCollapsed
-                    ? "M6,3 L14,7 L6,11"
-                    : "M14,3 L6,7 L14,11");
+                SidebarCollapseIcon.Kind = _sidebarCollapsed ? "PanelLeftOpen" : "PanelLeftClose";
             }
 
             // ApplyStateAwareSidebarMetadata resolves Editor.SidebarExpand /
@@ -9669,15 +9667,24 @@ namespace Caelum.Pages
                 if (PageNumberLabel != null)
                     PageNumberLabel.Text = "1";
                 PageCountText.Text = "/ 0";
+                if (PreviousPageButton != null)
+                    PreviousPageButton.IsEnabled = false;
+                if (NextPageButton != null)
+                    NextPageButton.IsEnabled = false;
                 return;
             }
 
-            int currentPageNumber = GetCurrentPageIndex() + 1;
+            int currentPageIndex = GetCurrentPageIndex();
+            int currentPageNumber = currentPageIndex + 1;
             if (!_isPageJumpEditing)
                 SetPageJumpText(currentPageNumber.ToString());
             if (PageNumberLabel != null)
                 PageNumberLabel.Text = currentPageNumber.ToString();
             PageCountText.Text = $"/ {_pageControls.Count}";
+            if (PreviousPageButton != null)
+                PreviousPageButton.IsEnabled = currentPageIndex > 0;
+            if (NextPageButton != null)
+                NextPageButton.IsEnabled = currentPageIndex < _pageControls.Count - 1;
             UpdateThumbnailSelection();
             UpdateBookmarkButton();
         }
@@ -10856,6 +10863,18 @@ namespace Caelum.Pages
             SyncSmoothScrollState();
             UpdatePageNumberIndicator();
             UpdateSelectedTextBoxPopupVisibility(forceRefresh: true);
+        }
+
+        private void PreviousPageButton_Click(object sender, RoutedEventArgs e)
+        {
+            if (_pageControls.Count > 0)
+                JumpToPage(Math.Max(0, GetCurrentPageIndex() - 1));
+        }
+
+        private void NextPageButton_Click(object sender, RoutedEventArgs e)
+        {
+            if (_pageControls.Count > 0)
+                JumpToPage(Math.Min(_pageControls.Count - 1, GetCurrentPageIndex() + 1));
         }
 
         private void UpdateZoomLabel()

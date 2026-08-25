@@ -34,3 +34,5 @@ dotnet test OpenNotes.Tests\OpenNotes.Tests.csproj --no-restore --filter "FullyQ
 ~~~
 
 Expected: 13 passed, 0 failed, 0 skipped. Desktop screenshot review remains an external/manual boundary and is not claimed without artifacts.
+
+The minimum-size French label set intentionally excludes the removed raw pen-default rows; all remaining visible labels still require wrap-safe layout and keyboard focus contracts.

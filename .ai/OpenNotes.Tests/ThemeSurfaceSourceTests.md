@@ -7,6 +7,7 @@ Guard the visual boundary between the editor workspace/backdrop and the rendered
 
 ## Open Threads / Resume Context
 
+- Screenshot-driven Settings RED contracts require removal of visible default-pen fields, a rounded switch template, and six persisted/localized backdrop identifiers while preserving PDF pixel isolation.
 - **Status:** complete for Wave5 automated scope.
 - V5.1.1 keeps Neutral as the persisted/default backdrop identifier but maps its Light surround to white, while Paper/Slate remain explicit alternate decorations and the PDF render-byte contract remains unchanged.
 - **Intent/result:** RED-first coverage now verifies neutral palette declarations, semantic token coverage, Settings sizing/scroll/backdrop controls, runtime DynamicResource usage, and a known PDF render hash/byte sequence across Neutral/Paper/Slate.
@@ -24,3 +25,4 @@ Guard the visual boundary between the editor workspace/backdrop and the rendered
 - The known blank-PDF page is rendered before and after all three backdrop choices; SHA-256 and PNG bytes remain identical.
 - The source contract also requires the actual-system HighContrast branch to publish `SystemColors` window/highlight brushes while explicit non-system HighContrast retains the deterministic readable fallback palette used by existing navigation tests.
 - The review follow-up complements the service hash with a real WPF `PdfPageControl` composition: a known dark bitmap pixel and crimson annotation are rendered inside an outer workspace Border for Neutral/Paper/Slate, and only the page crop is compared. `PdfImage`/`PdfImageOverlay` opacity/effect/source stay unchanged; HC decoration is intentionally outside this page contract.
+- 2026-08-24 source contracts require the rounded Settings switch, absence of the two legacy raw fields, and complete six-choice backdrop normalization/localization.

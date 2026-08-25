@@ -22,3 +22,4 @@ Verify Hidden Ink model persistence, reveal timing, geometry and ownership rules
 | 2026-08-20 | Documented Hidden Ink regression tests. | Codex |
 | 2026-08-23 | Added Wave 2 gray-default/legacy-white/transient-reveal RED contracts. | Codex |
 | 2026-08-23 | Verified production missing-`/C` fallback and localized UIA Name/HelpText alongside the stable smoke AutomationId. | Codex |
+| 2026-08-24 | Updated the themed card-mark contract from a raw Path tag to the named Lucide `PanelTop` vector. | Codex |

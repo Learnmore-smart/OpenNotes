@@ -10,7 +10,7 @@ using System.Windows.Automation.Provider;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Media;
-using ShapePath = System.Windows.Shapes.Path;
+using ShapePath = System.Windows.Shapes.Shape;
 using Caelum.Models;
 using Caelum.Pages;
 using Caelum.Services;
