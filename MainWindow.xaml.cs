@@ -13,6 +13,7 @@ using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Media.Imaging;
 using System.Windows.Navigation;
+using Caelum.Controls;
 using Caelum.Models;
 using Caelum.Pages;
 using Caelum.Services;
@@ -488,16 +489,16 @@ namespace Caelum
             var transparentBackground = Brushes.Transparent;
 
             // Tab content: icon + title + close button
-            var icon = new TextBlock
+            var icon = new LucideIcon
             {
-                Text = tab.Icon,
-                FontFamily = new FontFamily("Segoe MDL2 Assets"),
-                FontSize = 13,
-                Foreground = isActive ? activeForeground : inactiveForeground,
+                Kind = tab.Icon,
+                Width = 14,
+                Height = 14,
+                Stroke = isActive ? activeForeground : inactiveForeground,
                 VerticalAlignment = VerticalAlignment.Center,
                 Margin = new Thickness(0, 0, 6, 0)
             };
-            UseThemeBrush(icon, TextBlock.ForegroundProperty, "ThemeForegroundBrush");
+            UseThemeBrush(icon, System.Windows.Shapes.Shape.StrokeProperty, isActive ? "ThemeForegroundBrush" : "ThemeSubtleForegroundBrush");
 
             var title = new TextBlock
             {
@@ -511,14 +512,14 @@ namespace Caelum
             };
             UseThemeBrush(title, TextBlock.ForegroundProperty, isActive ? "ThemeForegroundBrush" : "ThemeSubtleForegroundBrush");
 
-            var closeIcon = new TextBlock
+            var closeIcon = new LucideIcon
             {
-                Text = "\uE8BB",
-                FontFamily = new FontFamily("Segoe MDL2 Assets"),
-                FontSize = 10,
-                Foreground = inactiveForeground
+                Kind = "X",
+                Width = 12,
+                Height = 12,
+                Stroke = inactiveForeground
             };
-            UseThemeBrush(closeIcon, TextBlock.ForegroundProperty, "ThemeSubtleForegroundBrush");
+            UseThemeBrush(closeIcon, System.Windows.Shapes.Shape.StrokeProperty, "ThemeSubtleForegroundBrush");
 
             var closeBtn = new Button
             {
@@ -1011,7 +1012,7 @@ namespace Caelum
         // 鈹€鈹€鈹€ Window State 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
         private void MainWindow_StateChanged(object sender, EventArgs e)
         {
-            MaximizeIcon.Text = WindowState == WindowState.Maximized ? "\uE923" : "\uE922";
+            MaximizeIcon.Kind = WindowState == WindowState.Maximized ? "Restore" : "Square";
             if (ActiveFrame?.Content is EditorPage activeEditor)
             {
                 activeEditor.SetHostActive(WindowState != WindowState.Minimized);
@@ -1329,14 +1330,14 @@ namespace Caelum
         }
 
         // 鈹€鈹€鈹€ Toast 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
-        public async void ShowToast(string message, string icon = "\uE73E", int durationMs = 2500)
+        public async void ShowToast(string message, string icon = "Check", int durationMs = 2500)
         {
             _toastCts?.Cancel();
             _toastCts?.Dispose();
             _toastCts = new CancellationTokenSource();
             CancellationToken toastToken = _toastCts.Token;
 
-            ToastIcon.Text = icon;
+            ToastIcon.Kind = icon;
             ToastText.Text = message;
             ToastBorder.Visibility = Visibility.Visible;
 

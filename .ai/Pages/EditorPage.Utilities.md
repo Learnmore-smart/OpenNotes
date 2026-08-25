@@ -1,4 +1,7 @@
 # Pages/EditorPage.Utilities.cs（合并说明：含 EditorPage.Selectable.cs）
+
+> V5.1.2 localized bookmark content is rebuilt from checked state with a Lucide bookmark instead of text stars.
+> The obsolete Content-property localization observer was removed because rebuilding the visual from that observer recursively re-entered itself; language refresh already calls the localized rebuild directly.
 > Last updated: 2026-08-24（Wave6 transient/Sticky localization refresh plus Wave4 sidebar/page-jump UIA evidence green; foreground/device visual boundary remains external） | Protection: STANDARD
 本镜像按 Task 0 要求合并说明 `EditorPage.Utilities.cs` 与 `EditorPage.Selectable.cs` 两个 partial 文件（均为 `EditorPage` 的 partial class）。
 

@@ -12,7 +12,7 @@ Defines the .NET 8 WPF desktop build, assembly identity, release version, runtim
 
 ## Open Threads / Resume Context
 
-- **Status:** complete (5.1.1 crash/background patch metadata)
-- Project, assembly, file and informational versions are aligned to `5.1.1`; all compatibility identities remain unchanged.
+- **Status:** complete (5.1.2 Lucide icon patch metadata)
+- Project, assembly, file and informational versions are aligned to `5.1.2`; all compatibility identities remain unchanged.
 - **Status:** complete
 - Project, assembly, file and informational versions are aligned to `5.0.1` for the frozen-`ScaleTransform` startup-crash patch; the existing `v5.0.0` tag remains immutable.

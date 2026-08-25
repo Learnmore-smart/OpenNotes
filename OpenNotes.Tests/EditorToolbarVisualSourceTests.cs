@@ -14,6 +14,36 @@ namespace Caelum.Tests;
 public sealed class EditorToolbarVisualSourceTests
 {
     [Test]
+    public void VisibleApplicationChromeUsesOnlyNamedLucideIcons()
+    {
+        var root = FindProjectRoot();
+        var relativeFiles = new[]
+        {
+            "MainWindow.xaml", "MainWindow.xaml.cs", "MainWindow.Utilities.cs",
+            "SettingsWindow.xaml", "PageTemplatePickerWindow.xaml",
+            Path.Combine("Pages", "HomePage.xaml"), Path.Combine("Pages", "HomePage.xaml.cs"),
+            Path.Combine("Pages", "HomePage.Utilities.cs"),
+            Path.Combine("Pages", "EditorPage.xaml"), Path.Combine("Pages", "EditorPage.xaml.cs"),
+            Path.Combine("Pages", "EditorPage.Utilities.cs")
+        };
+        string production = string.Join("\n", relativeFiles.Select(file =>
+            File.ReadAllText(Path.Combine(root, file))));
+        string editorXaml = File.ReadAllText(Path.Combine(root, "Pages", "EditorPage.xaml"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(production, Does.Not.Contain("Segoe MDL2 Assets"));
+            Assert.That(production, Does.Not.Match(@"&#xE[0-9A-Fa-f]{3};"));
+            Assert.That(production, Does.Contain("LucideIcon"));
+            Assert.That(production, Does.Not.Contain("★"));
+            Assert.That(production, Does.Not.Contain("☆"));
+            Assert.That(editorXaml, Does.Not.Contain("Content=\"×\""));
+            Assert.That(editorXaml, Does.Contain("x:Name=\"PenOnlyButton\""));
+            Assert.That(editorXaml, Does.Contain("x:Name=\"PenOnlyIcon\" Kind=\"PenLine\""));
+        });
+    }
+
+    [Test]
     public void ToolbarDoesNotExposeObsoleteCommandsOrPresetSlots()
     {
         var root = FindProjectRoot();

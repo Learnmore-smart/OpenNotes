@@ -7,6 +7,8 @@ Source-level contracts for the Wave 3 editor toolbar affordance repair. These te
 
 ## Open Threads / Resume Context
 
+- 2026-08-24 release 5.1.2 RED plan: scan the full visible WPF shell/home/editor/settings/template surface and runtime icon builders for Segoe MDL2/private-use glyphs; require named `LucideIcon` usage and keep the PenOnly toolbar action as `PenLine`.
+- **Status:** 5.1.2 icon contract GREEN; visible WPF surfaces reject MDL2/XAML private-use glyph rendering, text stars and the text-only close symbol. Legacy runtime identifiers are accepted only through the central Lucide compatibility map.
 - Screenshot-driven editor RED contract requires a named, font-independent Lucide vector renderer, previous/next page buttons around the editable one-based field, and a non-colliding three-column sidebar selector while preserving handlers and automation IDs.
 - **Status:** Wave 3 P2 source-contract work complete; external visual/device/foreground checks remain separate.
 - **Intent/result:** contracts cover highlighter size/opacity refresh (including the area-highlight main drag preview), localized alignment ItemsSource/selection preservation, live ruler/font/color/popup theme-token state colors, real Button/ToggleButton popup peers and keyboard paths, marker contrast, smoke ID drift, detachable/idempotent popup lifecycle, context/ComboBox duplicate-hook guards, and high-contrast pen visuals.
@@ -32,3 +34,4 @@ Source-level contracts for the Wave 3 editor toolbar affordance repair. These te
 |---|---|---|
 | 2026-08-23 | Added Wave 3 toolbar visual/accessibility TDD RED contract and verified it GREEN after implementation. | Codex |
 | 2026-08-24 | Added a named Lucide renderer/page-navigator/sidebar-strip contract and updated live laser/highlighter expectations to the new vector control. | Codex |
+| 2026-08-24 | Extended the contract across all visible application chrome and preserved PenOnly as a named PenLine action for 5.1.2. | Codex |

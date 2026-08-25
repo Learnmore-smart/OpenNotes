@@ -366,7 +366,7 @@
                 <ContextMenu x:Name="PdfViewerContextMenu" Opened="PdfViewerContextMenu_Opened">
                     <MenuItem x:Name="PrintMenuItem" InputGestureText="Ctrl+P" Click="ContextMenu_PrintClick">
                         <MenuItem.Icon>
-                            <TextBlock Text="&#xE749;" FontFamily="Segoe MDL2 Assets" FontSize="14" Foreground="{DynamicResource ThemeForegroundBrush}"/>
+                            <controls:LucideIcon Kind="Printer" Width="16" Height="16" Stroke="{DynamicResource ThemeForegroundBrush}"/>
                         </MenuItem.Icon>
                     </MenuItem>
                     <Separator/>
@@ -936,7 +936,9 @@
                     </Grid.ColumnDefinitions>
                     <TextBox x:Name="PdfSearchTextBox" Margin="0,0,8,0" VerticalContentAlignment="Center"
                              KeyDown="PdfSearchTextBox_KeyDown" TextChanged="PdfSearchTextBox_TextChanged"/>
-                    <Button Grid.Column="1" Width="30" Content="×" Click="ClosePdfSearchButton_Click"/>
+                    <Button Grid.Column="1" Width="30" Click="ClosePdfSearchButton_Click">
+                        <controls:LucideIcon Kind="X" Width="14" Height="14" Stroke="{DynamicResource ThemeForegroundBrush}"/>
+                    </Button>
                 </Grid>
                 <TextBlock x:Name="PdfSearchStatusTextBlock" DockPanel.Dock="Bottom" Margin="2,6,2,0"
                            Foreground="{DynamicResource ThemeSubtleForegroundBrush}" FontSize="11"/>
@@ -963,11 +965,11 @@
                     <DropShadowEffect BlurRadius="20" ShadowDepth="4" Opacity="{DynamicResource ThemeShadowOpacity}" Color="#000"/>
                 </Border.Effect>
                 <StackPanel Orientation="Horizontal">
-                    <TextBlock x:Name="LoadingRing" Text="&#xE712;" FontFamily="Segoe MDL2 Assets" FontSize="22" Foreground="{DynamicResource ThemeAccentBrush}" RenderTransformOrigin="0.5,0.5" Margin="0,0,12,0">
-                        <TextBlock.RenderTransform>
+                    <controls:LucideIcon x:Name="LoadingRing" Kind="LoaderCircle" Width="22" Height="22" Stroke="{DynamicResource ThemeAccentBrush}" RenderTransformOrigin="0.5,0.5" Margin="0,0,12,0">
+                        <controls:LucideIcon.RenderTransform>
                             <RotateTransform x:Name="LoadingRotate" Angle="0"/>
-                        </TextBlock.RenderTransform>
-                    </TextBlock>
+                        </controls:LucideIcon.RenderTransform>
+                    </controls:LucideIcon>
                     <TextBlock x:Name="LoadingText" FontSize="15" VerticalAlignment="Center" Foreground="{DynamicResource ThemeForegroundBrush}"/>
                 </StackPanel>
             </Border>

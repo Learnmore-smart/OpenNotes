@@ -338,14 +338,6 @@ namespace Caelum.Pages
                     (_, __) => ApplyLocalizedSearchStatus());
             }
 
-            if (BookmarkToggleButton != null)
-            {
-                var contentDescriptor = DependencyPropertyDescriptor.FromProperty(
-                    ContentControl.ContentProperty, typeof(ContentControl));
-                contentDescriptor?.AddValueChanged(BookmarkToggleButton,
-                    (_, __) => ApplyLocalizedBookmarkLabel());
-            }
-
             if (SidebarCollapseButton != null)
             {
                 var contentDescriptor = DependencyPropertyDescriptor.FromProperty(
@@ -360,15 +352,8 @@ namespace Caelum.Pages
             if (BookmarkToggleButton == null)
                 return;
 
-            var currentContent = BookmarkToggleButton.Content as string;
-            var marker = currentContent?.StartsWith("★", StringComparison.Ordinal) == true ? "★" : "☆";
-            var localizedLabel = marker == "★"
-                ? LocalizationService.Get("Editor.UnbookmarkCurrentPage")
-                : LocalizationService.Get("Editor.BookmarkCurrentPage");
-            var localizedContent = $"{marker}  {localizedLabel}";
-            if (!string.Equals(currentContent, localizedContent, StringComparison.Ordinal))
-                BookmarkToggleButton.Content = localizedContent;
-            BookmarkToggleButton.IsChecked = marker == "★";
+            bool bookmarked = BookmarkToggleButton.IsChecked == true;
+            SetBookmarkButtonContent(bookmarked);
             ApplyStateAwareSidebarMetadata();
         }
 

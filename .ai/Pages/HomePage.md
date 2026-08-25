@@ -1,5 +1,8 @@
 # HomePage
 
+> V5.1.2 runtime menu and notification icons use the shared Lucide renderer.
+> Tile hover resolves a directly assigned named content element before walking the visual tree, preserving the frozen-transform clone contract under custom button templates.
+
 > Last updated: 2026-08-22（paper archive home-surface completion）| Protection: STANDARD
 
 ## Purpose

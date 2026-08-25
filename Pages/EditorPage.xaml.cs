@@ -7525,11 +7525,36 @@ namespace Caelum.Pages
                 return;
             bool bookmarked = PageBookmarkService.Load(_currentPdfPath).Any(bookmark => bookmark.PageIndex == GetCurrentPageIndex());
             BookmarkToggleButton.IsChecked = bookmarked;
-            BookmarkToggleButton.Content = bookmarked
-                ? $"★ {LocalizationService.Get("Editor.UnbookmarkCurrentPage")}"
-                : $"☆ {LocalizationService.Get("Editor.BookmarkCurrentPage")}";
+            SetBookmarkButtonContent(bookmarked);
             ApplyStateAwareSidebarMetadata();
             SetAutomationId(BookmarkToggleButton, "Editor.Sidebar.BookmarkToggle");
+        }
+
+        private void SetBookmarkButtonContent(bool bookmarked)
+        {
+            var icon = new LucideIcon
+            {
+                Kind = "Bookmark",
+                Width = 15,
+                Height = 15,
+                Fill = Brushes.Transparent,
+                Stroke = SystemColors.HighlightBrush,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            icon.SetResourceReference(Shape.StrokeProperty, "ThemeAccentBrush");
+            if (bookmarked)
+                icon.SetResourceReference(Shape.FillProperty, "ThemeAccentBrush");
+            var label = new TextBlock
+            {
+                Text = LocalizationService.Get(bookmarked ? "Editor.UnbookmarkCurrentPage" : "Editor.BookmarkCurrentPage"),
+                Margin = new Thickness(7, 0, 0, 0),
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            label.SetResourceReference(TextBlock.ForegroundProperty, "ThemeForegroundBrush");
+            var content = new StackPanel { Orientation = Orientation.Horizontal };
+            content.Children.Add(icon);
+            content.Children.Add(label);
+            BookmarkToggleButton.Content = content;
         }
 
         private static void SetAutomationId(DependencyObject control, string automationId)
@@ -7961,11 +7986,11 @@ namespace Caelum.Pages
                 Orientation = Orientation.Horizontal,
                 Children =
                 {
-                    new TextBlock
+                    new LucideIcon
                     {
-                        Text = "\uE74D",
-                        FontFamily = new FontFamily("Segoe MDL2 Assets"),
-                        FontSize = 11,
+                        Kind = "Trash2",
+                        Width = 14,
+                        Height = 14,
                         VerticalAlignment = VerticalAlignment.Center
                     },
                     new TextBlock
@@ -7980,6 +8005,8 @@ namespace Caelum.Pages
             };
             foreach (var label in ((StackPanel)deleteButton.Content).Children.OfType<TextBlock>())
                 label.SetResourceReference(TextBlock.ForegroundProperty, "ThemeDangerBrush");
+            foreach (var icon in ((StackPanel)deleteButton.Content).Children.OfType<LucideIcon>())
+                icon.SetResourceReference(Shape.StrokeProperty, "ThemeDangerBrush");
 
             deleteButton.Click += async (sender, args) =>
             {
@@ -8051,15 +8078,15 @@ namespace Caelum.Pages
             insertButton.SetResourceReference(Control.ForegroundProperty, "ThemeAccentBrush");
             insertButton.SetResourceReference(Control.FocusVisualStyleProperty, "SettingsFocusVisualStyle");
 
-            insertButton.Content = new TextBlock
+            insertButton.Content = new LucideIcon
             {
-                Text = "\uE710",
-                FontFamily = new FontFamily("Segoe MDL2 Assets"),
-                FontSize = 16,
+                Kind = "Plus",
+                Width = 17,
+                Height = 17,
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center
             };
-            ((TextBlock)insertButton.Content).SetResourceReference(TextBlock.ForegroundProperty, "ThemeAccentBrush");
+            ((LucideIcon)insertButton.Content).SetResourceReference(Shape.StrokeProperty, "ThemeAccentBrush");
 
             insertButton.Click += async (_, __) =>
             {

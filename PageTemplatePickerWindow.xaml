@@ -2,6 +2,7 @@
     x:Class="Caelum.PageTemplatePickerWindow"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:controls="clr-namespace:Caelum.Controls"
     Width="620"
     Height="760"
     WindowStartupLocation="CenterOwner"
@@ -137,7 +138,7 @@
                             </ControlTemplate.Triggers>
                         </ControlTemplate>
                     </Button.Template>
-                    <TextBlock Text="&#xE8BB;" FontFamily="Segoe MDL2 Assets" FontSize="11" Foreground="{DynamicResource ThemeSubtleForegroundBrush}"/>
+                    <controls:LucideIcon Kind="X" Width="14" Height="14" Stroke="{DynamicResource ThemeSubtleForegroundBrush}"/>
                 </Button>
             </Grid>
 
@@ -291,7 +292,7 @@
                                 Grid.Column="2"
                                 Click="BrowsePathButton_Click"
                                 Style="{StaticResource IconButtonStyle}">
-                             <TextBlock Text="&#xE838;" FontFamily="Segoe MDL2 Assets" FontSize="14" Foreground="{DynamicResource ThemeSubtleForegroundBrush}"/>
+                             <controls:LucideIcon Kind="FolderOpen" Width="16" Height="16" Stroke="{DynamicResource ThemeSubtleForegroundBrush}"/>
                         </Button>
                     </Grid>
                 </Border>

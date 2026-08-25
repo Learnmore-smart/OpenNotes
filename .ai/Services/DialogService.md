@@ -1,5 +1,7 @@
 # DialogService
 
+> V5.1.2 replaces the runtime close font glyph with the shared Lucide X vector.
+
 > Last updated: 2026-08-21（runtime localization synchronization / sealed template regression） | Protection: STANDARD
 
 ## Purpose

@@ -1,4 +1,6 @@
 # Pages/HomePage.Utilities.cs
+
+> V5.1.2 selection and export notifications use the shared Lucide toast renderer.
 > Last updated: 2026-08-23 | Protection: STANDARD
 
 ## Purpose

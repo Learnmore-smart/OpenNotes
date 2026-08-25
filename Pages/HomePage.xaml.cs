@@ -13,6 +13,7 @@ using System.Windows.Media;
 using System.Windows.Media.Animation;
 using Microsoft.Win32;
 using Caelum.Services;
+using Caelum.Controls;
 
 namespace Caelum.Pages
 {
@@ -90,6 +91,10 @@ namespace Caelum.Pages
                     : "IconGrid";
             var target = button.Template?.FindName(targetName, button) as FrameworkElement
                 ?? button.FindName(targetName) as FrameworkElement
+                ?? (button.Content as FrameworkElement is FrameworkElement directContent &&
+                    string.Equals(directContent.Name, targetName, StringComparison.Ordinal)
+                        ? directContent
+                        : null)
                 ?? FindNamedVisual(button, targetName);
             if (target?.RenderTransform is not ScaleTransform scale)
                 return;
@@ -543,12 +548,12 @@ namespace Caelum.Pages
         {
             var item = new MenuItem { Padding = new Thickness(8, 6, 16, 6) };
             var stack = new StackPanel { Orientation = Orientation.Horizontal };
-            var iconText = new TextBlock
+            var iconText = new LucideIcon
             {
-                Text = icon,
-                FontFamily = new System.Windows.Media.FontFamily("Segoe MDL2 Assets"),
-                FontSize = 14,
-                Width = 28,
+                Kind = icon,
+                Width = 16,
+                Height = 16,
+                Margin = new Thickness(0, 0, 12, 0),
                 VerticalAlignment = VerticalAlignment.Center
             };
             var textBlock = new TextBlock
@@ -560,7 +565,7 @@ namespace Caelum.Pages
 
             if (foreground != null)
             {
-                iconText.Foreground = foreground;
+                iconText.Stroke = foreground;
                 textBlock.Foreground = foreground;
             }
             else
@@ -569,7 +574,7 @@ namespace Caelum.Pages
                     ? "ThemeTextBrush"
                     : foregroundResourceKey;
                 item.SetResourceReference(MenuItem.ForegroundProperty, resourceKey);
-                iconText.SetResourceReference(TextBlock.ForegroundProperty, resourceKey);
+                iconText.SetResourceReference(System.Windows.Shapes.Shape.StrokeProperty, resourceKey);
                 textBlock.SetResourceReference(TextBlock.ForegroundProperty, resourceKey);
             }
 

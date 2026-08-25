@@ -338,8 +338,14 @@
                                                     BorderBrush="{TemplateBinding BorderBrush}"
                                                     BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="10">
                                                 <Grid>
-                                                    <TextBlock Text="&#xE70D;" FontFamily="Segoe MDL2 Assets" FontSize="12" Foreground="{DynamicResource ThemeSubtleForegroundBrush}"
-                                                               HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,16,0"/>
+                                                    <Path Data="M9,18 L15,12 L9,6" Stretch="Uniform" StrokeThickness="1.8"
+                                                          StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"
+                                                          Width="13" Height="13" Stroke="{DynamicResource ThemeSubtleForegroundBrush}"
+                                                          HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,16,0" RenderTransformOrigin="0.5,0.5">
+                                                        <Path.RenderTransform>
+                                                            <RotateTransform Angle="90"/>
+                                                        </Path.RenderTransform>
+                                                    </Path>
                                                 </Grid>
                                             </Border>
                                             <ControlTemplate.Triggers>

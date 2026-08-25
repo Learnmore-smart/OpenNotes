@@ -1,5 +1,7 @@
 # MainWindow.Utilities
 
+> V5.1.2 settings notifications flow through the shared Lucide toast renderer.
+
 ## Purpose
 
 Shared settings, localization, tab refresh, and settings-dialog orchestration for the main window.

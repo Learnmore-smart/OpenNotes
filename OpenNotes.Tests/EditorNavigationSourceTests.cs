@@ -221,8 +221,10 @@ public sealed class EditorNavigationSourceTests
             var bookmark = FindByAutomationId<ToggleButton>(editor, "Editor.Sidebar.BookmarkToggle");
 
             InvokePrivate(editor, "SetSidebarCollapsed", true);
-            bookmark.Content = "★  " + LocalizationService.Get("Editor.UnbookmarkCurrentPage");
+            bookmark.IsChecked = true;
             InvokePrivate(editor, "ApplyLocalizedBookmarkLabel");
+
+            Assert.That(bookmark.Content, Is.TypeOf<StackPanel>());
 
             foreach (var language in new[] { AppLanguage.English, AppLanguage.Chinese, AppLanguage.French })
             {

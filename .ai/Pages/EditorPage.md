@@ -1,5 +1,7 @@
 # Pages/EditorPage.xaml.cs
 
+> V5.1.2 dynamic page controls, bookmarks and notifications use Lucide vectors; PenOnly remains PenLine.
+
 ## Wave6 async stale-operation P2 (2026-08-24) — audit continuation
 
 Version History, sidebar/page context, PDF structural/context operations, search,

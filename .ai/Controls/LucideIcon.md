@@ -1,5 +1,7 @@
 # Controls/LucideIcon.cs
 
+> V5.1.2 expands the shared geometry catalog and maps historical icon identifiers to Lucide vectors.
+
 > Last updated: 2026-08-24 | Protection: STANDARD
 
 ## Purpose

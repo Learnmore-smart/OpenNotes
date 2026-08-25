@@ -3,6 +3,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Media.Effects;
+using Caelum.Controls;
 using Caelum.Models;
 
 namespace Caelum.Services
@@ -83,13 +84,13 @@ namespace Caelum.Services
             headerGrid.Children.Add(titleStackPanel);
 
             // Close button
-            var closeIcon = new TextBlock
+            var closeIcon = new LucideIcon
             {
-                Text = "\xE8BB",
-                FontFamily = new FontFamily("Segoe MDL2 Assets"),
-                FontSize = 11
+                Kind = "X",
+                Width = 14,
+                Height = 14
             };
-            closeIcon.SetResourceReference(TextBlock.ForegroundProperty, "ThemeSubtleForegroundBrush");
+            closeIcon.SetResourceReference(System.Windows.Shapes.Shape.StrokeProperty, "ThemeSubtleForegroundBrush");
 
             var closeButton = new Button
             {

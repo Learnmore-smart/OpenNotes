@@ -1,5 +1,7 @@
 # MainWindow
 
+> V5.1.2 renders programmatic tabs, window state and toasts with the shared Lucide vector control.
+
 ## Wave6 transient lifecycle (2026-08-24)
 
 - **Status:** green for focused automated scope. `MainWindow_Deactivated` first calls the

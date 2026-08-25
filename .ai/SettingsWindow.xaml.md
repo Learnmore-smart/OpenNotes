@@ -1,5 +1,7 @@
 # SettingsWindow.xaml
 
+> V5.1.2 uses the shared Lucide X vector for the custom close affordance.
+
 > Last updated: 2026-08-24 | Protection: STANDARD
 
 ## Purpose
