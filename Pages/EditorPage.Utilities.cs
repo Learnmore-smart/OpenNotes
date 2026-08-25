@@ -301,6 +301,7 @@ namespace Caelum.Pages
             ApplyStickyNoteButtonMetadata(_stickyNoteSaveButton, LocalizationService.Get("Common.Save"), "Sticky.Save");
             ApplyStickyNoteButtonMetadata(_stickyNoteCancelButton, LocalizationService.Get("Common.Cancel"), "Sticky.Cancel");
             ApplyStickyNoteButtonMetadata(_stickyNoteDeleteButton, LocalizationService.Get("Editor.DeleteTooltip"), "Sticky.Delete");
+            ApplyStickyNoteDragHandleMetadata();
             foreach (var page in _pageControls)
                 page.RefreshStickyNoteContextMenuLocalization();
         }

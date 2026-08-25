@@ -10,6 +10,8 @@ round-trips CJK text, stable Id, DIP geometry and RGB marker data.
 
 ## Open Threads / Resume Context
 
+- **2026-08-24 UI repair GREEN:** semantic primary/secondary/destructive Sticky actions and a named SizeAll drag header are implemented. Real STA coverage proves header drag changes only Popup offsets while model coordinates and dirty state remain unchanged; focused Sticky/transient/localization tests pass 36/36.
+
 - **Wave6 dual-review RED plan:** add real STA regressions for marker LostMouseCapture,
   Escape/deactivation rollback, repeated reopen, live-session Save/Cancel/Delete after reload,
   malicious duplicate IDs, visible EN/ZH/FR popup metadata refresh, and focus/HC semantics.
@@ -45,3 +47,4 @@ round-trips CJK text, stable Id, DIP geometry and RGB marker data.
 | 2026-08-24 | Added Wave6 RED contracts for Sticky Note lifecycle and interaction boundaries. | Codex |
 | 2026-08-24 | GREEN: stable Id/size/colour persistence, marker capture/keyboard/context Delete, explicit popup lifecycle, and real STA/WPF marker/editor paths implemented; Sticky class passed 7/7 and combined focused filter passed 11/11. | Codex |
 | 2026-08-24 | Dual-review GREEN: shared capture rollback, live session guards, duplicate PDF/UIA identities, localized popup metadata/focus and STA regressions; combined focused `20/20`, full `241/241`. | Codex |
+| 2026-08-24 | Restyled runtime editor actions and added isolated draggable popup-header coverage. | Codex |

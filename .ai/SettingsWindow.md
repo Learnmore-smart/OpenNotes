@@ -34,3 +34,4 @@ Modal editor for persisted application settings. It previews language/theme and 
 
 - The dialog exposes auto-save interval, pressure, PenOnly, smoothing, performance mode and Light/Dark/System/HighContrast theme controls. Legacy default pen color/size values remain in the persisted snapshot for compatibility but are no longer shown as raw text fields.
 - The workspace selector now exposes localized White/Paper/Mist/Warm/Slate/Midnight choices with swatches in a bounded resizable/scrollable form. Checkboxes use a rounded 44×24 switch while retaining keyboard/UIA semantics; preview is chrome-only and Cancel restores the original snapshot.
+- 2026-08-24: six backdrop labels use explicit literal localization calls so the strict i18n scanner can audit every visible key; runtime selection behavior is unchanged.

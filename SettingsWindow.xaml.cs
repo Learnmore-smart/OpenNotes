@@ -171,20 +171,20 @@ namespace Caelum
 
         private static WorkspaceBackdropOption[] CreateWorkspaceBackdropOptions()
         {
-            string[] keys =
+            string[] labels =
             {
-                "Settings.WorkspaceBackdropNeutral",
-                "Settings.WorkspaceBackdropPaper",
-                "Settings.WorkspaceBackdropMist",
-                "Settings.WorkspaceBackdropWarm",
-                "Settings.WorkspaceBackdropSlate",
-                "Settings.WorkspaceBackdropMidnight"
+                LocalizationService.Get("Settings.WorkspaceBackdropNeutral"),
+                LocalizationService.Get("Settings.WorkspaceBackdropPaper"),
+                LocalizationService.Get("Settings.WorkspaceBackdropMist"),
+                LocalizationService.Get("Settings.WorkspaceBackdropWarm"),
+                LocalizationService.Get("Settings.WorkspaceBackdropSlate"),
+                LocalizationService.Get("Settings.WorkspaceBackdropMidnight")
             };
             string[] previewColors = { "#FFFFFF", "#F5F3EE", "#EAF2F6", "#F1E7DA", "#D7DEE7", "#101722" };
 
             return WorkspaceBackdropValues.Select((value, index) => new WorkspaceBackdropOption(
                 value,
-                LocalizationService.Get(keys[index]),
+                labels[index],
                 new SolidColorBrush((Color)ColorConverter.ConvertFromString(previewColors[index])))).ToArray();
         }
 

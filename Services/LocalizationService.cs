@@ -181,6 +181,7 @@ namespace Caelum.Services
             ["Editor.RotateTooltip"] = ("Rotate 90°", "\u65CB\u8F6C 90°", "Tourner de 90°"),
             ["Editor.ImmersiveTooltip"] = ("Immersive mode (F11)", "沉浸模式（F11）", "Mode immersif (F11)"),
             ["Editor.StickyNoteTooltip"] = ("Sticky note", "\u4FBF\u7B7E", "Note autocollante"),
+            ["Editor.MoveStickyNoteEditor"] = ("Drag to move this note", "\u62D6\u52A8\u4EE5\u79FB\u52A8\u6B64\u4FBF\u7B7E", "Faire glisser pour d\u00E9placer cette note"),
             ["Editor.HiddenInkTooltip"] = ("Hidden ink — click to reveal for 3 seconds", "\u9690\u85CF\u58A8\u8FF9\u2014\u2014\u70B9\u51FB\u663E\u793A 3 \u79D2", "Encre masquée — cliquer pour afficher pendant 3 secondes"),
             ["Editor.RulerTooltip"] = ("Ruler", "\u76F4\u5C3A", "Règle"),
             ["Editor.SaveDocumentTooltip"] = ("Save document", "\u4FDD\u5B58\u6587\u6863", "Enregistrer le document"),

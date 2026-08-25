@@ -70,7 +70,8 @@ namespace Caelum.Controls
                 ["ListTree"] = "M4,5 H6 M10,5 H20 M4,12 H6 M10,12 H20 M4,19 H6 M10,19 H20",
                 ["Bookmark"] = "M6,3 H18 V21 L12,17 L6,21 Z",
                 ["ChevronLeft"] = "M15,18 L9,12 L15,6",
-                ["ChevronRight"] = "M9,18 L15,12 L9,6"
+                ["ChevronRight"] = "M9,18 L15,12 L9,6",
+                ["GripVertical"] = "M9,5 A1,1 0 1 1 8.99,5 M15,5 A1,1 0 1 1 14.99,5 M9,12 A1,1 0 1 1 8.99,12 M15,12 A1,1 0 1 1 14.99,12 M9,19 A1,1 0 1 1 8.99,19 M15,19 A1,1 0 1 1 14.99,19"
             };
 
             var result = new Dictionary<string, Geometry>(StringComparer.OrdinalIgnoreCase);

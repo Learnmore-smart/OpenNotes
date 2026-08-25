@@ -329,6 +329,62 @@ public sealed class StickyNoteInteractionTests
     }
 
     [Test]
+    public void StickyEditorUsesSemanticRoundedActionsAndAnExplicitDragSurface()
+    {
+        var source = ReadProjectFile("Pages", "EditorPage.xaml.cs");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(source, Does.Contain("DialogPrimaryButton"));
+            Assert.That(source, Does.Contain("DialogSecondaryButton"));
+            Assert.That(source, Does.Contain("ThemeDangerBrush"));
+            Assert.That(source, Does.Contain("_stickyNoteDragHandle"));
+            Assert.That(source, Does.Contain("Cursors.SizeAll"));
+            Assert.That(source, Does.Contain("Sticky.Editor.DragHandle"));
+            Assert.That(source, Does.Contain("BeginStickyNotePopupDrag"));
+            Assert.That(source, Does.Contain("UpdateStickyNotePopupDrag"));
+        });
+    }
+
+    [Test]
+    [Apartment(ApartmentState.STA)]
+    public void StickyEditorHeaderDragMovesOnlyTheTransientPopup()
+    {
+        EnsureWpfEnvironment();
+        CreateTestApplication();
+
+        var editor = new EditorPage();
+        var page = new PdfPageControl { Width = 300, Height = 300 };
+        GetPrivateField<List<PdfPageControl>>(editor, "_pageControls").Add(page);
+        var note = new StickyNoteAnnotation { Id = "sticky-drag-editor", X = 40, Y = 48, Text = "move me" };
+        var container = page.AddStickyNote(note);
+        Assert.That(container, Is.Not.Null);
+
+        InvokePrivate(editor, "OpenStickyNoteEditor", page, container!, note);
+        var popup = GetPrivateField<Popup>(editor, "_stickyNotePopup");
+        var dragHandle = GetPrivateField<Border>(editor, "_stickyNoteDragHandle");
+        double originalX = note.X;
+        double originalY = note.Y;
+
+        InvokePrivate(editor, "BeginStickyNotePopupDrag", new Point(10, 10));
+        InvokePrivate(editor, "UpdateStickyNotePopupDrag", new Point(54, 38));
+        InvokePrivate(editor, "EndStickyNotePopupDrag");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(popup.HorizontalOffset, Is.EqualTo(44).Within(0.01));
+            Assert.That(popup.VerticalOffset, Is.EqualTo(28).Within(0.01));
+            Assert.That(note.X, Is.EqualTo(originalX));
+            Assert.That(note.Y, Is.EqualTo(originalY));
+            Assert.That(editor.IsDirty, Is.False);
+            Assert.That(dragHandle.Cursor, Is.EqualTo(Cursors.SizeAll));
+            Assert.That(AutomationProperties.GetAutomationId(dragHandle), Is.EqualTo("Sticky.Editor.DragHandle"));
+        });
+
+        editor.CloseTransientUi("sticky drag cleanup");
+    }
+
+    [Test]
     [Apartment(ApartmentState.STA)]
     public void ProductionStaStaleStickyEditorCannotMutateNewDocumentSession()
     {

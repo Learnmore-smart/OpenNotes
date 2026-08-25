@@ -232,6 +232,12 @@ namespace Caelum.Pages
         private Button _stickyNoteSaveButton;
         private Button _stickyNoteCancelButton;
         private Button _stickyNoteDeleteButton;
+        private Border _stickyNoteDragHandle;
+        private TextBlock _stickyNoteTitleTextBlock;
+        private bool _isDraggingStickyNotePopup;
+        private Point _stickyNotePopupDragStart;
+        private double _stickyNotePopupDragStartHorizontalOffset;
+        private double _stickyNotePopupDragStartVerticalOffset;
         private StickyNoteAnnotation _stickyNoteEditingModel;
         private Grid _stickyNoteEditingContainer;
         private string _stickyNoteEditingOriginalText;
@@ -13257,53 +13263,112 @@ namespace Caelum.Pages
                 MaxHeight = 180,
                 FontSize = 14,
                 VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-                Margin = new Thickness(0, 0, 0, 8)
+                Margin = new Thickness(0, 0, 0, 10),
+                Padding = new Thickness(10, 8, 10, 8),
+                BorderThickness = new Thickness(1)
             };
+            _stickyNoteEditor.SetResourceReference(Control.BackgroundProperty, "ThemeControlBrush");
+            _stickyNoteEditor.SetResourceReference(Control.ForegroundProperty, "ThemeTextBrush");
+            _stickyNoteEditor.SetResourceReference(Control.BorderBrushProperty, "ThemeBorderBrush");
 
             var saveButton = new Button
             {
-                Padding = new Thickness(12, 5, 12, 5),
-                MinWidth = 72,
-                MinHeight = 32
+                Style = TryFindResource("DialogPrimaryButton") as Style,
+                MinWidth = 84,
+                MinHeight = 34,
+                Margin = new Thickness(8, 0, 0, 0)
             };
             _stickyNoteSaveButton = saveButton;
             ApplyStickyNoteButtonMetadata(saveButton, LocalizationService.Get("Common.Save"), "Sticky.Save");
 
             var cancelButton = new Button
             {
-                Padding = new Thickness(12, 5, 12, 5),
-                MinWidth = 72,
-                MinHeight = 32
+                Style = TryFindResource("DialogSecondaryButton") as Style,
+                MinWidth = 84,
+                MinHeight = 34
             };
             _stickyNoteCancelButton = cancelButton;
             ApplyStickyNoteButtonMetadata(cancelButton, LocalizationService.Get("Common.Cancel"), "Sticky.Cancel");
 
+            var deleteStyle = new Style(typeof(Button), TryFindResource("DialogSecondaryButton") as Style);
+            deleteStyle.Setters.Add(new Setter(Control.ForegroundProperty,
+                new DynamicResourceExtension("ThemeDangerBrush")));
             var deleteButton = new Button
             {
-                Padding = new Thickness(12, 5, 12, 5),
-                MinWidth = 72,
-                MinHeight = 32
+                Style = deleteStyle,
+                MinWidth = 76,
+                MinHeight = 34
             };
             _stickyNoteDeleteButton = deleteButton;
             ApplyStickyNoteButtonMetadata(deleteButton, LocalizationService.Get("Editor.DeleteTooltip"), "Sticky.Delete");
 
-            var panel = new StackPanel { Margin = new Thickness(12) };
+            _stickyNoteTitleTextBlock = new TextBlock
+            {
+                Text = LocalizationService.Get("Editor.StickyNoteTooltip"),
+                FontSize = 13,
+                FontWeight = FontWeights.SemiBold,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            _stickyNoteTitleTextBlock.SetResourceReference(TextBlock.ForegroundProperty, "ThemeTextBrush");
+            var gripIcon = new LucideIcon
+            {
+                Kind = "GripVertical",
+                Width = 16,
+                Height = 16,
+                Margin = new Thickness(0, 0, 8, 0)
+            };
+            gripIcon.SetResourceReference(Shape.StrokeProperty, "ThemeSubtleTextBrush");
+            var dragHeaderContent = new DockPanel { LastChildFill = true };
+            dragHeaderContent.Children.Add(gripIcon);
+            dragHeaderContent.Children.Add(_stickyNoteTitleTextBlock);
+            _stickyNoteDragHandle = new Border
+            {
+                Background = Brushes.Transparent,
+                CornerRadius = new CornerRadius(8),
+                Padding = new Thickness(8, 6, 8, 6),
+                Margin = new Thickness(-4, -4, -4, 10),
+                Cursor = Cursors.SizeAll,
+                Child = dragHeaderContent
+            };
+            AutomationProperties.SetAutomationId(_stickyNoteDragHandle, "Sticky.Editor.DragHandle");
+            ApplyStickyNoteDragHandleMetadata();
+            _stickyNoteDragHandle.MouseLeftButtonDown += StickyNoteDragHandle_MouseLeftButtonDown;
+            _stickyNoteDragHandle.MouseMove += StickyNoteDragHandle_MouseMove;
+            _stickyNoteDragHandle.MouseLeftButtonUp += StickyNoteDragHandle_MouseLeftButtonUp;
+            _stickyNoteDragHandle.LostMouseCapture += StickyNoteDragHandle_LostMouseCapture;
+
+            var panel = new StackPanel { Margin = new Thickness(14) };
+            panel.Children.Add(_stickyNoteDragHandle);
             panel.Children.Add(_stickyNoteEditor);
-            var actionRow = new StackPanel
+            var actionRow = new Grid { Margin = new Thickness(0, 2, 0, 0) };
+            actionRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            actionRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            actionRow.Children.Add(deleteButton);
+            Grid.SetColumn(deleteButton, 0);
+            var confirmActions = new StackPanel
             {
                 Orientation = Orientation.Horizontal,
                 HorizontalAlignment = HorizontalAlignment.Right
             };
-            actionRow.Children.Add(saveButton);
-            actionRow.Children.Add(cancelButton);
-            actionRow.Children.Add(deleteButton);
+            confirmActions.Children.Add(cancelButton);
+            confirmActions.Children.Add(saveButton);
+            Grid.SetColumn(confirmActions, 1);
+            actionRow.Children.Add(confirmActions);
             panel.Children.Add(actionRow);
 
             var border = new Border
             {
                 BorderThickness = new Thickness(1),
-                CornerRadius = new CornerRadius(8),
-                Child = panel
+                CornerRadius = new CornerRadius(14),
+                Padding = new Thickness(2),
+                Child = panel,
+                Effect = new System.Windows.Media.Effects.DropShadowEffect
+                {
+                    BlurRadius = 18,
+                    ShadowDepth = 4,
+                    Opacity = ThemeService.GetShadowOpacity(),
+                    Color = Colors.Black
+                }
             };
             border.SetResourceReference(Border.BackgroundProperty, "ThemeSurfaceBrush");
             border.SetResourceReference(Border.BorderBrushProperty, "ThemeBorderBrush");
@@ -13340,6 +13405,7 @@ namespace Caelum.Pages
             if (popup == null)
                 return;
 
+            EndStickyNotePopupDrag();
             popup.Closed -= StickyNotePopup_Closed;
             PopupZOrderHelper.UnfixPopupTopmost(popup);
             if (popup.IsOpen)
@@ -13353,6 +13419,9 @@ namespace Caelum.Pages
             _stickyNoteSaveButton = null;
             _stickyNoteCancelButton = null;
             _stickyNoteDeleteButton = null;
+            _stickyNoteDragHandle = null;
+            _stickyNoteTitleTextBlock = null;
+            _isDraggingStickyNotePopup = false;
             _stickyNoteEditingModel = null;
             _stickyNoteEditingContainer = null;
             _stickyNoteEditingPage = null;
@@ -13378,6 +13447,83 @@ namespace Caelum.Pages
             ApplyToolbarFocusVisualStyle(button);
             button.SetResourceReference(Control.BorderBrushProperty, "ThemeFocusBrush");
             button.SetResourceReference(Control.FocusVisualStyleProperty, "ToolbarFocusVisualStyle");
+        }
+
+        private void ApplyStickyNoteDragHandleMetadata()
+        {
+            if (_stickyNoteDragHandle == null)
+                return;
+
+            string label = LocalizationService.Get("Editor.MoveStickyNoteEditor");
+            ToolTipService.SetToolTip(_stickyNoteDragHandle, label);
+            AutomationProperties.SetName(_stickyNoteDragHandle, label);
+            AutomationProperties.SetHelpText(_stickyNoteDragHandle, label);
+            if (_stickyNoteTitleTextBlock != null)
+                _stickyNoteTitleTextBlock.Text = LocalizationService.Get("Editor.StickyNoteTooltip");
+        }
+
+        private void StickyNoteDragHandle_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+        {
+            if (e.ChangedButton != MouseButton.Left || _stickyNotePopup == null)
+                return;
+
+            BeginStickyNotePopupDrag(Mouse.GetPosition(this));
+            _stickyNoteDragHandle?.CaptureMouse();
+            e.Handled = true;
+        }
+
+        private void StickyNoteDragHandle_MouseMove(object sender, MouseEventArgs e)
+        {
+            if (_isDraggingStickyNotePopup && e.LeftButton == MouseButtonState.Pressed)
+            {
+                UpdateStickyNotePopupDrag(Mouse.GetPosition(this));
+                e.Handled = true;
+            }
+        }
+
+        private void StickyNoteDragHandle_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+        {
+            if (_isDraggingStickyNotePopup)
+            {
+                EndStickyNotePopupDrag();
+                e.Handled = true;
+            }
+        }
+
+        private void StickyNoteDragHandle_LostMouseCapture(object sender, MouseEventArgs e)
+        {
+            EndStickyNotePopupDrag();
+        }
+
+        private void BeginStickyNotePopupDrag(Point pointerPosition)
+        {
+            if (_stickyNotePopup == null)
+                return;
+
+            _isDraggingStickyNotePopup = true;
+            _stickyNotePopupDragStart = pointerPosition;
+            _stickyNotePopupDragStartHorizontalOffset = _stickyNotePopup.HorizontalOffset;
+            _stickyNotePopupDragStartVerticalOffset = _stickyNotePopup.VerticalOffset;
+        }
+
+        private void UpdateStickyNotePopupDrag(Point pointerPosition)
+        {
+            if (!_isDraggingStickyNotePopup || _stickyNotePopup == null)
+                return;
+
+            Vector delta = pointerPosition - _stickyNotePopupDragStart;
+            _stickyNotePopup.HorizontalOffset = _stickyNotePopupDragStartHorizontalOffset + delta.X;
+            _stickyNotePopup.VerticalOffset = _stickyNotePopupDragStartVerticalOffset + delta.Y;
+        }
+
+        private void EndStickyNotePopupDrag()
+        {
+            if (!_isDraggingStickyNotePopup)
+                return;
+
+            _isDraggingStickyNotePopup = false;
+            if (_stickyNoteDragHandle?.IsMouseCaptured == true)
+                _stickyNoteDragHandle.ReleaseMouseCapture();
         }
 
         private bool IsLiveStickyNoteEdit(

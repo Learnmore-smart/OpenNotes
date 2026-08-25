@@ -294,6 +294,7 @@ Wave 1 note: shape replacement undo stores only session token/index and immutabl
 - **2026-08-20:** Immersive mode now hides/restores the toolbar, document sidebar and search panel and is reachable from the localized toolbar button as well as F11/ESC.
 
 ## Change History
+- 2026-08-24 Sticky editor UI repair: replaced the runtime flat action row with primary/secondary/destructive rounded buttons and added a Lucide grip header that moves only the transient editor popup. The persisted marker remains the page-bounded/undoable movement surface; popup dragging does not dirty the document or alter annotation DIP coordinates.
 
 - **2026-08-20:** External PDF/image imports now capture and restore bookmark sidecar snapshots and remap subsequent page indices for the full inserted range.
 - **2026-08-21:** Completed the scoped popup/ruler/PenOnly input fixes plus text resize, save ordering, immersive-surface synchronization, external-import bookmark snapshots and Hidden Ink input boundary; text boxes now expose keyboard nudge and focusable keyboard resize handles; added the isolated `OPENNOTES_DATA_ROOT` test seam, stable resize-handle AutomationIds and the live UIA peer contract; solution build has 0 errors with two known NU1701 warnings and tests pass 96/96 after the theme contract was added.

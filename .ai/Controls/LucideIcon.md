@@ -20,3 +20,4 @@ Provides one theme-aware WPF renderer for the consistent open-source Lucide-styl
 ## Implementation
 
 - `LucideIcon : Shape` resolves named, frozen 24-unit geometries and inherits the owner control's dynamic theme stroke. The editor uses it for tools, zoom/history, sidebar navigation, collapse state, and page navigation without an installed icon font.
+- The Sticky editor header uses the named `GripVertical` geometry as a decorative drag affordance; accessible text remains on the owning header surface.
