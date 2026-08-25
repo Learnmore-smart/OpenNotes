@@ -207,8 +207,7 @@ public sealed class EditorToolbarVisualSourceTests
             "Editor.LaserToolButton", "Editor.RulerToolButton",
             "Editor.SelectToolButton", "Editor.TextToolButton", "Editor.SavePdfButton",
             "Editor.VersionHistoryButton", "Editor.PageJump", "Editor.PenOnlyButton",
-            "Editor.ZoomOutButton", "Editor.ZoomInButton", "Editor.RotatePageButton",
-            "Editor.ImmersiveModeButton"
+            "Editor.ZoomOutButton", "Editor.ZoomInButton", "Editor.RotatePageButton"
         };
 
         foreach (var id in requiredIds)

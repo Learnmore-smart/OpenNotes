@@ -731,16 +731,6 @@
                                          Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
                 </Button>
 
-                <!-- Task 16: keyboard-accessible immersive reading mode. -->
-                <Button x:Name="ImmersiveModeButton" Click="ImmersiveModeButton_Click"
-                        Style="{StaticResource ToolbarButtonStyle}"
-                        Width="42" Height="36" Margin="2,0"
-                        AutomationProperties.AutomationId="Editor.ImmersiveModeButton">
-                    <controls:LucideIcon Kind="Maximize" Width="18" Height="18"
-                                         Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
-                </Button>
-
-
                  </StackPanel>
              </ScrollViewer>
         </Border>

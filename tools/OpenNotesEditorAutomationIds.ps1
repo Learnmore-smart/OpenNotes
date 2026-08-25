@@ -29,7 +29,6 @@ $EditorAutomationIds = [ordered]@{
     ZoomOut = 'Editor.ZoomOutButton'
     ZoomIn = 'Editor.ZoomInButton'
     Rotate = 'Editor.RotatePageButton'
-    Immersive = 'Editor.ImmersiveModeButton'
     PdfScrollViewer = 'PdfScrollViewer'
     PdfPageControlPrefix = 'PdfPageControl.'
     TextResizeHandlePrefix = 'TextResizeHandle.'

@@ -8983,11 +8983,6 @@ namespace Caelum.Pages
             }
         }
 
-        private void ImmersiveModeButton_Click(object sender, RoutedEventArgs e)
-        {
-            ToggleImmersiveMode();
-        }
-
         public void ApplySettings(AppSettings settings)
         {
             string previousPerformanceMode = CurrentPerformanceMode;
