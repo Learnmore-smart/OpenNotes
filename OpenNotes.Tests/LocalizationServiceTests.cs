@@ -98,9 +98,9 @@ public sealed class LocalizationCoverageTests
     public void OpenPagesRefreshLocalizationThroughTheirLoadedLifecycle()
     {
         var projectRoot = FindProjectRoot();
-        var editorSource = File.ReadAllText(Path.Combine(projectRoot, "Pages", "EditorPage.xaml.cs"));
-        var editorUtilitiesSource = File.ReadAllText(Path.Combine(projectRoot, "Pages", "EditorPage.Utilities.cs"));
-        var homeSource = File.ReadAllText(Path.Combine(projectRoot, "Pages", "HomePage.xaml.cs"));
+        var editorSource = File.ReadAllText(Path.Combine(projectRoot, "Pages", "EditorPage.xaml.cs")).Replace("\r\n", "\n");
+        var editorUtilitiesSource = File.ReadAllText(Path.Combine(projectRoot, "Pages", "EditorPage.Utilities.cs")).Replace("\r\n", "\n");
+        var homeSource = File.ReadAllText(Path.Combine(projectRoot, "Pages", "HomePage.xaml.cs")).Replace("\r\n", "\n");
 
         Assert.Multiple(() =>
         {

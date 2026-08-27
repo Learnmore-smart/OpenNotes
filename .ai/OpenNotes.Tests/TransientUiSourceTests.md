@@ -65,6 +65,7 @@ surface on Escape, outside click, tab/navigation/unload, and MainWindow.Deactiva
 
 | Date | Change | Author |
 |---|---|---|
+| 2026-08-27 | Normalized source files from CRLF to LF in the shared reader so multiline fail-closed contracts are checkout-independent. | Codex |
 | 2026-08-24 | Added Wave6 RED contracts for deactivation and registry lifecycle. | Codex |
 | 2026-08-24 | GREEN: registry/lifecycle/deactivation contracts pass 4/4 with Sticky focused tests (11/11 combined); no commit made. | Codex |
 | 2026-08-24 | Dual-review GREEN: shared capture/load/session/unfix contracts pass in the 20-test focused filter; full 241/241 and i18n are green, with external Alt-Tab unclaimed. | Codex |

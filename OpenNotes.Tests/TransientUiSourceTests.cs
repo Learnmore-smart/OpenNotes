@@ -432,6 +432,7 @@ public sealed class TransientUiSourceTests
 
         var root = directory?.FullName
             ?? throw new DirectoryNotFoundException("Could not locate the OpenNotes project root.");
-        return File.ReadAllText(Path.Combine(new[] { root }.Concat(segments).ToArray()));
+        return File.ReadAllText(Path.Combine(new[] { root }.Concat(segments).ToArray()))
+            .Replace("\r\n", "\n");
     }
 }
