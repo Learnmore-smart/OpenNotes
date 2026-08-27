@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
 using System.Threading;
+using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Media;
 using ShapePath = System.Windows.Shapes.Path;
@@ -98,6 +99,62 @@ public sealed class EditorToolbarVisualSourceTests
             Assert.That(source, Does.Contain("Color.FromArgb"));
             Assert.That(source, Does.Contain("BuildHighlighterModePreview"));
         });
+    }
+
+    [Test]
+    public void LaserAndHiddenInkExposeDedicatedSemanticVectorNames()
+    {
+        var root = FindProjectRoot();
+        var xaml = File.ReadAllText(Path.Combine(root, "Pages", "EditorPage.xaml"));
+        var icons = File.ReadAllText(Path.Combine(root, "Controls", "LucideIcon.cs"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(xaml, Does.Contain("x:Name=\"LaserIcon\" Kind=\"Laser\""));
+            Assert.That(xaml, Does.Contain("x:Name=\"HiddenInkIcon\" Kind=\"HiddenInkReveal\""));
+            Assert.That(xaml, Does.Not.Contain("Kind=\"WandSparkles\""));
+            Assert.That(xaml, Does.Not.Contain("Kind=\"PanelTop\""));
+            Assert.That(icons, Does.Contain("[\"Laser\"]"));
+            Assert.That(icons, Does.Contain("[\"HiddenInkReveal\"]"));
+            Assert.That(icons, Does.Contain("M3,12 H15"), "Laser geometry must expose a directional beam.");
+            Assert.That(icons, Does.Contain("A2,2"), "Laser geometry must expose a visible dot.");
+            Assert.That(icons, Does.Contain("M4,5 H20"), "Hidden Ink geometry must expose a card frame.");
+        });
+    }
+
+    [Test]
+    public void ToolbarActionRowUsesOneCompactActionRhythm()
+    {
+        var root = FindProjectRoot();
+        var xaml = File.ReadAllText(Path.Combine(root, "Pages", "EditorPage.xaml"));
+        int toolbarStart = xaml.IndexOf("<Border x:Name=\"ToolbarBorder\"", StringComparison.Ordinal);
+        int toolbarEnd = xaml.IndexOf("</Border>", xaml.IndexOf("</ScrollViewer>", toolbarStart, StringComparison.Ordinal), StringComparison.Ordinal);
+        Assert.That(toolbarStart, Is.GreaterThanOrEqualTo(0));
+        Assert.That(toolbarEnd, Is.GreaterThan(toolbarStart));
+        string toolbar = xaml.Substring(toolbarStart, toolbarEnd - toolbarStart);
+        int actionRowStart = toolbar.IndexOf("<StackPanel Orientation=\"Horizontal\" Height=\"42\"", StringComparison.Ordinal);
+        int actionRowEnd = toolbar.IndexOf("</StackPanel>", actionRowStart, StringComparison.Ordinal);
+        Assert.That(actionRowStart, Is.GreaterThanOrEqualTo(0));
+        Assert.That(actionRowEnd, Is.GreaterThan(actionRowStart));
+        string actionRow = toolbar.Substring(actionRowStart, actionRowEnd - actionRowStart);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(actionRow, Does.Not.Contain("Width=\"42\" Height=\"36\""));
+            Assert.That(actionRow, Does.Not.Contain("Margin=\"2,0\""));
+            Assert.That(actionRow, Does.Not.Contain("Margin=\"4,8\""));
+            Assert.That(actionRow, Does.Contain("Width=\"36\" Height=\"36\" Margin=\"1,0\""));
+            Assert.That(toolbar, Does.Contain("x:Name=\"PageJumpReservedSpace\""));
+            Assert.That(toolbar, Does.Not.Contain("Width=\"150\""));
+            Assert.That(xaml, Does.Contain("x:Key=\"ToolbarSeparatorStyle\""));
+            Assert.That(toolbar, Does.Contain("Style=\"{StaticResource ToolbarSeparatorStyle}\""));
+        });
+
+        var wideActionDeclarations = Regex.Matches(
+            actionRow,
+            @"<(?:Button|ToggleButton)\b(?:(?!>).)*?Width=""42""\s+Height=""36""",
+            RegexOptions.Singleline);
+        Assert.That(wideActionDeclarations.Count, Is.EqualTo(0), "Every toolbar action must use the compact 36-DIP cell.");
     }
 
     [Test]

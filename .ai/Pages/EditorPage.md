@@ -2,6 +2,64 @@
 
 > V5.1.2 dynamic page controls, bookmarks and notifications use Lucide vectors; PenOnly remains PenLine.
 
+## Task 1 selection regression fix (2026-08-26) — GREEN
+
+- **Root cause/fix:** `ShouldClosePopupOnPointerDown` closed an outside Select popup and set `Handled=true`, so the first canvas selection gesture never reached the page delegate. Select-tool dismissal now leaves that pointer unhandled while other tool-popup/input semantics remain unchanged.
+- **Scope:** selection remains page-local. The existing EditorPage cross-page Ctrl guard still clears a prior page before switching; no cross-page accumulation, thumbnail, undo/history, icon, PDF bitmap, or layer-order behavior changed.
+- **Evidence:** `dotnet test OpenNotes.Tests\OpenNotes.Tests.csproj --no-restore --filter "FullyQualifiedName~ShapeSelectionTests"` was intentionally RED at 3 failures / 4 passes before the first production edits. The review-gap test invokes the actual `EditorPage_PreviewMouseDown` seam and a real `PdfPageControl` selection gesture; with the popup consume behavior temporarily restored it was RED at 2 failures / 8 tests. After the minimal fix, final focused GREEN is `8/8`; existing Pdfium NU1701 and WPF high-DPI warnings remain expected build warnings.
+- **Open threads:** none for Task 1; parent integration may run the full suite/build.
+
+## Task 2 popup dismissal and recognized-stroke history (2026-08-26) — GREEN for issue 6
+
+- **Intent:** preserve the Task 1 pass-through for an outside Select click while
+  giving ink-producing tool popups a pending gesture boundary. A stationary
+  outside click must dismiss only; movement beyond the system drag threshold must
+  continue through the page's normal ink pipeline.
+- **History contract:** a newly smoothed/recognized stroke is one user action;
+  its ideal live stroke is removed by one Undo and restored by one Redo. Existing
+  snapshot/token-safe StrokeReplacedAction behavior for replacement sequences
+  remains unchanged.
+- **Compatibility guard:** a legacy four-argument recognition payload (or an
+  explicit `IsFreshStroke=false`) remains a snapshot replacement and Undo restores
+  the original stroke. The production collection event passes `true` explicitly.
+- **Evidence:** fresh recognition now records one placement-backed add/remove
+  action, while legacy replacement payloads retain snapshot Undo semantics. The
+  focused production filter passes `16/16`; the combined shape filter passes
+  `20/20`. Popup dismissal remains outside this issue slice.
+- **Open threads:** none for issue 6; the external pointer smoke boundary remains
+  unclaimed.
+
+## Task 3 live-ink thumbnails (2026-08-26) — GREEN for focused scope
+
+- **Intent:** preserve the clean Pdfium thumbnail as the base and composite the
+  current page's ordinary pen/highlighter strokes at the existing 42-DPI
+  thumbnail scale. Hidden ink, text and image overlays remain outside this path.
+- **Invalidation:** `PageControl_InkMutated` advances only the emitting page's
+  `ThumbnailRevisionGate` revision, removes that page from the bounded LRU and
+  refreshes a realized row. In-flight callbacks require both the existing
+  document/model lease and the captured page revision before cache/model publish;
+  a mutation during a render schedules one fresh realized-row render after the
+  old marker is cleared.
+- **Evidence:** `ThumbnailCompositorTests` was intentionally RED at `2/2`
+  before the helper existed and is GREEN at `2/2` after integration. The focused
+  compositor/sidebar/stale-operation filter passes `24/24`; expected Pdfium
+  NU1701 and WPF high-DPI warnings remain. PdfService's strip-and-rebuild path,
+  DIP coordinates, and 24-entry cache capacity are unchanged.
+- **Open threads:** none for the focused Task 3 implementation; parent may run
+  the full suite/build and release verification.
+
+## Issue 3 outside pen-popup gesture (2026-08-26) — GREEN for focused scope
+
+- **Intent:** dismiss an open Pen/Highlighter popup on a stationary outside click without leaving an ink stroke, undo entry, or dirty state; preserve a real drag from the same pointer-down as ordinary inking.
+- **Root cause:** `EditorPage_PreviewMouseDown` intentionally leaves immediate drawing-tool events unhandled so the page can draw, but native `InkCanvas` collects a tap before the editor can distinguish click from drag.
+- **Plan:** arm a page-local pending popup-dismissal gesture only for Pen/Highlighter, then let `PdfPageControl` discard only a collected stroke that never crosses WPF's system drag thresholds. Eraser and custom drag tools remain outside this guard.
+- **Reviewer follow-up:** the no-collection PenOnly mouse path is covered so a later short stroke cannot inherit stale dismissal state; `PdfPageControl` clears pending state from normal mouse-up and stylus-up lifecycle handlers.
+- **Overlay boundary:** arming now requires the actual page `InkCanvas` routed target. Interactive Hidden Ink paths remain eligible for their own reveal handler but cannot arm native-ink dismissal state.
+- **Evidence:** the Hidden Ink overlay regression was RED at `1 failure / 3 passes` before the target gate. Focused popup coverage is GREEN at `4/4`; `HiddenInkTests` pass `10/10`; relevant `PenOnlyInputTests` pass `1/1`, with only expected Pdfium/WPF warnings.
+- **Reviewer follow-up:** a RED regression covered dismissing an unrelated Select popup while Pen is active; arming now snapshots whether the active `_penPopup`/`_highlighterPopup` was open before `CloseTransientUi`, so only that active popup closure may arm native tap suppression.
+- **Evidence:** the unrelated-surface regression was RED at `1 failure / 4 passes` before the active-popup gate. Focused popup coverage is GREEN at `5/5`; `HiddenInkTests` pass `10/10`; `PenOnlyInputTests` pass `1/1`; `ShapeSelectionTests` pass `8/8`, with only expected Pdfium/WPF warnings.
+- **Open threads:** none for this focused issue-3 scope; parent integration may run the broader suite/build.
+
 ## Fixed sidebar / centered page navigation (2026-08-25) — GREEN
 
 - Remove the sidebar resize thumb, range automation peer, resize handlers and resize-only width state. Expanded width is fixed at 184 DIPs; explicit and narrow-window collapse remains 38 DIPs and expands back to 184.
@@ -305,6 +363,10 @@ Wave 1 note: shape replacement undo stores only session token/index and immutabl
 - **2026-08-20:** Immersive mode now hides/restores the toolbar, document sidebar and search panel and is reachable from the localized toolbar button as well as F11/ESC.
 
 ## Change History
+
+- 2026-08-26: Quiet stroke add/remove/replace events now invalidate only the owning live thumbnail; the handler intentionally omits dirty/history publication. Focused thumbnail + history/replacement + selection filters pass 28/28.
+
+- 2026-08-26: Quiet stroke add/remove/replace events now invalidate only the owning live thumbnail; the handler intentionally omits dirty/history publication. Focused thumbnail + history/replacement + selection filters pass 28/28.
 - 2026-08-24 Sticky editor UI repair: replaced the runtime flat action row with primary/secondary/destructive rounded buttons and added a Lucide grip header that moves only the transient editor popup. The persisted marker remains the page-bounded/undoable movement surface; popup dragging does not dirty the document or alter annotation DIP coordinates.
 
 - **2026-08-20:** External PDF/image imports now capture and restore bookmark sidecar snapshots and remap subsequent page indices for the full inserted range.

@@ -1,4 +1,5 @@
 # Services/ProductInfo.cs
+> 2026-08-26 GREEN: visible version is 5.2.3 for the editor regression-fix release; Caelum/WindowsNotesApp compatibility identifiers, data root and URLs are preserved.
 > Last updated: 2026-08-24（5.0.0 release metadata）| Protection: STANDARD
 
 ## Purpose
@@ -12,7 +13,7 @@ Single source of truth for the visible OpenNotes brand and the compatibility ide
 - `LegacyAppxIdentity`: `WindowsNotesApp`
 - `RepositoryUrl`: `https://github.com/Learnmore-smart/Windows-Notes`
 - `WebsiteUrl`: `https://learnmore-smart.github.io/Windows-Notes/`
-- `Version`: `5.2.2`
+- `Version`: `5.2.3`
 - `Description`: localized through `LocalizationService.Get("Product.Description")`
 
 ## Important Notes / NEVER Change
@@ -25,6 +26,8 @@ Single source of truth for the visible OpenNotes brand and the compatibility ide
 
 ## Open Threads / Resume Context
 
+- **Status:** GREEN (5.2.3 editor regression-fix release)
+- ProductInfoTests proved the 5.2.3 expectation RED against 5.2.2, then GREEN after this constant advanced; Caelum/WindowsNotesApp compatibility identifiers, data root and URLs remain unchanged.
 - **Status:** verified (5.2.2 navigation layout patch)
 - Only the visible version advances to `5.2.2`; compatibility names, data root and URLs remain unchanged.
 - **Status:** ready_for_release (5.2.1 large-PDF crash hotfix)
@@ -50,3 +53,4 @@ Single source of truth for the visible OpenNotes brand and the compatibility ide
 - 2026-08-24: Bumped the visible version to `5.2.0` for the toolbar, shapes and page-template feature release.
 - 2026-08-25: Bumped the visible version to `5.2.1` for the large-PDF session-lifecycle crash hotfix.
 - 2026-08-25: Bumped the visible version to `5.2.2` for the fixed sidebar and centered page navigator patch.
+- 2026-08-26: Bumped the visible version to `5.2.3` for the editor regression-fix release; compatibility identifiers and URLs remain unchanged.

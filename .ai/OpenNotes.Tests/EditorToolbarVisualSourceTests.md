@@ -1,13 +1,14 @@
 # OpenNotes.Tests/EditorToolbarVisualSourceTests.cs
 > Last updated: 2026-08-23 (Wave 3 P2 theme-token TDD RED/GREEN source contract) | Protection: STANDARD
 
-> 2026-08-25 RED/GREEN: toolbar polish rejects the obsolete resize style/metadata and requires a fixed sidebar plus centered page-jump overlay markers while retaining localized tooltips and existing icon contracts. The focused 23-test class passes.
+> 2026-08-26 RED/GREEN: Task 4 adds dedicated Laser/Hidden Ink semantics and compact toolbar-rhythm contracts; the focused 25-test class passes.
 
 ## Purpose
 
 Source-level contracts for the Wave 3 editor toolbar affordance repair. These tests protect the visible toolbar boundary without requiring a WPF desktop session: obsolete Fit/preset/Ink Analysis entry points must be absent, laser and highlighter visuals must be vector-backed, shape/highlighter popup choices must expose real previews, and toolbar metadata must remain localizable and stable.
 
 ## Open Threads / Resume Context
+- **Status:** ready_for_next — Task 4 source contracts are green for dedicated Laser/Hidden Ink vectors, uniform compact action cells/separators, preserved action IDs/order and the compact page-jump source shape. The production change remains limited to `Controls/LucideIcon.cs` and `Pages/EditorPage.xaml`; Hidden Ink’s existing test expectation follows the intentional vector rename.
 
 - **2026-08-24 GREEN result:** contracts require the accessible sidebar resize target and container right edge to render no vertical rail, require the custom themed/localized editor ToolTip path, reject doubled or per-tool-tinted Lucide toolbar glyphs, reject the shape checkmark overlay, and require the nine-choice 3×3 catalog. The focused editor contract passes 29/29 and the combined editor/navigation/localization slice passes 58/58.
 

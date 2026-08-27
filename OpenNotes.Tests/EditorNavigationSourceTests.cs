@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Threading;
+using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Automation.Provider;
@@ -334,8 +335,9 @@ public sealed class EditorNavigationSourceTests
             var editor = new EditorPage();
             SeedPageNavigationState(editor, 3);
             var pageJump = GetNamed<TextBox>(editor, "PageNumberTextBox");
-            var invalidKey = CreateKeyEventArgs(pageJump, Key.Enter);
-            var escapeKey = CreateKeyEventArgs(pageJump, Key.Escape);
+            using var keyEventSource = new SyntheticKeyEventSource(pageJump);
+            var invalidKey = keyEventSource.Create(Key.Enter);
+            var escapeKey = keyEventSource.Create(Key.Escape);
 
             InvokePrivate(editor, "PageNumberTextBox_GotKeyboardFocus", pageJump, null);
             pageJump.Text = "2";
@@ -516,6 +518,78 @@ public sealed class EditorNavigationSourceTests
         {
             window?.Close();
         }
+    }
+
+    [Test]
+    public void PageNavigatorUsesACompactSymmetricThreeColumnGroup()
+    {
+        var root = FindProjectRoot();
+        var xaml = File.ReadAllText(Path.Combine(root, "Pages", "EditorPage.xaml"));
+        int groupStart = xaml.IndexOf("<Grid x:Name=\"PageJumpGroup\"", StringComparison.Ordinal);
+        int groupEnd = xaml.IndexOf("</Grid>", groupStart, StringComparison.Ordinal);
+        Assert.That(groupStart, Is.GreaterThanOrEqualTo(0));
+        Assert.That(groupEnd, Is.GreaterThan(groupStart));
+        string group = xaml.Substring(groupStart, groupEnd - groupStart);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Regex.Matches(group, @"<ColumnDefinition\b").Count, Is.EqualTo(3));
+            Assert.That(group, Does.Contain("<ColumnDefinition Width=\"30\"/>"));
+            Assert.That(group, Does.Not.Contain("PageNumberLabel"), "The page group must not lay out a hidden duplicate current-page label.");
+            Assert.That(group, Does.Contain("x:Name=\"PageNumberTextBox\""));
+            Assert.That(group, Does.Contain("x:Name=\"PageCountText\""));
+            Assert.That(group, Does.Contain("Margin=\"2,0\""), "Current/total spacing must be symmetric.");
+            Assert.That(xaml, Does.Contain("x:Name=\"PageNumberLabel\""), "Legacy code-behind field remains available outside the layout group.");
+            Assert.That(xaml, Does.Not.Contain("Width=\"150\""));
+        });
+    }
+
+    [Test]
+    [Apartment(ApartmentState.STA)]
+    public void PageNavigatorKeepsSymmetricCenterAtNormalAndNarrowWidths()
+    {
+        EnsureWpfEnvironment();
+        var application = Application.Current ?? new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
+        AddRequiredResource(application, "ToolbarFocusVisualStyle", new Style(typeof(Control)));
+        AddRequiredResource(application, "SleekScrollViewer", new Style(typeof(ScrollViewer)));
+        AddRequiredResource(application, "CompactComboBox", new Style(typeof(ComboBox)));
+        AddThemeResources(application);
+
+        Window window = null;
+        try
+        {
+            var editor = new EditorPage();
+            DisablePenServiceForTest(editor);
+            window = new Window { Content = editor, Width = 720, Height = 540, ShowInTaskbar = false };
+            window.Show();
+            window.UpdateLayout();
+
+            var group = GetNamed<Grid>(editor, "PageJumpGroup");
+            var toolbar = GetNamed<Border>(editor, "ToolbarBorder");
+            var centered = GetNamed<Border>(editor, "CenteredPageJumpHost");
+            var previous = GetNamed<Button>(editor, "PreviousPageButton");
+            var next = GetNamed<Button>(editor, "NextPageButton");
+
+            Assert.That(group.ColumnDefinitions.Count, Is.EqualTo(3));
+            Assert.That(group.ColumnDefinitions[0].Width.Value, Is.EqualTo(group.ColumnDefinitions[2].Width.Value).Within(0.01));
+            Assert.That(previous.Width, Is.EqualTo(next.Width).Within(0.01));
+            Assert.That(centered.ActualWidth, Is.GreaterThan(0));
+            Assert.That(PageJumpCenter(centered, toolbar), Is.EqualTo(toolbar.ActualWidth / 2).Within(1));
+
+            window.Width = 360;
+            window.UpdateLayout();
+            Assert.That(centered.ActualWidth, Is.GreaterThan(0));
+            Assert.That(PageJumpCenter(centered, toolbar), Is.EqualTo(toolbar.ActualWidth / 2).Within(1));
+        }
+        finally
+        {
+            window?.Close();
+        }
+    }
+
+    private static double PageJumpCenter(FrameworkElement centered, FrameworkElement toolbar)
+    {
+        return centered.TranslatePoint(new Point(centered.ActualWidth / 2, 0), toolbar).X;
     }
 
     [Test]
@@ -742,23 +816,39 @@ public sealed class EditorNavigationSourceTests
         InvokePrivate(editor, "UpdatePageNumberIndicator");
     }
 
-    private static KeyEventArgs CreateKeyEventArgs(Visual input, Key key)
+    private sealed class SyntheticKeyEventSource : IDisposable
     {
-        var source = PresentationSource.FromVisual(input) ??
-            new HwndSource(new HwndSourceParameters("OpenNotesNavigationTest")
+        private readonly PresentationSource _presentationSource;
+        private readonly HwndSource? _fallbackSource;
+
+        public SyntheticKeyEventSource(Visual input)
+        {
+            _presentationSource = PresentationSource.FromVisual(input);
+            if (_presentationSource != null)
+                return;
+
+            _fallbackSource = new HwndSource(new HwndSourceParameters("OpenNotesNavigationTest")
             {
                 Width = 1,
                 Height = 1,
                 WindowStyle = 0x10000000
             });
-        return new KeyEventArgs(
+            _presentationSource = _fallbackSource;
+        }
+
+        public KeyEventArgs Create(Key key) => new(
             Keyboard.PrimaryDevice,
-            source,
+            _presentationSource,
             0,
             key)
         {
             RoutedEvent = Keyboard.KeyDownEvent
         };
+
+        public void Dispose()
+        {
+            _fallbackSource?.Dispose();
+        }
     }
 
     private static object InvokePrivate(EditorPage editor, string methodName, params object[] arguments)

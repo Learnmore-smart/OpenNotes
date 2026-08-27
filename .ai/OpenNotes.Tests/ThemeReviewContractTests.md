@@ -7,6 +7,8 @@ Exercise the second-pass Wave5 acceptance contracts that source-only palette tes
 
 ## RED/GREEN evidence
 
+- 2026-08-26 RED: isolated execution passed the first five tests, then nine later tests failed in SetUp because it constructed a second Application after the first test had already created Application.Current. The fixture must reuse the existing WPF application and clear only its resources between cases.
+
 - 2026-08-24 Settings-menu crash regression: `ManuallyOpenedMoreMenuSurvivesMissingPlacementTarget` opens a real WPF `ContextMenu` through the same programmatic `IsOpen` path as `MainWindow.MoreButton_Click`, leaves `PlacementTarget` null, and drains the deferred Render callback. RED reproduces the `ArgumentNullException` from `Window.GetWindow(null)` reported by the runtime event log.
 - 2026-08-24 Light-background regression: `LightNeutralUsesWhiteWindowDeskAndWorkspace` requires the Light/Neutral window, desk, canvas and workspace surround to resolve to opaque white, matching the user-visible expectation without tinting PDF page pixels.
 - 2026-08-24 startup-crash hotfix: `HomeTileHoverClonesFrozenTemplateScaleBeforeAnimating` uses the real private `HomePage.AnimateTileScale` path and a frozen template-style transform. RED reproduced the exact `InvalidOperationException` at line 100; GREEN proves hover replaces it with a mutable instance. Full suite passes 259/259.
@@ -36,3 +38,13 @@ dotnet test OpenNotes.Tests\OpenNotes.Tests.csproj --no-restore --filter "FullyQ
 Expected: 13 passed, 0 failed, 0 skipped. Desktop screenshot review remains an external/manual boundary and is not claimed without artifacts.
 
 The minimum-size French label set intentionally excludes the removed raw pen-default rows; all remaining visible labels still require wrap-safe layout and keyboard focus contracts.
+
+## Open Threads / Resume Context
+
+- **Status:** complete - `SetUp` reuses `Application.Current`, clears per-test resources, and creates an explicit-shutdown application only when needed. Isolated ThemeReviewContractTests passes 14/14 and the complete suite passes 303/303.
+
+## Change History
+
+| Date | Change | Author |
+|---|---|---|
+| 2026-08-26 | Reused the single WPF Application across SetUp calls; isolated ThemeReviewContractTests passes 14/14 and the full suite passes 303/303. | Codex |

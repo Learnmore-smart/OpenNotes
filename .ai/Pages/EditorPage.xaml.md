@@ -1,5 +1,5 @@
 # Pages/EditorPage.xaml
-> Last updated: 2026-08-24（Wave4 review follow-up + Wave5 theme/backdrop/runtime chrome GREEN）| Protection: STANDARD
+> Last updated: 2026-08-26（Task 4 semantic toolbar/nav GREEN）| Protection: STANDARD
 
 ## Purpose
 
@@ -13,6 +13,7 @@ Toolbar and editor-surface markup for the single OpenNotes PDF editor page.
 - Wave 3 replaces the remaining toolbar glyph placeholders with semantic vector geometry, removes visible preset slots and Fit Width/Fit Page controls, and keeps the compact zoom/page-jump controls. Highlighter and shape popup choices are vector previews with stable localized UIA metadata.
 
 ## Open Threads / Resume Context
+- **Status:** ready_for_next — Task 4 toolbar/nav repair is complete for the scoped visual/source/STA coverage. Laser uses a dedicated beam/dot vector, Hidden Ink uses a dedicated card/reveal vector, toolbar actions use compact 36-DIP cells with one separator style, and page navigation uses a centered symmetric three-column group. Handlers, localization, AutomationIds, one-based editing, action order, narrow-width scrolling and PDF geometry remain unchanged.
 - **Status:** complete for the 2026-08-24 toolbar/shape polish requested from screenshots. The top bar now uses one owner-foreground 18-DIP Lucide treatment with compact pen/highlighter color bars, editor ToolTips use a rounded themed WPF template while retaining localized metadata, and the sidebar's right border plus 32-DIP resize-thumb rail render no vertical line. The shape picker is a checkmark-free 3×3 grid. Handlers, AutomationIds, focus targets and PDF geometry are unchanged.
 - **Status:** in_progress for screenshot-driven editor chrome repair. Replace mixed toolbar/sidebar glyphs with a consistent scalable Lucide-style vector renderer, give page navigation an unambiguous previous/current/total/next structure, and prevent sidebar mode icons/labels from colliding. Preserve all handlers, AutomationIds, localization, 32-DIP targets and PDF geometry.
 - **Status:** Wave4 review follow-up remains in_progress. The implementation and deterministic STA/UIA contracts are green; the remaining status is intentionally open for the foreground/device visual boundary and the parent wave's final review bookkeeping.

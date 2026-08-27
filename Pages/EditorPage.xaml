@@ -70,7 +70,7 @@
             <Setter Property="Background" Value="Transparent"/>
             <Setter Property="Foreground" Value="{DynamicResource ThemeTextBrush}"/>
             <Setter Property="BorderThickness" Value="0"/>
-            <Setter Property="Padding" Value="10,8"/>
+            <Setter Property="Padding" Value="8,6"/>
             <Setter Property="MinWidth" Value="32"/>
             <Setter Property="MinHeight" Value="32"/>
             <Setter Property="FocusVisualStyle" Value="{StaticResource ToolbarFocusVisualStyle}"/>
@@ -119,7 +119,7 @@
             <Setter Property="Background" Value="Transparent"/>
             <Setter Property="Foreground" Value="{DynamicResource ThemeTextBrush}"/>
             <Setter Property="BorderThickness" Value="0"/>
-            <Setter Property="Padding" Value="10,8"/>
+            <Setter Property="Padding" Value="8,6"/>
             <Setter Property="MinWidth" Value="32"/>
             <Setter Property="MinHeight" Value="32"/>
             <Setter Property="FocusVisualStyle" Value="{StaticResource ToolbarFocusVisualStyle}"/>
@@ -161,6 +161,13 @@
                     </ControlTemplate>
                 </Setter.Value>
             </Setter>
+        </Style>
+
+        <Style x:Key="ToolbarSeparatorStyle" TargetType="Border">
+            <Setter Property="Width" Value="1"/>
+            <Setter Property="Height" Value="20"/>
+            <Setter Property="Margin" Value="6,8"/>
+            <Setter Property="Background" Value="{DynamicResource ThemeMenuSeparatorBrush}"/>
         </Style>
 
         <!-- Wave4: the document rail uses the same compact focus/selection
@@ -443,7 +450,7 @@
                 <!-- Undo -->
                 <Button x:Name="UndoButton" Click="UndoButton_Click"
                         Style="{StaticResource UndoRedoButtonStyle}"
-                        Width="42" Height="36" Margin="2,0" IsEnabled="False"
+                        Width="36" Height="36" Margin="1,0" IsEnabled="False"
                         AutomationProperties.AutomationId="Editor.UndoButton">
                     <controls:LucideIcon Kind="Undo2" Width="18" Height="18"
                                          Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
@@ -452,19 +459,19 @@
                 <!-- Redo -->
                 <Button x:Name="RedoButton" Click="RedoButton_Click"
                         Style="{StaticResource UndoRedoButtonStyle}"
-                        Width="42" Height="36" Margin="2,0" IsEnabled="False"
+                        Width="36" Height="36" Margin="1,0" IsEnabled="False"
                         AutomationProperties.AutomationId="Editor.RedoButton">
                     <controls:LucideIcon Kind="Redo2" Width="18" Height="18"
                                          Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
                 </Button>
 
                 <!-- Separator -->
-                <Border Width="1" Background="{DynamicResource ThemeMenuSeparatorBrush}" Margin="4,8"/>
+                <Border Style="{StaticResource ToolbarSeparatorStyle}"/>
 
                 <!-- Pen -->
                 <ToggleButton x:Name="PenToolButton" Click="PenToolButton_Click"
                         Style="{StaticResource ToolbarToggleButtonStyle}"
-                        Width="42" Height="36" Margin="2,0"
+                        Width="36" Height="36" Margin="1,0"
                         AutomationProperties.AutomationId="Editor.PenToolButton">
                     <Grid Width="22" Height="22">
                         <controls:LucideIcon x:Name="PenIcon" Kind="PenLine" Width="18" Height="18"
@@ -481,7 +488,7 @@
                 <!-- Highlighter -->
                 <ToggleButton x:Name="HighlighterToolButton" Click="HighlighterToolButton_Click"
                         Style="{StaticResource ToolbarToggleButtonStyle}"
-                        Width="42" Height="36" Margin="2,0"
+                        Width="36" Height="36" Margin="1,0"
                         AutomationProperties.AutomationId="Editor.HighlighterToolButton">
                     <Grid Width="22" Height="22">
                         <controls:LucideIcon x:Name="HighlighterIcon" Kind="Highlighter" Width="18" Height="18"
@@ -498,18 +505,18 @@
                 <!-- Study mode: freehand opaque mask, click to reveal briefly. -->
                 <ToggleButton x:Name="HiddenInkToolButton" Click="HiddenInkToolButton_Click"
                         Style="{StaticResource ToolbarToggleButtonStyle}"
-                        Width="42" Height="36" Margin="2,0"
+                        Width="36" Height="36" Margin="1,0"
                          AutomationProperties.AutomationId="HiddenInkToolButton">
                     <!-- A card/answer mark communicates covering a response and
                          its temporary reveal without using eye semantics. -->
-                    <controls:LucideIcon Kind="PanelTop" Width="18" Height="18"
+                    <controls:LucideIcon x:Name="HiddenInkIcon" Kind="HiddenInkReveal" Width="18" Height="18"
                                          Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=ToggleButton}}"/>
                 </ToggleButton>
 
                 <!-- Task 26: place a collapsible sticky-note annotation. -->
                 <ToggleButton x:Name="StickyNoteToolButton" Click="StickyNoteToolButton_Click"
                         Style="{StaticResource ToolbarToggleButtonStyle}"
-                        Width="42" Height="36" Margin="2,0"
+                        Width="36" Height="36" Margin="1,0"
                         AutomationProperties.AutomationId="Editor.StickyNoteToolButton">
                     <controls:LucideIcon Kind="StickyNote" Width="18" Height="18"
                                          Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=ToggleButton}}"/>
@@ -518,7 +525,7 @@
                 <!-- Eraser -->
                 <ToggleButton x:Name="EraserToolButton" Click="EraserToolButton_Click"
                         Style="{StaticResource ToolbarToggleButtonStyle}"
-                        Width="42" Height="36" Margin="2,0"
+                        Width="36" Height="36" Margin="1,0"
                         AutomationProperties.AutomationId="Editor.EraserToolButton">
                     <controls:LucideIcon x:Name="EraserIcon" Kind="Eraser" Width="18" Height="18"
                                          Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=ToggleButton}}"/>
@@ -527,7 +534,7 @@
                 <!-- Shape -->
                 <ToggleButton x:Name="ShapeToolButton" Click="ShapeToolButton_Click"
                         Style="{StaticResource ToolbarToggleButtonStyle}"
-                        Width="42" Height="36" Margin="2,0"
+                        Width="36" Height="36" Margin="1,0"
                         AutomationProperties.AutomationId="Editor.ShapeToolButton">
                     <controls:LucideIcon x:Name="ShapeIcon" Kind="Shapes" Width="18" Height="18"
                                          Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=ToggleButton}}"/>
@@ -536,9 +543,9 @@
                 <!-- Laser pointer (ephemeral ink that fades away; never saved) -->
                 <ToggleButton x:Name="LaserToolButton" Click="LaserToolButton_Click"
                         Style="{StaticResource ToolbarToggleButtonStyle}"
-                        Width="42" Height="36" Margin="2,0"
+                        Width="36" Height="36" Margin="1,0"
                         AutomationProperties.AutomationId="Editor.LaserToolButton">
-                    <controls:LucideIcon x:Name="LaserIcon" Kind="WandSparkles" Width="18" Height="18"
+                    <controls:LucideIcon x:Name="LaserIcon" Kind="Laser" Width="18" Height="18"
                                          Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=ToggleButton}}"/>
                 </ToggleButton>
 
@@ -547,7 +554,7 @@
                      pen strokes near its edge snap onto it. Never saved. -->
                 <ToggleButton x:Name="RulerToolButton" Click="RulerToolButton_Click"
                         Style="{StaticResource ToolbarToggleButtonStyle}"
-                        Width="42" Height="36" Margin="2,0"
+                        Width="36" Height="36" Margin="1,0"
                         AutomationProperties.AutomationId="Editor.RulerToolButton">
                     <controls:LucideIcon x:Name="RulerIcon" Kind="Ruler" Width="18" Height="18"
                                          Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=ToggleButton}}"/>
@@ -555,27 +562,27 @@
 
                 <!-- Reserve the toolbar midpoint for the centered page navigator. -->
                 <Border x:Name="PageJumpReservedSpace"
-                        Width="150"
+                        Width="144"
                         Height="36"
-                        Margin="2,0"
+                        Margin="1,0"
                         Background="Transparent"
                         IsHitTestVisible="False"/>
 
                 <!-- Select -->
                 <ToggleButton x:Name="SelectToolButton" Click="SelectToolButton_Click"
                         Style="{StaticResource ToolbarToggleButtonStyle}"
-                        Width="42" Height="36" Margin="2,0"
+                        Width="36" Height="36" Margin="1,0"
                         AutomationProperties.AutomationId="Editor.SelectToolButton">
                     <controls:LucideIcon x:Name="SelectIcon" Kind="MousePointer2" Width="18" Height="18"
                                          Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=ToggleButton}}"/>
                 </ToggleButton>
 
-                <Border Width="1" Background="{DynamicResource ThemeMenuSeparatorBrush}" Margin="4,8"/>
+                <Border Style="{StaticResource ToolbarSeparatorStyle}"/>
 
                 <!-- Text -->
                 <ToggleButton x:Name="TextToolButton" Click="TextToolButton_Click"
                         Style="{StaticResource ToolbarToggleButtonStyle}"
-                        Width="42" Height="36" Margin="2,0"
+                        Width="36" Height="36" Margin="1,0"
                         AutomationProperties.AutomationId="Editor.TextToolButton">
                     <controls:LucideIcon Kind="Type" Width="18" Height="18"
                                          Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=ToggleButton}}"/>
@@ -584,7 +591,7 @@
                 <!-- Save -->
                 <Button x:Name="SavePdfButton" Click="SavePdf_Click"
                         Style="{StaticResource ToolbarButtonStyle}"
-                        Width="42" Height="36" Margin="2,0"
+                        Width="36" Height="36" Margin="1,0"
                         AutomationProperties.AutomationId="Editor.SavePdfButton">
                     <controls:LucideIcon Kind="Save" Width="18" Height="18"
                                          Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
@@ -593,19 +600,19 @@
                 <!-- Version History -->
                 <Button x:Name="VersionHistoryButton" Click="VersionHistory_Click"
                         Style="{StaticResource ToolbarButtonStyle}"
-                        Width="42" Height="36" Margin="2,0"
+                        Width="36" Height="36" Margin="1,0"
                         AutomationProperties.AutomationId="Editor.VersionHistoryButton">
                     <controls:LucideIcon Kind="History" Width="18" Height="18"
                                          Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
                 </Button>
 
                 <!-- Separator -->
-                <Border Width="1" Background="{DynamicResource ThemeMenuSeparatorBrush}" Margin="4,8"/>
+                <Border Style="{StaticResource ToolbarSeparatorStyle}"/>
 
                 <!-- Pen-only drawing (palm rejection): only the stylus creates ink -->
                 <ToggleButton x:Name="PenOnlyButton" Click="PenOnlyButton_Click"
                         Style="{StaticResource ToolbarToggleButtonStyle}"
-                        Width="36" Height="36" Margin="2,0"
+                        Width="36" Height="36" Margin="1,0"
                         AutomationProperties.AutomationId="Editor.PenOnlyButton">
                     <controls:LucideIcon x:Name="PenOnlyIcon" Kind="PenLine" Width="18" Height="18"
                                          Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=ToggleButton}}"/>
@@ -614,7 +621,7 @@
                 <!-- Zoom Out -->
                 <Button x:Name="ZoomOutButton" Click="ZoomOutButton_Click"
                         Style="{StaticResource ToolbarButtonStyle}"
-                        Width="36" Height="36" Margin="2,0"
+                        Width="36" Height="36" Margin="1,0"
                         AutomationProperties.AutomationId="Editor.ZoomOutButton">
                     <controls:LucideIcon Kind="Minus" Width="18" Height="18"
                                          Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
@@ -638,14 +645,14 @@
                 <!-- Zoom In -->
                 <Button x:Name="ZoomInButton" Click="ZoomInButton_Click"
                         Style="{StaticResource ToolbarButtonStyle}"
-                        Width="36" Height="36" Margin="2,0"
+                        Width="36" Height="36" Margin="1,0"
                         AutomationProperties.AutomationId="Editor.ZoomInButton">
                     <controls:LucideIcon Kind="Plus" Width="18" Height="18"
                                          Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
                 </Button>
                 <Button x:Name="RotatePageButton" Click="RotateCurrentPage_Click"
                         Style="{StaticResource ToolbarButtonStyle}"
-                        Width="42" Height="36" Margin="2,0"
+                        Width="36" Height="36" Margin="1,0"
                         AutomationProperties.AutomationId="Editor.RotatePageButton">
                     <controls:LucideIcon Kind="RotateCcw" Width="18" Height="18"
                                          Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
@@ -665,71 +672,75 @@
                         BorderBrush="{DynamicResource ThemeBorderBrush}"
                         BorderThickness="1"
                         CornerRadius="9">
-                    <Grid x:Name="PageJumpGroup"
-                          Margin="2"
-                          VerticalAlignment="Center"
-                          AutomationProperties.AutomationId="Editor.PageJumpGroup">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="30"/>
-                            <ColumnDefinition Width="36"/>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="30"/>
-                        </Grid.ColumnDefinitions>
-                        <Button x:Name="PreviousPageButton"
-                                Grid.Column="0"
-                                Width="30" Height="30" MinWidth="30" MinHeight="30"
-                                Style="{StaticResource ToolbarButtonStyle}"
-                                Click="PreviousPageButton_Click"
-                                AutomationProperties.AutomationId="Editor.PreviousPageButton">
-                            <controls:LucideIcon Kind="ChevronLeft" Width="16" Height="16"
-                                                 Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
-                        </Button>
-                        <TextBox x:Name="PageNumberTextBox"
-                                 Grid.Column="1"
-                                 FontSize="13"
-                                 FontWeight="SemiBold"
-                                 Foreground="{DynamicResource ThemeForegroundBrush}"
-                                 Background="Transparent"
-                                 BorderBrush="Transparent"
-                                 BorderThickness="0"
-                                 VerticalAlignment="Center"
-                                 Width="36"
-                                 Height="32"
-                                 MinHeight="32"
-                                 Text="1"
-                                 TextAlignment="Center"
-                                 Padding="2,0"
-                                 FocusVisualStyle="{StaticResource ToolbarFocusVisualStyle}"
-                                 CaretBrush="{DynamicResource ThemeAccentBrush}"
-                                 SelectionBrush="{DynamicResource ThemeSelectionBrush}"
-                                 SelectionTextBrush="{DynamicResource ThemeSelectionForegroundBrush}"
-                                 KeyboardNavigation.IsTabStop="True"
-                                 AutomationProperties.AutomationId="Editor.PageJump"
-                                 GotKeyboardFocus="PageNumberTextBox_GotKeyboardFocus"
-                                 TextChanged="PageNumberTextBox_TextChanged"
-                                 KeyDown="PageNumberTextBox_KeyDown"
-                                 LostFocus="PageNumberTextBox_LostFocus"/>
+                    <Grid>
+                        <Grid x:Name="PageJumpGroup"
+                              Margin="2"
+                              HorizontalAlignment="Center"
+                              VerticalAlignment="Center"
+                              AutomationProperties.AutomationId="Editor.PageJumpGroup">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="30"/>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="30"/>
+                            </Grid.ColumnDefinitions>
+                            <Button x:Name="PreviousPageButton"
+                                    Grid.Column="0"
+                                    Width="30" Height="30" MinWidth="30" MinHeight="30"
+                                    Style="{StaticResource ToolbarButtonStyle}"
+                                    Click="PreviousPageButton_Click"
+                                    AutomationProperties.AutomationId="Editor.PreviousPageButton">
+                                <controls:LucideIcon Kind="ChevronLeft" Width="16" Height="16"
+                                                     Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
+                            </Button>
+                            <StackPanel Grid.Column="1"
+                                        Orientation="Horizontal"
+                                        VerticalAlignment="Center">
+                                <TextBox x:Name="PageNumberTextBox"
+                                         FontSize="13"
+                                         FontWeight="SemiBold"
+                                         Foreground="{DynamicResource ThemeForegroundBrush}"
+                                         Background="Transparent"
+                                         BorderBrush="Transparent"
+                                         BorderThickness="0"
+                                         VerticalAlignment="Center"
+                                         Width="36"
+                                         Height="32"
+                                         MinHeight="32"
+                                         Text="1"
+                                         TextAlignment="Center"
+                                         Padding="2,0"
+                                         FocusVisualStyle="{StaticResource ToolbarFocusVisualStyle}"
+                                         CaretBrush="{DynamicResource ThemeAccentBrush}"
+                                         SelectionBrush="{DynamicResource ThemeSelectionBrush}"
+                                         SelectionTextBrush="{DynamicResource ThemeSelectionForegroundBrush}"
+                                         KeyboardNavigation.IsTabStop="True"
+                                         AutomationProperties.AutomationId="Editor.PageJump"
+                                         GotKeyboardFocus="PageNumberTextBox_GotKeyboardFocus"
+                                         TextChanged="PageNumberTextBox_TextChanged"
+                                         KeyDown="PageNumberTextBox_KeyDown"
+                                         LostFocus="PageNumberTextBox_LostFocus"/>
+                                <TextBlock x:Name="PageCountText"
+                                           Text="/ 0"
+                                           MinWidth="36"
+                                           Margin="2,0"
+                                           FontSize="13"
+                                           Foreground="{DynamicResource ThemeSubtleTextBrush}"
+                                           VerticalAlignment="Center"/>
+                            </StackPanel>
+                            <Button x:Name="NextPageButton"
+                                    Grid.Column="2"
+                                    Width="30" Height="30" MinWidth="30" MinHeight="30"
+                                    Style="{StaticResource ToolbarButtonStyle}"
+                                    Click="NextPageButton_Click"
+                                    AutomationProperties.AutomationId="Editor.NextPageButton">
+                                <controls:LucideIcon Kind="ChevronRight" Width="16" Height="16"
+                                                     Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
+                            </Button>
+                        </Grid>
                         <TextBlock x:Name="PageNumberLabel"
-                                   Grid.Column="1"
                                    Text="0"
                                    Visibility="Collapsed"
                                    IsHitTestVisible="False"/>
-                        <TextBlock x:Name="PageCountText"
-                                   Grid.Column="2"
-                                   Text="/ 0"
-                                   Margin="3,0,4,0"
-                                   FontSize="13"
-                                   Foreground="{DynamicResource ThemeSubtleTextBrush}"
-                                   VerticalAlignment="Center"/>
-                        <Button x:Name="NextPageButton"
-                                Grid.Column="3"
-                                Width="30" Height="30" MinWidth="30" MinHeight="30"
-                                Style="{StaticResource ToolbarButtonStyle}"
-                                Click="NextPageButton_Click"
-                                AutomationProperties.AutomationId="Editor.NextPageButton">
-                            <controls:LucideIcon Kind="ChevronRight" Width="16" Height="16"
-                                                 Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
-                        </Button>
                     </Grid>
                 </Border>
             </Grid>

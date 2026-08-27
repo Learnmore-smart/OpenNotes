@@ -31,7 +31,10 @@ public sealed class ThemeReviewContractTests
     [SetUp]
     public void SetUp()
     {
-        var application = Application.Current ?? new Application();
+        var application = Application.Current ?? new Application
+        {
+            ShutdownMode = ShutdownMode.OnExplicitShutdown
+        };
         application.Resources.Clear();
     }
 

@@ -190,7 +190,9 @@ namespace Caelum.Controls
     /// <summary>
     /// Payload for a successful scribble shape recognition. The page has
     /// already replaced the original in place; consumers receive only copied
-    /// token/snapshot data so undo never retains live WPF strokes.
+    /// token/snapshot data so undo never retains live WPF strokes. Recognition
+    /// raised by InkCanvas collection is a fresh gesture; the discriminator is
+    /// retained so a future true replacement can keep snapshot-only history.
     /// </summary>
     public sealed class StrokeRecognizedEventArgs : EventArgs
     {
@@ -198,18 +200,21 @@ namespace Caelum.Controls
             Guid token,
             int originalIndex,
             StrokeReplacementSnapshot originalSnapshot,
-            StrokeReplacementSnapshot idealSnapshot)
+            StrokeReplacementSnapshot idealSnapshot,
+            bool isFreshStroke = false)
         {
             Token = token;
             OriginalIndex = originalIndex;
             OriginalSnapshot = originalSnapshot ?? throw new ArgumentNullException(nameof(originalSnapshot));
             IdealSnapshot = idealSnapshot ?? throw new ArgumentNullException(nameof(idealSnapshot));
+            IsFreshStroke = isFreshStroke;
         }
 
         public Guid Token { get; }
         public int OriginalIndex { get; }
         public StrokeReplacementSnapshot OriginalSnapshot { get; }
         public StrokeReplacementSnapshot IdealSnapshot { get; }
+        public bool IsFreshStroke { get; }
     }
 
     public sealed partial class PdfPageControl : UserControl, IInteractionCancellation
@@ -277,6 +282,8 @@ namespace Caelum.Controls
         /// </summary>
         public void CancelInteraction(string reason = null)
         {
+            _pendingPopupDismissalInkGesture = false;
+
             if (_stickyDragContainer != null)
                 EndStickyPointer(_stickyDragContainer, canceled: true);
 
@@ -343,6 +350,8 @@ namespace Caelum.Controls
         public event EventHandler<PdfTextSelectionPointerEventArgs> PdfTextSelectionPointerMoved;
         public event EventHandler<PdfTextSelectionPointerEventArgs> PdfTextSelectionPointerReleased;
         public event EventHandler InkMutated;
+        /// <summary>Raised after a quiet undo/redo/delete stroke mutation. Unlike InkMutated, this never marks the document dirty or creates history.</summary>
+        public event EventHandler QuietStrokeMutation;
         public event EventHandler<Stroke> StrokeCollectedUndoable;
         public event EventHandler<StrokesErasedEventArgs> StrokesErased;
         public event EventHandler<StrokeRecognizedEventArgs> StrokeRecognized;
@@ -371,6 +380,12 @@ namespace Caelum.Controls
 
         private DrawingAttributes _drawingAttributes;
         private CustomInkInputProcessingMode _currentMode = CustomInkInputProcessingMode.None;
+        // Armed by EditorPage when an outside Pen/Highlighter popup click is
+        // allowed to continue into this page. Native InkCanvas starts the
+        // gesture before it knows whether the pointer will move; collection
+        // time is the first boundary where a stationary tap can be removed
+        // without publishing InkMutated or an undo action.
+        private bool _pendingPopupDismissalInkGesture;
         private double _eraserSize = 20;
         private bool _isErasing;
         private StylusPointCollection _erasePoints;
@@ -841,6 +856,12 @@ namespace Caelum.Controls
 
         private void InkCanvas_StrokeCollected(object sender, InkCanvasStrokeCollectedEventArgs e)
         {
+            if (TrySuppressPendingPopupTap(e.Stroke))
+            {
+                e.Handled = true;
+                return;
+            }
+
             if (_currentMode == CustomInkInputProcessingMode.HiddenInk)
             {
                 CommitHiddenInkStroke(e.Stroke);
@@ -922,7 +943,8 @@ namespace Caelum.Controls
                             token,
                             originalIndex,
                             originalSnapshot,
-                            idealSnapshot));
+                            idealSnapshot,
+                            isFreshStroke: true));
                 }
                 return;
             }
@@ -932,6 +954,58 @@ namespace Caelum.Controls
 
             InkMutated?.Invoke(this, EventArgs.Empty);
             StrokeCollectedUndoable?.Invoke(this, stroke);
+        }
+
+        /// <summary>
+        /// Arms the page-local boundary used when EditorPage closes a
+        /// Pen/Highlighter popup from an outside page pointer. The pointer
+        /// remains unhandled so native InkCanvas can still become a real drag;
+        /// a stationary tap is removed in <see cref="InkCanvas_StrokeCollected" />.
+        /// </summary>
+        internal void ArmPendingPopupDismissalGesture()
+        {
+            if (_currentMode == CustomInkInputProcessingMode.Inking)
+                _pendingPopupDismissalInkGesture = true;
+        }
+
+        private bool TrySuppressPendingPopupTap(Stroke stroke)
+        {
+            if (!_pendingPopupDismissalInkGesture)
+                return false;
+
+            _pendingPopupDismissalInkGesture = false;
+            if (_currentMode != CustomInkInputProcessingMode.Inking
+                || StrokeCrossedSystemDragThreshold(stroke))
+            {
+                return false;
+            }
+
+            // The native InkCanvas has already inserted the collected stroke,
+            // but the normal mutation/undo events have not fired yet. Remove
+            // it quietly so a popup-dismissal tap has no visible or history
+            // side effects.
+            RemoveStrokeQuiet(stroke);
+            return true;
+        }
+
+        private static bool StrokeCrossedSystemDragThreshold(Stroke stroke)
+        {
+            if (stroke?.StylusPoints == null || stroke.StylusPoints.Count < 2)
+                return false;
+
+            var start = stroke.StylusPoints[0];
+            double horizontal = SystemParameters.MinimumHorizontalDragDistance;
+            double vertical = SystemParameters.MinimumVerticalDragDistance;
+            foreach (var point in stroke.StylusPoints)
+            {
+                if (Math.Abs(point.X - start.X) >= horizontal
+                    || Math.Abs(point.Y - start.Y) >= vertical)
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private void CommitHiddenInkStroke(Stroke stroke)
@@ -1167,6 +1241,30 @@ namespace Caelum.Controls
         }
 
         /// <summary>
+        /// Resolves a currently live stroke by its stable token and replacement
+        /// side. This is used by fresh recognition history after the page has
+        /// swapped the collected stroke for its Ideal shape; it deliberately
+        /// returns a live placement only after both token and side match.
+        /// </summary>
+        public bool TryCaptureCurrentStrokePlacement(
+            Guid token,
+            StrokeReplacementSide expectedSide,
+            out StrokePlacement current)
+        {
+            current = null;
+            if (token == Guid.Empty
+                || !TryFindCurrentStroke(token, out var currentStroke, out _)
+                || !_strokeMetadata.TryGetValue(currentStroke, out var metadata)
+                || metadata.Side != expectedSide)
+            {
+                return false;
+            }
+
+            current = CaptureStrokePlacement(currentStroke);
+            return true;
+        }
+
+        /// <summary>
         /// Removes only the exact live stroke represented by a placement.
         /// Unlike the normal logical-token removal used by replacement-aware
         /// undo, this is the identity guard required by cross-page transfer
@@ -1275,6 +1373,7 @@ namespace Caelum.Controls
             }
 
             ReplaceStrokeAt(index, replacementStroke, token, replacement.Side);
+            QuietStrokeMutation?.Invoke(this, EventArgs.Empty);
             return true;
         }
 
@@ -1680,6 +1779,7 @@ namespace Caelum.Controls
 
         private void InkCanvas_LostMouseCapture(object sender, MouseEventArgs e)
         {
+            _pendingPopupDismissalInkGesture = false;
             if (_isErasing || HasPendingEraseGesture())
             {
                 _isErasing = false;
@@ -1690,6 +1790,7 @@ namespace Caelum.Controls
 
         private void InkCanvas_LostStylusCapture(object sender, StylusEventArgs e)
         {
+            _pendingPopupDismissalInkGesture = false;
             if (_isErasing || HasPendingEraseGesture())
             {
                 _isErasing = false;
@@ -2113,6 +2214,11 @@ namespace Caelum.Controls
                     SetInputMode(_currentMode);
                 }
             }
+
+            // A PenOnly-blocked or otherwise intercepted stylus gesture may
+            // reach StylusUp without ever raising StrokeCollected. Do not let
+            // its popup-dismissal intent suppress a later unrelated stroke.
+            _pendingPopupDismissalInkGesture = false;
         }
 
         private void InkCanvas_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
@@ -2281,6 +2387,11 @@ namespace Caelum.Controls
             // is always flushed here; for pen input this is a no-op because
             // StylusUp has already flushed it.
             EndEraseGesture();
+
+            // A PenOnly-blocked or otherwise intercepted mouse gesture may
+            // reach MouseUp without ever raising StrokeCollected. Do not let
+            // its popup-dismissal intent suppress a later unrelated stroke.
+            _pendingPopupDismissalInkGesture = false;
         }
 
         #region Shape tool (drag-to-draw line / rectangle / ellipse / arrow)
@@ -3616,6 +3727,9 @@ namespace Caelum.Controls
 
         public void SetInputMode(CustomInkInputProcessingMode mode)
         {
+            if (mode != CustomInkInputProcessingMode.Inking)
+                _pendingPopupDismissalInkGesture = false;
+
             if (mode != CustomInkInputProcessingMode.Erasing &&
                 (_isErasing || HasPendingEraseGesture()))
             {
@@ -4065,6 +4179,7 @@ namespace Caelum.Controls
             _strokes.RemoveAt(index);
             _strokeMetadata.Remove(stroke);
             SynchronizeReplacementState();
+            QuietStrokeMutation?.Invoke(this, EventArgs.Empty);
             return true;
         }
 
@@ -4081,7 +4196,10 @@ namespace Caelum.Controls
                 return AddStrokeQuiet(placement.ForOwner(this, index));
             }
 
-            return AddStrokeToCollection(stroke);
+            var added = AddStrokeToCollection(stroke);
+            if (added != null)
+                QuietStrokeMutation?.Invoke(this, EventArgs.Empty);
+            return added;
         }
 
         public bool RemoveStrokeQuiet(StrokePlacement placement)
@@ -4135,6 +4253,8 @@ namespace Caelum.Controls
                 placement.Token,
                 placement.Side,
                 placement.Index);
+            if (added != null)
+                QuietStrokeMutation?.Invoke(this, EventArgs.Empty);
             return added;
         }
 
@@ -5734,7 +5854,9 @@ namespace Caelum.Controls
             if (stroke.HitTest(point, 8))
                 return true;
 
-            // 2. If it's a closed shape (first and last vertices meet), check if the point is inside the shape polygon
+            // 2. Closed shapes use their actual polygon interior. Do not fall
+            // back to the axis-aligned bounds for these strokes, or a click in
+            // a corner outside a triangle/ellipse would select it.
             var pts = stroke.StylusPoints;
             if (pts.Count >= 4)
             {
@@ -5748,10 +5870,15 @@ namespace Caelum.Controls
 
                     if (IsPointInPolygon(poly, point))
                         return true;
+
+                    return false;
                 }
             }
 
-            return stroke.GetBounds().Contains(point) && (stroke.GetBounds().Width <= 16 || stroke.GetBounds().Height <= 16);
+            // 3. Freehand/open drawings are selectable anywhere in their
+            // visible bounded area. This restores the broad-stroke behavior
+            // without expanding the hit target beyond the stroke bounds.
+            return stroke.GetBounds().Contains(point);
         }
 
         private void ToggleStrokeSelection(Stroke stroke)

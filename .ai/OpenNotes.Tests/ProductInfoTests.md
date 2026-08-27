@@ -1,4 +1,5 @@
 # OpenNotes.Tests/ProductInfoTests.cs
+> 2026-08-26 GREEN: visible-version assertion is 5.2.3; ProductInfoTests proved RED before production metadata changes and GREEN afterward, with all compatibility assertions preserved.
 > Last updated: 2026-08-24（5.0.0 release metadata coverage） | Protection: STANDARD
 
 ## Purpose
@@ -7,6 +8,8 @@ Verify the visible OpenNotes brand while protecting the Caelum data-directory an
 
 ## Open Threads / Resume Context
 
+- **Status:** GREEN (5.2.3 editor regression-fix release)
+- The focused ProductInfoTests run was RED against ProductInfo.Version 5.2.2 after changing the expectation, then GREEN after production metadata advanced to 5.2.3; all OpenNotes/Caelum/WindowsNotesApp compatibility assertions remain unchanged.
 - **Status:** GREEN (5.2.2 navigation layout patch)
 - The visible-version assertion expects `5.2.2`; all compatibility assertions remain unchanged.
 - **Status:** complete (5.2.1 hotfix release)
@@ -26,6 +29,7 @@ Verify the visible OpenNotes brand while protecting the Caelum data-directory an
 
 | Date | Change | Author |
 |---|---|---|
+| 2026-08-26 | Advanced the visible-version contract to 5.2.3 with verified RED/GREEN coverage and unchanged compatibility assertions. | Codex |
 | 2026-08-25 | Advanced the RED visible-version assertion to 5.2.2 without changing compatibility contracts. | Codex |
 | 2026-08-25 | Updated the visible-version assertion to 5.2.1 for the large-PDF crash hotfix. | Codex |
 | 2026-08-24 | Updated the visible-version assertion to 5.2.0 without changing compatibility contracts. | Codex |

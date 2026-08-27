@@ -384,6 +384,12 @@ namespace Caelum.Pages
                 _page = page;
                 _placement = page.CaptureStrokePlacement(stroke);
             }
+
+            public StrokeAddedAction(PdfPageControl page, StrokePlacement placement)
+            {
+                _page = page ?? throw new ArgumentNullException(nameof(page));
+                _placement = placement ?? throw new ArgumentNullException(nameof(placement));
+            }
             public bool LeavesDocumentDirty => true;
             public Task UndoAsync()
             {
@@ -1713,6 +1719,7 @@ namespace Caelum.Pages
         // marker generation-scoped so an old callback cannot block the same
         // page index in the replacement document (or clear its marker).
         private readonly Dictionary<int, int> _thumbnailPageLoadSessions = new Dictionary<int, int>();
+        private readonly ThumbnailRevisionGate _thumbnailRevisionGate = new();
         private const int ThumbnailCacheCapacity = 24;
         private readonly Dictionary<int, BitmapSource> _thumbnailCache = new Dictionary<int, BitmapSource>();
         private readonly LinkedList<int> _thumbnailCacheLru = new LinkedList<int>();
@@ -6292,7 +6299,10 @@ namespace Caelum.Pages
         {
             if (ShouldClosePopupOnPointerDown(e.OriginalSource as DependencyObject, out bool consumePointerEvent))
             {
+                bool shouldArmPopupDismissal = IsActiveInkPopupOpen();
                 CloseTransientUi("outside click");
+                if (shouldArmPopupDismissal)
+                    ArmPopupDismissalGestureIfNeeded(e.OriginalSource as DependencyObject);
                 e.Handled = consumePointerEvent;
             }
         }
@@ -6301,9 +6311,49 @@ namespace Caelum.Pages
         {
             if (ShouldClosePopupOnPointerDown(e.OriginalSource as DependencyObject, out bool consumePointerEvent))
             {
+                bool shouldArmPopupDismissal = IsActiveInkPopupOpen();
                 CloseTransientUi("outside click");
+                if (shouldArmPopupDismissal)
+                    ArmPopupDismissalGestureIfNeeded(e.OriginalSource as DependencyObject);
                 e.Handled = consumePointerEvent;
             }
+        }
+
+        private bool IsActiveInkPopupOpen()
+        {
+            return _currentTool switch
+            {
+                ToolType.Pen => _penPopup?.IsOpen == true,
+                ToolType.Highlighter => _highlighterPopup?.IsOpen == true,
+                _ => false
+            };
+        }
+
+        private void ArmPopupDismissalGestureIfNeeded(DependencyObject originalSource)
+        {
+            // Only native freehand ink has a collection-time tap to suppress.
+            // Shape/laser/area-highlight already own their drag threshold, and
+            // eraser input is intentionally left untouched.
+            if (_currentTool != ToolType.Pen && _currentTool != ToolType.Highlighter)
+            {
+                return;
+            }
+
+            var page = FindAncestor<PdfPageControl>(originalSource);
+            if (page == null)
+                return;
+
+            // The page has several interactive overlay descendants. Hidden Ink
+            // paths consume their own click and never enter native InkCanvas,
+            // so arming from any PdfPageControl descendant would leave stale
+            // dismissal state for a later unrelated stroke. Keep ordinary
+            // native InkCanvas children eligible by resolving the routed target
+            // to the page's actual InkCanvas instance.
+            var nativeInkCanvas = FindAncestor<InkCanvas>(originalSource);
+            if (nativeInkCanvas == null || !ReferenceEquals(nativeInkCanvas, page.InkCanvas))
+                return;
+
+            page.ArmPendingPopupDismissalGesture();
         }
 
         private bool ShouldClosePopupOnPointerDown(DependencyObject originalSource, out bool consumePointerEvent)
@@ -6336,7 +6386,10 @@ namespace Caelum.Pages
                 return false;
             }
 
-            consumePointerEvent = !IsImmediateDrawingToolActive();
+            // Select's popup is a configuration surface for the canvas below.
+            // Dismiss it, but let the same outside pointer continue to the
+            // page-local selection handler so the first click is not lost.
+            consumePointerEvent = _currentTool != ToolType.Select && !IsImmediateDrawingToolActive();
             return true;
         }
 
@@ -6511,6 +6564,7 @@ namespace Caelum.Pages
             CancelActiveLoad();
             _loadCts = new CancellationTokenSource();
             var sessionId = Interlocked.Increment(ref _loadSessionId);
+            _thumbnailRevisionGate.BeginSession(sessionId);
             _documentOperationSession.Begin(sessionId, filePath, _pdfService);
             var loadLease = CaptureDocumentOperationLease(
                 sessionId,
@@ -6593,6 +6647,7 @@ namespace Caelum.Pages
                     pageControl.PdfTextSelectionPointerMoved += PageControl_PdfTextSelectionPointerMoved;
                     pageControl.PdfTextSelectionPointerReleased += PageControl_PdfTextSelectionPointerReleased;
                     pageControl.InkMutated += PageControl_InkMutated;
+                    pageControl.QuietStrokeMutation += PageControl_QuietStrokeMutation;
                     pageControl.StrokeCollectedUndoable += PageControl_StrokeCollectedUndoable;
                     pageControl.StrokesErased += PageControl_StrokesErased;
                     pageControl.StrokeRecognized += PageControl_StrokeRecognized;
@@ -6846,6 +6901,7 @@ namespace Caelum.Pages
                 loadingSessionId == sessionId)
                 return;
             var externalToken = _thumbnailLoadCts?.Token ?? CancellationToken.None;
+            int thumbnailRevision = _thumbnailRevisionGate.CaptureRevision(model.PageIndex);
             using var operationLease = CaptureDocumentOperationLease(
                 sessionId,
                 filePath,
@@ -6868,11 +6924,25 @@ namespace Caelum.Pages
                 var bitmap = await _pdfService.RenderPageBitmapSourceAsync(model.PageIndex, 0.22, token);
                 token.ThrowIfCancellationRequested();
                 bool liveModel = ReferenceEquals(item.DataContext, model) && _sidebarPageItems.Contains(model);
-                if (!ValidateDocumentOperationLease(operationLease, model) || !_isHostActive || _resourcesReleased || !liveModel)
+                if (!ValidateDocumentOperationLease(operationLease, model) || !_isHostActive || _resourcesReleased || !liveModel
+                    || !_thumbnailRevisionGate.IsCurrent(model.PageIndex, sessionId, thumbnailRevision))
                     return;
+
+                var pageControl = GetThumbnailPageControl(model.PageIndex);
+                bitmap = ThumbnailCompositor.Composite(
+                    bitmap,
+                    pageControl?.GetStrokeData(),
+                    pageControl?.Width ?? 0,
+                    pageControl?.Height ?? 0);
+                if (!ValidateDocumentOperationLease(operationLease, model) || !_isHostActive || _resourcesReleased
+                    || !ReferenceEquals(item.DataContext, model) || !_sidebarPageItems.Contains(model)
+                    || !_thumbnailRevisionGate.IsCurrent(model.PageIndex, sessionId, thumbnailRevision))
+                    return;
+
                 CacheThumbnail(model.PageIndex, bitmap);
                 if (ValidateDocumentOperationLease(operationLease, model) &&
-                    ReferenceEquals(item.DataContext, model) && _sidebarPageItems.Contains(model))
+                    ReferenceEquals(item.DataContext, model) && _sidebarPageItems.Contains(model)
+                    && _thumbnailRevisionGate.IsCurrent(model.PageIndex, sessionId, thumbnailRevision))
                     model.Thumbnail = bitmap;
             }
             catch (OperationCanceledException)
@@ -6889,11 +6959,23 @@ namespace Caelum.Pages
             }
             finally
             {
+                bool shouldReloadAfterMutation =
+                    !_thumbnailRevisionGate.IsCurrent(model.PageIndex, sessionId, thumbnailRevision);
                 if (_thumbnailPageLoadSessions.TryGetValue(model.PageIndex, out int ownedSessionId) &&
                     ownedSessionId == sessionId)
                 {
                     _thumbnailPageLoadSessions.Remove(model.PageIndex);
                     _thumbnailPagesLoading.Remove(model.PageIndex);
+                }
+
+                if (shouldReloadAfterMutation && _isHostActive && !_resourcesReleased
+                    && IsSidebarLoadCurrent(sessionId, filePath)
+                    && item.IsLoaded && ReferenceEquals(item.DataContext, model)
+                    && _sidebarPageItems.Contains(model))
+                {
+                    ThumbnailListBoxItem_Loaded(
+                        item,
+                        new RoutedEventArgs(FrameworkElement.LoadedEvent, item));
                 }
             }
         }
@@ -7013,6 +7095,45 @@ namespace Caelum.Pages
                 if (evictedModel != null && ReferenceEquals(evictedModel.Thumbnail, evictedBitmap))
                     evictedModel.Thumbnail = null;
             }
+        }
+
+        private PdfPageControl GetThumbnailPageControl(int pageIndex)
+        {
+            return _pageControls.FirstOrDefault(page => page != null && page.PageIndex == pageIndex);
+        }
+
+        private void InvalidateThumbnailForPage(int pageIndex)
+        {
+            if (pageIndex < 0)
+                return;
+
+            _thumbnailRevisionGate.InvalidatePage(pageIndex);
+            if (_thumbnailCache.Remove(pageIndex, out var oldBitmap))
+                _thumbnailCacheLru.Remove(pageIndex);
+
+            var model = _sidebarPageItems.FirstOrDefault(page => page.PageIndex == pageIndex);
+            if (model != null && (oldBitmap == null || ReferenceEquals(model.Thumbnail, oldBitmap)))
+                model.Thumbnail = null;
+
+            // Leave an in-flight marker in place. Its finally block observes
+            // the revision mismatch, removes only its own session marker, and
+            // starts one fresh render for the realized row. Clearing the
+            // marker here would let the old callback remove a newer marker.
+            if (_thumbnailPageLoadSessions.ContainsKey(pageIndex)
+                || ThumbnailListBox == null || !_isHostActive || _resourcesReleased
+                || model == null)
+                return;
+
+            int itemIndex = _sidebarPageItems.IndexOf(model);
+            if (itemIndex < 0
+                || ThumbnailListBox.ItemContainerGenerator.ContainerFromIndex(itemIndex) is not ListBoxItem item
+                || !item.IsLoaded
+                || !ReferenceEquals(item.DataContext, model))
+                return;
+
+            ThumbnailListBoxItem_Loaded(
+                item,
+                new RoutedEventArgs(FrameworkElement.LoadedEvent, item));
         }
 
         private void ClearThumbnailCache()
@@ -13081,7 +13202,18 @@ namespace Caelum.Pages
             await Task.CompletedTask;
         }
 
-        private void PageControl_InkMutated(object sender, EventArgs e) => MarkDirty();
+        private void PageControl_InkMutated(object sender, EventArgs e)
+        {
+            MarkDirty();
+            if (sender is PdfPageControl page)
+                InvalidateThumbnailForPage(page.PageIndex);
+        }
+
+        private void PageControl_QuietStrokeMutation(object sender, EventArgs e)
+        {
+            if (sender is PdfPageControl page)
+                InvalidateThumbnailForPage(page.PageIndex);
+        }
 
         private void PageControl_HiddenInkCreated(object sender, HiddenInkAnnotation annotation)
         {
@@ -13580,12 +13712,31 @@ namespace Caelum.Pages
         private void PageControl_StrokeRecognized(object sender, StrokeRecognizedEventArgs e)
         {
             if (sender is PdfPageControl page)
+            {
+                // InkCanvas recognition is a fresh user gesture. The page has
+                // already replaced its raw/smoothed stroke with the Ideal live
+                // stroke, so one Undo must remove the whole gesture instead
+                // of exposing the polishing snapshot as an extra history step.
+                // Keep the existing snapshot action for any future true
+                // replacement event, and only accept a live placement after
+                // token + Ideal-side validation.
+                if (e.IsFreshStroke
+                    && page.TryCaptureCurrentStrokePlacement(
+                        e.Token,
+                        StrokeReplacementSide.Ideal,
+                        out var idealPlacement))
+                {
+                    PushUndoAction(new StrokeAddedAction(page, idealPlacement));
+                    return;
+                }
+
                 PushUndoAction(new StrokeReplacedAction(
                     page,
                     e.Token,
                     e.OriginalIndex,
                     e.OriginalSnapshot,
                     e.IdealSnapshot));
+            }
         }
 
         private void MarkDirty()
@@ -13671,6 +13822,7 @@ namespace Caelum.Pages
                     UIElement.PreviewMouseDownEvent,
                     new MouseButtonEventHandler(PageControl_PreviewMouseDown));
                 pageControl.InkMutated -= PageControl_InkMutated;
+                pageControl.QuietStrokeMutation -= PageControl_QuietStrokeMutation;
                 pageControl.StrokeCollectedUndoable -= PageControl_StrokeCollectedUndoable;
                 pageControl.StrokesErased -= PageControl_StrokesErased;
                 pageControl.StrokeRecognized -= PageControl_StrokeRecognized;

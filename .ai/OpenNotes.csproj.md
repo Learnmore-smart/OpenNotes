@@ -1,4 +1,5 @@
 # OpenNotes.csproj
+> 2026-08-26 GREEN: package/assembly/file/informational metadata are 5.2.3/5.2.3.0 for the editor regression-fix release; `RootNamespace=Caelum` and all storage/package compatibility identities are preserved.
 > Last updated: 2026-08-24（5.0.0 release metadata） | Protection: STANDARD
 
 > 2026-08-25 GREEN: package/assembly/file/informational metadata are 5.2.2/5.2.2.0 for the fixed-sidebar and centered-page-navigation patch; `RootNamespace=Caelum` and all storage/package compatibility identities are preserved.
@@ -12,11 +13,13 @@ The build definition for the OpenNotes desktop application. The file name, assem
 - Keep `RootNamespace` as `Caelum` until a separately versioned namespace migration exists.
 - Keep the `%LOCALAPPDATA%\Caelum` data directory and `WindowsNotesApp` AppX identity as legacy compatibility identifiers.
 - Keep `OpenNotes` as `AssemblyName`, `Product`, and the project filename so new builds and installers use the renamed product.
-- Release metadata is `5.0.0`/`5.0.0.0`; retain `RootNamespace=Caelum` for compatibility.
+- Release metadata is being advanced to `5.2.3`/`5.2.3.0`; retain `RootNamespace=Caelum` for compatibility.
 - The test project references this file through `..\OpenNotes.csproj`.
 
 ## Open Threads / Resume Context
 
+- **Status:** complete
+- Release metadata is `5.2.3`/`5.2.3.0`; ProductInfoTests proved RED against the stale value before the source metadata update and GREEN afterward. No compatibility identifiers changed.
 - **Status:** complete
 - The rename and executable-icon verification are complete. `ApplicationIcon` remains pointed at `Assets/app-icon.ico`; the asset now carries native Windows shell sizes through 256×256.
 
@@ -24,6 +27,7 @@ The build definition for the OpenNotes desktop application. The file name, assem
 
 | Date | Change | Author |
 |---|---|---|
+| 2026-08-26 | Bumped assembly/package metadata to 5.2.3/5.2.3.0 while preserving legacy compatibility identifiers; focused ProductInfo tests are GREEN. | Codex |
 | 2026-08-24 | Bumped assembly/package metadata to OpenNotes 5.0.0 for the release. | Codex |
 | 2026-08-23 | Verified the unchanged `ApplicationIcon` binding against the rebuilt high-resolution multi-frame ICO. | Codex |
 | 2026-08-20 | Renamed the project file and assembly-facing build identity from Caelum to OpenNotes while retaining legacy namespace/data compatibility. | Codex |

@@ -2,13 +2,14 @@
 
 > V5.1.2 expands the shared geometry catalog and maps historical icon identifiers to Lucide vectors.
 
-> Last updated: 2026-08-24 | Protection: STANDARD
+> Last updated: 2026-08-26 | Protection: STANDARD
 
 ## Purpose
 
 Provides one theme-aware WPF renderer for the consistent open-source Lucide-style vector icons used by editor chrome.
 
 ## Open Threads / Resume Context
+- **Status:** ready_for_next — Task 4 named `Laser` beam/dot and `HiddenInkReveal` card/reveal geometries are implemented and used by the editor toolbar. The renderer remains font-independent, owner-foreground driven, and independent of annotation/PDF colors.
 
 - **Status:** implemented
 - **Intent:** replace mixed font glyphs and one-off toolbar geometry with named 24-unit vector icons while preserving existing button handlers, IDs, tooltips and target sizes.

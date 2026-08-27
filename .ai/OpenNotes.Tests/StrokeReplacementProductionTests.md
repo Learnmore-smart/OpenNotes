@@ -5,6 +5,20 @@
 
 Exercise the real STA/WPF `PdfPageControl` and nested `EditorPage` undo actions for stable stroke placement identity, pressure/`IgnorePressure` snapshot fidelity, cross-page ownership, and protected stroke access.
 
+## Recognized-stroke history follow-up (2026-08-26) — GREEN
+
+- **Intent:** reproduce the real WPF collection → smoothing → recognition event
+  and route it through `EditorPage.PageControl_StrokeRecognized`; one fresh ideal
+  stroke must undo to zero strokes and redo to the same ideal token/side.
+- **RED/GREEN evidence:** the initial fresh-recognition test was `14/15` because
+  Undo restored the Ideal stroke's smoothing snapshot. The reviewer regression
+  then failed while the four-argument discriminator defaulted to fresh. After
+  the default was changed to replacement-safe and the real collection event
+  opted into fresh history explicitly, focused production coverage is `16/16`
+  and combined shape coverage is `20/20`.
+- **Open threads:** no automated issue-6 work remains; the dedicated pointer
+  smoke remains unavailable and is not claimed.
+
 ## Open Threads / Resume Context
 
 - **Status:** final P1 stale-placement and same-token/side conflict follow-up complete for automated scope after deliberate RED/GREEN; 14 STA/WPF production tests pass
@@ -31,3 +45,4 @@ Exercise the real STA/WPF `PdfPageControl` and nested `EditorPage` undo actions 
 | 2026-08-23 | Production placement/token implementation reached GREEN: 5/5 tests pass, including real `StrokeReplacedAction`, and the full suite passes 113/113. | Codex |
 | 2026-08-23 | Added deliberate same-token/same-side cross-page conflict RED/GREEN and exact live-reference rollback; the combined Wave 2/Wave 1 production filter passes 44/44. | Codex |
 | 2026-08-23 | Added STA/WPF multi-selection transaction coverage for both a later target identity conflict and a later stale source capture; all earlier adds roll back and no transfer is reported. | Codex |
+| 2026-08-26 | Added fresh-recognition add/remove history and a legacy four-argument compatibility regression; focused production coverage passes 16/16 and combined shape coverage passes 20/20. | Codex |

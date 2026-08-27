@@ -1,9 +1,12 @@
 using System.Reflection;
 using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Ink;
 using System.Windows.Input;
 using System.Windows.Media;
 using Caelum.Controls;
+using Caelum.Pages;
 using NUnit.Framework;
 
 namespace Caelum.Tests;
@@ -15,6 +18,18 @@ public sealed class ShapeSelectionTests
     private static readonly MethodInfo HitStrokeMethod =
         typeof(PdfPageControl).GetMethod("HitStroke", BindingFlags.Static | BindingFlags.NonPublic)
         ?? throw new InvalidOperationException("PdfPageControl.HitStroke was not found.");
+
+    private static readonly MethodInfo HandleCtrlClickToggleMethod =
+        typeof(PdfPageControl).GetMethod("HandleCtrlClickToggle", BindingFlags.Instance | BindingFlags.NonPublic)
+        ?? throw new InvalidOperationException("PdfPageControl.HandleCtrlClickToggle was not found.");
+
+    private static readonly MethodInfo ShouldClosePopupOnPointerDownMethod =
+        typeof(EditorPage).GetMethod("ShouldClosePopupOnPointerDown", BindingFlags.Instance | BindingFlags.NonPublic)
+        ?? throw new InvalidOperationException("EditorPage.ShouldClosePopupOnPointerDown was not found.");
+
+    private static readonly MethodInfo EditorPagePreviewMouseDownMethod =
+        typeof(EditorPage).GetMethod("EditorPage_PreviewMouseDown", BindingFlags.Instance | BindingFlags.NonPublic)
+        ?? throw new InvalidOperationException("EditorPage.EditorPage_PreviewMouseDown was not found.");
 
     private static readonly MethodInfo IsStrokeInsidePolygonMethod =
         typeof(PdfPageControl).GetMethod("IsStrokeInsidePolygon", BindingFlags.Static | BindingFlags.NonPublic)
@@ -62,6 +77,156 @@ public sealed class ShapeSelectionTests
     }
 
     [Test]
+    public void BroadOpenStrokeInteriorUsesBoundedFallback()
+    {
+        var stroke = CreateStroke(
+            new Point(20, 20),
+            new Point(20, 120),
+            new Point(120, 120));
+
+        var interiorPoint = new Point(90, 45);
+        var isHit = (bool)HitStrokeMethod.Invoke(null, new object[] { stroke, interiorPoint })!;
+        Assert.That(isHit, Is.True,
+            "A broad open drawing must remain selectable from its visible bounded area, not only on its sampled path.");
+
+        var outsidePoint = new Point(140, 45);
+        var isOutsideHit = (bool)HitStrokeMethod.Invoke(null, new object[] { stroke, outsidePoint })!;
+        Assert.That(isOutsideHit, Is.False, "The bounded fallback must not select outside the drawing bounds.");
+    }
+
+    [Test]
+    [Apartment(System.Threading.ApartmentState.STA)]
+    public void OpenSelectPopupDoesNotConsumeFirstCanvasSelectionClick()
+    {
+        EnsureWpfEnvironment();
+        EnsureTestApplication();
+
+        var editor = new EditorPage();
+        SetCurrentTool(editor, "Select");
+        var popup = GetPrivateField<Popup>(editor, "_selectionPopup");
+
+        try
+        {
+            popup.IsOpen = true;
+
+            var invocationArguments = new object?[] { new Border(), false };
+            var closesPopup = (bool)ShouldClosePopupOnPointerDownMethod.Invoke(
+                editor, invocationArguments)!;
+
+            Assert.That(closesPopup, Is.True, "An outside canvas pointer must still dismiss the Select popup.");
+            Assert.That(invocationArguments[1], Is.EqualTo(false),
+                "The dismissal pointer must continue to the canvas so the first selection click is not lost.");
+        }
+        finally
+        {
+            popup.IsOpen = false;
+        }
+    }
+
+    [Test]
+    [Apartment(System.Threading.ApartmentState.STA)]
+    public void FirstPostDismissalCanvasGestureSelectsStrokeThroughEditorRoute()
+    {
+        EnsureWpfEnvironment();
+        EnsureTestApplication();
+
+        var editor = new EditorPage();
+        SetCurrentTool(editor, "Select");
+        var popup = GetPrivateField<Popup>(editor, "_selectionPopup");
+        var page = new PdfPageControl { Width = 240, Height = 240 };
+        var stroke = CreateStroke(
+            new Point(20, 20),
+            new Point(20, 120),
+            new Point(120, 120));
+
+        page.AddStrokeQuiet(stroke);
+        page.SetSelectionFilter(SelectionFilter.DrawingsOnly);
+        page.SetSelectionShape(SelectionShape.FreeForm);
+        page.SetSelectionMode(true);
+        var pageControls = typeof(EditorPage).GetField("_pageControls", BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new AssertionException("EditorPage._pageControls was not found.");
+        ((System.Collections.IList)pageControls.GetValue(editor)!).Add(page);
+
+        try
+        {
+            popup.IsOpen = true;
+            var pointer = new MouseButtonEventArgs(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Left)
+            {
+                RoutedEvent = UIElement.PreviewMouseDownEvent
+            };
+            pointer.Source = new Border();
+
+            EditorPagePreviewMouseDownMethod.Invoke(editor, new object[] { editor, pointer });
+
+            // This is the routed seam: an unhandled dismissal pointer reaches
+            // the real page selection delegate as the first canvas gesture.
+            if (!pointer.Handled)
+            {
+                page.InvokeSelectionMouseDownCore(new Point(90, 45));
+                page.InvokeSelectionMouseUpCore();
+            }
+
+            Assert.That(pointer.Handled, Is.False,
+                "The outside Select-popup pointer must remain available to the canvas route.");
+            Assert.That(page.SelectedStrokes, Is.EqualTo(new[] { stroke }),
+                "The first post-dismissal canvas gesture must select the stroke.");
+        }
+        finally
+        {
+            page.SetSelectionMode(false);
+            popup.IsOpen = false;
+        }
+    }
+
+    [Test]
+    [Apartment(System.Threading.ApartmentState.STA)]
+    public void SamePageClickCtrlToggleAndEmptyClickPreserveSelectionSet()
+    {
+        EnsureWpfEnvironment();
+        EnsureTestApplication();
+
+        var page = new PdfPageControl { Width = 240, Height = 240 };
+        var first = CreateStroke(
+            new Point(20, 20),
+            new Point(20, 120),
+            new Point(120, 120));
+        var second = CreateStroke(
+            new Point(20, 140),
+            new Point(20, 220),
+            new Point(120, 220));
+
+        page.AddStrokeQuiet(first);
+        page.AddStrokeQuiet(second);
+        page.SetSelectionFilter(SelectionFilter.DrawingsOnly);
+        page.SetSelectionShape(SelectionShape.FreeForm);
+        page.SetSelectionMode(true);
+
+        try
+        {
+            // A normal click establishes the first item on this page.
+            page.InvokeSelectionMouseDownCore(new Point(90, 45));
+            page.InvokeSelectionMouseUpCore();
+            Assert.That(page.SelectedStrokes, Is.EqualTo(new[] { first }));
+
+            // Ctrl-click adds a second item without clearing the first.
+            HandleCtrlClickToggleMethod.Invoke(page, new object[] { new Point(90, 165) });
+            Assert.That(page.SelectedStrokes, Is.EquivalentTo(new[] { first, second }));
+
+            // Ctrl-clicking empty page space keeps the same-page set intact.
+            HandleCtrlClickToggleMethod.Invoke(page, new object[] { new Point(200, 40) });
+            Assert.That(page.SelectedStrokes, Is.EquivalentTo(new[] { first, second }));
+
+            // Ctrl-clicking the first item removes only that item.
+            HandleCtrlClickToggleMethod.Invoke(page, new object[] { new Point(90, 45) });
+            Assert.That(page.SelectedStrokes, Is.EqualTo(new[] { second }));
+        }
+        finally
+        {
+            page.SetSelectionMode(false);
+        }
+    }
+
+    [Test]
     public void LassoPolygonAroundShapeSelectsStroke()
     {
         // Create an ellipse shape from (50, 50) to (150, 150)
@@ -99,5 +264,47 @@ public sealed class ShapeSelectionTests
         var marquee = new Rect(40, 40, 70, 70);
         var isInside = (bool)IsStrokeInsideRectMethod.Invoke(null, new object[] { marquee, stroke })!;
         Assert.That(isInside, Is.True, "Rectangle marquee covering the shape must select it.");
+    }
+
+    private static Stroke CreateStroke(params Point[] points)
+    {
+        var stylusPoints = new StylusPointCollection();
+        foreach (var point in points)
+            stylusPoints.Add(new StylusPoint(point.X, point.Y));
+        return new Stroke(stylusPoints);
+    }
+
+    private static void SetCurrentTool(EditorPage editor, string toolName)
+    {
+        var field = typeof(EditorPage).GetField("_currentTool", BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new AssertionException("EditorPage._currentTool was not found.");
+        field.SetValue(editor, Enum.Parse(field.FieldType, toolName));
+    }
+
+    private static T GetPrivateField<T>(object target, string name)
+        where T : class
+    {
+        return target.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)?.GetValue(target) as T
+            ?? throw new AssertionException($"Private field '{name}' was not initialized.");
+    }
+
+    private static void EnsureTestApplication()
+    {
+        var application = Application.Current ?? new Application
+        {
+            ShutdownMode = ShutdownMode.OnExplicitShutdown
+        };
+        if (application.Resources["SleekScrollViewer"] == null)
+            application.Resources["SleekScrollViewer"] = new Style(typeof(ScrollViewer));
+        if (application.Resources["CompactComboBox"] == null)
+            application.Resources["CompactComboBox"] = new Style(typeof(ComboBox));
+        if (application.Resources["ToolbarFocusVisualStyle"] == null)
+            application.Resources["ToolbarFocusVisualStyle"] = new Style(typeof(Control));
+    }
+
+    private static void EnsureWpfEnvironment()
+    {
+        if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("WINDIR")))
+            Environment.SetEnvironmentVariable("WINDIR", Environment.GetEnvironmentVariable("SystemRoot") ?? @"C:\Windows");
     }
 }

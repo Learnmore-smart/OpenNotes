@@ -244,6 +244,7 @@ public sealed class EditorTextSessionTests
         };
         app.Resources["SleekScrollViewer"] = new Style(typeof(ScrollViewer));
         app.Resources["CompactComboBox"] = new Style(typeof(ComboBox));
+        app.Resources["ToolbarFocusVisualStyle"] = new Style(typeof(Control));
         return app;
     }
 

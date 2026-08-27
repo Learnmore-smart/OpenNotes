@@ -1,6 +1,45 @@
 # Controls/PdfPageControl.xaml(.cs)
 > Last updated: 2026-08-24（Wave6 Sticky/transient dual-review GREEN closure）| Protection: STANDARD
 
+## Task 1 selection regression fix (2026-08-26) — GREEN
+
+- **Root cause/fix:** the 290ade1 `HitStroke` tightening kept path/closed-polygon checks but limited its final bounds fallback to strokes with one dimension ≤16 DIP. Broad/open drawings therefore missed interior clicks. The final fallback is now the stroke's own bounds for open strokes only; closed shapes return false after polygon containment so bounding-box corners do not select outside the shape.
+- **Same-page semantics:** `HandleCtrlClickToggle` remains the page-local owner. The RED test exercises normal click, Ctrl add, Ctrl empty-click retention, and Ctrl removal on one page; no cross-page accumulation was enabled.
+- **Evidence:** focused `ShapeSelectionTests` command was RED 3/7 before the production edit; the routed first-gesture review test was RED 2/8 with the popup consume behavior reverted; final focused GREEN is `8/8`. The integration path selects a real open stroke through the `PdfPageControl` seam. Layer ordering, custom stroke collection, placement/token metadata, and PDF DIP coordinates remain unchanged.
+- **Open threads:** none for Task 1.
+
+## Task 2 pending popup dismissal and recognition history (2026-08-26) — GREEN for issue 6
+
+- **Pending input boundary:** when an ink-producing tool popup closes on a page
+  pointer, the page may receive the same gesture. Suppress only a stationary
+  native ink tap; a move beyond SystemParameters.MinimumHorizontalDragDistance /
+  MinimumVerticalDragDistance must keep the full drawing path. Eraser input is
+  intentionally outside this guard.
+- **Recognition:** InkCanvas_StrokeCollected still owns smoothing and shape
+  recognition. A recognized fresh stroke must publish one normal mutation and a
+  token/placement-safe add/remove history boundary at the editor layer; the
+  intermediate smoothed snapshot must not become a visible Undo step.
+- **Compatibility guard:** `StrokeRecognizedEventArgs` defaults to the
+  snapshot-replacement path for legacy four-argument callers. Only the real
+  `InkCanvas_StrokeCollected` fresh-gesture event opts into the add/remove path.
+- **Evidence:** the reviewer regression was intentionally RED with the default
+  discriminator set to true; after defaulting it to false and passing true only
+  from `InkCanvas_StrokeCollected`, focused production coverage is `16/16` and
+  combined shape coverage is `20/20`. Popup dismissal remains outside this slice.
+- **Open threads:** none for issue 6; the external pointer smoke boundary remains
+  unclaimed.
+
+## Issue 3 outside pen-popup gesture (2026-08-26) — GREEN for focused scope
+
+- **Intent:** consume only a stationary native Pen/Highlighter tap after an outside popup dismissal; preserve the full stroke when its path exceeds WPF's system drag thresholds.
+- **Guard boundary:** the pending flag is page-local and is armed by `EditorPage` only for native inking tools. It must be cleared on collection, pointer-up/lost-capture, cancellation, and mode changes. Eraser and custom shape/laser/area-highlight gestures remain untouched.
+- **Reviewer follow-up:** a production-path regression covers a PenOnly-blocked mouse down/up that never raises `StrokeCollected`; the next unrelated short stroke is retained. The pending flag is cleared at the end of normal `InkCanvas_MouseUp` and `InkCanvas_StylusUp` paths, while collection-time tap suppression remains unchanged.
+- **Overlay boundary:** `EditorPage` arms this page-local flag only when the routed source resolves to the page's own native `InkCanvas`; Hidden Ink and other interactive overlay descendants cannot leave pending state behind.
+- **Evidence:** the lifecycle regression was RED at `1 failure / 2 passes` before the pointer-up fix, and the Hidden Ink overlay regression was RED at `1 failure / 3 passes` before the target gate. Focused `EditorPopupDismissalTests` pass `4/4`; `HiddenInkTests` pass `10/10`; relevant `PenOnlyInputTests` pass `1/1`. Expected Pdfium NU1701 and WPF high-DPI WFAC010 warnings remain.
+- **Active-popup boundary:** `EditorPage` snapshots whether `_penPopup`/`_highlighterPopup` was open for the active tool before closing transient surfaces; unrelated popup dismissal cannot arm this page-local guard.
+- **Evidence:** the unrelated-surface regression was RED at `1 failure / 4 passes` before the active-popup gate. Focused `EditorPopupDismissalTests` pass `5/5`; `HiddenInkTests` pass `10/10`; relevant `PenOnlyInputTests` pass `1/1`. Expected Pdfium NU1701 and WPF high-DPI WFAC010 warnings remain.
+- **Open threads:** none for this focused issue-3 scope; parent integration may run the broader suite/build.
+
 ## Wave6 Open Thread
 
 - **2026-08-24 shape result:** `ShapeKind` and `BuildShapeOutline` now include Triangle, Diamond, Parallelogram, Pentagon and Hexagon. Each produces one closed, bounded ordinary ink stroke, so existing undo, selection, copy/paste and save behavior is inherited unchanged; Shift applies equal width/height bounds. Production geometry tests pass for all five shapes.
@@ -218,6 +257,8 @@ Keep `PageGrid`, `PdfImage`, and `PdfImageOverlay` opaque and independent from `
 - Hidden Ink 擦除使用线段-矩形相交（Liang–Barsky clipping）而不是只比较点或轴对齐 bounds，斜向遮罩也能按真实几何命中。
 
 ## Change History
+
+- 2026-08-26: `QuietStrokeMutation` now fires only after successful quiet add/remove/replace operations used by undo, redo, delete, erase, paste, and cross-page transfer. EditorPage uses it for page-local thumbnail invalidation without dirty/history side effects.
 - 2026-08-24: Wave5 review closure keeps the PDF display layer independent from workspace decoration. Laser fade and selection-dash animation now consume `ThemeService.GetAnimationDuration`/`ShouldAnimate`, while `PdfImage` and `PdfImageOverlay` remain bitmap-only hosts. The real STA `PdfPageControl` composite probe wraps a known non-white bitmap and annotation overlay in Neutral/Paper/Slate workspace parents and confirms the page crop is byte-stable; this is complementary to the PDF service hash contract and must not be replaced by tinting the page.
 - 2026-08-24: Wave5 review chrome follow-up routes eraser/text-selection/selection-handle visuals through live `ThemeAccentBrush`, `ThemeFocusBrush`, `ThemeSelectionBrush`, and `ThemeSurfaceBrush` resource references. The marching-ants phase may switch between the current accent/focus resources, but no frozen blue/cyan brush captures a palette; PDF bitmap pixels and user annotation colors remain untouched.
 - 2026-08-18: 建立镜像文档（Task 0）。

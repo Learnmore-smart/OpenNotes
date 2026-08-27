@@ -8,6 +8,9 @@
 Wave4 source and WPF contract tests for the compact page jump and custom document navigation rail.
 
 ## Open Threads / Resume Context
+- **Status:** ready_for_next — Task 4 source/STA navigation contracts are green for the compact three-column symmetric group, no duplicate layout label, runtime center at normal/narrow widths, and preserved one-based editable field, handlers and AutomationIds. The focused class passes 17/17.
+
+- **Status:** complete — synthetic fallback `HwndSource` ownership is scoped to the synthetic key-event test and disposed before the STA fixture exits. Navigation passes 17/17 and the full suite passes 303/303.
 
 - **Status:** review_followup_in_progress.
 - **Intent/result:** page navigation is keyboard-first and the native TabControl presentation is rejected while PDF scrolling, zoom, thumbnail rendering, outline navigation and bookmark persistence remain protected.
@@ -33,3 +36,5 @@ Wave4 source and WPF contract tests for the compact page jump and custom documen
 | 2026-08-24 | Added final P2 RED/GREEN contracts for one-based PageJump construction, state-preserving EN/ZH/FR metadata and fallback SelectionItem+Invoke parity; 14/14 navigation tests and 203/203 full suite passed. | Codex |
 | 2026-08-24 | Documented the recycled ListBoxItem ContextMenu binding bug and RED-first plan: clear old menu/handlers on Unloaded/DataContextChanged and rebuild from current page/bookmark model identity on every Opening. | Codex |
 | 2026-08-24 | Added and passed the recycled Pages/Bookmarks menu regression: one container page1/bookmarkA → page2/bookmarkB, old commands no-op after cleanup, current model identity rebinds; 15/15 navigation and 204/204 full suite passed. | Codex |
+| 2026-08-26 | Reproduced the integrated HwndSubclass host crash after four tests; root cause is undisposed fallback `HwndSource` instances created for synthetic key events. | Codex |
+| 2026-08-26 | Added disposable synthetic key-event source ownership; isolated navigation passes 17/17 and the complete suite passes 303/303 without the host crash. | Codex |

@@ -1,9 +1,12 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Ink;
 using System.Windows.Input;
 using System.Windows.Media;
@@ -63,6 +66,103 @@ public sealed class StrokeReplacementProductionTests
         Assert.That(page.GetStrokes().Count, Is.EqualTo(2));
         Assert.That(page.GetStrokes()[0].StylusPoints[0].X, Is.EqualTo(10));
         Assert.That(page.GetStrokes()[1].StylusPoints[0].X, Is.EqualTo(40));
+    }
+
+    [Test]
+    [Apartment(ApartmentState.STA)]
+    public void FreshRecognizedStroke_UsesOneAddUndoRedoHistoryAction()
+    {
+        EnsureEditorResources();
+        var editor = new EditorPage();
+        var page = new PdfPageControl
+        {
+            ShapeRecognitionEnabled = true,
+            StrokeSmoothingLevel = 2
+        };
+        var rawStroke = CreateRecognizedLineStroke();
+        var rawPlacement = page.AddStrokeQuiet(rawStroke);
+        Assert.That(rawPlacement, Is.Not.Null);
+
+        bool recognized = false;
+        page.StrokeRecognized += (sender, args) =>
+        {
+            recognized = true;
+            InvokeEditorPrivate(editor, "PageControl_StrokeRecognized", sender, args);
+        };
+
+        var collected = typeof(PdfPageControl).GetMethod(
+            "InkCanvas_StrokeCollected",
+            BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new MissingMethodException(typeof(PdfPageControl).FullName, "InkCanvas_StrokeCollected");
+        collected.Invoke(
+            page,
+            new object[] { page, new InkCanvasStrokeCollectedEventArgs(rawStroke) });
+
+        Assert.That(recognized, Is.True, "the real collection pipeline must recognize the smoothed line");
+        var idealPlacement = page.CaptureStrokePlacement(page.GetStrokes()[0]);
+        Assert.That(idealPlacement.Token, Is.EqualTo(rawPlacement.Token));
+        Assert.That(idealPlacement.Side, Is.EqualTo(StrokeReplacementSide.Ideal));
+
+        var undoStack = (IList)(typeof(EditorPage)
+            .GetField("_undoStack", BindingFlags.Instance | BindingFlags.NonPublic)
+            ?.GetValue(editor)
+            ?? throw new AssertionException("EditorPage did not initialize its undo stack."));
+        Assert.That(undoStack.Count, Is.EqualTo(1), "one recognized gesture must create one history entry");
+
+        InvokeTask(undoStack[0], "UndoAsync");
+        Assert.That(page.GetStrokes().Count, Is.EqualTo(0),
+            "Undo must remove a freshly drawn recognized stroke rather than expose smoothing history");
+
+        InvokeTask(undoStack[0], "RedoAsync");
+        Assert.That(page.GetStrokes().Count, Is.EqualTo(1));
+        var restored = page.CaptureStrokePlacement(page.GetStrokes()[0]);
+        Assert.That(restored.Token, Is.EqualTo(rawPlacement.Token));
+        Assert.That(restored.Side, Is.EqualTo(StrokeReplacementSide.Ideal));
+        Assert.That(page.GetStrokes()[0].DrawingAttributes.FitToCurve, Is.False);
+    }
+
+    [Test]
+    [Apartment(ApartmentState.STA)]
+    public void LegacyRecognizedEvent_DefaultsToSnapshotReplacementUndo()
+    {
+        EnsureEditorResources();
+        var editor = new EditorPage();
+        var page = new PdfPageControl();
+        var original = CreateRecognizedLineStroke();
+        var originalPlacement = page.AddStrokeQuiet(original);
+        var originalSnapshot = originalPlacement.Snapshot;
+        var idealSnapshot = originalSnapshot
+            .WithSide(StrokeReplacementSide.Ideal)
+            .WithIgnorePressure(true);
+
+        Assert.That(page.TryReplaceStrokeQuiet(
+            originalPlacement.Token,
+            StrokeReplacementSide.Original,
+            idealSnapshot,
+            out _), Is.True);
+
+        var args = new StrokeRecognizedEventArgs(
+            originalPlacement.Token,
+            originalPlacement.Index,
+            originalSnapshot,
+            idealSnapshot);
+        Assert.That(args.IsFreshStroke, Is.False,
+            "legacy four-argument recognition payloads must remain replacements");
+
+        InvokeEditorPrivate(editor, "PageControl_StrokeRecognized", page, args);
+        var undoStack = (IList)(typeof(EditorPage)
+            .GetField("_undoStack", BindingFlags.Instance | BindingFlags.NonPublic)
+            ?.GetValue(editor)
+            ?? throw new AssertionException("EditorPage did not initialize its undo stack."));
+        Assert.That(undoStack.Count, Is.EqualTo(1));
+
+        InvokeTask(undoStack[0], "UndoAsync");
+        Assert.That(page.GetStrokes().Count, Is.EqualTo(1));
+        var restored = page.CaptureStrokePlacement(page.GetStrokes()[0]);
+        Assert.That(restored.Token, Is.EqualTo(originalPlacement.Token));
+        Assert.That(restored.Side, Is.EqualTo(StrokeReplacementSide.Original));
+        Assert.That(page.GetStrokes()[0].DrawingAttributes.FitToCurve, Is.True);
+        Assert.That(page.GetStrokes()[0].DrawingAttributes.IgnorePressure, Is.False);
     }
 
     [Test]
@@ -678,6 +778,26 @@ public sealed class StrokeReplacementProductionTests
         };
     }
 
+    private static Stroke CreateRecognizedLineStroke()
+    {
+        var points = new StylusPointCollection();
+        for (int index = 0; index < 12; index++)
+            points.Add(new StylusPoint(20 + index * 10, 40 + index * 4, 0.2f + index * 0.05f));
+
+        return new Stroke(points)
+        {
+            DrawingAttributes = new DrawingAttributes
+            {
+                Color = Colors.Blue,
+                Width = 3,
+                Height = 3,
+                IgnorePressure = false,
+                FitToCurve = true,
+                IsHighlighter = false
+            }
+        };
+    }
+
     private static StrokePlacement CreateDeterministicPlacement(
         PdfPageControl owner,
         Stroke stroke,
@@ -721,6 +841,15 @@ public sealed class StrokeReplacementProductionTests
             ?? throw new InvalidOperationException($"Could not construct {name}.");
     }
 
+    private static void InvokeEditorPrivate(EditorPage editor, string methodName, params object[] args)
+    {
+        var method = typeof(EditorPage).GetMethod(
+            methodName,
+            BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new MissingMethodException(typeof(EditorPage).FullName, methodName);
+        method.Invoke(editor, args);
+    }
+
     private static void InvokeVoid(object instance, string methodName)
     {
         var method = instance.GetType().GetMethod(
@@ -748,5 +877,19 @@ public sealed class StrokeReplacementProductionTests
         var task = method.Invoke(instance, null) as Task
             ?? throw new InvalidOperationException($"{methodName} did not return Task.");
         task.GetAwaiter().GetResult();
+    }
+
+    private static void EnsureEditorResources()
+    {
+        var application = Application.Current ?? new Application
+        {
+            ShutdownMode = ShutdownMode.OnExplicitShutdown
+        };
+        if (!application.Resources.Contains("ToolbarFocusVisualStyle"))
+            application.Resources["ToolbarFocusVisualStyle"] = new Style(typeof(Control));
+        if (!application.Resources.Contains("SleekScrollViewer"))
+            application.Resources["SleekScrollViewer"] = new Style(typeof(ScrollViewer));
+        if (!application.Resources.Contains("CompactComboBox"))
+            application.Resources["CompactComboBox"] = new Style(typeof(ComboBox));
     }
 }

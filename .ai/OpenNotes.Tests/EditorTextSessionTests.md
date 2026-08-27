@@ -19,3 +19,14 @@ Production WPF/STA regressions for text-session save ordering and final close/na
 ## Evidence
 
 - RED covered missing/incorrect text-session ordering and the late close retry's cross-thread WPF collection failure; GREEN `ProductionTextSessionCommitsBeforeSaveAndWritesLatestContentOnce`, `ProductionCloseKeepsLateTextMutationInTheFinalSnapshot`, and `ProductionNavigationReopensCoordinatorForEditsAfterReturning` pass on the production WPF/STA path.
+
+## Open Threads / Resume Context
+
+- **Status:** complete - `CreateTestApplication` now seeds the required `ToolbarFocusVisualStyle` alongside the other editor resources; isolated EditorTextSessionTests passes 3/3 and the complete suite passes 303/303.
+- **RED evidence:** 2026-08-26 isolated `EditorTextSessionTests` failed all 3 cases with `XamlParseException` at `EditorPage.xaml` line 711: `ToolbarFocusVisualStyle` was not found. The class passed when grouped after popup tests only because their setup happened to seed that resource.
+
+## Change History
+
+| Date | Change | Author |
+|---|---|---|
+| 2026-08-26 | Added the missing ToolbarFocusVisualStyle to the isolated WPF test application; EditorTextSessionTests now passes 3/3 and the full suite passes 303/303. | Codex |
