@@ -53,4 +53,4 @@
 - [x] Run all focused filters, then the full suite in a fresh process; isolate any environment/order-sensitive WPF host crash rather than accepting a partial run.
 - [x] Run Release build, i18n verification, and `git diff --check`.
 - [x] Update all version surfaces to 5.2.3, build the self-contained installer, and launch the installed executable in an isolated data root.
-- [ ] Commit and push `main`, create/push tag `v5.2.3`, wait for the GitHub release, and verify downloadable executable/installer assets and hashes.
+- [x] Commit and push `main`, create/push tag `v5.2.3`, wait for the GitHub release, and verify downloadable executable/installer assets and hashes.
