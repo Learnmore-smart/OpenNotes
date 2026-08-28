@@ -51,5 +51,5 @@
 - Modify: `.ai/PROJECT_CONTEXT.md`
 
 - [x] Run the complete Release test suite, Release build, i18n verifier, and `git diff --check`.
-- [ ] Publish and launch the self-contained executable with isolated data, then build and silently install/launch/uninstall the installer.
-- [ ] Commit, fast-forward `main`, push, tag `v5.2.4`, wait for GitHub Actions, verify both public asset hashes, and launch the GitHub-downloaded executable.
+- [x] Publish and launch the self-contained executable with isolated data; local Inno Setup was unavailable, so installer creation/validation ran in the successful GitHub release workflow.
+- [x] Commit, fast-forward `main`, push, tag `v5.2.4`, wait for GitHub Actions, verify both public asset hashes, and launch the GitHub-downloaded executable.
