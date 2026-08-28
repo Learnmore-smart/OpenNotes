@@ -442,16 +442,16 @@ try {
     }
     Write-Output "KEYBOARD_RESIZE_COMPLETED before=$beforeKeyboardResize after=$($resizedTextBox.Current.BoundingRectangle)"
 
-    $dragHandle = Find-DescendantByAutomationId (Find-MainWindow $process.Id) $EditorAutomationIds.TextAnnotationDragHandle
-    if ($null -eq $dragHandle) { throw 'TextAnnotationDragHandle was not exposed to UIA.' }
-    $dragRect = $dragHandle.Current.BoundingRectangle
+    $moveBorder = Find-DescendantByAutomationId (Find-MainWindow $process.Id) $EditorAutomationIds.TextAnnotationMoveBorder
+    if ($null -eq $moveBorder) { throw 'TextAnnotationMoveBorder was not exposed to UIA.' }
+    $dragRect = $moveBorder.Current.BoundingRectangle
     $sourceRect = (Wait-TextOnPage $process.Id 0 $expectedText 5).Current.BoundingRectangle
     $sourceCenterX = $sourceRect.Left + ($sourceRect.Width * 0.5)
     $sourceCenterY = $sourceRect.Top + ($sourceRect.Height * 0.5)
     $targetCenterX = $viewport.Page1.Left + ($viewport.Page1.Width * 0.36)
     $targetCenterY = $viewport.Page1.Top + ($viewport.Page1.Height * 0.36)
-    $dragStartX = [int][Math]::Round($dragRect.Left + ($dragRect.Width * 0.5))
-    $dragStartY = [int][Math]::Round($dragRect.Top + ($dragRect.Height * 0.5))
+    $dragStartX = [int][Math]::Round($dragRect.Left + 2)
+    $dragStartY = [int][Math]::Round($dragRect.Top + ($dragRect.Height * 0.35))
     $dragEndX = [int][Math]::Round($dragStartX + ($targetCenterX - $sourceCenterX))
     $dragEndY = [int][Math]::Round($dragStartY + ($targetCenterY - $sourceCenterY))
     [void](Send-PointerDrag $hwnd $dragStartX $dragStartY $dragEndX $dragEndY 'text-cross-page-drag')

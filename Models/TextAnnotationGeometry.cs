@@ -26,10 +26,31 @@ public static class TextAnnotationGeometry
     public const double DefaultHeight = 84;
     public const double MinimumWidth = 120;
     public const double MinimumHeight = 48;
+    public const double MoveBorderHitThickness = 8;
 
     public static string GetResizeHandleAutomationId(TextResizeHandle handle)
     {
         return $"TextResizeHandle.{handle}";
+    }
+
+    public static bool IsMoveBorderHit(
+        double x,
+        double y,
+        double width,
+        double height,
+        double hitThickness = MoveBorderHitThickness)
+    {
+        if (!double.IsFinite(x) || !double.IsFinite(y) ||
+            !double.IsFinite(width) || width <= 0 ||
+            !double.IsFinite(height) || height <= 0 ||
+            !double.IsFinite(hitThickness) || hitThickness <= 0 ||
+            x < 0 || y < 0 || x > width || y > height)
+        {
+            return false;
+        }
+
+        double band = Math.Min(hitThickness, Math.Min(width, height) / 2);
+        return x <= band || x >= width - band || y <= band || y >= height - band;
     }
 
     public static TextBoxBounds Normalize(TextBoxBounds bounds)

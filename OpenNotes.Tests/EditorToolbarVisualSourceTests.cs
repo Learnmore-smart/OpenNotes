@@ -590,7 +590,7 @@ public sealed class EditorToolbarVisualSourceTests
         {
             Assert.That(helper, Does.Contain("Get-EditorPageAutomationId"));
             Assert.That(helper, Does.Contain("TextResizeHandleBottomRight"));
-            Assert.That(helper, Does.Contain("TextAnnotationDragHandle"));
+            Assert.That(helper, Does.Contain("TextAnnotationMoveBorder"));
         });
 
         foreach (var scriptName in scripts)

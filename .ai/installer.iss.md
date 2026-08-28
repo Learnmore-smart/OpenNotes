@@ -1,4 +1,5 @@
 # installer.iss
+> 2026-08-28 GREEN: default installer version is 5.2.5; AppId and per-user upgrade behavior are preserved.
 > 2026-08-28 GREEN: default installer version is 5.2.4; AppId and per-user upgrade behavior are preserved.
 
 > Last updated: 2026-08-24 | Protection: CRITICAL

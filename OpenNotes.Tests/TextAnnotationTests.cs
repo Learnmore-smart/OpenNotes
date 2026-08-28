@@ -68,6 +68,24 @@ public sealed class TextAnnotationTests
         Assert.That(clamped.Height, Is.GreaterThanOrEqualTo(TextAnnotationGeometry.MinimumHeight));
     }
 
+    [TestCase(0, 42, true)]
+    [TestCase(6, 42, true)]
+    [TestCase(279, 42, true)]
+    [TestCase(140, 0, true)]
+    [TestCase(140, 7, true)]
+    [TestCase(140, 83, true)]
+    [TestCase(140, 42, false)]
+    public void IsMoveBorderHit_UsesOnlyTheInnerEdgeBand(double x, double y, bool expected)
+    {
+        Assert.That(
+            TextAnnotationGeometry.IsMoveBorderHit(
+                x,
+                y,
+                TextAnnotationGeometry.DefaultWidth,
+                TextAnnotationGeometry.DefaultHeight),
+            Is.EqualTo(expected));
+    }
+
     [TestCase(TextResizeHandle.TopLeft)]
     [TestCase(TextResizeHandle.Top)]
     [TestCase(TextResizeHandle.TopRight)]

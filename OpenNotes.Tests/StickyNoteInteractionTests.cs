@@ -434,13 +434,12 @@ public sealed class StickyNoteInteractionTests
             page, new Point(40, 44), null, null, "gesture", false, false,
             null, null, null, null, null, null
         })!;
-        var dragHandle = container.Children.OfType<Border>().Single(border => border.Cursor == Cursors.SizeAll);
         double originalX = Canvas.GetLeft(container);
         double originalY = Canvas.GetTop(container);
 
-        InvokePrivate(editor, "BeginTextBoxDrag", dragHandle, new Point(originalX, originalY));
+        InvokePrivate(editor, "BeginTextBoxDrag", container, new Point(originalX, originalY));
         InvokePrivate(editor, "UpdateTextBoxDrag", new Point(originalX + 72, originalY + 54), new Action(() => { }));
-        InvokePrivate(editor, "DragHandle_LostMouseCapture", dragHandle, null);
+        InvokePrivate(editor, "TextContainerBorder_LostMouseCapture", container, null);
 
         var resizeHandle = container.Children.OfType<Border>().First(border => border.Tag is TextResizeHandle);
         var resizeKind = (TextResizeHandle)resizeHandle.Tag;

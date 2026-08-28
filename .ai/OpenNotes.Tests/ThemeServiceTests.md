@@ -7,6 +7,8 @@ Verify theme normalization and application chrome resource tokens without requir
 
 ## Open Threads / Resume Context
 
+- **2026-08-28:** Runtime text-movement accessibility coverage now requires the visible chrome border's TextAnnotationMoveBorder ID and rejects construction of the retired dotted side handle.
+
 - **Status:** complete
 - V5.1.1 updates the exact Light palette contract so window, canvas and desk resolve to `#FFFFFF`; alternate controls and borders retain their neutral contrast.
 - Red-first contracts now cover the six material theme resources and their deliberate use by the shell, home, editor, settings and template picker.

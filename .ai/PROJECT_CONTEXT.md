@@ -131,3 +131,9 @@ Open: retain the completed external PDF/image import bookmark snapshot/remap wir
  - `AppSettingsService.Sanitize/Clone` preserves all current fields, validates/clamps supported values, copies collections defensively, and does not mutate the caller's settings object.
  - `SimplePdfExporter.cs` was removed only after a repository-wide reference check found no remaining calls.
  - 2026-08-24 UI refresh: Settings hides raw pen defaults, uses rounded switches and six backdrop swatches; Editor uses the native `LucideIcon` vector renderer, a complete four-part page navigator, and a three-column sidebar selector. Lucide attribution is tracked in `THIRD_PARTY_NOTICES.md`.
+# 2026-08-28 Text border drag / alignment display plan
+
+- Replace the separate dotted text-move handle with an inner border hit band on the selected text annotation. Border input must reuse the existing movement, cross-page transfer, dirty-state and undo lifecycle while interior input remains native text editing and resize handles retain priority.
+- Fix the compact alignment ComboBox selected-item presentation so localized Left/Center/Right labels are rendered instead of the backing option type name (`Caelum...`).
+- Follow RED/GREEN coverage in `TextAnnotationTests` and the existing editor popup/source contracts before producing another release build.
+- Implementation is GREEN in focused coverage and the 323-test Release suite: the separate side handle is absent, mouse/stylus input uses the container's 8-DIP inner edge band with resize/tool-mode guards, and TextAlignmentOption.ToString() returns its localized label. Release metadata is advancing to 5.2.5.

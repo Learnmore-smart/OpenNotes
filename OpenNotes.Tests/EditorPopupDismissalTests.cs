@@ -348,6 +348,29 @@ public sealed class EditorPopupDismissalTests
         });
     }
 
+    [Test]
+    [Apartment(System.Threading.ApartmentState.STA)]
+    public void AlignmentSelectionDisplaysLocalizedLabelInsteadOfBackingTypeName()
+    {
+        EnsureWpfEnvironment();
+        EnsureTestApplication();
+        var editor = new EditorPage();
+        var alignmentCombo = GetPrivateField<ComboBox>(editor, "_textAlignmentCombo");
+        var center = alignmentCombo.Items.Cast<object>().Single(item =>
+            item.GetType().GetProperty("Value")?.GetValue(item) is TextAlignment value
+            && value == TextAlignment.Center);
+        var label = center.GetType().GetProperty("Label")?.GetValue(center) as string;
+
+        alignmentCombo.SelectedItem = center;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(label, Is.Not.Null.And.Not.Empty);
+            Assert.That(center.ToString(), Is.EqualTo(label));
+            Assert.That(center.ToString(), Does.Not.Contain("Caelum"));
+        });
+    }
+
     private static (EditorPage Editor, PdfPageControl Page, Popup Popup) CreateHarness(
         string toolName,
         CustomInkInputProcessingMode inputMode)

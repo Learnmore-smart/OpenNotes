@@ -22,6 +22,8 @@ surface on Escape, outside click, tab/navigation/unload, and MainWindow.Deactiva
 
 ## Open Threads / Resume Context
 
+- **2026-08-28:** Shared cancellation source contracts follow the renamed textbox border capture-loss handlers after removal of the separate dotted move handle.
+
 - **Wave6 dual-review RED plan:** add source/STA contracts for shared interaction cancellation
   across Sticky/text/selection drags, MainWindow deactivation and LoadPdf isolation, plus exact
   Unfix coverage for text color, formatting ComboBoxes and PDF viewer context menus. Resumed

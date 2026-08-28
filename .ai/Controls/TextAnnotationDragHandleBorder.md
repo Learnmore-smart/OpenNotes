@@ -1,4 +1,8 @@
 # Controls/TextAnnotationDragHandleBorder.cs
+
+## 2026-08-28 role
+
+- This peer-bearing legacy control now backs the text annotation's visible chrome border only, preserving a Thumb automation surface without rendering the retired dotted side handle. User input is routed by the parent annotation container's bounded border gesture handlers.
 > Last updated: 2026-08-22 | Protection: STANDARD
 
 ## Purpose

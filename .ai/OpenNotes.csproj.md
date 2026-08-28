@@ -1,4 +1,5 @@
 # OpenNotes.csproj
+> 2026-08-28 GREEN: package/assembly/file/informational metadata are 5.2.5/5.2.5.0 for the textbox border-movement and alignment-label patch; compatibility identities remain unchanged.
 > 2026-08-28 GREEN: package/assembly/file/informational metadata are 5.2.4/5.2.4.0 for the selection/text/ruler regression release; `RootNamespace=Caelum` and all compatibility identities are preserved.
 > Last updated: 2026-08-24（5.0.0 release metadata） | Protection: STANDARD
 

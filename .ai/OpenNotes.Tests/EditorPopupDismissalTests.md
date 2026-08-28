@@ -1,5 +1,10 @@
 # EditorPopupDismissalTests
 
+## 2026-08-28 RED plan
+
+- Add runtime coverage that the selected Center alignment option renders/stringifies as its localized label and never exposes the backing `Caelum` type name.
+- GREEN: the runtime Center option now returns its localized label through the shared selected-item presenter fallback.
+
 ## v5.2.4 text ComboBox follow-up (2026-08-27) — IN PROGRESS
 
 - Add STA coverage proving generated font-family and alignment dropdown items are editor-owned transient content and cannot be closed by `ShouldClosePopupOnPointerDown` before their selection commits.

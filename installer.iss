@@ -6,7 +6,7 @@
   #define MyAppName "OpenNotes"
 #endif
 #ifndef MyAppVersion
-#define MyAppVersion "5.2.4"
+#define MyAppVersion "5.2.5"
 #endif
 #ifndef MyAppPublisher
   #define MyAppPublisher "Learnmore_smart"

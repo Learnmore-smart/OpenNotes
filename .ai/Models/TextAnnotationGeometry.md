@@ -5,6 +5,11 @@
 
 Pure geometry helpers for resizable text annotations. It defines the eight resize handles, normalizes dimensions, and computes the new rectangle while keeping the opposite edge anchored.
 
+## 2026-08-28 planned contract
+
+- Add a framework-independent inner-border hit test used by textbox movement. Points inside the configured edge band count as border input; the center/content region does not.
+- GREEN: IsMoveBorderHit validates finite bounds and applies an 8-DIP inner edge band, capped at half the smallest dimension.
+
 ## API
 
 - `TextResizeHandle`: eight directions (`TopLeft`, `Top`, `TopRight`, `Left`, `Right`, `BottomLeft`, `Bottom`, `BottomRight`).

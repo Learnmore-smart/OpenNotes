@@ -32,7 +32,7 @@ $EditorAutomationIds = [ordered]@{
     PdfPageControlPrefix = 'PdfPageControl.'
     TextResizeHandlePrefix = 'TextResizeHandle.'
     TextResizeHandleBottomRight = 'TextResizeHandle.BottomRight'
-    TextAnnotationDragHandle = 'TextAnnotationDragHandle'
+    TextAnnotationMoveBorder = 'TextAnnotationMoveBorder'
 }
 
 function Get-EditorAutomationId([string]$name) {

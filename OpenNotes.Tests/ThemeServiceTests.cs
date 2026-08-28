@@ -227,15 +227,16 @@ public sealed class ThemeServiceTests
     }
 
     [Test]
-    public void RuntimeTextDragHandleExposesStableAutomationAndLocalizedName()
+    public void RuntimeTextMoveBorderExposesStableAutomationAndLocalizedName()
     {
         var projectRoot = FindProjectRoot();
         var editorCode = File.ReadAllText(Path.Combine(projectRoot, "Pages", "EditorPage.xaml.cs"));
 
         Assert.Multiple(() =>
         {
-            Assert.That(editorCode, Does.Contain("AutomationProperties.SetAutomationId(dragHandle, \"TextAnnotationDragHandle\")"));
+            Assert.That(editorCode, Does.Contain("AutomationProperties.SetAutomationId(chrome, \"TextAnnotationMoveBorder\")"));
             Assert.That(editorCode, Does.Contain("LocalizationService.Get(\"Editor.MoveTextBox\")"));
+            Assert.That(editorCode, Does.Not.Contain("var dragHandle = new TextAnnotationDragHandleBorder"));
         });
     }
 

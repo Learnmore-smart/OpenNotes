@@ -10,6 +10,8 @@ round-trips CJK text, stable Id, DIP geometry and RGB marker data.
 
 ## Open Threads / Resume Context
 
+- **2026-08-28:** The text capture-loss regression now drives the annotation container border drag controller directly; it no longer searches for the retired dotted move handle.
+
 - **2026-08-24 UI repair GREEN:** semantic primary/secondary/destructive Sticky actions and a named SizeAll drag header are implemented. Real STA coverage proves header drag changes only Popup offsets while model coordinates and dirty state remain unchanged; focused Sticky/transient/localization tests pass 36/36.
 
 - **Wave6 dual-review RED plan:** add real STA regressions for marker LostMouseCapture,

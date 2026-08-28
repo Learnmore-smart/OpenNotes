@@ -329,6 +329,8 @@ namespace Caelum.Pages
 
             public TextAlignment Value { get; }
             public string Label { get; }
+
+            public override string ToString() => Label;
         }
 
         private Point _lastClickedPoint;
@@ -11589,10 +11591,6 @@ namespace Caelum.Pages
                             b.BorderBrush = Brushes.Transparent;
                         }
                     }
-                    else if (child is Border handle && handle.Cursor == Cursors.SizeAll)
-                    {
-                        handle.Visibility = isSelected ? Visibility.Visible : Visibility.Collapsed;
-                    }
                     else if (child is Border resizeHandle && resizeHandle.Tag is TextResizeHandle)
                     {
                         resizeHandle.Visibility = isSelected ? Visibility.Visible : Visibility.Collapsed;
@@ -11924,10 +11922,9 @@ namespace Caelum.Pages
             }
 
             container.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            container.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
             // Visual chrome border spanning both columns
-            var chrome = new Border
+            var chrome = new TextAnnotationDragHandleBorder
             {
                 CornerRadius = new CornerRadius(8),
                 BorderThickness = select ? new Thickness(1.5) : new Thickness(0),
@@ -11938,7 +11935,8 @@ namespace Caelum.Pages
             };
             if (select)
                 chrome.SetResourceReference(Border.BorderBrushProperty, "ThemeFocusBrush");
-            Grid.SetColumnSpan(chrome, 2);
+            AutomationProperties.SetAutomationId(chrome, "TextAnnotationMoveBorder");
+            AutomationProperties.SetName(chrome, LocalizationService.Get("Editor.MoveTextBox"));
 
             double availableWidth = page.ActualWidth - Math.Max(0, position.X);
             double maxTextBoxWidth = Math.Max(100, availableWidth - textPadding.Left - textPadding.Right - 40);
@@ -11980,69 +11978,10 @@ namespace Caelum.Pages
                 }
             };
 
-            var dragHandle = new TextAnnotationDragHandleBorder
-            {
-                Width = 18,
-                Height = 36,
-                Margin = new Thickness(8, 4, 0, 4),
-                HorizontalAlignment = HorizontalAlignment.Right,
-                VerticalAlignment = VerticalAlignment.Center,
-                CornerRadius = new CornerRadius(9),
-                Visibility = select ? Visibility.Visible : Visibility.Collapsed,
-                Cursor = Cursors.SizeAll,
-                Background = new SolidColorBrush(Color.FromRgb(248, 250, 252)),
-                BorderBrush = new SolidColorBrush(Color.FromRgb(203, 213, 225)),
-                BorderThickness = new Thickness(1),
-                Effect = new System.Windows.Media.Effects.DropShadowEffect
-                {
-                    BlurRadius = 8,
-                    ShadowDepth = 1,
-                    Opacity = ThemeService.GetShadowOpacity(),
-                    Color = Colors.Black
-                }
-            };
-            dragHandle.SetResourceReference(Border.BackgroundProperty, "ThemeControlBrush");
-            dragHandle.SetResourceReference(Border.BorderBrushProperty, "ThemeBorderBrush");
-
-            var dragIcon = new StackPanel
-            {
-                Orientation = Orientation.Horizontal,
-                HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Center
-            };
-            for (int column = 0; column < 2; column++)
-            {
-                var dotColumn = new StackPanel
-                {
-                    Orientation = Orientation.Vertical,
-                    Margin = new Thickness(column == 0 ? 0 : 2, 0, 0, 0)
-                };
-
-                for (int row = 0; row < 3; row++)
-                {
-                    var dot = new Ellipse
-                    {
-                        Width = 3,
-                        Height = 3,
-                        Fill = Brushes.Transparent,
-                        Margin = new Thickness(0, 1.5, 0, 1.5)
-                    };
-                    dot.SetResourceReference(System.Windows.Shapes.Shape.FillProperty, "ThemeSubtleTextBrush");
-                    dotColumn.Children.Add(dot);
-                }
-
-                dragIcon.Children.Add(dotColumn);
-            }
-            dragHandle.Child = dragIcon;
-            AutomationProperties.SetAutomationId(dragHandle, "TextAnnotationDragHandle");
-            AutomationProperties.SetName(dragHandle, LocalizationService.Get("Editor.MoveTextBox"));
-
             Grid.SetColumn(textBox, 0);
-            Grid.SetColumn(dragHandle, 1);
 
             container.Children.Add(chrome);
             container.Children.Add(textBox);
-            container.Children.Add(dragHandle);
 
             var resizeHandleDefinitions = new[]
             {
@@ -12084,7 +12023,6 @@ namespace Caelum.Pages
                     resizeHandle,
                     LocalizationService.Get("Editor.ResizeTextBox"));
                 KeyboardNavigation.SetIsTabStop(resizeHandle, true);
-                Grid.SetColumnSpan(resizeHandle, 2);
                 Panel.SetZIndex(resizeHandle, 20);
                 resizeHandle.MouseLeftButtonDown += TextResizeHandle_MouseLeftButtonDown;
                 resizeHandle.MouseMove += TextResizeHandle_MouseMove;
@@ -12110,14 +12048,15 @@ namespace Caelum.Pages
             Canvas.SetTop(container, Math.Max(0, initialTop));
             Panel.SetZIndex(container, 1000);
 
-            dragHandle.MouseLeftButtonDown += DragHandle_MouseLeftButtonDown;
-            dragHandle.MouseMove += DragHandle_MouseMove;
-            dragHandle.MouseLeftButtonUp += DragHandle_MouseLeftButtonUp;
-            dragHandle.LostMouseCapture += DragHandle_LostMouseCapture;
-            dragHandle.StylusDown += DragHandle_StylusDown;
-            dragHandle.StylusMove += DragHandle_StylusMove;
-            dragHandle.StylusUp += DragHandle_StylusUp;
-            dragHandle.LostStylusCapture += DragHandle_LostStylusCapture;
+            container.PreviewMouseLeftButtonDown += TextContainerBorder_MouseLeftButtonDown;
+            container.PreviewMouseMove += TextContainerBorder_MouseMove;
+            container.PreviewMouseLeftButtonUp += TextContainerBorder_MouseLeftButtonUp;
+            container.LostMouseCapture += TextContainerBorder_LostMouseCapture;
+            container.PreviewStylusDown += TextContainerBorder_StylusDown;
+            container.PreviewStylusMove += TextContainerBorder_StylusMove;
+            container.PreviewStylusUp += TextContainerBorder_StylusUp;
+            container.LostStylusCapture += TextContainerBorder_LostStylusCapture;
+            container.QueryCursor += TextContainerBorder_QueryCursor;
 
             textBox.TextChanged += (s, e) => MarkDirty();
             textBox.PreviewMouseLeftButtonDown += (s, e) =>
@@ -12495,69 +12434,56 @@ namespace Caelum.Pages
             }
         }
 
-        private void DragHandle_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+        private static bool IsTextContainerBorderGesture(Grid container, Point point, object originalSource)
         {
-            if (sender is Border handle && handle.Parent is Grid container && container.Parent is Canvas canvas)
-                BeginTextBoxDrag(handle, e.GetPosition(canvas));
-            e.Handled = true;
+            return FindAncestor<TextResizeHandleBorder>(originalSource as DependencyObject) == null
+                && TextAnnotationGeometry.IsMoveBorderHit(
+                    point.X,
+                    point.Y,
+                    container.ActualWidth,
+                    container.ActualHeight);
         }
 
-        private void DragHandle_MouseMove(object sender, MouseEventArgs e)
+        private void TextContainerBorder_QueryCursor(object sender, QueryCursorEventArgs e)
         {
-            if (_draggedContainer?.Parent is Canvas canvas)
-                UpdateTextBoxDrag(e.GetPosition(canvas), () =>
-                {
-                    var handle = _draggedContainer.Children.OfType<Border>().FirstOrDefault(b => b.Cursor == Cursors.SizeAll);
-                    handle?.CaptureMouse();
-                });
-            e.Handled = _isDragging || _dragArmed;
-        }
-
-        private void DragHandle_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
-        {
-            var handle = sender as Border;
-            _suppressTextCaptureCancellation = true;
-            bool wasDragging;
-            try
+            if (sender is Grid container &&
+                _currentTool == ToolType.Text &&
+                IsTextContainerBorderGesture(container, e.GetPosition(container), e.OriginalSource))
             {
-                handle?.ReleaseMouseCapture();
-                wasDragging = CompleteTextBoxDrag();
-            }
-            finally
-            {
-                _suppressTextCaptureCancellation = false;
-            }
-            e.Handled = wasDragging;
-        }
-
-        private void DragHandle_StylusDown(object sender, StylusEventArgs e)
-        {
-            if (sender is Border handle && handle.Parent is Grid container && container.Parent is Canvas canvas)
-            {
-                BeginTextBoxDrag(handle, e.GetPosition(canvas));
-                handle.CaptureStylus();
+                e.Cursor = Cursors.SizeAll;
                 e.Handled = true;
             }
         }
 
-        private void DragHandle_StylusMove(object sender, StylusEventArgs e)
+        private void TextContainerBorder_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+        {
+            if (_currentTool != ToolType.Text ||
+                sender is not Grid container ||
+                container.Parent is not Canvas canvas ||
+                !IsTextContainerBorderGesture(container, e.GetPosition(container), e.OriginalSource))
+            {
+                return;
+            }
+
+            BeginTextBoxDrag(container, e.GetPosition(canvas));
+            e.Handled = true;
+        }
+
+        private void TextContainerBorder_MouseMove(object sender, MouseEventArgs e)
         {
             if (_draggedContainer?.Parent is Canvas canvas)
-                UpdateTextBoxDrag(e.GetPosition(canvas), () =>
-                {
-                    var handle = _draggedContainer.Children.OfType<Border>().FirstOrDefault(b => b.Cursor == Cursors.SizeAll);
-                    handle?.CaptureStylus();
-                });
+                UpdateTextBoxDrag(e.GetPosition(canvas), () => _draggedContainer.CaptureMouse());
             e.Handled = _isDragging || _dragArmed;
         }
 
-        private void DragHandle_StylusUp(object sender, StylusEventArgs e)
+        private void TextContainerBorder_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
         {
+            var container = sender as Grid;
             _suppressTextCaptureCancellation = true;
             bool wasDragging;
             try
             {
-                (sender as Border)?.ReleaseStylusCapture();
+                container?.ReleaseMouseCapture();
                 wasDragging = CompleteTextBoxDrag();
             }
             finally
@@ -12567,21 +12493,57 @@ namespace Caelum.Pages
             e.Handled = wasDragging;
         }
 
-        private void DragHandle_LostMouseCapture(object sender, MouseEventArgs e)
+        private void TextContainerBorder_StylusDown(object sender, StylusEventArgs e)
+        {
+            if (_currentTool != ToolType.Text ||
+                sender is not Grid container ||
+                container.Parent is not Canvas canvas ||
+                !IsTextContainerBorderGesture(container, e.GetPosition(container), e.OriginalSource))
+                return;
+
+            BeginTextBoxDrag(container, e.GetPosition(canvas));
+            container.CaptureStylus();
+            e.Handled = true;
+        }
+
+        private void TextContainerBorder_StylusMove(object sender, StylusEventArgs e)
+        {
+            if (_draggedContainer?.Parent is Canvas canvas)
+                UpdateTextBoxDrag(e.GetPosition(canvas), () => _draggedContainer.CaptureStylus());
+            e.Handled = _isDragging || _dragArmed;
+        }
+
+        private void TextContainerBorder_StylusUp(object sender, StylusEventArgs e)
+        {
+            _suppressTextCaptureCancellation = true;
+            bool wasDragging;
+            try
+            {
+                (sender as Grid)?.ReleaseStylusCapture();
+                wasDragging = CompleteTextBoxDrag();
+            }
+            finally
+            {
+                _suppressTextCaptureCancellation = false;
+            }
+            e.Handled = wasDragging;
+        }
+
+        private void TextContainerBorder_LostMouseCapture(object sender, MouseEventArgs e)
         {
             if (!_suppressTextCaptureCancellation)
                 CancelTextBoxDrag(restoreBounds: true);
         }
 
-        private void DragHandle_LostStylusCapture(object sender, StylusEventArgs e)
+        private void TextContainerBorder_LostStylusCapture(object sender, StylusEventArgs e)
         {
             if (!_suppressTextCaptureCancellation)
                 CancelTextBoxDrag(restoreBounds: true);
         }
 
-        private void BeginTextBoxDrag(Border handle, Point pressPoint)
+        private void BeginTextBoxDrag(Grid container, Point pressPoint)
         {
-            if (_currentTool != ToolType.Text || handle?.Parent is not Grid container)
+            if (_currentTool != ToolType.Text || container == null)
                 return;
 
             if (container.Children.OfType<TextBox>().FirstOrDefault() is TextBox textBox)

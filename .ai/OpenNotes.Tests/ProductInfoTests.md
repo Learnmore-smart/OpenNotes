@@ -1,4 +1,5 @@
 # OpenNotes.Tests/ProductInfoTests.cs
+> 2026-08-28 GREEN: the 5.2.5 expectation failed against 5.2.4 before production metadata advanced; all legacy compatibility assertions remain unchanged.
 > 2026-08-28 GREEN: visible-version assertion is 5.2.4 for the selection/text/ruler regression release; the stale 5.2.3 value failed first and compatibility assertions remain unchanged.
 > Last updated: 2026-08-24（5.0.0 release metadata coverage） | Protection: STANDARD
 

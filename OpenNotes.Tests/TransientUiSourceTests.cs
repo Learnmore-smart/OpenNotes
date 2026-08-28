@@ -84,8 +84,8 @@ public sealed class TransientUiSourceTests
             Assert.That(editor, Does.Contain("InteractionCancellation.CancelAll(_pageControls, reason)"));
             Assert.That(editor, Does.Contain("CancelTextBoxDrag(restoreBounds: true)"));
             Assert.That(editor, Does.Contain("CancelTextResize(restoreBounds: true)"));
-            Assert.That(editor, Does.Contain("DragHandle_LostMouseCapture"));
-            Assert.That(editor, Does.Contain("DragHandle_LostStylusCapture"));
+            Assert.That(editor, Does.Contain("TextContainerBorder_LostMouseCapture"));
+            Assert.That(editor, Does.Contain("TextContainerBorder_LostStylusCapture"));
             Assert.That(editor, Does.Contain("TextResizeHandle_LostMouseCapture"));
             Assert.That(editor, Does.Contain("TextResizeHandle_LostStylusCapture"));
             Assert.That(page, Does.Contain("SelectionOverlayCanvas_LostMouseCapture"));

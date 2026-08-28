@@ -430,3 +430,9 @@ Wave 1 note: shape replacement undo stores only session token/index and immutabl
 - 2026-08-24: Editor chrome refresh replaces mixed glyph/one-off toolbar art with named font-independent Lucide vectors, adds state-aware Previous/Next navigation around the editable page field, and changes the sidebar selector to a three-column strip so labels cannot vertically collide.
 - 2026-08-24: Bookmark toggle localization now selects between two literal catalog lookups, preserving live bookmark state text while satisfying strict i18n call-site validation.
 - 2026-08-24: Toolbar/shape polish removes the shape checkmark, adds nine localized choices, normalizes icon weight/color and supplies the themed ToolTip path; focused editor coverage and the full 277-test suite pass.
+# 2026-08-28 Text border movement / alignment label plan
+
+- The separate dotted `TextAnnotationDragHandleBorder` is being retired from the text annotation visual tree. A selected annotation's visible border will provide the move gesture through a bounded inner hit band; text-content clicks and resize handles must remain independent.
+- The existing `BeginTextBoxDrag` / `UpdateTextBoxDrag` / `CompleteTextBoxDrag` path remains authoritative so same-page and cross-page undo semantics do not fork.
+- `TextAlignmentOption` selected-item rendering must return its localized `Label`; the legacy `Caelum` namespace is compatibility-only and must never appear as the ComboBox's visible selection.
+- GREEN: the chrome border retains the move Thumb automation peer as TextAnnotationMoveBorder, while the parent container owns preview mouse/stylus/query-cursor handlers. The border band is tool-gated and excludes all TextResizeHandleBorder descendants.

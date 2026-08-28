@@ -1,4 +1,5 @@
 # tools/Test-OpenNotesCrossPageKeyboardSmoke.ps1
+> 2026-08-28: physical text movement now starts from a safe point on the left border (away from resize handles), discovered through the TextAnnotationMoveBorder automation peer.
 > Last updated: 2026-08-24 (Wave 4 review-follow-up verification) | Protection: STANDARD
 
 ## Purpose

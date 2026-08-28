@@ -1,4 +1,9 @@
 # OpenNotes.Tests/TextAnnotationTests.cs
+
+## 2026-08-28 RED plan
+
+- Add boundary coverage for the textbox inner border move band so border drags cannot consume interior text-edit gestures.
+- GREEN: seven edge/interior cases pass with the 8-DIP inner band.
 > Last updated: 2026-08-21 | Protection: STANDARD
 
 ## Purpose

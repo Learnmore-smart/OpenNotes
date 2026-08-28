@@ -1,4 +1,5 @@
 # Services/ProductInfo.cs
+> 2026-08-28 GREEN: visible version is 5.2.5 for the textbox border-movement and alignment-label patch; legacy compatibility values remain unchanged.
 > 2026-08-28 GREEN: visible version is 5.2.4 for the selection/text/ruler regression release; Caelum/WindowsNotesApp compatibility identifiers, data root and URLs are preserved.
 > Last updated: 2026-08-24（5.0.0 release metadata）| Protection: STANDARD
 
