@@ -603,7 +603,7 @@ namespace Caelum.Controls
         /// onto it — the result is a perfectly straight line along the
         /// ruler. Assigned by EditorPage when the page control is created.
         /// </summary>
-        public Func<(Point A, Point B)?> GetRulerEdgeInPageCoords { get; set; }
+        public Func<(Point TopA, Point TopB, Point BottomA, Point BottomB)?> GetRulerGeometryInPageCoords { get; set; }
 
         /// <summary>
         /// Task 22: max point-to-ruler-edge distance (page px) for a stroke
@@ -887,7 +887,14 @@ namespace Caelum.Controls
             // manually and the eraser never collects — but the mode gate
             // keeps that contract explicit.
             if (_currentMode == CustomInkInputProcessingMode.Inking)
-                stroke = SnapStrokeToRuler(stroke);
+            {
+                stroke = ApplyRulerConstraint(stroke);
+                if (stroke == null)
+                {
+                    e.Handled = true;
+                    return;
+                }
+            }
 
             // Task 21: Shift straight-line constraint for freehand pen and
             // highlighter. WPF InkCanvas owns the per-point collection, so a
@@ -1482,62 +1489,168 @@ namespace Caelum.Controls
         /// stroke. Returns the original stroke untouched when there is no
         /// ruler, the edge is degenerate or the stroke is not near it.
         /// </summary>
-        private Stroke SnapStrokeToRuler(Stroke stroke)
+        private Stroke ApplyRulerConstraint(Stroke stroke)
         {
-            var edge = GetRulerEdgeInPageCoords?.Invoke();
-            if (edge == null) return stroke;
+            var geometry = GetRulerGeometryInPageCoords?.Invoke();
+            if (geometry == null) return stroke;
 
-            // The provider returns root coordinates; stylus points are
-            // measured against the InkCanvas.
-            Point a = RootGrid.TranslatePoint(edge.Value.A, InkCanvas);
-            Point b = RootGrid.TranslatePoint(edge.Value.B, InkCanvas);
+            Point topA = RootGrid.TranslatePoint(geometry.Value.TopA, InkCanvas);
+            Point topB = RootGrid.TranslatePoint(geometry.Value.TopB, InkCanvas);
+            Point bottomA = RootGrid.TranslatePoint(geometry.Value.BottomA, InkCanvas);
+            Point bottomB = RootGrid.TranslatePoint(geometry.Value.BottomB, InkCanvas);
+            var replacement = ConstrainStrokeToRuler(stroke, topA, topB, bottomA, bottomB);
 
-            double dx = b.X - a.X;
-            double dy = b.Y - a.Y;
-            double len2 = dx * dx + dy * dy;
-            if (len2 < 1e-4) return stroke; // degenerate ruler edge
-
-            var points = stroke.StylusPoints;
-            if (points.Count < 2) return stroke;
-
-            // First pass: every point must be close enough to the edge
-            // segment (distance to the CLAMPED projection, so pen travel
-            // past the ruler's end counts against the tolerance).
-            double maxDistance = 0;
-            for (int i = 0; i < points.Count; i++)
+            if (replacement == null)
             {
-                double t = ((points[i].X - a.X) * dx + (points[i].Y - a.Y) * dy) / len2;
-                if (t < 0) t = 0; else if (t > 1) t = 1;
-                double ddx = points[i].X - (a.X + t * dx);
-                double ddy = points[i].Y - (a.Y + t * dy);
-                double dist = Math.Sqrt(ddx * ddx + ddy * ddy);
-                if (dist > maxDistance) maxDistance = dist;
+                RemoveStrokeQuiet(stroke);
+                return null;
             }
-
-            if (maxDistance >= RulerSnapTolerancePx) return stroke;
-
-            // Second pass: project every point onto the segment, preserving
-            // pressure so ink simulation / pressure rendering still apply.
-            var snapped = new StylusPointCollection();
-            for (int i = 0; i < points.Count; i++)
-            {
-                double t = ((points[i].X - a.X) * dx + (points[i].Y - a.Y) * dy) / len2;
-                if (t < 0) t = 0; else if (t > 1) t = 1;
-                snapped.Add(new StylusPoint(a.X + t * dx, a.Y + t * dy, points[i].PressureFactor));
-            }
-
-            var replacement = new Stroke(snapped)
-            {
-                DrawingAttributes = stroke.DrawingAttributes.Clone()
-            };
+            if (ReferenceEquals(replacement, stroke))
+                return stroke;
 
             int index = _strokes.IndexOf(stroke);
             if (index >= 0)
                 ReplaceStrokeAt(index, replacement, EnsureStrokeToken(stroke), GetStrokeSide(stroke));
             else
                 AddStrokeToCollection(replacement);
-
             return replacement;
+        }
+
+        private static Stroke ConstrainStrokeToRuler(
+            Stroke stroke,
+            Point topA,
+            Point topB,
+            Point bottomA,
+            Point bottomB)
+        {
+            var points = stroke?.StylusPoints;
+            if (points == null || points.Count == 0)
+                return stroke;
+
+            var quad = new[] { topA, topB, bottomB, bottomA };
+            var first = new Point(points[0].X, points[0].Y);
+            if (IsPointInsideConvexQuad(first, quad))
+                return null;
+
+            for (int i = 1; i < points.Count; i++)
+            {
+                var from = new Point(points[i - 1].X, points[i - 1].Y);
+                var to = new Point(points[i].X, points[i].Y);
+                if (!TryFindFirstQuadIntersection(from, to, quad, out double entryT, out Point entry))
+                {
+                    // A gesture may begin exactly on the edge. That boundary
+                    // point is allowed for along-edge drawing, but moving from
+                    // it into the body must still produce no ink.
+                    if (IsPointInsideConvexQuad(to, quad))
+                        return null;
+                    continue;
+                }
+
+                var clipped = new StylusPointCollection();
+                for (int j = 0; j < i; j++)
+                    clipped.Add(points[j]);
+                float pressure = (float)(points[i - 1].PressureFactor
+                    + (points[i].PressureFactor - points[i - 1].PressureFactor) * entryT);
+                clipped.Add(new StylusPoint(entry.X, entry.Y, pressure));
+                return CloneStroke(stroke, clipped);
+            }
+
+            double topDistance = MaxDistanceToSegment(points, topA, topB);
+            double bottomDistance = MaxDistanceToSegment(points, bottomA, bottomB);
+            if (Math.Min(topDistance, bottomDistance) >= RulerSnapTolerancePx)
+                return stroke;
+
+            Point edgeA = topDistance <= bottomDistance ? topA : bottomA;
+            Point edgeB = topDistance <= bottomDistance ? topB : bottomB;
+            var snapped = new StylusPointCollection();
+            foreach (var point in points)
+            {
+                Point projected = ProjectToSegment(new Point(point.X, point.Y), edgeA, edgeB);
+                snapped.Add(new StylusPoint(projected.X, projected.Y, point.PressureFactor));
+            }
+            return CloneStroke(stroke, snapped);
+        }
+
+        private static Stroke CloneStroke(Stroke source, StylusPointCollection points)
+        {
+            return new Stroke(points) { DrawingAttributes = source.DrawingAttributes.Clone() };
+        }
+
+        private static double MaxDistanceToSegment(StylusPointCollection points, Point a, Point b)
+        {
+            double max = 0;
+            foreach (var point in points)
+            {
+                var source = new Point(point.X, point.Y);
+                max = Math.Max(max, PointDistance(source, ProjectToSegment(source, a, b)));
+            }
+            return max;
+        }
+
+        private static Point ProjectToSegment(Point point, Point a, Point b)
+        {
+            Vector edge = b - a;
+            double lengthSquared = edge.X * edge.X + edge.Y * edge.Y;
+            if (lengthSquared < 1e-4)
+                return a;
+            double t = Vector.Multiply(point - a, edge) / lengthSquared;
+            t = Math.Max(0, Math.Min(1, t));
+            return a + edge * t;
+        }
+
+        private static bool IsPointInsideConvexQuad(Point point, IReadOnlyList<Point> quad)
+        {
+            double? sign = null;
+            for (int i = 0; i < quad.Count; i++)
+            {
+                Point a = quad[i];
+                Point b = quad[(i + 1) % quad.Count];
+                double cross = (b.X - a.X) * (point.Y - a.Y) - (b.Y - a.Y) * (point.X - a.X);
+                if (Math.Abs(cross) < 1e-7)
+                    return false;
+                double current = Math.Sign(cross);
+                if (sign.HasValue && current != sign.Value)
+                    return false;
+                sign = current;
+            }
+            return sign.HasValue;
+        }
+
+        private static bool TryFindFirstQuadIntersection(
+            Point from,
+            Point to,
+            IReadOnlyList<Point> quad,
+            out double firstT,
+            out Point intersection)
+        {
+            firstT = double.MaxValue;
+            intersection = default;
+            for (int i = 0; i < quad.Count; i++)
+            {
+                if (TryIntersectSegments(from, to, quad[i], quad[(i + 1) % quad.Count], out double t)
+                    && t > 1e-7 && t < firstT)
+                {
+                    firstT = t;
+                    intersection = from + (to - from) * t;
+                }
+            }
+            return firstT != double.MaxValue;
+        }
+
+        private static bool TryIntersectSegments(Point p, Point p2, Point q, Point q2, out double t)
+        {
+            Vector r = p2 - p;
+            Vector s = q2 - q;
+            double cross = r.X * s.Y - r.Y * s.X;
+            if (Math.Abs(cross) < 1e-7)
+            {
+                t = 0;
+                return false;
+            }
+            Vector qp = q - p;
+            t = (qp.X * s.Y - qp.Y * s.X) / cross;
+            double u = (qp.X * r.Y - qp.Y * r.X) / cross;
+            return t >= 0 && t <= 1 && u >= 0 && u <= 1;
         }
 
         /// <summary>
@@ -5739,7 +5852,7 @@ namespace Caelum.Controls
                         _resizeStartHandleDist = PointDistance(cornerHandles[i], _resizeAnchorPoint);
                         if (_resizeStartHandleDist < 1.0) _resizeStartHandleDist = 1.0;
                         _lastResizeScale = 1.0;
-                        SelectionOverlayCanvas.CaptureMouse();
+                        CaptureSelectionInput(fromStylus);
                         if (this.Parent is System.Windows.Controls.Grid pg1) { System.Windows.Controls.Panel.SetZIndex(pg1, 999); }
                         return;
                     }
@@ -5755,7 +5868,7 @@ namespace Caelum.Controls
                     _dragStartPoint = point;
                     _totalDragDeltaX = 0;
                     _totalDragDeltaY = 0;
-                    SelectionOverlayCanvas.CaptureMouse();
+                    CaptureSelectionInput(fromStylus);
                     if (this.Parent is System.Windows.Controls.Grid pg2) { System.Windows.Controls.Panel.SetZIndex(pg2, 999); }
                     return;
                 }
@@ -5764,7 +5877,7 @@ namespace Caelum.Controls
             ClearSelection();
             _isSelecting = true;
             _selectionStartPoint = point;
-            SelectionOverlayCanvas.CaptureMouse();
+            CaptureSelectionInput(fromStylus);
             if (this.Parent is System.Windows.Controls.Grid pg3) { System.Windows.Controls.Panel.SetZIndex(pg3, 999); }
 
             if (_selectionShape == SelectionShape.FreeForm)
@@ -5792,6 +5905,14 @@ namespace Caelum.Controls
                 Canvas.SetTop(_selectionRect, point.Y);
                 SelectionOverlayCanvas.Children.Add(_selectionRect);
             }
+        }
+
+        private void CaptureSelectionInput(bool fromStylus)
+        {
+            if (fromStylus)
+                SelectionOverlayCanvas.CaptureStylus();
+            else
+                SelectionOverlayCanvas.CaptureMouse();
         }
 
         // --- Task 7: Ctrl+click multi-select (Select tool, mouse only) ---
@@ -6051,8 +6172,18 @@ namespace Caelum.Controls
             {
                 _isSelecting = false;
                 if (this.Parent is System.Windows.Controls.Grid pGrid) { System.Windows.Controls.Panel.SetZIndex(pGrid, 0); }
-                if (SelectionOverlayCanvas.IsMouseCaptured)
-                    SelectionOverlayCanvas.ReleaseMouseCapture();
+                _suppressSelectionCaptureCancellation = true;
+                try
+                {
+                    if (SelectionOverlayCanvas.IsMouseCaptured)
+                        SelectionOverlayCanvas.ReleaseMouseCapture();
+                    if (SelectionOverlayCanvas.IsStylusCaptured)
+                        SelectionOverlayCanvas.ReleaseStylusCapture();
+                }
+                finally
+                {
+                    _suppressSelectionCaptureCancellation = false;
+                }
 
                 _selectedStrokes.Clear();
                 _selectedTextContainers.Clear();

@@ -1,5 +1,5 @@
 # OpenNotes.csproj
-> 2026-08-26 GREEN: package/assembly/file/informational metadata are 5.2.3/5.2.3.0 for the editor regression-fix release; `RootNamespace=Caelum` and all storage/package compatibility identities are preserved.
+> 2026-08-28 GREEN: package/assembly/file/informational metadata are 5.2.4/5.2.4.0 for the selection/text/ruler regression release; `RootNamespace=Caelum` and all compatibility identities are preserved.
 > Last updated: 2026-08-24（5.0.0 release metadata） | Protection: STANDARD
 
 > 2026-08-25 GREEN: package/assembly/file/informational metadata are 5.2.2/5.2.2.0 for the fixed-sidebar and centered-page-navigation patch; `RootNamespace=Caelum` and all storage/package compatibility identities are preserved.

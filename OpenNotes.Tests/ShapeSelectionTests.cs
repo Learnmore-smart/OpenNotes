@@ -1,3 +1,4 @@
+using System.IO;
 using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
@@ -227,6 +228,41 @@ public sealed class ShapeSelectionTests
     }
 
     [Test]
+    public void CancelInteractionClearsDelegatedSelectionRoute()
+    {
+        EnsureWpfEnvironment();
+        EnsureTestApplication();
+
+        var editor = new EditorPage();
+        var page = new PdfPageControl();
+        SetPrivateField(editor, "_isDelegatingSelection", true);
+        SetPrivateField(editor, "_selectionDelegateTarget", page);
+
+        editor.CancelInteraction("selection regression test");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(GetPrivateValue<bool>(editor, "_isDelegatingSelection"), Is.False);
+            Assert.That(GetPrivateValue<PdfPageControl?>(editor, "_selectionDelegateTarget"), Is.Null);
+        });
+    }
+
+    [Test]
+    public void StylusSelectionUsesStylusCaptureAndReleasesBothCaptureKinds()
+    {
+        string source = File.ReadAllText(Path.Combine(
+            TestContext.CurrentContext.TestDirectory, "..", "..", "..", "..", "Controls", "PdfPageControl.xaml.cs"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(source, Does.Contain("CaptureSelectionInput(fromStylus);"),
+                "Selection starts must capture the route that originated the gesture.");
+            Assert.That(source, Does.Contain("SelectionOverlayCanvas.ReleaseStylusCapture();"),
+                "Normal selection completion must release stylus capture as well as mouse capture.");
+        });
+    }
+
+    [Test]
     public void LassoPolygonAroundShapeSelectsStroke()
     {
         // Create an ellipse shape from (50, 50) to (150, 150)
@@ -286,6 +322,19 @@ public sealed class ShapeSelectionTests
     {
         return target.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)?.GetValue(target) as T
             ?? throw new AssertionException($"Private field '{name}' was not initialized.");
+    }
+
+    private static T GetPrivateValue<T>(object target, string name)
+    {
+        object? value = target.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)?.GetValue(target);
+        return value is null ? default! : (T)value;
+    }
+
+    private static void SetPrivateField(object target, string name, object? value)
+    {
+        var field = target.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new AssertionException($"Private field '{name}' was not found.");
+        field.SetValue(target, value);
     }
 
     private static void EnsureTestApplication()

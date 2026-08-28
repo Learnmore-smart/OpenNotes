@@ -1,5 +1,5 @@
 # OpenNotes.Tests/ProductInfoTests.cs
-> 2026-08-26 GREEN: visible-version assertion is 5.2.3; ProductInfoTests proved RED before production metadata changes and GREEN afterward, with all compatibility assertions preserved.
+> 2026-08-28 GREEN: visible-version assertion is 5.2.4 for the selection/text/ruler regression release; the stale 5.2.3 value failed first and compatibility assertions remain unchanged.
 > Last updated: 2026-08-24（5.0.0 release metadata coverage） | Protection: STANDARD
 
 ## Purpose

@@ -1,4 +1,9 @@
 # Controls/PdfPageControl.xaml(.cs)
+
+## v5.2.4 ruler constraint follow-up (2026-08-27) — IN PROGRESS
+
+- Replace the one-edge/all-points-near-only snap contract with live four-corner ruler geometry. A stroke approaching the ruler body must end at its first boundary intersection; a stroke beginning inside is rejected; an outside stroke drawn alongside either long edge snaps to the nearer edge.
+- Run the ruler constraint before Shift, smoothing, recognition and ink simulation so the final constrained stroke remains one ordinary placement/history action.
 > Last updated: 2026-08-24（Wave6 Sticky/transient dual-review GREEN closure）| Protection: STANDARD
 
 ## Task 1 selection regression fix (2026-08-26) — GREEN
@@ -257,6 +262,9 @@ Keep `PageGrid`, `PdfImage`, and `PdfImageOverlay` opaque and independent from `
 - Hidden Ink 擦除使用线段-矩形相交（Liang–Barsky clipping）而不是只比较点或轴对齐 bounds，斜向遮罩也能按真实几何命中。
 
 ## Change History
+
+- 2026-08-28: Selection gestures capture their originating input route (stylus vs mouse) and all completion paths release both capture kinds under the cancellation guard. The ruler provider now supplies both long edges/body; collected ink starting inside is rejected, crossings clip at first body entry, and parallel strokes snap to the nearer edge before smoothing/history.
+- 2026-08-28 review: exact boundary starts are outside the strict interior test, enabling the primary along-edge gesture; a following point inside the body still rejects the gesture.
 
 - 2026-08-26: `QuietStrokeMutation` now fires only after successful quiet add/remove/replace operations used by undo, redo, delete, erase, paste, and cross-page transfer. EditorPage uses it for page-local thumbnail invalidation without dirty/history side effects.
 - 2026-08-24: Wave5 review closure keeps the PDF display layer independent from workspace decoration. Laser fade and selection-dash animation now consume `ThemeService.GetAnimationDuration`/`ShouldAnimate`, while `PdfImage` and `PdfImageOverlay` remain bitmap-only hosts. The real STA `PdfPageControl` composite probe wraps a known non-white bitmap and annotation overlay in Neutral/Paper/Slate workspace parents and confirms the page crop is byte-stable; this is complementary to the PDF service hash contract and must not be replaced by tinting the page.

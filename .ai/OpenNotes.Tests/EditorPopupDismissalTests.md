@@ -1,5 +1,9 @@
 # EditorPopupDismissalTests
 
+## v5.2.4 text ComboBox follow-up (2026-08-27) — IN PROGRESS
+
+- Add STA coverage proving generated font-family and alignment dropdown items are editor-owned transient content and cannot be closed by `ShouldClosePopupOnPointerDown` before their selection commits.
+
 > Last updated: 2026-08-26 | Protection: STANDARD
 
 ## Purpose
@@ -32,3 +36,4 @@ Exercises `EditorPage_PreviewMouseDown`, the native `InkCanvas_StrokeCollected` 
 | 2026-08-26 | Cleared stale pending dismissal state on normal mouse-up and stylus-up; popup filter 3/3 and PenOnly filter 1/1 are GREEN. | Codex |
 | 2026-08-26 | Added interactive Hidden Ink overlay coverage, gated arming to the actual native InkCanvas target, and verified popup 4/4, HiddenInk 10/10, and PenOnly 1/1. | Codex |
 | 2026-08-26 | Added unrelated-popup dismissal coverage, gated arming to the active Pen/Highlighter popup closure, and verified popup 5/5 plus selection 8/8. | Codex |
+| 2026-08-28 | Added detached font/alignment item ownership plus real SelectionChanged format/history/dirty regressions; preserved non-activating popup HWND behavior after review. | Codex |

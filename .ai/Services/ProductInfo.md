@@ -1,5 +1,5 @@
 # Services/ProductInfo.cs
-> 2026-08-26 GREEN: visible version is 5.2.3 for the editor regression-fix release; Caelum/WindowsNotesApp compatibility identifiers, data root and URLs are preserved.
+> 2026-08-28 GREEN: visible version is 5.2.4 for the selection/text/ruler regression release; Caelum/WindowsNotesApp compatibility identifiers, data root and URLs are preserved.
 > Last updated: 2026-08-24（5.0.0 release metadata）| Protection: STANDARD
 
 ## Purpose
@@ -13,7 +13,7 @@ Single source of truth for the visible OpenNotes brand and the compatibility ide
 - `LegacyAppxIdentity`: `WindowsNotesApp`
 - `RepositoryUrl`: `https://github.com/Learnmore-smart/Windows-Notes`
 - `WebsiteUrl`: `https://learnmore-smart.github.io/Windows-Notes/`
-- `Version`: `5.2.3`
+- `Version`: `5.2.4`
 - `Description`: localized through `LocalizationService.Get("Product.Description")`
 
 ## Important Notes / NEVER Change

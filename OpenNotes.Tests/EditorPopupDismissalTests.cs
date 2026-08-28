@@ -15,6 +15,10 @@ namespace Caelum.Tests;
 
 public sealed class EditorPopupDismissalTests
 {
+    private static readonly MethodInfo ShouldClosePopupOnPointerDownMethod =
+        typeof(EditorPage).GetMethod("ShouldClosePopupOnPointerDown", BindingFlags.Instance | BindingFlags.NonPublic)
+        ?? throw new InvalidOperationException("EditorPage.ShouldClosePopupOnPointerDown was not found.");
+
     private static readonly MethodInfo EditorPagePreviewMouseDownMethod =
         typeof(EditorPage).GetMethod("EditorPage_PreviewMouseDown", BindingFlags.Instance | BindingFlags.NonPublic)
         ?? throw new InvalidOperationException("EditorPage.EditorPage_PreviewMouseDown was not found.");
@@ -277,6 +281,73 @@ public sealed class EditorPopupDismissalTests
         }
     }
 
+    [Test]
+    [Apartment(System.Threading.ApartmentState.STA)]
+    public void TextComboBoxChoicesRemainInsideTransientToolbarSurface()
+    {
+        EnsureWpfEnvironment();
+        EnsureTestApplication();
+        var editor = new EditorPage();
+        var fontCombo = GetPrivateField<ComboBox>(editor, "_textFontFamilyCombo");
+        var alignmentCombo = GetPrivateField<ComboBox>(editor, "_textAlignmentCombo");
+        var textPopup = GetPrivateField<Popup>(editor, "_textColorPopup");
+
+        try
+        {
+            textPopup.IsOpen = true;
+            foreach (var combo in new[] { fontCombo, alignmentCombo })
+            {
+                var item = new ComboBoxItem { Content = combo.Items[1] };
+                combo.ItemsSource = null;
+                combo.Items.Add(item);
+
+                var arguments = new object?[] { item, false };
+                var closes = (bool)ShouldClosePopupOnPointerDownMethod.Invoke(editor, arguments)!;
+                Assert.That(closes, Is.False,
+                    "Clicking a font/alignment choice must not close transient UI before SelectionChanged commits it.");
+            }
+        }
+        finally
+        {
+            textPopup.IsOpen = false;
+        }
+    }
+
+    [Test]
+    [Apartment(System.Threading.ApartmentState.STA)]
+    public void FontAndAlignmentSelectionsCommitFormatHistoryAndDirtyState()
+    {
+        EnsureWpfEnvironment();
+        EnsureTestApplication();
+        var editor = new EditorPage();
+        var page = new PdfPageControl();
+        var container = new Grid();
+        var textBox = new TextBox
+        {
+            FontFamily = new System.Windows.Media.FontFamily("Segoe UI"),
+            TextAlignment = TextAlignment.Left
+        };
+        container.Children.Add(textBox);
+        page.AddTextContainerQuiet(container);
+        GetPrivateField<IList>(editor, "_pageControls").Add(page);
+        SetPrivateField(editor, "_selectedTextBox", textBox);
+
+        var fontCombo = GetPrivateField<ComboBox>(editor, "_textFontFamilyCombo");
+        var alignmentCombo = GetPrivateField<ComboBox>(editor, "_textAlignmentCombo");
+        fontCombo.SelectedItem = "Arial";
+        alignmentCombo.SelectedItem = alignmentCombo.Items.Cast<object>().Single(item =>
+            item.GetType().GetProperty("Value")?.GetValue(item) is TextAlignment value
+            && value == TextAlignment.Center);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(textBox.FontFamily.Source, Is.EqualTo("Arial"));
+            Assert.That(textBox.TextAlignment, Is.EqualTo(TextAlignment.Center));
+            Assert.That(GetUndoStack(editor), Has.Count.EqualTo(2));
+            Assert.That(editor.IsDirty, Is.True);
+        });
+    }
+
     private static (EditorPage Editor, PdfPageControl Page, Popup Popup) CreateHarness(
         string toolName,
         CustomInkInputProcessingMode inputMode)
@@ -355,6 +426,13 @@ public sealed class EditorPopupDismissalTests
     {
         return (T)(target.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)?.GetValue(target)
             ?? throw new AssertionException($"Private field '{name}' was not initialized."));
+    }
+
+    private static void SetPrivateField(object target, string name, object? value)
+    {
+        var field = target.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new AssertionException($"Private field '{name}' was not found.");
+        field.SetValue(target, value);
     }
 
     private static void InvokePrivate(object target, string methodName, params object[] args)

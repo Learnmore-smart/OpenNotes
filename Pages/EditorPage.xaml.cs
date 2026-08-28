@@ -112,7 +112,7 @@ namespace Caelum.Pages
         // ON and draw along the edge). Viewport-anchored: scrolling or
         // zooming the document never moves it, like a real ruler lying on
         // the screen. Pen/Highlighter strokes drawn near the ruler's edge
-        // are projected onto it (see PdfPageControl.SnapStrokeToRuler);
+        // are constrained by it (see PdfPageControl.ApplyRulerConstraint);
         // the snapped strokes are ordinary strokes, so undo/save work
         // naturally and the ruler itself never touches undo/dirty.
         private bool _rulerVisible;
@@ -6381,6 +6381,9 @@ namespace Caelum.Pages
 
             if (!anyPopupOpen && !_transientUiRegistry.HasOpenSurface()) return false;
 
+            if (IsSourceInOwnedTextComboBox(originalSource))
+                return false;
+
             if (IsSourceInToolbar(originalSource))
             {
                 return false;
@@ -6412,6 +6415,17 @@ namespace Caelum.Pages
         private bool IsSourceInToolbar(DependencyObject source)
         {
             return IsDescendantOf(source, ToolbarBorder);
+        }
+
+        private bool IsSourceInOwnedTextComboBox(DependencyObject source)
+        {
+            var item = FindAncestor<ComboBoxItem>(source);
+            if (item == null)
+                return false;
+
+            var owner = ItemsControl.ItemsControlFromItemContainer(item) as ComboBox;
+            return ReferenceEquals(owner, _textFontFamilyCombo)
+                || ReferenceEquals(owner, _textAlignmentCombo);
         }
 
         private bool IsDescendantOf(DependencyObject descendant, DependencyObject ancestor)
@@ -6672,11 +6686,15 @@ namespace Caelum.Pages
                     // ruler) never serves a stale segment. Null while the
                     // ruler is hidden. The edge lives in the overlay, never
                     // in the document — no dirty flag, no undo, no save.
-                    pageControl.GetRulerEdgeInPageCoords = () =>
+                    pageControl.GetRulerGeometryInPageCoords = () =>
                     {
-                        var edge = GetRulerEdgeEndpoints();
-                        if (edge == null) return null;
-                        return (TranslatePoint(edge.Value.A, pageControl), TranslatePoint(edge.Value.B, pageControl));
+                        var geometry = GetRulerGeometryEndpoints();
+                        if (geometry == null) return null;
+                        return (
+                            TranslatePoint(geometry.Value.TopA, pageControl),
+                            TranslatePoint(geometry.Value.TopB, pageControl),
+                            TranslatePoint(geometry.Value.BottomA, pageControl),
+                            TranslatePoint(geometry.Value.BottomB, pageControl));
                     };
 
                     if (_penService != null)
@@ -8972,7 +8990,7 @@ namespace Caelum.Pages
         /// away from where it was drawn. Rotating the ruler 180° swaps which
         /// physical edge is "top", so every direction stays usable.
         /// </summary>
-        private (Point A, Point B)? GetRulerEdgeEndpoints()
+        private (Point TopA, Point TopB, Point BottomA, Point BottomB)? GetRulerGeometryEndpoints()
         {
             if (!_rulerVisible || _rulerVisual == null) return null;
 
@@ -8986,13 +9004,19 @@ namespace Caelum.Pages
             double halfLen = RulerLength / 2;
             double halfHeight = RulerHeight / 2;
 
-            return (
-                new Point(
+            var topA = new Point(
                     _rulerCenter.X - halfLen * dirX + halfHeight * upX,
-                    _rulerCenter.Y - halfLen * dirY + halfHeight * upY),
-                new Point(
+                    _rulerCenter.Y - halfLen * dirY + halfHeight * upY);
+            var topB = new Point(
                     _rulerCenter.X + halfLen * dirX + halfHeight * upX,
-                    _rulerCenter.Y + halfLen * dirY + halfHeight * upY));
+                    _rulerCenter.Y + halfLen * dirY + halfHeight * upY);
+            var bottomA = new Point(
+                    _rulerCenter.X - halfLen * dirX - halfHeight * upX,
+                    _rulerCenter.Y - halfLen * dirY - halfHeight * upY);
+            var bottomB = new Point(
+                    _rulerCenter.X + halfLen * dirX - halfHeight * upX,
+                    _rulerCenter.Y + halfLen * dirY - halfHeight * upY);
+            return (topA, topB, bottomA, bottomB);
         }
 
         #endregion
@@ -9098,6 +9122,8 @@ namespace Caelum.Pages
             _thumbnailDragSessionId = -1;
             _thumbnailDragPath = null;
             InteractionCancellation.CancelAll(_pageControls, reason);
+            _isDelegatingSelection = false;
+            _selectionDelegateTarget = null;
         }
 
         /// <summary>

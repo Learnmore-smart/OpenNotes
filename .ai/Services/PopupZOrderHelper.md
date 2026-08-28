@@ -26,6 +26,8 @@ Centralizes the Win32 popup/context-menu z-order workaround used by editor, main
 
 ## Completion Status
 
+- 2026-08-28: Review preserved `WS_EX_NOACTIVATE` for ComboBoxes because activating their owned popup can trigger the app-wide deactivation sweep. Text formatting is fixed narrowly by classifying detached generated items as editor-owned transient UI before dismissal.
+
 - V5.1.1 hotfix: deferred popup callbacks resolve their owner through a null-safe helper. Programmatically opened menus and targets detached before Render priority leave the native owner unchanged instead of passing null to `Window.GetWindow` and terminating the app; callers that own a target explicitly assign it before opening.
 - The helper is used by editor tool/color/version popups, PDF context menus, MainWindow menus, all four SettingsWindow ComboBoxes, and the three dynamically created HomePage context menus.
 - `FixPopupTopmost`, `FixContextMenuTopmost`, and `FixComboBoxPopupTopmost` all remove WPF's unintended topmost band and apply `WS_EX_NOACTIVATE`; the latter two wait for the popup HWND to exist at render priority.

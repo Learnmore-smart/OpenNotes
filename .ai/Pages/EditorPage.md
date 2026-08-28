@@ -1,5 +1,12 @@
 # Pages/EditorPage.xaml.cs
 
+## v5.2.4 selection/text/ruler follow-up (2026-08-27) — IN PROGRESS
+
+- **Selection plan:** replace the duplicate ScrollViewer-synthesized selection gesture with the already-visible page `SelectionOverlayCanvas` as the single input owner; retain cross-page Ctrl cleanup without consuming the routed pointer.
+- **Text root cause/plan:** ComboBox dropdown item clicks are registered as open transient UI but are not recognized as inside the inline toolbar, so preview dismissal closes them before `SelectionChanged`; recognize the two owned ComboBox dropdown item containers and preserve the existing `ApplySelectedTextFormat` undo/dirty path.
+- **Ruler plan:** expose both long edges plus the body; snap an outside along-edge stroke to the nearer edge and clip a stroke at first body entry so ink cannot pass through the ruler. The overlay stays session-only and never enters save/undo by itself.
+- **Status:** RED-first tests pending; pixel eraser explicitly removed from scope by the user.
+
 > V5.1.2 dynamic page controls, bookmarks and notifications use Lucide vectors; PenOnly remains PenLine.
 
 ## Task 1 selection regression fix (2026-08-26) — GREEN
@@ -363,6 +370,8 @@ Wave 1 note: shape replacement undo stores only session token/index and immutabl
 - **2026-08-20:** Immersive mode now hides/restores the toolbar, document sidebar and search panel and is reachable from the localized toolbar button as well as F11/ESC.
 
 ## Change History
+
+- 2026-08-28: `CancelInteraction` clears stale delegated selection routing. Detached font/alignment `ComboBoxItem` sources are recognized as owned transient UI, and the ruler provider exposes all four body corners for page-local blocking/clipping.
 
 - 2026-08-26: Quiet stroke add/remove/replace events now invalidate only the owning live thumbnail; the handler intentionally omits dirty/history publication. Focused thumbnail + history/replacement + selection filters pass 28/28.
 
