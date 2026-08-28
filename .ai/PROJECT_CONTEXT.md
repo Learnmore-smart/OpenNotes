@@ -137,3 +137,9 @@ Open: retain the completed external PDF/image import bookmark snapshot/remap wir
 - Fix the compact alignment ComboBox selected-item presentation so localized Left/Center/Right labels are rendered instead of the backing option type name (`Caelum...`).
 - Follow RED/GREEN coverage in `TextAnnotationTests` and the existing editor popup/source contracts before producing another release build.
 - Implementation is GREEN in focused coverage and the 323-test Release suite: the separate side handle is absent, mouse/stylus input uses the container's 8-DIP inner edge band with resize/tool-mode guards, and TextAlignmentOption.ToString() returns its localized label. Release metadata is advancing to 5.2.5.
+# 2026-08-28 OpenNotes 5.2.5 release
+
+- OpenNotes 5.2.5 was released from tag commit `2f68f84`. The release removes the separate dotted textbox move handle, routes Text-tool mouse/stylus movement through an 8-DIP inner border band with resize-handle priority, and displays localized alignment labels instead of the backing Caelum type name.
+- Final local verification: 323/323 Release tests passed; the solution build completed with 0 errors; i18n verified 293 catalog entries, 480 calls, and 0 hard-coded visible strings; `git diff --check` exited 0.
+- GitHub Actions release run `33204498831` completed successfully. Public assets: `OpenNotes-Setup-5.2.5.exe` SHA-256 `aeedcef624d1befd99d9cef0502f676d49f540b3b7d6f612687e18f544300d91`; `OpenNotes-Portable-win-x64-5.2.5.zip` SHA-256 `408bbcad0c1cd7ed958f04417fe5e54df3c1bb26858a7c423850e5aeeb98db9f`.
+- The GitHub-downloaded portable archive hash matches release metadata. Its executable reports FileVersion 5.2.5.0 / ProductVersion 5.2.5+2f68f84 and is running responsively in a visible OpenNotes window as PID 31200.
