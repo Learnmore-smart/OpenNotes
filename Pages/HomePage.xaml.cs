@@ -1229,7 +1229,9 @@ namespace Caelum.Pages
 
         private MainWindow GetMainWindow()
         {
-            return Application.Current.MainWindow as MainWindow;
+            return Window.GetWindow(this) as MainWindow
+                ?? TabDragCoordinator.GetRegisteredWindows().FirstOrDefault(window => window.IsActiveContent(this))
+                ?? Application.Current?.MainWindow as MainWindow;
         }
 
         private double _targetVerticalOffset;

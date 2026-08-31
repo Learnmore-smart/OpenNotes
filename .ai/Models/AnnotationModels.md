@@ -39,6 +39,7 @@
 - 无外部依赖（纯 POCO）。
 
 ## Open Threads / Resume Context
+- v5.2.6 ordinary stroke annotations gain optional logical-shape metadata (`ShapeGroupId`, `ShapeKind`, `ShapePartIndex`, `IsDashedShape`). Empty/default values remain legacy freehand and must round-trip through owned PDF ink, clipboard, undo, and eraser fragments.
 - **Status:** ready_for_next
 - Wave 2 changes the default only for newly constructed Hidden Ink masks. Existing serialized RGB values (including explicit pure white) remain data, and reveal timers/state remain runtime-only. Focused Hidden Ink/PDF tests pass.
 

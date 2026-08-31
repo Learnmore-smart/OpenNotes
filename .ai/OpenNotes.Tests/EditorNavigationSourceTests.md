@@ -1,4 +1,8 @@
 # OpenNotes.Tests/EditorNavigationSourceTests.cs
+
+## Sidebar page reorder (2026-08-30) — GREEN for focused scope
+
+- Source contracts cover the immutable thumbnail drag payload, DragOver/DragLeave/QueryContinueDrag indicator lifecycle, stale model/session rejection, and the one-session reload validation. Tests stay independent of MainWindow and PdfPageControl; focused navigation/placement/bookmark/PDF coverage passes 62/62.
 > Last updated: 2026-08-24 | Protection: STANDARD
 
 > 2026-08-25 RED/GREEN: new contracts require a fixed 184-DIP expanded sidebar, 38-DIP collapse/auto-collapse, no resize surface/provider/handlers, and a centered `PageJumpGroup` toolbar overlay with a reserved action-row footprint. The focused slice failed against the pre-change implementation; the live STA layout now also proves the page-jump center matches the floating toolbar center within one DIP.

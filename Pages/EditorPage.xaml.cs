@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Runtime.CompilerServices;
@@ -513,22 +514,129 @@ namespace Caelum.Pages
                 _addedFragments = addedFragments ?? new List<StrokePlacement>();
             }
             public bool LeavesDocumentDirty => true;
+            public bool LastOperationSucceeded { get; private set; }
             public Task UndoAsync()
             {
-                foreach (var fragment in _addedFragments.OrderByDescending(p => p.Index))
-                    _page.RemoveStrokeQuiet(fragment);
-                foreach (var original in _removedOriginals.OrderBy(p => p.Index))
-                    _page.AddStrokeQuiet(original.ForOwner(_page, original.Index));
+                LastOperationSucceeded = false;
+                var removedFragments = new List<StrokePlacement>();
+                var restoredOriginals = new List<StrokePlacement>();
+                try
+                {
+                    foreach (var fragment in _addedFragments.OrderByDescending(p => p.Index))
+                    {
+                        if (!TryRemoveCurrentPlacement(fragment, out var removedFragment))
+                        {
+                            RollbackUndo(removedFragments, restoredOriginals);
+                            return Task.CompletedTask;
+                        }
+
+                        removedFragments.Add(removedFragment);
+                    }
+
+                    foreach (var original in _removedOriginals.OrderBy(p => p.Index))
+                    {
+                        var restored = _page.AddStrokeQuiet(original.ForOwner(_page, original.Index));
+                        if (restored == null)
+                        {
+                            RollbackUndo(removedFragments, restoredOriginals);
+                            return Task.CompletedTask;
+                        }
+
+                        restoredOriginals.Add(restored);
+                    }
+
+                    LastOperationSucceeded = true;
+                }
+                catch
+                {
+                    RollbackUndo(removedFragments, restoredOriginals);
+                }
+
                 return Task.CompletedTask;
             }
 
             public Task RedoAsync()
             {
-                foreach (var original in _removedOriginals.OrderByDescending(p => p.Index))
-                    _page.RemoveStrokeQuiet(original);
-                foreach (var fragment in _addedFragments.OrderBy(p => p.Index))
-                    _page.AddStrokeQuiet(fragment.ForOwner(_page, fragment.Index));
+                LastOperationSucceeded = false;
+                var removedOriginals = new List<StrokePlacement>();
+                var restoredFragments = new List<StrokePlacement>();
+                try
+                {
+                    foreach (var original in _removedOriginals.OrderByDescending(p => p.Index))
+                    {
+                        if (!TryRemoveCurrentPlacement(original, out var removedOriginal))
+                        {
+                            RollbackRedo(removedOriginals, restoredFragments);
+                            return Task.CompletedTask;
+                        }
+
+                        removedOriginals.Add(removedOriginal);
+                    }
+
+                    foreach (var fragment in _addedFragments.OrderBy(p => p.Index))
+                    {
+                        var restored = _page.AddStrokeQuiet(fragment.ForOwner(_page, fragment.Index));
+                        if (restored == null)
+                        {
+                            RollbackRedo(removedOriginals, restoredFragments);
+                            return Task.CompletedTask;
+                        }
+
+                        restoredFragments.Add(restored);
+                    }
+
+                    LastOperationSucceeded = true;
+                }
+                catch
+                {
+                    RollbackRedo(removedOriginals, restoredFragments);
+                }
+
                 return Task.CompletedTask;
+            }
+
+            /// <summary>
+            /// Erase history follows the logical token/side identity, because
+            /// recognition and polishing can replace a WPF Stroke reference
+            /// between the original gesture and a later redo. Capture the
+            /// resolved live placement first, then remove that exact instance
+            /// so rollback never targets a stale or unrelated reference.
+            /// </summary>
+            private bool TryRemoveCurrentPlacement(
+                StrokePlacement expected,
+                out StrokePlacement removed)
+            {
+                removed = null;
+                if (!_page.TryCaptureCurrentStrokePlacement(expected, out var current)
+                    || !_page.RemoveStrokeQuietExact(current))
+                {
+                    return false;
+                }
+
+                removed = current;
+                return true;
+            }
+
+            private void RollbackUndo(
+                IReadOnlyList<StrokePlacement> removedFragments,
+                IReadOnlyList<StrokePlacement> restoredOriginals)
+            {
+                for (int index = restoredOriginals.Count - 1; index >= 0; index--)
+                    _page.RemoveStrokeQuietExact(restoredOriginals[index]);
+
+                foreach (var fragment in removedFragments.OrderBy(p => p.Index))
+                    _page.AddStrokeQuiet(fragment.ForOwner(_page, fragment.Index));
+            }
+
+            private void RollbackRedo(
+                IReadOnlyList<StrokePlacement> removedOriginals,
+                IReadOnlyList<StrokePlacement> restoredFragments)
+            {
+                for (int index = restoredFragments.Count - 1; index >= 0; index--)
+                    _page.RemoveStrokeQuietExact(restoredFragments[index]);
+
+                foreach (var original in removedOriginals.OrderBy(p => p.Index))
+                    _page.AddStrokeQuiet(original.ForOwner(_page, original.Index));
             }
 
             private static List<StrokePlacement> CapturePlacements(
@@ -1694,6 +1802,54 @@ namespace Caelum.Pages
             public string FilePath { get; }
         }
 
+        private sealed class StrokeStyleChangedAction : IUndoAction
+        {
+            private readonly PdfPageControl _page;
+            private readonly IReadOnlyDictionary<Stroke, DrawingAttributes> _before;
+            private readonly IReadOnlyDictionary<Stroke, DrawingAttributes> _after;
+
+            public StrokeStyleChangedAction(
+                PdfPageControl page,
+                IReadOnlyDictionary<Stroke, DrawingAttributes> before,
+                IReadOnlyDictionary<Stroke, DrawingAttributes> after)
+            {
+                _page = page;
+                _before = before;
+                _after = after;
+            }
+
+            public bool LeavesDocumentDirty => true;
+
+            public Task UndoAsync()
+            {
+                Apply(_before);
+                return Task.CompletedTask;
+            }
+
+            public Task RedoAsync()
+            {
+                Apply(_after);
+                return Task.CompletedTask;
+            }
+
+            private void Apply(IReadOnlyDictionary<Stroke, DrawingAttributes> values)
+            {
+                foreach (var pair in values)
+                    pair.Key.DrawingAttributes = pair.Value.Clone();
+                _page.RefreshSelectedDrawingStyle();
+            }
+        }
+
+        // The WPF drag loop is synchronous, but the Drop callback can begin an
+        // asynchronous document operation before DoDragDrop returns. Keep the
+        // complete source identity in one immutable value so clearing editor
+        // gesture state cannot make the drop stale by accident.
+        private sealed record ThumbnailDragPayload(
+            int SourceIndex,
+            int SessionId,
+            string FilePath,
+            SidebarPageItem Source);
+
         private readonly List<IUndoAction> _undoStack = new List<IUndoAction>();
         private readonly List<IUndoAction> _redoStack = new List<IUndoAction>();
 
@@ -1728,9 +1884,8 @@ namespace Caelum.Pages
         private bool _isRefreshingThumbnails;
         private bool _isSynchronizingThumbnailSelection;
         private Point _thumbnailDragStartPoint;
-        private int _thumbnailDragIndex = -1;
-        private int _thumbnailDragSessionId = -1;
-        private string _thumbnailDragPath;
+        private ThumbnailDragPayload _thumbnailDragPayload;
+        private int _thumbnailDropSlot = -1;
         private enum SidebarTab
         {
             Pages,
@@ -3576,6 +3731,9 @@ namespace Caelum.Pages
                     if (action is SelectionCrossPageMoveAction crossPageMove
                         && !crossPageMove.LastOperationSucceeded)
                         return;
+                    if (action is StrokesErasedAction strokesErased
+                        && !strokesErased.LastOperationSucceeded)
+                        return;
                     if (action is DocumentSnapshotAction snapshot
                         ? !snapshot.LastOperationSucceeded ||
                           !ValidateDocumentOperationLease(snapshot.CompletedOperationLease)
@@ -3621,6 +3779,9 @@ namespace Caelum.Pages
                     await action.RedoAsync();
                     if (action is SelectionCrossPageMoveAction crossPageMove
                         && !crossPageMove.LastOperationSucceeded)
+                        return;
+                    if (action is StrokesErasedAction strokesErased
+                        && !strokesErased.LastOperationSucceeded)
                         return;
                     if (action is DocumentSnapshotAction snapshot
                         ? !snapshot.LastOperationSucceeded ||
@@ -3710,6 +3871,7 @@ namespace Caelum.Pages
             _penPopupSizePreview = AddSizePreviewSection(_penPopup, _penSize, _penColor, isHighlighter: false);
             AddPenBehaviourToggles(_penPopup);
             AddPenSmoothingSection(_penPopup);
+            EnableToolPopupScrolling(_penPopup);
 
             // Highlighter popup — with size preview section
             _highlighterPopup = BuildToolPopup(
@@ -3722,6 +3884,7 @@ namespace Caelum.Pages
                 sizeAutomationId: "Editor.Highlighter.Size");
             _highlighterPopupSizePreview = AddSizePreviewSection(_highlighterPopup, _highlighterSize, _highlighterColor, isHighlighter: true);
             AddHighlighterModeSection(_highlighterPopup);
+            EnableToolPopupScrolling(_highlighterPopup);
 
             _eraserPopup = BuildToolPopup(
                 LocalizationService.Get("Editor.PopupEraserSize"), 4, 80, _eraserSize, 1,
@@ -3730,6 +3893,7 @@ namespace Caelum.Pages
                 out _,
                 sizeAutomationId: "Editor.Eraser.Size");
             AddEraserModeSection(_eraserPopup);
+            EnableToolPopupScrolling(_eraserPopup);
 
             // Shape popup — sub-type selector above the shared size slider
             // and color palette (session-only state, no persistence).
@@ -3741,6 +3905,7 @@ namespace Caelum.Pages
                 out _,
                 sizeAutomationId: "Editor.Shape.Size");
             AddShapeSubTypeSection(_shapePopup);
+            EnableToolPopupScrolling(_shapePopup);
 
             CreateSelectionPopup();
         }
@@ -3767,6 +3932,7 @@ namespace Caelum.Pages
             var choices = new (ShapeKind Kind, string Label, string AutomationId)[]
             {
                 (ShapeKind.Line, LocalizationService.Get("Editor.ShapeLine"), "Editor.Shape.Line"),
+                (ShapeKind.DashedLine, LocalizationService.Get("Editor.ShapeDashedLine"), "Editor.Shape.DashedLine"),
                 (ShapeKind.Rectangle, LocalizationService.Get("Editor.ShapeRectangle"), "Editor.Shape.Rectangle"),
                 (ShapeKind.Ellipse, LocalizationService.Get("Editor.ShapeEllipse"), "Editor.Shape.Ellipse"),
                 (ShapeKind.Arrow, LocalizationService.Get("Editor.ShapeArrow"), "Editor.Shape.Arrow"),
@@ -3848,8 +4014,12 @@ namespace Caelum.Pages
                 if (settings.WholeStrokeEraser == whole)
                     return;
                 settings.WholeStrokeEraser = whole;
-                AppSettingsService.Save(settings);
-                ApplyToolToAllPages();
+                // Keep the editor cache and the page controls on the same
+                // snapshot. Calling the no-argument overload here would read
+                // the stale _applicationSettings value and immediately undo
+                // the mode the user just selected.
+                _applicationSettings = AppSettingsService.Save(settings);
+                ApplyToolToAllPages(_applicationSettings);
                 ApplyModeVisual();
             }
 
@@ -4072,6 +4242,7 @@ namespace Caelum.Pages
                 ShapeKind.Parallelogram => "M9,3 H29 L23,20 H3 Z",
                 ShapeKind.Pentagon => "M16,2 L29,9 L24,20 L8,20 L3,9 Z",
                 ShapeKind.Hexagon => "M9,3 H23 L29,11 L23,20 H9 L3,11 Z",
+                ShapeKind.DashedLine => "M4,17 L9,15 M13,13 L18,11 M22,9 L27,7",
                 _ => "M4,17 L27,5"
             };
 
@@ -4285,9 +4456,30 @@ namespace Caelum.Pages
                 ApplyToolToAllPages();
             }, automationId: "Editor.Pen.ShapeRecognition");
 
-            panel.Children.Add(pressureRow);
-            panel.Children.Add(inkSimRow);
-            panel.Children.Add(shapeRecognitionRow);
+            var behaviourGrid = new UniformGrid { Columns = 3, Margin = new Thickness(0, 0, 0, 6) };
+            foreach (var toggle in new[] { pressureRow, inkSimRow, shapeRecognitionRow })
+            {
+                toggle.Height = 58;
+                toggle.MinWidth = 0;
+                toggle.Margin = new Thickness(3);
+                toggle.Padding = new Thickness(4);
+                if (toggle.Content is StackPanel content)
+                {
+                    content.Orientation = Orientation.Vertical;
+                    content.HorizontalAlignment = HorizontalAlignment.Center;
+                    if (content.Children.OfType<Border>().FirstOrDefault() is Border indicator)
+                        indicator.HorizontalAlignment = HorizontalAlignment.Center;
+                    if (content.Children.OfType<TextBlock>().FirstOrDefault() is TextBlock text)
+                    {
+                        text.Margin = new Thickness(0, 4, 0, 0);
+                        text.FontSize = 11;
+                        text.TextAlignment = TextAlignment.Center;
+                        text.TextWrapping = TextWrapping.Wrap;
+                    }
+                }
+                behaviourGrid.Children.Add(toggle);
+            }
+            panel.Children.Add(behaviourGrid);
         }
 
         /// <summary>
@@ -4821,7 +5013,102 @@ namespace Caelum.Pages
 
             settingsPanel.Children.Add(filterPanel);
 
+            settingsPanel.Children.Add(ThemeDivider(new Border
+            {
+                Height = 1,
+                Margin = new Thickness(-14, 12, -14, 12)
+            }));
+            settingsPanel.Children.Add(ThemeSubtleHeader(new TextBlock
+            {
+                Text = LocalizationService.Get("Editor.SelectedDrawingStyle"),
+                FontSize = 12,
+                FontWeight = FontWeights.SemiBold,
+                Margin = new Thickness(0, 0, 0, 8)
+            }));
+
+            var widthRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 8) };
+            foreach (double width in new[] { 1d, 2d, 4d, 8d })
+            {
+                var widthButton = new Button
+                {
+                    Content = width.ToString("0.#", CultureInfo.InvariantCulture),
+                    Width = 44,
+                    Height = 32,
+                    Margin = new Thickness(0, 0, 6, 0),
+                    Cursor = Cursors.Hand
+                };
+                ApplyToolbarPopupButtonStyle(widthButton);
+                AutomationProperties.SetAutomationId(widthButton, $"Editor.Select.DrawingWidth.{width:0.#}");
+                widthButton.Click += (_, e) =>
+                {
+                    ApplySelectedDrawingStyle(null, width);
+                    e.Handled = true;
+                };
+                widthRow.Children.Add(widthButton);
+            }
+            settingsPanel.Children.Add(widthRow);
+
+            var colorRow = new StackPanel { Orientation = Orientation.Horizontal };
+            foreach (var color in new[] { Colors.Black, Colors.Red, Colors.Orange, Colors.Green, Colors.Blue, Colors.Purple })
+            {
+                var swatch = new Button
+                {
+                    Width = 32,
+                    Height = 32,
+                    Margin = new Thickness(0, 0, 6, 0),
+                    Background = new SolidColorBrush(color),
+                    BorderThickness = new Thickness(1),
+                    Cursor = Cursors.Hand,
+                    Tag = color
+                };
+                ApplyToolbarPopupButtonStyle(swatch);
+                string label = $"#{color.R:X2}{color.G:X2}{color.B:X2}";
+                AutomationProperties.SetAutomationId(swatch, $"Editor.Select.DrawingColor.{label[1..]}");
+                AutomationProperties.SetName(swatch, label);
+                swatch.Click += (_, e) =>
+                {
+                    ApplySelectedDrawingStyle(color, null);
+                    e.Handled = true;
+                };
+                colorRow.Children.Add(swatch);
+            }
+            settingsPanel.Children.Add(colorRow);
+
             _selectionPopup.Child = settingsBorder;
+        }
+
+        private void ApplySelectedDrawingStyle(Color? color, double? width)
+        {
+            var page = _activeSelectionPage;
+            var strokes = page?.SelectedStrokes?.Distinct().ToList();
+            if (page == null || strokes == null || strokes.Count == 0)
+                return;
+
+            var before = strokes.ToDictionary(stroke => stroke, stroke => stroke.DrawingAttributes.Clone());
+            bool changed = false;
+            foreach (var stroke in strokes)
+            {
+                var attributes = stroke.DrawingAttributes.Clone();
+                if (color.HasValue && attributes.Color != color.Value)
+                {
+                    attributes.Color = color.Value;
+                    changed = true;
+                }
+                if (width.HasValue && (Math.Abs(attributes.Width - width.Value) > 0.001 || Math.Abs(attributes.Height - width.Value) > 0.001))
+                {
+                    attributes.Width = width.Value;
+                    attributes.Height = width.Value;
+                    changed = true;
+                }
+                stroke.DrawingAttributes = attributes;
+            }
+
+            if (!changed)
+                return;
+
+            var after = strokes.ToDictionary(stroke => stroke, stroke => stroke.DrawingAttributes.Clone());
+            page.RefreshSelectedDrawingStyle();
+            PushUndoAction(new StrokeStyleChangedAction(page, before, after));
         }
 
         private static Grid CreateSelectionToggleContent(UIElement visual)
@@ -4945,6 +5232,7 @@ namespace Caelum.Pages
                 // Add selected strokes
                 foreach (var stroke in _activeSelectionPage.SelectedStrokes)
                 {
+                    var shape = ShapeStrokeMetadata.Read(stroke);
                     var strokeAnnotation = new StrokeAnnotation
                     {
                         R = stroke.DrawingAttributes.Color.R,
@@ -4954,6 +5242,10 @@ namespace Caelum.Pages
                         Size = stroke.DrawingAttributes.Width,
                         IsHighlighter = stroke.DrawingAttributes.IsHighlighter,
                         FitToCurve = stroke.DrawingAttributes.FitToCurve,
+                        ShapeGroupId = shape.GroupId,
+                        ShapeKind = shape.Kind,
+                        ShapePartIndex = shape.PartIndex,
+                        IsDashedShape = shape.IsDashed,
                         Points = new List<double[]>()
                     };
 
@@ -5136,8 +5428,18 @@ namespace Caelum.Pages
                 // Paste strokes
                 if (pageAnnotation.Strokes != null)
                 {
+                    var pastedShapeGroups = new Dictionary<string, string>(StringComparer.Ordinal);
                     foreach (var strokeAnnotation in pageAnnotation.Strokes)
                     {
+                        string pastedGroupId = string.Empty;
+                        if (!string.IsNullOrWhiteSpace(strokeAnnotation.ShapeGroupId))
+                        {
+                            if (!pastedShapeGroups.TryGetValue(strokeAnnotation.ShapeGroupId, out pastedGroupId))
+                            {
+                                pastedGroupId = Guid.NewGuid().ToString("N");
+                                pastedShapeGroups[strokeAnnotation.ShapeGroupId] = pastedGroupId;
+                            }
+                        }
                         // Apply paste offset
                         var offsetStroke = new StrokeAnnotation
                         {
@@ -5148,6 +5450,10 @@ namespace Caelum.Pages
                             Size = strokeAnnotation.Size,
                             IsHighlighter = strokeAnnotation.IsHighlighter,
                             FitToCurve = strokeAnnotation.FitToCurve,
+                            ShapeGroupId = pastedGroupId,
+                            ShapeKind = strokeAnnotation.ShapeKind,
+                            ShapePartIndex = strokeAnnotation.ShapePartIndex,
+                            IsDashedShape = strokeAnnotation.IsDashedShape,
                             Points = new List<double[]>()
                         };
 
@@ -5509,6 +5815,7 @@ namespace Caelum.Pages
 
                 // Clone strokes: fresh StylusPointCollection (offset applied,
                 // PressureFactor preserved) + cloned DrawingAttributes.
+                var duplicatedShapeGroups = new Dictionary<string, string>(StringComparer.Ordinal);
                 foreach (var stroke in page.SelectedStrokes)
                 {
                     var points = new StylusPointCollection();
@@ -5516,6 +5823,21 @@ namespace Caelum.Pages
                         points.Add(new StylusPoint(pt.X + offsetX, pt.Y + offsetY, pt.PressureFactor));
 
                     var clone = new Stroke(points, stroke.DrawingAttributes.Clone());
+                    var shape = ShapeStrokeMetadata.Read(stroke);
+                    if (!string.IsNullOrWhiteSpace(shape.GroupId))
+                    {
+                        if (!duplicatedShapeGroups.TryGetValue(shape.GroupId, out var duplicateGroupId))
+                        {
+                            duplicateGroupId = Guid.NewGuid().ToString("N");
+                            duplicatedShapeGroups[shape.GroupId] = duplicateGroupId;
+                        }
+                        ShapeStrokeMetadata.Apply(
+                            clone,
+                            duplicateGroupId,
+                            shape.Kind,
+                            shape.PartIndex,
+                            shape.IsDashed);
+                    }
                     page.AddStrokeQuiet(clone);
                     clonedStrokes.Add(clone);
                 }
@@ -5956,6 +6278,21 @@ namespace Caelum.Pages
 
             popup.Child = border;
             return popup;
+        }
+
+        private static void EnableToolPopupScrolling(Popup popup)
+        {
+            if (popup?.Child is not Border border || border.Child is not StackPanel panel)
+                return;
+
+            border.Child = new ScrollViewer
+            {
+                Content = panel,
+                MaxHeight = Math.Max(320, Math.Min(680, SystemParameters.WorkArea.Height - 120)),
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+                CanContentScroll = false
+            };
         }
 
         private void OpenPdfSearch()
@@ -6569,6 +6906,8 @@ namespace Caelum.Pages
 
         private async Task LoadPdf(string filePath)
         {
+            ClearThumbnailDropIndicator();
+            ResetThumbnailDragState();
             CloseTransientUi("load");
             CancelRenderWork();
             _thumbnailLoadCts?.Cancel();
@@ -6816,7 +7155,7 @@ namespace Caelum.Pages
                 operationLease.Dispose();
             }
 
-            int expectedSessionId = previousSessionId + 2;
+            int expectedSessionId = previousSessionId + 1;
             if (_completedLoadSessionId != expectedSessionId ||
                 _loadSessionId != expectedSessionId ||
                 !string.Equals(
@@ -7337,18 +7676,24 @@ namespace Caelum.Pages
         private void ThumbnailListBox_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
         {
             if (FindAncestor<ListBoxItem>(e.OriginalSource as DependencyObject) is ListBoxItem item &&
-                item.DataContext is SidebarPageItem page)
+                item.DataContext is SidebarPageItem page &&
+                _sidebarPageItems.Contains(page) &&
+                !string.IsNullOrWhiteSpace(_currentPdfPath))
             {
                 _thumbnailDragStartPoint = e.GetPosition(ThumbnailListBox);
-                _thumbnailDragIndex = page.PageIndex;
-                _thumbnailDragSessionId = _loadSessionId;
-                _thumbnailDragPath = _currentPdfPath;
+                _thumbnailDragPayload = new ThumbnailDragPayload(
+                    page.PageIndex,
+                    _loadSessionId,
+                    DocumentOperationSession.NormalizePath(_currentPdfPath),
+                    page);
             }
+            else
+                ResetThumbnailDragState();
         }
 
         private void ThumbnailListBox_PreviewMouseMove(object sender, MouseEventArgs e)
         {
-            if (_thumbnailDragIndex < 0 || e.LeftButton != MouseButtonState.Pressed)
+            if (_thumbnailDragPayload == null || e.LeftButton != MouseButtonState.Pressed)
                 return;
 
             var current = e.GetPosition(ThumbnailListBox);
@@ -7356,27 +7701,164 @@ namespace Caelum.Pages
                 Math.Abs(current.Y - _thumbnailDragStartPoint.Y) < SystemParameters.MinimumVerticalDragDistance)
                 return;
 
-            int sourceIndex = _thumbnailDragIndex;
-            _thumbnailDragIndex = -1;
-            _thumbnailDragSessionId = -1;
-            DragDrop.DoDragDrop(ThumbnailListBox, new DataObject(typeof(int), sourceIndex), DragDropEffects.Move);
+            var payload = _thumbnailDragPayload;
+            try
+            {
+                DragDrop.DoDragDrop(
+                    ThumbnailListBox,
+                    new DataObject(typeof(ThumbnailDragPayload), payload),
+                    DragDropEffects.Move);
+            }
+            finally
+            {
+                ResetThumbnailDragState();
+                ClearThumbnailDropIndicator();
+            }
+        }
+
+        private bool IsCurrentThumbnailDragPayload(ThumbnailDragPayload payload)
+        {
+            return payload != null && payload.Source != null &&
+                _isHostActive && !_resourcesReleased && !_documentInteractionBlocked &&
+                payload.SessionId == _loadSessionId &&
+                string.Equals(
+                    DocumentOperationSession.NormalizePath(payload.FilePath),
+                    DocumentOperationSession.NormalizePath(_currentPdfPath),
+                    StringComparison.OrdinalIgnoreCase) &&
+                payload.SourceIndex >= 0 &&
+                payload.SourceIndex < _sidebarPageItems.Count &&
+                ReferenceEquals(_sidebarPageItems[payload.SourceIndex], payload.Source);
+        }
+
+        private bool TryGetThumbnailDragPayload(
+            IDataObject data,
+            out ThumbnailDragPayload payload)
+        {
+            payload = null;
+            if (data == null || !data.GetDataPresent(typeof(ThumbnailDragPayload)))
+                return false;
+
+            payload = data.GetData(typeof(ThumbnailDragPayload)) as ThumbnailDragPayload;
+            return IsCurrentThumbnailDragPayload(payload);
+        }
+
+        private bool TryResolveThumbnailDropSlot(
+            DragEventArgs e,
+            int pageCount,
+            out int slot,
+            out double indicatorTop)
+        {
+            slot = -1;
+            indicatorTop = 0;
+            if (ThumbnailListBox == null || pageCount <= 0)
+                return false;
+
+            var targetItem = FindAncestor<ListBoxItem>(e.OriginalSource as DependencyObject);
+            if (targetItem?.DataContext is SidebarPageItem target &&
+                _sidebarPageItems.Contains(target))
+            {
+                Point pointer = e.GetPosition(ThumbnailListBox);
+                Point origin = targetItem.TranslatePoint(new Point(0, 0), ThumbnailListBox);
+                double height = targetItem.ActualHeight > 0
+                    ? targetItem.ActualHeight
+                    : Math.Max(1, targetItem.DesiredSize.Height);
+                bool before = pointer.Y < origin.Y + (height / 2.0);
+                slot = before ? target.PageIndex : target.PageIndex + 1;
+                indicatorTop = before ? origin.Y : origin.Y + height;
+            }
+            else
+            {
+                slot = pageCount;
+                var lastItem = Enumerable.Range(0, _sidebarPageItems.Count)
+                    .Reverse()
+                    .Select(index => ThumbnailListBox.ItemContainerGenerator.ContainerFromIndex(index) as ListBoxItem)
+                    .FirstOrDefault(item => item != null && item.IsLoaded);
+                if (lastItem != null)
+                {
+                    Point origin = lastItem.TranslatePoint(new Point(0, 0), ThumbnailListBox);
+                    double height = lastItem.ActualHeight > 0
+                        ? lastItem.ActualHeight
+                        : Math.Max(1, lastItem.DesiredSize.Height);
+                    indicatorTop = origin.Y + height;
+                }
+                else
+                    indicatorTop = Math.Max(0, ThumbnailListBox.ActualHeight);
+            }
+
+            slot = Math.Clamp(slot, 0, pageCount);
+            indicatorTop = Math.Max(0, indicatorTop);
+            return true;
+        }
+
+        private void ShowThumbnailDropIndicator(double top)
+        {
+            if (ThumbnailDropIndicator == null)
+                return;
+
+            ThumbnailDropIndicator.Margin = new Thickness(0, top, 0, 0);
+            ThumbnailDropIndicator.Visibility = Visibility.Visible;
+        }
+
+        private void ClearThumbnailDropIndicator()
+        {
+            _thumbnailDropSlot = -1;
+            if (ThumbnailDropIndicator == null)
+                return;
+
+            ThumbnailDropIndicator.Visibility = Visibility.Collapsed;
+            ThumbnailDropIndicator.Margin = new Thickness(0);
+        }
+
+        private void ResetThumbnailDragState()
+        {
+            _thumbnailDragPayload = null;
+        }
+
+        private void ThumbnailListBox_DragOver(object sender, DragEventArgs e)
+        {
+            if (!TryGetThumbnailDragPayload(e.Data, out var payload) ||
+                !TryResolveThumbnailDropSlot(e, _sidebarPageItems.Count, out int slot, out double top))
+            {
+                ClearThumbnailDropIndicator();
+                e.Effects = DragDropEffects.None;
+                return;
+            }
+
+            _thumbnailDropSlot = slot;
+            ShowThumbnailDropIndicator(top);
+            e.Effects = DragDropEffects.Move;
+            e.Handled = true;
+        }
+
+        private void ThumbnailListBox_DragLeave(object sender, DragEventArgs e)
+        {
+            ClearThumbnailDropIndicator();
+        }
+
+        private void ThumbnailListBox_QueryContinueDrag(object sender, QueryContinueDragEventArgs e)
+        {
+            if (e.Action == DragAction.Cancel)
+            {
+                ClearThumbnailDropIndicator();
+                ResetThumbnailDragState();
+            }
         }
 
         private async void ThumbnailListBox_Drop(object sender, DragEventArgs e)
         {
             e.Handled = true;
-            int dragSessionId = _thumbnailDragSessionId;
-            string dragPath = _thumbnailDragPath;
-            _thumbnailDragSessionId = -1;
-            _thumbnailDragPath = null;
-            if (dragSessionId < 0)
+            int indicatorSlot = _thumbnailDropSlot;
+            ClearThumbnailDropIndicator();
+
+            if (!TryGetThumbnailDragPayload(e.Data, out var payload))
                 return;
+            ResetThumbnailDragState();
 
             DocumentOperationLease currentLease = CaptureDocumentOperationLease(
-                dragSessionId,
-                dragPath,
-                _pdfService);
-            if (!ValidateDocumentOperationLease(currentLease))
+                payload.SessionId,
+                payload.FilePath,
+                payload.Source);
+            if (!ValidateDocumentOperationLease(currentLease, payload.Source))
             {
                 currentLease.Dispose();
                 return;
@@ -7392,46 +7874,68 @@ namespace Caelum.Pages
             {
                 try
                 {
-                    if (!e.Data.GetDataPresent(typeof(int)) || string.IsNullOrWhiteSpace(_currentPdfPath))
+                    int pageCount = _sidebarPageItems.Count;
+                    int slot = TryResolveThumbnailDropSlot(
+                        e,
+                        pageCount,
+                        out int resolvedSlot,
+                        out _)
+                        ? resolvedSlot
+                        : indicatorSlot;
+                    if (pageCount <= 0 || payload.SourceIndex < 0 ||
+                        payload.SourceIndex >= pageCount || slot < 0)
                         return;
 
-                    int fromIndex = (int)e.Data.GetData(typeof(int));
-                    var targetItem = FindAncestor<ListBoxItem>(e.OriginalSource as DependencyObject);
-                    int toIndex = targetItem?.DataContext is SidebarPageItem target
-                        ? target.PageIndex : _pageControls.Count - 1;
-                    if (fromIndex == toIndex || fromIndex < 0 || toIndex < 0)
+                    int finalIndex = ThumbnailDropPlacement.ResolveFinalIndex(
+                        payload.SourceIndex,
+                        slot,
+                        pageCount);
+                    if (finalIndex < 0 || finalIndex == payload.SourceIndex)
                         return;
 
                     string filePath = _currentPdfPath;
-                    if (!ValidateDocumentOperationLease(currentLease))
+                    if (!ValidateDocumentOperationLease(currentLease, payload.Source))
                         return;
                     if (_documentSaveCoordinator.IsDirty &&
-                        (!await AutoSaveAsync(currentLease) || !ValidateDocumentOperationLease(currentLease)))
+                        (!await AutoSaveAsync(currentLease) ||
+                         !ValidateDocumentOperationLease(currentLease, payload.Source)))
                         return;
 
                     byte[] before = await File.ReadAllBytesAsync(filePath, currentLease.Token);
-                    if (!ValidateDocumentOperationLease(currentLease))
+                    if (!ValidateDocumentOperationLease(currentLease, payload.Source))
                         return;
                     int focusBefore = GetCurrentPageIndex();
                     var beforeBookmarks = PageBookmarkService.Load(filePath).ToList();
-                    await _pdfService.ReorderPagesAsync(filePath, fromIndex, toIndex);
-                    if (!ValidateDocumentOperationLease(currentLease))
+                    await _pdfService.ReorderPagesAsync(filePath, payload.SourceIndex, finalIndex);
+                    if (!ValidateDocumentOperationLease(currentLease, payload.Source))
                         return;
                     byte[] after = await File.ReadAllBytesAsync(filePath, currentLease.Token);
-                    if (!ValidateDocumentOperationLease(currentLease))
+                    if (!ValidateDocumentOperationLease(currentLease, payload.Source))
                         return;
+
                     currentLease = await ReloadDocumentForOperationAsync(filePath, currentLease);
                     if (currentLease == null)
                         return;
-                    int focused = Math.Max(0, Math.Min(toIndex, _pageControls.Count - 1));
+                    int focused = Math.Max(0, Math.Min(finalIndex, _pageControls.Count - 1));
                     if (!ValidateDocumentOperationLease(currentLease))
                         return;
                     JumpToPage(focused);
-                    var afterBookmarks = PageBookmarkService.ApplyPageMove(filePath, fromIndex, toIndex).ToList();
+                    var afterBookmarks = PageBookmarkService.RemapForMove(
+                        beforeBookmarks,
+                        payload.SourceIndex,
+                        finalIndex).ToList();
+                    PageBookmarkService.Replace(filePath, afterBookmarks);
                     RefreshBookmarks(_loadSessionId, filePath, currentLease);
                     if (!ValidateDocumentOperationLease(currentLease))
                         return;
-                    PushUndoAction(new DocumentSnapshotAction(this, before, after, focusBefore, focused, beforeBookmarks, afterBookmarks));
+                    PushUndoAction(new DocumentSnapshotAction(
+                        this,
+                        before,
+                        after,
+                        focusBefore,
+                        focused,
+                        beforeBookmarks,
+                        afterBookmarks));
                 }
                 catch (OperationCanceledException)
                 {
@@ -7444,6 +7948,7 @@ namespace Caelum.Pages
                 finally
                 {
                     currentLease?.Dispose();
+                    ClearThumbnailDropIndicator();
                 }
             }
         }
@@ -9120,9 +9625,8 @@ namespace Caelum.Pages
         {
             CancelTextBoxDrag(restoreBounds: true);
             CancelTextResize(restoreBounds: true);
-            _thumbnailDragIndex = -1;
-            _thumbnailDragSessionId = -1;
-            _thumbnailDragPath = null;
+            ResetThumbnailDragState();
+            ClearThumbnailDropIndicator();
             InteractionCancellation.CancelAll(_pageControls, reason);
             _isDelegatingSelection = false;
             _selectionDelegateTarget = null;
@@ -9137,6 +9641,8 @@ namespace Caelum.Pages
             if (!isActive)
             {
                 CloseTransientUi("inactive editor");
+                ResetThumbnailDragState();
+                ClearThumbnailDropIndicator();
                 _documentOperationSession.Cancel();
             }
             else
@@ -10704,7 +11210,7 @@ namespace Caelum.Pages
                 if (!ValidateDocumentOperationLease(refreshedLease))
                     return null;
 
-                GetMainWindow()?.HandleFilePathChanged(oldPath, newPath);
+                GetMainWindow()?.HandleActiveTabFilePathChanged(this, oldPath, newPath);
                 if (ValidateDocumentOperationLease(refreshedLease))
                     GetMainWindow()?.ShowToast(LocalizationService.Get("Home.NotebookSaved"), "\uE74E");
 
@@ -13099,7 +13605,9 @@ namespace Caelum.Pages
 
         private MainWindow GetMainWindow()
         {
-            return Application.Current.MainWindow as MainWindow;
+            return Window.GetWindow(this) as MainWindow
+                ?? TabDragCoordinator.GetRegisteredWindows().FirstOrDefault(window => window.IsActiveContent(this))
+                ?? Application.Current?.MainWindow as MainWindow;
         }
 
         private async Task LoadAnnotationsFromPdfServiceAsync(DocumentOperationLease operationLease = null)

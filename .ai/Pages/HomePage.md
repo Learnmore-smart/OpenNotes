@@ -48,3 +48,4 @@ Displays the document/folder home surface inside the MainWindow tab shell.
 
 - **2026-08-24:** Fixed the OpenNotes 5.0 home hover startup crash caused by animating a frozen WPF template transform.
 - **2026-08-20:** Added z-order registration for add-tile, file, and folder context menus.
+- Detached Home pages resolve their containing `MainWindow`; library rename continues to broadcast the path change to every matching tab.

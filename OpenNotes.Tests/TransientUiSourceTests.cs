@@ -418,8 +418,8 @@ public sealed class TransientUiSourceTests
             Assert.That(editor, Does.Contain("binding.FilePath"));
             Assert.That(editor, Does.Contain("if (sender is MenuItem)"));
             Assert.That(editor, Does.Contain("e.Handled = true;"));
-            Assert.That(editor, Does.Contain("_thumbnailDragSessionId"));
-            Assert.That(editor, Does.Contain("dragSessionId"));
+            Assert.That(editor, Does.Contain("ThumbnailDragPayload"));
+            Assert.That(editor, Does.Contain("payload.SessionId"));
             Assert.That(xaml, Does.Contain("Opened=\"PdfViewerContextMenu_Opened\""));
         });
     }

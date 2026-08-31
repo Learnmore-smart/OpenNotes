@@ -15,4 +15,4 @@ Regression coverage for blank-page insertion/deletion and the V5 structural page
 
 ## Completion Status
 
-- Reorder, duplicate, rotate, inclusive PDF insertion and Dotted/Music/Cornell/Checklist/TwoColumn vector content are covered.
+- Reorder covers backward, forward, and final-slot moves using distinct page dimensions as durable page identity; duplicate, rotate, inclusive PDF insertion and Dotted/Music/Cornell/Checklist/TwoColumn vector content are also covered.

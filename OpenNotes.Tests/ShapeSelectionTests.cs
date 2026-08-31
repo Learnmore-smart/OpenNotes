@@ -7,6 +7,7 @@ using System.Windows.Ink;
 using System.Windows.Input;
 using System.Windows.Media;
 using Caelum.Controls;
+using Caelum.Models;
 using Caelum.Pages;
 using NUnit.Framework;
 
@@ -16,6 +17,55 @@ namespace Caelum.Tests;
 [Apartment(System.Threading.ApartmentState.STA)]
 public sealed class ShapeSelectionTests
 {
+    [Test]
+    public void SelectingOneLogicalShapePartExpandsToTheWholeGroup()
+    {
+        EnsureWpfEnvironment();
+        EnsureTestApplication();
+        var page = new PdfPageControl();
+        var first = CreateStroke(new Point(10, 10), new Point(30, 10));
+        var second = CreateStroke(new Point(40, 10), new Point(60, 10));
+        ShapeStrokeMetadata.Apply(first, "dash-group", "DashedLine", 0, true);
+        ShapeStrokeMetadata.Apply(second, "dash-group", "DashedLine", 1, true);
+        page.AddStrokeQuiet(first);
+        page.AddStrokeQuiet(second);
+
+        page.SelectItems(new[] { first }, Array.Empty<Grid>());
+
+        Assert.That(page.SelectedStrokes, Is.EquivalentTo(new[] { first, second }));
+    }
+
+    [Test]
+    public void SelectedDrawingStyleAppliesToWholeLogicalGroupAndRetainsSelection()
+    {
+        EnsureWpfEnvironment();
+        EnsureTestApplication();
+        var editor = new EditorPage();
+        var page = new PdfPageControl();
+        var first = CreateStroke(new Point(10, 10), new Point(30, 10));
+        var second = CreateStroke(new Point(40, 10), new Point(60, 10));
+        ShapeStrokeMetadata.Apply(first, "style-group", "DashedLine", 0, true);
+        ShapeStrokeMetadata.Apply(second, "style-group", "DashedLine", 1, true);
+        page.AddStrokeQuiet(first);
+        page.AddStrokeQuiet(second);
+        page.SelectItems(new[] { first }, Array.Empty<Grid>());
+        SetPrivateField(editor, "_activeSelectionPage", page);
+
+        var apply = typeof(EditorPage).GetMethod(
+            "ApplySelectedDrawingStyle",
+            BindingFlags.Instance | BindingFlags.NonPublic)!;
+        apply.Invoke(editor, new object?[] { Colors.Red, 6d });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(page.SelectedStrokes, Is.EquivalentTo(new[] { first, second }));
+            Assert.That(page.SelectedStrokes.Select(stroke => stroke.DrawingAttributes.Color),
+                Has.All.EqualTo(Colors.Red));
+            Assert.That(page.SelectedStrokes.Select(stroke => stroke.DrawingAttributes.Width),
+                Has.All.EqualTo(6d));
+        });
+    }
+
     private static readonly MethodInfo HitStrokeMethod =
         typeof(PdfPageControl).GetMethod("HitStroke", BindingFlags.Static | BindingFlags.NonPublic)
         ?? throw new InvalidOperationException("PdfPageControl.HitStroke was not found.");

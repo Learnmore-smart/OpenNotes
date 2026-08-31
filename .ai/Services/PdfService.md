@@ -1,5 +1,10 @@
 # Services/PdfService.cs
 
+## Sidebar page reorder (2026-08-30) — GREEN for focused scope
+
+- ReorderPagesAsync is the structural write boundary for sidebar drag/drop. It receives a zero-based final destination index after source removal, preserves full page objects/content, uses the normal path/lifetime/document lease and defensive reload, and remains compatible with snapshot undo/redo in EditorPage.
+- Focused forward/backward/end page-order tests pass; parent agent owns full verification and integration.
+
 ## Wave6 dual-review follow-up (2026-08-24) — GREEN closure
 
 - Preserve owned Sticky `/NM` identity while preventing duplicate ids from entering a live
@@ -66,6 +71,8 @@ PDF 核心服务：PdfiumViewer 负责加载/渲染"剥离注释后的干净流"
 - 被 EditorPage（加载/保存/渲染/分页）与 DocumentSnapshotAction（经 ApplyDocumentSnapshotAsync 重载字节流）使用。
 
 ## Open Threads / Resume Context
+- v5.2.6 owned `/Ink` persists optional logical-shape metadata in private `/WNA*` keys. Missing keys remain ordinary legacy ink; foreign ink is never modified or interpreted as an OpenNotes shape.
+- **v5.2.6 shape-integrity fix (2026-08-30):** owned `/Ink` annotations persist `StrokeAnnotation.FitToCurve` in `/WNAFitToCurve`. Loading honors that value and conservatively recovers legacy five-point perpendicular rectangles as crisp, non-smoothed shapes so a reload cannot visually turn a square into a circle. Foreign `/Ink` remains untouched. Full suite: 354/354; Release build: 0 errors.
 - Checklist renders repeated checkbox rows and TwoColumn renders a central divider with parallel writing rules. Both use the existing vector page-template path; annotation/save/coordinate/atomic replacement behavior is unchanged.
 - **Status:** ready_for_next — Wave 2 final save/dispose/structural-write review is green for automated scope.
 - `SaveAnnotationsToPdfAsync` and every structural write acquire `PdfSaveCoordinator` before the `_lifetimeGate` → `_documentLock` pair; optional Pdfium reload remains inside both leases and checks `ThrowIfDisposed()` before/after native load. `DisposeAsync` joins admitted work; a path/lifetime waiter fails before reload/create after disposing. A failed disposal restores the active state and replaces its completion source so editor resource release can retry. Focused/expanded save, load/reopen, legacy-white, missing-`/C`, stream-ownership, structural-gate and disposal-race tests are green.

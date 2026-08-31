@@ -1,4 +1,10 @@
 # Pages/EditorPage.xaml
+
+## Sidebar page reorder (2026-08-30) — GREEN for focused scope
+
+- ThumbnailListBox is an allowed drop target. Its DragOver/DragLeave/QueryContinueDrag lifecycle drives a single themed insertion cue layered above the virtualized rows; the cue is non-hit-testable and is cleared on leave, drop, cancellation, reload, and host deactivation.
+- Existing sidebar names, item template, selection behavior, and automation identities remain unchanged.
+- Focused source/navigation contracts pass; full-suite/build verification remains with the parent agent.
 > Last updated: 2026-08-26（Task 4 semantic toolbar/nav GREEN）| Protection: STANDARD
 
 ## Purpose

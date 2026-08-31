@@ -44,6 +44,10 @@ namespace Caelum.Models
         // Old sidecars omit this field and therefore keep the historical
         // FitToCurve=true behaviour.
         public bool FitToCurve { get; set; } = true;
+        public string ShapeGroupId { get; set; } = string.Empty;
+        public string ShapeKind { get; set; } = string.Empty;
+        public int ShapePartIndex { get; set; }
+        public bool IsDashedShape { get; set; }
         public List<double[]> Points { get; set; } = new();
     }
 

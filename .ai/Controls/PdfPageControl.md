@@ -1,5 +1,16 @@
 # Controls/PdfPageControl.xaml(.cs)
 
+## Exact eraser path geometry (2026-08-30) — IN PROGRESS
+
+- **Input geometry:** eraser gestures are represented by one rectangular `RectangleStylusShape` swept along the collected pointer path. Candidate bounds are used only as a cheap prefilter; visible-path intersection is authoritative.
+- **Whole-stroke mode:** `Stroke.HitTest` decides whether the eraser path actually touches a stroke. A stroke whose bounding rectangle overlaps the eraser rectangle but whose visible path is elsewhere must remain.
+- **Pixel mode:** an exact `Stroke.HitTest` preflight rejects path misses before calling `Stroke.GetEraseResult`; successful calls return WPF's retained clipped fragments, so sparse straight lines and shapes can be split at segment crossings instead of relying on sampled stroke vertices.
+- **Pointer continuity:** `_lastErasePoint` is reset at gesture begin/end/cancellation and prepended to every mouse/stylus update, so a fast pointer jump is treated as one swept eraser path rather than disconnected rectangles.
+- **Cancellation:** `CancelInteraction` clears `_isErasing`, `_erasePoints`, the pending erase payload, and `_lastErasePoint` before releasing InkCanvas capture; the mouse-down eraser path sets `_isErasing` so deactivation/lost-capture cleanup can identify it.
+- **Mouse completion:** mouse-up commits and clears the erase transaction before releasing capture, because WPF raises `LostMouseCapture` synchronously and the cancellation path must not restore a successfully erased gesture.
+- **History boundary:** `ApplyErasedStroke` still captures `StrokePlacement` before removal and for every fragment after insertion; repeated erase after placement-backed undo must operate on the restored live reference.
+- **Evidence:** focused coverage is being added in `OpenNotes.Tests/StrokeEraserGeometryTests.cs`; production changes remain pending until the red tests demonstrate the old bounds/sample behavior.
+
 ## v5.2.4 ruler constraint follow-up (2026-08-27) — IN PROGRESS
 
 - Replace the one-edge/all-points-near-only snap contract with live four-corner ruler geometry. A stroke approaching the ruler body must end at its first boundary intersection; a stroke beginning inside is rejected; an outside stroke drawn alongside either long edge snaps to the nearer edge.
@@ -263,6 +274,20 @@ Keep `PageGrid`, `PdfImage`, and `PdfImageOverlay` opaque and independent from `
 
 ## Change History
 
+### 2026-08-30 exact ink eraser plan
+
+- Replace whole-stroke `GetBounds().IntersectsWith` acceptance with WPF Ink path-aware `Stroke.HitTest` using the ordered gesture and a rectangular `StylusShape` matching the visible eraser.
+- Replace pixel mode's stylus-sample-only clipping with `Stroke.GetEraseResult`, so two-point straight lines and generated shapes split where the visible path crosses the eraser.
+- Preserve placement-backed gesture aggregation, stroke drawing attributes, one-gesture/one-undo semantics, and Hidden Ink's separate annotation eraser.
+- Add regression coverage for bounds-only false positives, sparse-line crossings, and Undo-then-erase-again.
+
+### 2026-08-30 editable grouped shapes plan
+
+- Commit every new shape with compatible semantic group/type/part/dashed metadata; `ligne pointillée` is rendered as real short grouped ink strokes separated by real gaps.
+- Clicking any member expands selection to the live logical group so arrows/dashes use the existing move, eight-handle resize, delete, copy, and selection overlay pipeline as one object.
+- Selected drawing color and line width apply as one cloned before/after batch while retaining the selection and emitting one mutation/history entry.
+- Eraser fragments and all stroke clones must inherit semantic metadata without weakening replacement token/side identity.
+
 - 2026-08-28: Selection gestures capture their originating input route (stylus vs mouse) and all completion paths release both capture kinds under the cancellation guard. The ruler provider now supplies both long edges/body; collected ink starting inside is rejected, crossings clip at first body entry, and parallel strokes snap to the nearer edge before smoothing/history.
 - 2026-08-28 review: exact boundary starts are outside the strict interior test, enabling the primary along-edge gesture; a following point inside the body still rejects the gesture.
 
@@ -293,3 +318,7 @@ Keep `PageGrid`, `PdfImage`, and `PdfImageOverlay` opaque and independent from `
 - 2026-08-23: Wave 2 final review — `SetDocumentInputEnabled` now participates in the shared editor close admission; page input is disabled before final save/release and restored only after a cancelled/recoverable navigation or close.
 - 2026-08-23: Wave 2 transactional follow-up — `RemoveImageData` lets cross-page selection rollback clear a copied image payload from the target page while preserving the source owner.
 - 2026-08-18: Task 24 笔迹平滑——新增 `StrokeSmoothingLevel` 属性（默认 2）+ `ApplySmoothing(stroke)`（档 0=FitToCurve=false 原位替换保原始轨迹；档 1-3=滑动窗口均值 w=1/2/4、PressureFactor 取原中心点、短笔迹窗口钳制防质心坍缩）；`InkCanvas_StrokeCollected` 链位插在 Shift 拉直之后、形状识别/墨水模拟之前。设置 UI（pen popup 分段行）在 EditorPage，见其镜像。构建 0 错误 + 21/21 测试通过。
+# v5.2.6 grouped shapes and dashed line
+
+- Shape commits attach durable logical metadata to WPF strokes. Arrow and dashed-line parts share a group id; dashed geometry consists of real separated ink segments. Stroke export/import preserves the metadata so selection, erasing, undo, thumbnails, and PDF reloads operate on the same logical drawing.
+- Selected drawing style refresh keeps the existing resize handles/selection active and publishes only a quiet thumbnail mutation; EditorPage owns the single batch history/dirty action.

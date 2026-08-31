@@ -33,7 +33,8 @@ namespace Caelum.Controls
         Diamond,
         Parallelogram,
         Pentagon,
-        Hexagon
+        Hexagon,
+        DashedLine
     }
 
     public sealed class SelectionMoveCompletedEventArgs : EventArgs
@@ -289,6 +290,22 @@ namespace Caelum.Controls
 
             CancelSelectionInteraction(restoreSnapshot: true);
 
+            // Erase state can begin through the mouse path without a normal
+            // MouseUp (for example when the page is deactivated or loses
+            // capture). Clear the swept-path anchor and pending payload before
+            // releasing InkCanvas so a later gesture cannot inherit either.
+            bool eraseCapture = _currentMode == CustomInkInputProcessingMode.Erasing
+                && (InkCanvas.IsMouseCaptured || InkCanvas.IsStylusCaptured);
+            if (_isErasing
+                || _erasePoints != null
+                || _lastErasePoint.HasValue
+                || HasPendingEraseGesture()
+                || eraseCapture)
+            {
+                CancelEraseGesture();
+                ReleaseInkCaptures();
+            }
+
             if (_isShapeDragging)
             {
                 _isShapeDragging = false;
@@ -389,6 +406,10 @@ namespace Caelum.Controls
         private double _eraserSize = 20;
         private bool _isErasing;
         private StylusPointCollection _erasePoints;
+        // The mouse/stylus APIs may deliver a fast move as two separate
+        // updates whose endpoints both miss the ink. Retain the previous
+        // page-local point so each update describes the swept segment.
+        private Point? _lastErasePoint;
         // Per-gesture erase accumulation (lazily initialised on first mutation,
         // flushed on stylus/mouse up) feeding the StrokesErased undo event.
         private List<Stroke> _eraseGestureRemovedStrokes;
@@ -1893,23 +1914,21 @@ namespace Caelum.Controls
         private void InkCanvas_LostMouseCapture(object sender, MouseEventArgs e)
         {
             _pendingPopupDismissalInkGesture = false;
-            if (_isErasing || HasPendingEraseGesture())
-            {
-                _isErasing = false;
-                _erasePoints = null;
-                EndEraseGesture();
-            }
+            if (_isErasing
+                || _erasePoints != null
+                || _lastErasePoint.HasValue
+                || HasPendingEraseGesture())
+                CancelEraseGesture();
         }
 
         private void InkCanvas_LostStylusCapture(object sender, StylusEventArgs e)
         {
             _pendingPopupDismissalInkGesture = false;
-            if (_isErasing || HasPendingEraseGesture())
-            {
-                _isErasing = false;
-                _erasePoints = null;
-                EndEraseGesture();
-            }
+            if (_isErasing
+                || _erasePoints != null
+                || _lastErasePoint.HasValue
+                || HasPendingEraseGesture())
+                CancelEraseGesture();
         }
 
         /// <summary>
@@ -2372,6 +2391,7 @@ namespace Caelum.Controls
             }
             else if (_currentMode == CustomInkInputProcessingMode.Erasing && !_isStylusInverted)
             {
+                _isErasing = true;
                 BeginEraseGesture();
                 EraseStrokesAtPoints(new StylusPointCollection
                 {
@@ -2488,18 +2508,18 @@ namespace Caelum.Controls
                 return;
             }
 
+            _isErasing = false;
+            // Commit before releasing capture. ReleaseMouseCapture raises
+            // LostMouseCapture synchronously; leaving pending erase state at
+            // that point would make the cancellation handler roll back the
+            // completed mouse gesture.
+            EndEraseGesture();
+
             if (_currentMode == CustomInkInputProcessingMode.Erasing && e.StylusDevice == null
                 && InkCanvas.IsMouseCaptured)
             {
                 InkCanvas.ReleaseMouseCapture();
             }
-
-            _isErasing = false;
-            // Mouse-erase gestures never set _isErasing (they erase straight
-            // from MouseMove while the left button is pressed), so the gesture
-            // is always flushed here; for pen input this is a no-op because
-            // StylusUp has already flushed it.
-            EndEraseGesture();
 
             // A PenOnly-blocked or otherwise intercepted mouse gesture may
             // reach MouseUp without ever raising StrokeCollected. Do not let
@@ -2811,6 +2831,15 @@ namespace Caelum.Controls
                 BuildArrowGeometry(_shapeAnchor, _shapeCurrent, ShapeStrokeSize, out var shaft, out var head);
                 segments = new List<List<Point>> { shaft, head };
             }
+            else if (CurrentShape == ShapeKind.DashedLine)
+            {
+                double dashLength = Math.Max(ShapeStrokeSize * 4.0, 10.0);
+                double gapLength = Math.Max(ShapeStrokeSize * 2.5, 6.0);
+                segments = ShapeStrokeMetadata.BuildDashedLine(
+                        _shapeAnchor, _shapeCurrent, dashLength, gapLength)
+                    .Select(part => part.ToList())
+                    .ToList();
+            }
             else
             {
                 segments = new List<List<Point>>
@@ -2819,14 +2848,22 @@ namespace Caelum.Controls
                 };
             }
 
+            string groupId = Guid.NewGuid().ToString("N");
             var committed = new List<Stroke>();
-            foreach (var segment in segments)
+            for (int partIndex = 0; partIndex < segments.Count; partIndex++)
             {
+                var segment = segments[partIndex];
                 var stylusPoints = new StylusPointCollection();
                 foreach (var p in segment)
                     stylusPoints.Add(new StylusPoint(p.X, p.Y));
 
                 var stroke = new Stroke(stylusPoints) { DrawingAttributes = attributes.Clone() };
+                ShapeStrokeMetadata.Apply(
+                    stroke,
+                    groupId,
+                    CurrentShape.ToString(),
+                    partIndex,
+                    CurrentShape == ShapeKind.DashedLine);
                 AddStrokeToCollection(stroke);
                 committed.Add(stroke);
             }
@@ -3361,9 +3398,32 @@ namespace Caelum.Controls
             if (points == null || points.Count == 0)
                 return;
 
-            var eraserRects = CreateEraserRects(points);
+            var erasePathPoints = new StylusPointCollection();
+            if (_lastErasePoint.HasValue)
+            {
+                var previous = _lastErasePoint.Value;
+                erasePathPoints.Add(new StylusPoint(previous.X, previous.Y));
+            }
+
+            foreach (var point in points)
+                erasePathPoints.Add(point);
+
+            var lastPoint = erasePathPoints[erasePathPoints.Count - 1];
+            _lastErasePoint = new Point(lastPoint.X, lastPoint.Y);
+
+            var eraserRects = CreateEraserRects(erasePathPoints);
             if (eraserRects.Count == 0)
                 return;
+
+            // WPF's ink geometry APIs operate on the visible stroke path, not
+            // its axis-aligned bounds or sampled vertices. Keep one shape and
+            // one path for this pointer update so sparse lines and generated
+            // shapes can be hit/split between their stored points.
+            var eraserPath = erasePathPoints
+                .Cast<StylusPoint>()
+                .Select(point => new Point(point.X, point.Y))
+                .ToList();
+            var eraserShape = new RectangleStylusShape(_eraserSize, _eraserSize);
 
             // Hidden Ink lives above InkCanvas, so include it in the same
             // eraser gesture rather than waiting for a direct click on its
@@ -3391,21 +3451,10 @@ namespace Caelum.Controls
             {
                 if (WholeStrokeEraser)
                 {
-                    // Whole-stroke mode: remove the entire stroke when its
-                    // bounds intersect any individual eraser rect. Routed
-                    // through ApplyErasedStroke with no fragments so the
-                    // StrokesErased undo payload contains originals only.
-                    bool boundsHit = false;
-                    for (int i = 0; i < eraserRects.Count; i++)
-                    {
-                        if (stroke.GetBounds().IntersectsWith(eraserRects[i]))
-                        {
-                            boundsHit = true;
-                            break;
-                        }
-                    }
-
-                    if (!boundsHit)
+                    // Whole-stroke mode removes only when the visible path is
+                    // touched. Bounds are a candidate prefilter above, never
+                    // the deletion decision.
+                    if (!stroke.HitTest(eraserPath, eraserShape))
                         continue;
 
                     ApplyErasedStroke(stroke, new List<Stroke>());
@@ -3413,10 +3462,21 @@ namespace Caelum.Controls
                     continue;
                 }
 
-                if (!stroke.StylusPoints.Any(sp => PointHitsEraser(new Point(sp.X, sp.Y), eraserRects)))
+                if (!stroke.HitTest(eraserPath, eraserShape))
                     continue;
 
-                var clippedStrokes = ClipStrokeByErasers(stroke, eraserRects);
+                // GetEraseResult performs path-aware clipping and preserves
+                // both sides of a sparse line crossing. It returns the
+                // original reference unchanged when the path misses, so do
+                // not create a history mutation for that case.
+                var clippedStrokes = stroke
+                    .GetEraseResult(eraserPath, eraserShape)
+                    .Cast<Stroke>()
+                    .ToList();
+                if (clippedStrokes.Count == 1
+                    && ReferenceEquals(clippedStrokes[0], stroke))
+                    continue;
+
                 ApplyErasedStroke(stroke, clippedStrokes);
 
                 mutated = true;
@@ -3566,6 +3626,7 @@ namespace Caelum.Controls
         {
             // A new pointer gesture must never inherit a pending payload from
             // a cancelled/lost-capture gesture.
+            _lastErasePoint = null;
             _eraseGestureRemovedStrokes = null;
             _eraseGestureAddedStrokes = null;
             _eraseGestureRemovedPlacements = null;
@@ -3582,6 +3643,7 @@ namespace Caelum.Controls
 
         private void EndEraseGesture()
         {
+            _lastErasePoint = null;
             var removed = _eraseGestureRemovedStrokes;
             var added = _eraseGestureAddedStrokes;
             var removedPlacements = _eraseGestureRemovedPlacements;
@@ -3613,6 +3675,58 @@ namespace Caelum.Controls
             }
         }
 
+        /// <summary>
+        /// Discards an in-flight erase gesture and restores everything it
+        /// removed. Unlike <see cref="EndEraseGesture"/>, this path never
+        /// publishes completion events or creates an undo boundary. Clear all
+        /// gesture state before the quiet mutations so releasing InkCanvas
+        /// capture cannot re-enter the lost-capture handlers with stale state.
+        /// </summary>
+        private void CancelEraseGesture()
+        {
+            var removedPlacements = _eraseGestureRemovedPlacements;
+            var addedPlacements = _eraseGestureAddedPlacements;
+            var removedHiddenInks = _eraseGestureRemovedHiddenInks;
+
+            _isErasing = false;
+            _erasePoints = null;
+            _lastErasePoint = null;
+            _eraseGestureRemovedStrokes = null;
+            _eraseGestureAddedStrokes = null;
+            _eraseGestureRemovedPlacements = null;
+            _eraseGestureAddedPlacements = null;
+            _eraseGestureRemovedHiddenInks = null;
+
+            if (addedPlacements != null)
+            {
+                foreach (var placement in addedPlacements
+                    .Where(placement => placement != null)
+                    .OrderByDescending(placement => placement.Index))
+                {
+                    RemoveStrokeQuietExact(placement);
+                }
+            }
+
+            if (removedPlacements != null)
+            {
+                foreach (var placement in removedPlacements
+                    .Where(placement => placement != null)
+                    .OrderBy(placement => placement.Index))
+                {
+                    AddStrokeQuiet(placement.ForOwner(this, placement.Index));
+                }
+            }
+
+            if (removedHiddenInks != null)
+            {
+                foreach (var annotation in removedHiddenInks)
+                {
+                    if (annotation != null)
+                        AddHiddenInkQuiet(CloneHiddenInk(annotation));
+                }
+            }
+        }
+
         private List<Rect> CreateEraserRects(StylusPointCollection points)
         {
             var eraserRects = new List<Rect>(points.Count);
@@ -3626,60 +3740,6 @@ namespace Caelum.Controls
             }
 
             return eraserRects;
-        }
-
-        private static bool PointHitsEraser(Point point, IReadOnlyList<Rect> eraserRects)
-        {
-            for (int i = 0; i < eraserRects.Count; i++)
-            {
-                if (eraserRects[i].Contains(point))
-                    return true;
-            }
-
-            return false;
-        }
-
-        private List<Stroke> ClipStrokeByErasers(Stroke stroke, IReadOnlyList<Rect> eraserRects)
-        {
-            var result = new List<Stroke>();
-            var stylusPoints = stroke.StylusPoints;
-            var currentSegment = new StylusPointCollection();
-
-            for (int i = 0; i < stylusPoints.Count; i++)
-            {
-                var pt = stylusPoints[i];
-                var point = new Point(pt.X, pt.Y);
-                bool inEraser = PointHitsEraser(point, eraserRects);
-
-                if (!inEraser)
-                {
-                    currentSegment.Add(pt);
-                }
-                else if (currentSegment.Count > 1)
-                {
-                    var newStroke = new Stroke(currentSegment.Clone())
-                    {
-                        DrawingAttributes = stroke.DrawingAttributes.Clone()
-                    };
-                    result.Add(newStroke);
-                    currentSegment.Clear();
-                }
-                else
-                {
-                    currentSegment.Clear();
-                }
-            }
-
-            if (currentSegment.Count > 1)
-            {
-                var newStroke = new Stroke(currentSegment.Clone())
-                {
-                    DrawingAttributes = stroke.DrawingAttributes.Clone()
-                };
-                result.Add(newStroke);
-            }
-
-            return result;
         }
 
         private static void OnPageSourceChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
@@ -3989,6 +4049,11 @@ namespace Caelum.Controls
                     IsHighlighter = attrs.IsHighlighter,
                     FitToCurve = attrs.FitToCurve
                 };
+                var shape = ShapeStrokeMetadata.Read(stroke);
+                sa.ShapeGroupId = shape.GroupId;
+                sa.ShapeKind = shape.Kind;
+                sa.ShapePartIndex = shape.PartIndex;
+                sa.IsDashedShape = shape.IsDashed;
                 foreach (var pt in stroke.StylusPoints)
                 {
                     sa.Points.Add(new[] { pt.X, pt.Y });
@@ -4011,6 +4076,8 @@ namespace Caelum.Controls
                 IsHighlighter = sa.IsHighlighter,
                 FitToCurve = sa.FitToCurve
             };
+            if (!string.IsNullOrWhiteSpace(sa.ShapeGroupId))
+                attrs.IgnorePressure = true;
 
             var stylusPoints = new StylusPointCollection();
             foreach (var pt in sa.Points)
@@ -4028,6 +4095,15 @@ namespace Caelum.Controls
 
                 var stroke = new Stroke(stylusPoints);
                 stroke.DrawingAttributes = attrs;
+                if (!string.IsNullOrWhiteSpace(sa.ShapeGroupId) || !string.IsNullOrWhiteSpace(sa.ShapeKind))
+                {
+                    ShapeStrokeMetadata.Apply(
+                        stroke,
+                        sa.ShapeGroupId,
+                        sa.ShapeKind,
+                        sa.ShapePartIndex,
+                        sa.IsDashedShape);
+                }
                 AddStrokeToCollection(stroke);
                 return stroke;
             }
@@ -5375,8 +5451,13 @@ namespace Caelum.Controls
             {
                 foreach (var stroke in strokes)
                 {
-                    if (stroke != null && !_selectedStrokes.Contains(stroke))
-                        _selectedStrokes.Add(stroke);
+                    if (stroke == null)
+                        continue;
+                    foreach (var logicalStroke in GetLogicalShapeStrokes(stroke))
+                    {
+                        if (!_selectedStrokes.Contains(logicalStroke))
+                            _selectedStrokes.Add(logicalStroke);
+                    }
                 }
             }
 
@@ -5567,6 +5648,13 @@ namespace Caelum.Controls
         public bool HasSelection => _selectedStrokes.Count > 0 || _selectedTextContainers.Count > 0;
 
         public List<Stroke> SelectedStrokes => _selectedStrokes;
+
+        public void RefreshSelectedDrawingStyle()
+        {
+            if (_selectedStrokes.Count > 0)
+                UpdateSelectionVisuals();
+            QuietStrokeMutation?.Invoke(this, EventArgs.Empty);
+        }
         public List<Grid> SelectedTextContainers => _selectedTextContainers;
 
         private void UpdateSelectionVisuals()
@@ -6004,16 +6092,36 @@ namespace Caelum.Controls
 
         private void ToggleStrokeSelection(Stroke stroke)
         {
-            if (_selectedStrokes.Contains(stroke))
+            var logicalStrokes = GetLogicalShapeStrokes(stroke).ToList();
+            if (logicalStrokes.All(candidate => _selectedStrokes.Contains(candidate)))
             {
-                _selectedStrokes.Remove(stroke);
+                foreach (var candidate in logicalStrokes)
+                    _selectedStrokes.Remove(candidate);
                 RefreshSelectionAfterToggle();
             }
             else
             {
-                _selectedStrokes.Add(stroke);
+                foreach (var candidate in logicalStrokes)
+                {
+                    if (!_selectedStrokes.Contains(candidate))
+                        _selectedStrokes.Add(candidate);
+                }
                 UpdateSelectionVisuals();
             }
+        }
+
+        private IEnumerable<Stroke> GetLogicalShapeStrokes(Stroke stroke)
+        {
+            var identity = ShapeStrokeMetadata.Read(stroke);
+            if (string.IsNullOrWhiteSpace(identity.GroupId))
+                return new[] { stroke };
+
+            return InkCanvas.Strokes
+                .Where(candidate => string.Equals(
+                    ShapeStrokeMetadata.Read(candidate).GroupId,
+                    identity.GroupId,
+                    StringComparison.Ordinal))
+                .ToList();
         }
 
         private void ToggleTextContainerSelection(Grid container)
@@ -6236,7 +6344,7 @@ namespace Caelum.Controls
                             var stroke = InkCanvas.Strokes[i];
                             if (HitStroke(stroke, clickPoint))
                             {
-                                _selectedStrokes.Add(stroke);
+                                _selectedStrokes.AddRange(GetLogicalShapeStrokes(stroke));
                                 hitSomething = true;
                                 break;
                             }
@@ -6325,6 +6433,16 @@ namespace Caelum.Controls
                 _freeSelectionPath = null;
                 _freeSelectionPoints = null;
                 _selectionRect = null;
+
+                if (_selectedStrokes.Count > 0)
+                {
+                    var expanded = _selectedStrokes
+                        .SelectMany(GetLogicalShapeStrokes)
+                        .Distinct()
+                        .ToList();
+                    _selectedStrokes.Clear();
+                    _selectedStrokes.AddRange(expanded);
+                }
 
                 // Auto-clear visuals if nothing was caught
                 if (_selectedStrokes.Count == 0 && _selectedTextContainers.Count == 0)

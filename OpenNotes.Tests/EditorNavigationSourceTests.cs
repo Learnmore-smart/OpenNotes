@@ -27,6 +27,42 @@ namespace Caelum.Tests;
 public sealed class EditorNavigationSourceTests
 {
     [Test]
+    public void SidebarThumbnailReorderUsesImmutablePayloadAndInsertionIndicator()
+    {
+        var root = FindProjectRoot();
+        var xaml = File.ReadAllText(Path.Combine(root, "Pages", "EditorPage.xaml"));
+        var source = File.ReadAllText(Path.Combine(root, "Pages", "EditorPage.xaml.cs"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(xaml, Does.Contain("DragOver=\"ThumbnailListBox_DragOver\""));
+            Assert.That(xaml, Does.Contain("DragLeave=\"ThumbnailListBox_DragLeave\""));
+            Assert.That(xaml, Does.Contain("x:Name=\"ThumbnailDropIndicator\""));
+            Assert.That(source, Does.Contain("sealed record ThumbnailDragPayload"));
+            Assert.That(source, Does.Contain("ThumbnailDropPlacement.ResolveFinalIndex"));
+            Assert.That(source, Does.Contain("ValidateDocumentOperationLease(currentLease, payload.Source)"));
+            Assert.That(source, Does.Not.Contain("_thumbnailDragSessionId = -1;\r\n            DragDrop.DoDragDrop"));
+        });
+    }
+
+    [Test]
+    public void StructuralReloadAcceptsTheSingleSessionIncrementCreatedByLoad()
+    {
+        var root = FindProjectRoot();
+        var source = File.ReadAllText(Path.Combine(root, "Pages", "EditorPage.xaml.cs"));
+        int start = source.IndexOf("private async Task<DocumentOperationLease> ReloadDocumentForOperationAsync", StringComparison.Ordinal);
+        int end = source.IndexOf("private bool IsSidebarLoadCurrent", start, StringComparison.Ordinal);
+        Assert.That(start, Is.GreaterThanOrEqualTo(0));
+        Assert.That(end, Is.GreaterThan(start));
+        var method = source.Substring(start, end - start);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(method, Does.Contain("previousSessionId + 1"));
+            Assert.That(method, Does.Not.Contain("previousSessionId + 2"));
+        });
+    }
+    [Test]
     public void PageJumpUsesACompactKeyboardFirstEditableField()
     {
         var root = FindProjectRoot();

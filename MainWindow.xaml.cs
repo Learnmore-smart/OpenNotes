@@ -45,9 +45,15 @@ namespace Caelum
         private static readonly TimeSpan CloseWorkflowTimeout = TimeSpan.FromSeconds(30);
 
         public MainWindow()
+            : this(createHomeTab: true)
+        {
+        }
+
+        internal MainWindow(bool createHomeTab)
         {
             InitializeComponent();
             LoadAppIcon();
+            TabDragCoordinator.Register(this);
             SourceInitialized += MainWindow_SourceInitialized;
             StateChanged += MainWindow_StateChanged;
             Deactivated += MainWindow_Deactivated;
@@ -58,6 +64,9 @@ namespace Caelum
             {
                 Deactivated -= MainWindow_Deactivated;
                 LocalizationService.LanguageChanged -= LocalizationService_LanguageChanged;
+                TabDragCoordinator.Unregister(this);
+                TabBar.DragOver -= TabBar_DragOver;
+                TabBar.Drop -= TabBar_Drop;
                 PopupZOrderHelper.UnfixContextMenuTopmost(SortContextMenu);
                 PopupZOrderHelper.UnfixContextMenuTopmost(MoreContextMenu);
             };
@@ -69,8 +78,15 @@ namespace Caelum
             PopupZOrderHelper.FixContextMenuTopmost(SortContextMenu);
             PopupZOrderHelper.FixContextMenuTopmost(MoreContextMenu);
 
-            // Create the first Home tab
-            AddNewHomeTab(activate: true);
+            TabBar.AllowDrop = true;
+            TabBar.DragOver += TabBar_DragOver;
+            TabBar.Drop += TabBar_Drop;
+
+            // The normal application window starts with Home.  Detached
+            // windows receive an existing AppTab after construction so the
+            // original Frame/editor state is preserved.
+            if (createHomeTab)
+                AddNewHomeTab(activate: true);
         }
 
         private void LocalizationService_LanguageChanged(object sender, EventArgs e)
@@ -136,6 +152,15 @@ namespace Caelum
 
         private void Window_DragEnter(object sender, DragEventArgs e)
         {
+            if (IsTabDragOverTabStrip(e))
+                return;
+            if (TabDragCoordinator.TryGetPayload(e.Data, out _))
+            {
+                e.Effects = DragDropEffects.None;
+                e.Handled = true;
+                return;
+            }
+
             if (ShouldDeferWindowFileDrop(e))
                 return;
 
@@ -145,6 +170,15 @@ namespace Caelum
 
         private void Window_DragOver(object sender, DragEventArgs e)
         {
+            if (IsTabDragOverTabStrip(e))
+                return;
+            if (TabDragCoordinator.TryGetPayload(e.Data, out _))
+            {
+                e.Effects = DragDropEffects.None;
+                e.Handled = true;
+                return;
+            }
+
             if (ShouldDeferWindowFileDrop(e))
                 return;
 
@@ -154,6 +188,9 @@ namespace Caelum
 
         private void Window_Drop(object sender, DragEventArgs e)
         {
+            if (IsTabDragOverTabStrip(e) || TabDragCoordinator.TryGetPayload(e.Data, out _))
+                return;
+
             if (ShouldDeferWindowFileDrop(e))
                 return;
 
@@ -185,6 +222,12 @@ namespace Caelum
                 }
             }
             e.Handled = true;
+        }
+
+        private bool IsTabDragOverTabStrip(DragEventArgs e)
+        {
+            return TabDragCoordinator.TryGetPayload(e.Data, out _) &&
+                   IsDescendantOf(e.OriginalSource as DependencyObject, TabBar);
         }
 
         // 鈹€鈹€鈹€ Tab Management 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
@@ -220,21 +263,218 @@ namespace Caelum
                 ActivateTab(tab);
         }
 
+        private sealed class TabTransferState
+        {
+            public AppTab Tab { get; set; }
+            public Frame Frame { get; set; }
+            public HashSet<EditorPage> Editors { get; set; }
+            public int SourceIndex { get; set; }
+            public bool WasActive { get; set; }
+        }
+
+        /// <summary>
+        /// Removes a tab from this window without closing or recreating its
+        /// Frame.  The editor map and Navigated subscription travel with the
+        /// same transfer transaction and are each moved exactly once.
+        /// </summary>
+        private bool TransferTabTo(
+            MainWindow destination,
+            AppTab tab,
+            AppTab targetTab,
+            bool insertAfter,
+            TabDragPayload payload)
+        {
+            if (destination == null || destination == this || tab == null ||
+                !_tabs.Contains(tab) || tab.Frame == null ||
+                _windowCloseWorkflowActive || _navigationWorkflowActive ||
+                _tabCloseWorkflows.Count > 0 ||
+                destination._windowCloseWorkflowActive || destination._navigationWorkflowActive ||
+                destination._tabCloseWorkflows.Count > 0)
+            {
+                return false;
+            }
+
+            if (payload != null && !ReferenceEquals(payload.Tab, tab))
+                return false;
+
+            if (ReferenceEquals(tab, _activeTab) && tab.Frame.Content is EditorPage activeEditor)
+            {
+                activeEditor.CancelInteraction("tab transfer");
+                activeEditor.CloseTransientUi("tab transfer");
+                activeEditor.SetHostActive(false);
+            }
+
+            var state = RemoveTabForTransfer(tab);
+            if (state == null)
+                return false;
+
+            try
+            {
+                if (!destination.AttachTransferredTab(state, targetTab, insertAfter))
+                {
+                    RestoreTabAfterTransferFailure(state);
+                    return false;
+                }
+
+                CompleteSourceTransfer(state);
+                if (payload != null)
+                    TabDragCoordinator.AcceptDrop(payload);
+                return true;
+            }
+            catch
+            {
+                RestoreTabAfterTransferFailure(state);
+                return false;
+            }
+        }
+
+        private TabTransferState RemoveTabForTransfer(AppTab tab)
+        {
+            int sourceIndex = _tabs.IndexOf(tab);
+            if (sourceIndex < 0 || tab.Frame == null)
+                return null;
+
+            var frame = tab.Frame;
+            var editors = _frameEditors.TryGetValue(frame, out var knownEditors)
+                ? knownEditors
+                : new HashSet<EditorPage>();
+            _frameEditors.Remove(frame);
+            frame.Navigated -= Frame_Navigated;
+            TabContentArea.Children.Remove(frame);
+
+            bool wasActive = ReferenceEquals(tab, _activeTab);
+            _tabs.RemoveAt(sourceIndex);
+            tab.IsActive = false;
+            frame.Visibility = Visibility.Collapsed;
+            if (wasActive)
+                _activeTab = null;
+
+            RebuildTabBar();
+            return new TabTransferState
+            {
+                Tab = tab,
+                Frame = frame,
+                Editors = editors,
+                SourceIndex = sourceIndex,
+                WasActive = wasActive
+            };
+        }
+
+        private bool AttachTransferredTab(TabTransferState state, AppTab targetTab, bool insertAfter)
+        {
+            if (state?.Tab == null || state.Frame == null || _tabs.Contains(state.Tab) ||
+                _windowCloseWorkflowActive || _navigationWorkflowActive || _tabCloseWorkflows.Count > 0)
+            {
+                return false;
+            }
+
+            int insertIndex = _tabs.Count;
+            if (targetTab != null)
+            {
+                int targetIndex = _tabs.IndexOf(targetTab);
+                if (targetIndex < 0)
+                    return false;
+                insertIndex = targetIndex + (insertAfter ? 1 : 0);
+            }
+
+            state.Frame.Navigated += Frame_Navigated;
+            try
+            {
+                TabContentArea.Children.Add(state.Frame);
+                // This assignment is the destination half of the one-time
+                // map move performed by RemoveTabForTransfer.
+                _frameEditors[state.Frame] = state.Editors ?? new HashSet<EditorPage>();
+                _tabs.Insert(Math.Min(insertIndex, _tabs.Count), state.Tab);
+                state.Tab.IsActive = false;
+                state.Frame.Visibility = Visibility.Collapsed;
+                RebuildTabBar();
+                ActivateTab(state.Tab);
+                return true;
+            }
+            catch
+            {
+                state.Frame.Navigated -= Frame_Navigated;
+                _frameEditors.Remove(state.Frame);
+                TabContentArea.Children.Remove(state.Frame);
+                _tabs.Remove(state.Tab);
+                return false;
+            }
+        }
+
+        private void CompleteSourceTransfer(TabTransferState state)
+        {
+            if (_tabs.Count == 0)
+            {
+                // A source window remains usable after its last tab moves.
+                AddNewHomeTab(activate: true);
+            }
+            else if (state.WasActive)
+            {
+                int nextIndex = Math.Min(state.SourceIndex, _tabs.Count - 1);
+                ActivateTab(_tabs[nextIndex]);
+            }
+            else
+            {
+                RebuildTabBar();
+                UpdateNavButtons();
+            }
+        }
+
+        private void RestoreTabAfterTransferFailure(TabTransferState state)
+        {
+            if (state?.Tab == null || state.Frame == null || _tabs.Contains(state.Tab))
+                return;
+
+            state.Frame.Navigated += Frame_Navigated;
+            TabContentArea.Children.Add(state.Frame);
+            _frameEditors[state.Frame] = state.Editors ?? new HashSet<EditorPage>();
+            int insertIndex = Math.Max(0, Math.Min(state.SourceIndex, _tabs.Count));
+            _tabs.Insert(insertIndex, state.Tab);
+            state.Frame.Visibility = Visibility.Collapsed;
+            state.Tab.IsActive = false;
+            RebuildTabBar();
+
+            if (state.WasActive)
+            {
+                _activeTab = null;
+                ActivateTab(state.Tab);
+            }
+            else
+            {
+                UpdateNavButtons();
+            }
+        }
+
+        private void DetachTabToNewWindow(AppTab tab)
+        {
+            if (tab == null || !_tabs.Contains(tab))
+                return;
+
+            var detached = new MainWindow(createHomeTab: false)
+            {
+                WindowStartupLocation = WindowStartupLocation.Manual,
+                Width = Width,
+                Height = Height,
+                Left = Left + 32,
+                Top = Top + 32
+            };
+
+            detached.Show();
+            if (!TransferTabTo(detached, tab, targetTab: null, insertAfter: true, payload: null))
+            {
+                detached._allowWindowClose = true;
+                detached.Close();
+                return;
+            }
+
+            detached.Activate();
+        }
+
         public void OpenFileInNewTab(string filePath, bool promptSaveAsAfterLoad = false, string pendingLibraryFolderId = null, bool isNotebookDraft = false)
         {
             if (_windowCloseWorkflowActive || _navigationWorkflowActive || _tabCloseWorkflows.Count > 0)
                 return;
             RecentFilesService.AddOrPromote(filePath);
-
-            // Check if this file is already open
-            var existing = _tabs.FirstOrDefault(t =>
-                !string.IsNullOrEmpty(t.FilePath) &&
-                string.Equals(t.FilePath, filePath, StringComparison.OrdinalIgnoreCase));
-            if (existing != null)
-            {
-                ActivateTab(existing);
-                return;
-            }
 
             var name = Path.GetFileNameWithoutExtension(filePath);
             var ext = Path.GetExtension(filePath).ToLowerInvariant();
@@ -637,16 +877,36 @@ namespace Caelum
                     return;
 
                 _isTabDragInProgress = true;
+                TabDragPayload dragPayload = null;
+                DragDropEffects dragResult = DragDropEffects.None;
+                QueryContinueDragEventHandler queryContinueDrag = null;
                 try
                 {
-                    DragDrop.DoDragDrop(border, new DataObject(TabDragDataFormat, capturedTab.Id), DragDropEffects.Move);
+                    dragPayload = TabDragCoordinator.BeginDrag(this, capturedTab);
+                    var dragData = new DataObject();
+                    dragData.SetData(TabDragCoordinator.DragDataFormat, dragPayload);
+                    // Keep the legacy ID format for same-window callers and
+                    // older automation payload readers.
+                    dragData.SetData(TabDragDataFormat, capturedTab.Id);
+                    queryContinueDrag = (querySender, queryArgs) =>
+                    {
+                        if (queryArgs.EscapePressed || queryArgs.Action == DragAction.Cancel)
+                            TabDragCoordinator.CancelDrag(dragPayload);
+                    };
+                    border.QueryContinueDrag += queryContinueDrag;
+                    dragResult = DragDrop.DoDragDrop(border, dragData, DragDropEffects.Move);
                 }
                 finally
                 {
+                    if (queryContinueDrag != null)
+                        border.QueryContinueDrag -= queryContinueDrag;
                     _isTabDragInProgress = false;
                     if (_tabDragCandidate == capturedTab)
                         _tabDragCandidate = null;
                 }
+
+                if (dragPayload != null && TabDragCoordinator.CompleteDrag(dragPayload, dragResult))
+                    DetachTabToNewWindow(capturedTab);
 
                 e.Handled = true;
             };
@@ -693,7 +953,8 @@ namespace Caelum
 
             border.DragOver += (s, e) =>
             {
-                if (TryGetDraggedTab(e.Data, out var draggedTab) && draggedTab != capturedTab)
+                if (TryGetDraggedTab(e.Data, out var draggedTab, out var sourceWindow, out _)
+                    && draggedTab != capturedTab && sourceWindow != null)
                 {
                     e.Effects = DragDropEffects.Move;
                     e.Handled = true;
@@ -706,20 +967,91 @@ namespace Caelum
 
             border.Drop += (s, e) =>
             {
-                if (!TryGetDraggedTab(e.Data, out var draggedTab) || draggedTab == capturedTab)
+                if (!TryGetDraggedTab(e.Data, out var draggedTab, out var sourceWindow, out var payload))
                     return;
 
+                if (draggedTab == capturedTab)
+                {
+                    if (payload != null)
+                        TabDragCoordinator.AcceptDrop(payload);
+                    e.Effects = DragDropEffects.Move;
+                    e.Handled = true;
+                    return;
+                }
+
                 bool insertAfter = e.GetPosition(border).X >= border.ActualWidth / 2;
-                MoveTab(draggedTab, capturedTab, insertAfter);
-                e.Handled = true;
+                bool moved = sourceWindow == this
+                    ? MoveTab(draggedTab, capturedTab, insertAfter)
+                    : sourceWindow?.TransferTabTo(this, draggedTab, capturedTab, insertAfter, payload) == true;
+                if (moved)
+                {
+                    e.Effects = DragDropEffects.Move;
+                    e.Handled = true;
+                }
             };
 
             return border;
         }
 
+        private void TabBar_DragOver(object sender, DragEventArgs e)
+        {
+            if (!TryGetDraggedTab(e.Data, out var draggedTab, out var sourceWindow, out _))
+                return;
+
+            if (draggedTab == null || sourceWindow == null)
+            {
+                e.Effects = DragDropEffects.None;
+                e.Handled = true;
+                return;
+            }
+
+            e.Effects = DragDropEffects.Move;
+            e.Handled = true;
+        }
+
+        private void TabBar_Drop(object sender, DragEventArgs e)
+        {
+            if (!TryGetDraggedTab(e.Data, out var draggedTab, out var sourceWindow, out var payload))
+                return;
+
+            if (sourceWindow == this)
+            {
+                // A blank portion of the same strip is a valid no-op target,
+                // so the source must not mistake it for an outside drop.
+                if (payload != null)
+                    TabDragCoordinator.AcceptDrop(payload);
+                e.Effects = DragDropEffects.Move;
+                e.Handled = true;
+                return;
+            }
+
+            if (sourceWindow?.TransferTabTo(this, draggedTab, targetTab: null, insertAfter: true, payload: payload) == true)
+            {
+                e.Effects = DragDropEffects.Move;
+                e.Handled = true;
+            }
+        }
+
         private bool TryGetDraggedTab(IDataObject data, out AppTab tab)
+            => TryGetDraggedTab(data, out tab, out _, out _);
+
+        private bool TryGetDraggedTab(
+            IDataObject data,
+            out AppTab tab,
+            out MainWindow sourceWindow,
+            out TabDragPayload payload)
         {
             tab = null;
+            sourceWindow = this;
+            payload = null;
+
+            if (TabDragCoordinator.TryGetPayload(data, out payload))
+            {
+                tab = payload.Tab;
+                sourceWindow = payload.SourceWindow;
+                return tab != null;
+            }
+
             if (data == null || !data.GetDataPresent(TabDragDataFormat))
                 return false;
 
@@ -731,17 +1063,17 @@ namespace Caelum
             return tab != null;
         }
 
-        private void MoveTab(AppTab draggedTab, AppTab targetTab, bool insertAfter)
+        private bool MoveTab(AppTab draggedTab, AppTab targetTab, bool insertAfter)
         {
             if (_windowCloseWorkflowActive || _navigationWorkflowActive || _tabCloseWorkflows.Count > 0)
-                return;
+                return false;
             if (draggedTab == null || targetTab == null || draggedTab == targetTab)
-                return;
+                return false;
 
             int sourceIndex = _tabs.IndexOf(draggedTab);
             int targetIndex = _tabs.IndexOf(targetTab);
             if (sourceIndex < 0 || targetIndex < 0)
-                return;
+                return false;
 
             _tabs.RemoveAt(sourceIndex);
             if (sourceIndex < targetIndex)
@@ -752,6 +1084,7 @@ namespace Caelum
 
             _tabs.Insert(insertIndex, draggedTab);
             RebuildTabBar();
+            return true;
         }
 
         private static bool HasExceededDragThreshold(Point startPoint, Point currentPoint)
@@ -932,17 +1265,6 @@ namespace Caelum
 
             RecentFilesService.AddOrPromote(filePath);
 
-            // Check if already open in another tab
-            var existing = _tabs.FirstOrDefault(t =>
-                t != _activeTab &&
-                !string.IsNullOrEmpty(t.FilePath) &&
-                string.Equals(t.FilePath, filePath, StringComparison.OrdinalIgnoreCase));
-            if (existing != null)
-            {
-                ActivateTab(existing);
-                return;
-            }
-
             var name = Path.GetFileNameWithoutExtension(filePath);
             _activeTab.Title = name;
             _activeTab.FilePath = filePath;
@@ -980,6 +1302,26 @@ namespace Caelum
             {
                 RebuildTabBar();
             }
+        }
+
+        public void HandleActiveTabFilePathChanged(EditorPage sourceEditor, string oldPath, string newPath)
+        {
+            if (sourceEditor == null || string.IsNullOrWhiteSpace(newPath))
+                return;
+
+            var tab = _tabs.FirstOrDefault(candidate =>
+                ReferenceEquals(candidate.Frame?.Content, sourceEditor) ||
+                GetFrameEditors(candidate.Frame).Contains(sourceEditor));
+            if (tab == null)
+                return;
+
+            tab.FilePath = newPath;
+            tab.Title = Path.GetFileNameWithoutExtension(newPath);
+            tab.Icon = Path.GetExtension(newPath).ToLowerInvariant() == ".pdf" ? "\uEA90" : "\uE7C3";
+            if (ReferenceEquals(tab, _activeTab))
+                UpdateActiveTabInfo();
+            else
+                RebuildTabBar();
         }
 
         private void MainWindow_KeyDown(object sender, KeyEventArgs e)

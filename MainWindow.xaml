@@ -3,7 +3,8 @@
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:controls="clr-namespace:Caelum.Controls"
-        Title="OpenNotes"
+    Title="OpenNotes"
+    ShowInTaskbar="True"
     Height="720" Width="1280"
     WindowStartupLocation="CenterScreen"
     Background="{DynamicResource ThemeWindowBrush}"
@@ -256,7 +257,7 @@
         <Border Grid.Row="1" Background="{DynamicResource ThemePaperBrush}" BorderBrush="{DynamicResource ThemeBorderBrush}" BorderThickness="0,0,0,1" Padding="8,4,8,4">
             <ScrollViewer Height="32" HorizontalScrollBarVisibility="Hidden" VerticalScrollBarVisibility="Disabled">
                 <StackPanel Orientation="Horizontal">
-                    <StackPanel x:Name="TabBar" Orientation="Horizontal"/>
+                    <StackPanel x:Name="TabBar" Orientation="Horizontal" AllowDrop="True"/>
                     <Button x:Name="NewTabButton" Click="NewTab_Click" Style="{StaticResource NavButtonStyle}"
                             VerticalAlignment="Center"
                             Width="32" Height="32" Margin="6,0,0,0"

@@ -14,6 +14,7 @@ Exercise the production PdfService strip/rebuild path against isolated temporary
 
 ## Open Threads / Resume Context
 
+- v5.2.6 adds real PDF save/reload coverage for `FitToCurve=false` plus a legacy owned-ink rectangle recovery case. Both are GREEN and guard against straight-edged shapes being re-rendered as curves after any document reload.
 - **Status:** ready_for_next — focused/expanded/full automated tests are green; real desktop save/reopen smoke remains blocked by foreground ownership in this environment.
 - Keep helper-generated PDFs aligned with production missing-`/C` behavior; do not migrate explicit legacy white values.
 
@@ -26,4 +27,5 @@ Exercise the production PdfService strip/rebuild path against isolated temporary
 
 | Date | Change | Author |
 |---|---|---|
+| 2026-08-30 | Added GREEN PDF `FitToCurve` metadata round-trip and legacy rectangle recovery regressions. | Codex |
 | 2026-08-23 | Added Wave 2 PDF save/readability, Hidden Ink legacy/default, stream ownership and disposal-race integration contracts. | Codex |

@@ -208,9 +208,19 @@ public sealed class EditorPopupAutomationTests
             yield break;
 
         yield return root;
-        for (var index = 0; index < VisualTreeHelper.GetChildrenCount(root); index++)
+        int visualChildren = VisualTreeHelper.GetChildrenCount(root);
+        for (var index = 0; index < visualChildren; index++)
         {
             foreach (var child in Descendants(VisualTreeHelper.GetChild(root, index)))
+                yield return child;
+        }
+
+        // Popup ScrollViewers may not have a realized visual template until
+        // opened. Follow logical content as well so automation metadata stays
+        // testable without requiring a foreground desktop window.
+        if (visualChildren == 0 && root is ContentControl contentControl && contentControl.Content is DependencyObject content)
+        {
+            foreach (var child in Descendants(content))
                 yield return child;
         }
     }

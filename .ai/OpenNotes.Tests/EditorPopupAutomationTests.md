@@ -5,6 +5,8 @@
 
 Exercise the production `EditorPage` popup construction on an STA dispatcher without a foreground desktop session. The test inspects AutomationPeers for the highlighter slider/modes and selection shape/filter controls, including localized metadata, semantic toggle state, 32-DIP targets, and Invoke/Toggle activation.
 
+The descendant walker follows realized visual children and falls back to a content control's logical content when a bounded popup `ScrollViewer` has not yet been visually realized offscreen.
+
 ## Open Threads / Resume Context
 
 - **Status:** complete; the RED runtime-peer and STA theme-expression contracts were added before the popup implementation/cleanup and now pass in the full suite.

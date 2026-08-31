@@ -63,6 +63,102 @@ public class PdfServiceAnnotationSavingTests
     }
 
     [Test]
+    public async Task SaveReload_CrispRectanglePreservesFitToCurveFalse()
+    {
+        string filePath = Path.Combine(_tempDirectory, "crisp-rectangle.pdf");
+        CreateTestPdf(filePath);
+
+        var rectangle = CreateCrispRectangleStroke();
+        var writer = new PdfService();
+        await writer.SaveAnnotationsToPdfAsync(
+            filePath,
+            new Dictionary<int, PageAnnotation>
+            {
+                [0] = new PageAnnotation { Strokes = new List<StrokeAnnotation> { rectangle } }
+            });
+        await writer.DisposeAsync();
+
+        var reader = new PdfService();
+        await reader.LoadPdfAsync(filePath);
+
+        Assert.That(reader.ExtractedAnnotations[0].Strokes.Single().FitToCurve, Is.False,
+            "a saved rectangle must not become a smoothed/circular stroke after reload");
+        await reader.DisposeAsync();
+    }
+
+    [Test]
+    public async Task SaveReload_LogicalShapeMetadataRoundTripsOnOwnedInk()
+    {
+        string filePath = Path.Combine(_tempDirectory, "logical-shape.pdf");
+        CreateTestPdf(filePath);
+        var stroke = CreateCrispRectangleStroke();
+        stroke.ShapeGroupId = "shape-group-42";
+        stroke.ShapeKind = "DashedLine";
+        stroke.ShapePartIndex = 4;
+        stroke.IsDashedShape = true;
+
+        var writer = new PdfService();
+        await writer.SaveAnnotationsToPdfAsync(
+            filePath,
+            new Dictionary<int, PageAnnotation>
+            {
+                [0] = new PageAnnotation { Strokes = new List<StrokeAnnotation> { stroke } }
+            });
+        await writer.DisposeAsync();
+
+        var reader = new PdfService();
+        await reader.LoadPdfAsync(filePath);
+        var loaded = reader.ExtractedAnnotations[0].Strokes.Single();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(loaded.ShapeGroupId, Is.EqualTo("shape-group-42"));
+            Assert.That(loaded.ShapeKind, Is.EqualTo("DashedLine"));
+            Assert.That(loaded.ShapePartIndex, Is.EqualTo(4));
+            Assert.That(loaded.IsDashedShape, Is.True);
+        });
+        await reader.DisposeAsync();
+    }
+
+    [Test]
+    public async Task LoadPdfAsync_LegacyOwnedRectangleWithoutFitMetadataRecoversAsCrispShape()
+    {
+        string filePath = Path.Combine(_tempDirectory, "legacy-crisp-rectangle.pdf");
+        CreateTestPdf(filePath);
+
+        var writer = new PdfService();
+        await writer.SaveAnnotationsToPdfAsync(
+            filePath,
+            new Dictionary<int, PageAnnotation>
+            {
+                [0] = new PageAnnotation
+                {
+                    Strokes = new List<StrokeAnnotation> { CreateCrispRectangleStroke() }
+                }
+            });
+        await writer.DisposeAsync();
+
+        // Simulate a PDF produced before FitToCurve metadata existed.
+        using (var legacyDocument = PdfReader.Open(filePath, PdfDocumentOpenMode.Modify))
+        {
+            var annots = legacyDocument.Pages[0].Elements.GetArray("/Annots")!;
+            var ownedInk = annots.Elements
+                .Select(GetAnnotationDictionary)
+                .Single(dict => dict.Elements.GetName("/Subtype") == "/Ink" &&
+                    dict.Elements.GetString("/NM").StartsWith("wna_ink_", StringComparison.Ordinal));
+            ownedInk.Elements.Remove("/WNAFitToCurve");
+            legacyDocument.Save(filePath);
+        }
+
+        var reader = new PdfService();
+        await reader.LoadPdfAsync(filePath);
+
+        Assert.That(reader.ExtractedAnnotations[0].Strokes.Single().FitToCurve, Is.False,
+            "legacy closed rectangle vertices should recover as a straight-edged shape");
+        await reader.DisposeAsync();
+    }
+
+    [Test]
     public async Task SaveAnnotationsToPdfAsync_PreservesExplicitTextBoxRectangle()
     {
         string filePath = Path.Combine(_tempDirectory, "sized-text.pdf");
@@ -747,6 +843,27 @@ public class PdfServiceAnnotationSavingTests
         page.Width = 612; // 8.5 x 72
         page.Height = 792; // 11 x 72
         document.Save(filePath);
+    }
+
+    private static StrokeAnnotation CreateCrispRectangleStroke()
+    {
+        return new StrokeAnnotation
+        {
+            R = 47,
+            G = 85,
+            B = 212,
+            A = 255,
+            Size = 3,
+            FitToCurve = false,
+            Points = new List<double[]>
+            {
+                new[] { 96d, 120d },
+                new[] { 240d, 120d },
+                new[] { 240d, 240d },
+                new[] { 96d, 240d },
+                new[] { 96d, 120d }
+            }
+        };
     }
 
     private static void CreateHiddenInkPdfWithoutColor(string filePath)

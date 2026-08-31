@@ -8,6 +8,7 @@
 Source-level contracts for the Wave 3 editor toolbar affordance repair. These tests protect the visible toolbar boundary without requiring a WPF desktop session: obsolete Fit/preset/Ink Analysis entry points must be absent, laser and highlighter visuals must be vector-backed, shape/highlighter popup choices must expose real previews, and toolbar metadata must remain localizable and stable.
 
 ## Open Threads / Resume Context
+- v5.2.6 popup contract requires a literal `Editor.ShapeDashedLine` choice, bounded vertical `ScrollViewer` wrapping, and one three-column row for Pressure/Ink simulation/Shape recognition.
 - **2026-08-28:** Shared smoke aliases now track TextAnnotationMoveBorder instead of the removed dotted drag handle.
 - **Status:** ready_for_next — Task 4 source contracts are green for dedicated Laser/Hidden Ink vectors, uniform compact action cells/separators, preserved action IDs/order and the compact page-jump source shape. The production change remains limited to `Controls/LucideIcon.cs` and `Pages/EditorPage.xaml`; Hidden Ink’s existing test expectation follows the intentional vector rename.
 

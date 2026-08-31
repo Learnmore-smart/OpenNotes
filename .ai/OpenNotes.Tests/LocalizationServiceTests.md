@@ -7,6 +7,7 @@ Test translation catalog completeness, placeholder parity, and language-change n
 
 ## Open Threads / Resume Context
 
+- v5.2.6 asserts the exact EN/ZH/FR `Editor.ShapeDashedLine` values, including “Ligne pointillée”.
 - **Status:** complete for Wave 3 source/test scope — catalog remains three-language complete after obsolete Fit/Ink Analysis keys are removed.
 - Add tests before changing catalog behavior; all three languages must have non-empty values for every key.
 - Performance-mode tests require all four catalog keys and verify the settings UI exposes and preserves the new field.

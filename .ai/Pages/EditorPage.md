@@ -1,5 +1,19 @@
 # Pages/EditorPage.xaml.cs
 
+## Sidebar page reorder (2026-08-30) — GREEN for focused scope
+
+- The drag carries source row identity, load session, normalized path, and source model in an immutable payload that survives synchronous DoDragDrop; mutable state is cleared only after the drag returns or at cancellation/reload boundaries.
+- DragOver resolves row halves/trailing space to an original-list slot and displays one themed, non-hit-testable indicator. ThumbnailDropPlacement converts the slot once to the final post-removal index; same-position drops are silent no-ops.
+- A valid drop uses one operation lease through autosave, byte/bookmark snapshots, PdfService.ReorderPagesAsync, reload, focus, bookmark remap, sidebar/thumbnail refresh, and one DocumentSnapshotAction. Stale session/path/model payloads do not write or publish. Reload validation now expects the single session increment made by LoadPdf.
+- Focused verification: EditorNavigationSourceTests, ThumbnailDropPlacementTests, PageBookmarkServiceTests, and PdfServicePageEditingTests pass (62/62 combined); expected Pdfium NU1701/WPF high-DPI warnings remain.
+- Open threads: full-suite/build verification and final branch integration remain with the parent agent; no commit made here.
+
+## Eraser mode cache propagation (2026-08-30) — IN PROGRESS
+
+- The eraser popup must persist the selected mode and pass the same updated `AppSettings` instance into `ApplyToolToAllPages`; calling the no-argument overload after saving a separate snapshot can reapply stale `_applicationSettings.WholeStrokeEraser` to every page.
+- The focused STA regression drives the real `EditorPage` popup toggle and verifies `PdfPageControl.WholeStrokeEraser` changes for a registered page.
+- `StrokesErasedAction` exposes an operation-success flag, resolves each current stroke by logical token/side before capturing its live reference, and rolls back exact placement mutations when a fragment/original cannot be removed or restored; `PerformUndoAsync`/`PerformRedoAsync` leave the action on its current stack when that flag is false.
+
 ## v5.2.4 selection/text/ruler follow-up (2026-08-27) — IN PROGRESS
 
 - **Selection plan:** replace the duplicate ScrollViewer-synthesized selection gesture with the already-visible page `SelectionOverlayCanvas` as the single input owner; retain cross-page Ctrl cleanup without consuming the routed pointer.
@@ -436,3 +450,25 @@ Wave 1 note: shape replacement undo stores only session token/index and immutabl
 - The existing `BeginTextBoxDrag` / `UpdateTextBoxDrag` / `CompleteTextBoxDrag` path remains authoritative so same-page and cross-page undo semantics do not fork.
 - `TextAlignmentOption` selected-item rendering must return its localized `Label`; the legacy `Caelum` namespace is compatibility-only and must never appear as the ComboBox's visible selection.
 - GREEN: the chrome border retains the move Thumb automation peer as TextAnnotationMoveBorder, while the parent container owns preview mouse/stylus/query-cursor handlers. The border band is tool-gated and excludes all TextResizeHandleBorder descendants.
+
+# 2026-08-30 Exact ink eraser plan
+
+- `StrokesErasedAction` continues to own one gesture's original and fragment `StrokePlacement` payloads.
+- Undo/Redo must resolve the current token/side objects and leave restored originals eligible for a later independent erase gesture.
+- Focused history coverage will protect repeat erasing without exposing intermediate fragments as separate undo actions.
+
+# 2026-08-30 Sidebar page reorder plan
+
+- Carry source index, load session, normalized path, and source model in an immutable drag payload; never clear the identity before synchronous `DoDragDrop` returns.
+- Resolve upper/lower row halves and trailing blank space to an insertion slot, convert it once to the final post-removal page index, and use that index for PDF reorder, bookmarks, focus, and undo snapshots.
+- Overlay one non-hit-testable accent insertion line and clear it for leave, drop, cancellation, reload, and host deactivation.
+- Correct structural reload validation to the single `LoadPdf` session increment so insert/delete/duplicate/reorder UI state can complete after the atomic write.
+
+# 2026-08-30 Editable shape and popup plan
+
+- Add `ligne pointillée` to the localized shape catalog and preserve the existing readable three-column catalog.
+- Add selected-drawing color/width controls that push one batch style action, mark dirty once, invalidate the active thumbnail, and keep the current selection active.
+- Put the three pen behavior toggles in one compact horizontal row while retaining their labels/AutomationIds.
+- Bound tool popup height and place the shared body in a vertical `ScrollViewer`; section helpers must unwrap the content panel through the scroller.
+- v5.2.6 Select popup exposes drawing color and line-width controls. Each click applies one batch style mutation to the retained logical selection and creates one Undo/Redo action; thumbnails invalidate once through the quiet mutation channel.
+- Detached-window ownership uses `Window.GetWindow(this)` first, and Save As updates only this editor's tab so a second tab on the original PDF is not silently renamed.

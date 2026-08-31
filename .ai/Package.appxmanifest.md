@@ -1,5 +1,5 @@
 # Package.appxmanifest
-> 2026-08-28 GREEN: package version is 5.2.5.0; AppX name and publisher compatibility values are unchanged.
+> 2026-08-30 GREEN: package version is 5.2.6.0; AppX name and publisher compatibility values are unchanged.
 > 2026-08-28 GREEN: package version is 5.2.4.0; AppX identity and publisher compatibility values are preserved.
 
 > Last updated: 2026-08-24 | Protection: CRITICAL

@@ -12,6 +12,7 @@ Protect page-local drawing selection geometry and Ctrl-toggle behavior through r
 
 ## Open Threads / Resume Context
 
+- v5.2.6 grouped-shape coverage requires selecting any arrow/dashed part to expand to every live stroke with the same logical group id; transforms and deletion then reuse the existing selection pipeline.
 - **Status:** complete
 - **Intent:** protect the first click after Select popup dismissal, broad/open-stroke hits, and same-page Ctrl add/remove/empty-click behavior through real WPF/production seams.
 - **Constraint:** do not enable cross-page selection accumulation.

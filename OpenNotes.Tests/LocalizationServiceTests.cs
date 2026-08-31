@@ -35,6 +35,18 @@ public sealed class LocalizationCoverageTests
     }
 
     [Test]
+    public void DashedLineHasTheRequestedThreeLanguageLabel()
+    {
+        var entry = LocalizationService.GetCatalog()["Editor.ShapeDashedLine"];
+        Assert.Multiple(() =>
+        {
+            Assert.That(entry.English, Is.EqualTo("Dashed line"));
+            Assert.That(entry.Chinese, Is.EqualTo("虚线"));
+            Assert.That(entry.French, Is.EqualTo("Ligne pointillée"));
+        });
+    }
+
+    [Test]
     public void ApplyingLanguageRaisesLanguageChanged()
     {
         int notifications = 0;

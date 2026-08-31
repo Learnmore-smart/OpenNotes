@@ -103,6 +103,39 @@ public class PdfServicePageEditingTests
     }
 
     [Test]
+    public async Task ReorderPagesAsync_MovesForwardPageAndPreservesPageOrder()
+    {
+        string filePath = Path.Combine(_tempDirectory, "reorder-forward.pdf");
+        CreatePdf(filePath, (210, 310), (320, 420), (430, 530));
+
+        await new PdfService().ReorderPagesAsync(filePath, fromIndex: 0, toIndex: 2);
+
+        AssertPageWidths(filePath, 320, 430, 210);
+    }
+
+    [Test]
+    public async Task ReorderPagesAsync_MovesBackwardPageAndPreservesPageOrder()
+    {
+        string filePath = Path.Combine(_tempDirectory, "reorder-backward.pdf");
+        CreatePdf(filePath, (210, 310), (320, 420), (430, 530));
+
+        await new PdfService().ReorderPagesAsync(filePath, fromIndex: 2, toIndex: 0);
+
+        AssertPageWidths(filePath, 430, 210, 320);
+    }
+
+    [Test]
+    public async Task ReorderPagesAsync_MovesPageToEndAndPreservesPageOrder()
+    {
+        string filePath = Path.Combine(_tempDirectory, "reorder-end.pdf");
+        CreatePdf(filePath, (210, 310), (320, 420), (430, 530), (540, 640));
+
+        await new PdfService().ReorderPagesAsync(filePath, fromIndex: 0, toIndex: 4);
+
+        AssertPageWidths(filePath, 320, 430, 540, 210);
+    }
+
+    [Test]
     public async Task DuplicatePageAsync_AddsCopyAfterRequestedPage()
     {
         string filePath = Path.Combine(_tempDirectory, "duplicate.pdf");
@@ -173,5 +206,17 @@ public class PdfServicePageEditingTests
         }
 
         document.Save(filePath);
+    }
+
+    private static void AssertPageWidths(string filePath, params double[] expectedWidths)
+    {
+        using var document = PdfReader.Open(filePath, PdfDocumentOpenMode.ReadOnly);
+
+        Assert.That(document.PageCount, Is.EqualTo(expectedWidths.Length));
+        var actualWidths = Enumerable.Range(0, document.PageCount)
+            .Select(index => document.Pages[index].Width.Point)
+            .ToArray();
+
+        Assert.That(actualWidths, Is.EqualTo(expectedWidths).Within(0.01));
     }
 }

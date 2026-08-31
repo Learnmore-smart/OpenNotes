@@ -196,6 +196,21 @@ public sealed class EditorToolbarVisualSourceTests
     }
 
     [Test]
+    public void ToolPopupsExposeDashedLineBoundedScrollingAndOneRowPenToggles()
+    {
+        var source = File.ReadAllText(Path.Combine(FindProjectRoot(), "Pages", "EditorPage.xaml.cs"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(source, Does.Contain("Editor.ShapeDashedLine"));
+            Assert.That(source, Does.Contain("ShapeKind.DashedLine"));
+            Assert.That(source, Does.Contain("EnableToolPopupScrolling"));
+            Assert.That(source, Does.Contain("VerticalScrollBarVisibility = ScrollBarVisibility.Auto"));
+            Assert.That(source, Does.Contain("new UniformGrid { Columns = 3"));
+        });
+    }
+
+    [Test]
     public void ToolbarPolishUsesLocalizedTooltipsFixedSidebarAndCenteredPageJump()
     {
         var root = FindProjectRoot();

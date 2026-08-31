@@ -1117,6 +1117,16 @@ namespace Caelum.Services
                                                         A = a,
                                                         IsHighlighter = ca < 1.0,
                                                         Size = size,
+                                                        FitToCurve = dict.Elements.ContainsKey("/WNAFitToCurve")
+                                                            ? dict.Elements.GetInteger("/WNAFitToCurve") != 0
+                                                            : !LooksLikeLegacyCrispRectangle(points),
+                                                        ShapeGroupId = dict.Elements.GetString("/WNAShapeGroup") ?? string.Empty,
+                                                        ShapeKind = dict.Elements.GetString("/WNAShapeKind") ?? string.Empty,
+                                                        ShapePartIndex = dict.Elements.ContainsKey("/WNAShapePart")
+                                                            ? dict.Elements.GetInteger("/WNAShapePart")
+                                                            : 0,
+                                                        IsDashedShape = dict.Elements.ContainsKey("/WNAShapeDashed")
+                                                            && dict.Elements.GetInteger("/WNAShapeDashed") != 0,
                                                         Points = points
                                                     });
                                                 }
@@ -1716,6 +1726,15 @@ namespace Caelum.Services
                             dict.Elements.SetName(PdfAnnotation.Keys.Subtype, "/Ink");
                             dict.Elements.SetString("/NM", $"{InkNmPrefix}{Guid.NewGuid()}");
                             dict.Elements.SetInteger("/F", 4);
+                            dict.Elements.SetInteger("/WNAFitToCurve", stroke.FitToCurve ? 1 : 0);
+                            if (!string.IsNullOrWhiteSpace(stroke.ShapeGroupId))
+                                dict.Elements.SetString("/WNAShapeGroup", stroke.ShapeGroupId);
+                            if (!string.IsNullOrWhiteSpace(stroke.ShapeKind))
+                                dict.Elements.SetString("/WNAShapeKind", stroke.ShapeKind);
+                            if (!string.IsNullOrWhiteSpace(stroke.ShapeGroupId) || stroke.ShapePartIndex != 0)
+                                dict.Elements.SetInteger("/WNAShapePart", stroke.ShapePartIndex);
+                            if (stroke.IsDashedShape)
+                                dict.Elements.SetInteger("/WNAShapeDashed", 1);
 
                             var colorArray = new PdfArray();
                             colorArray.Elements.Add(new PdfReal(stroke.R / 255.0));
@@ -2913,6 +2932,49 @@ namespace Caelum.Services
                 return "jpeg";
 
             return "png";
+        }
+
+        /// <summary>
+        /// Recovers rectangles saved by OpenNotes versions that predate the
+        /// private FitToCurve flag. Their five vertices are still intact in
+        /// /InkList; only the WPF rendering hint was lost.
+        /// </summary>
+        private static bool LooksLikeLegacyCrispRectangle(IReadOnlyList<double[]> points)
+        {
+            if (points.Count != 5 || points.Any(point => point.Length < 2))
+                return false;
+
+            static double DistanceSquared(double[] left, double[] right)
+            {
+                double dx = left[0] - right[0];
+                double dy = left[1] - right[1];
+                return (dx * dx) + (dy * dy);
+            }
+
+            if (DistanceSquared(points[0], points[4]) > 0.25)
+                return false;
+
+            for (int corner = 0; corner < 4; corner++)
+            {
+                var current = points[corner];
+                var next = points[(corner + 1) % 4];
+                var afterNext = points[(corner + 2) % 4];
+                double firstX = next[0] - current[0];
+                double firstY = next[1] - current[1];
+                double secondX = afterNext[0] - next[0];
+                double secondY = afterNext[1] - next[1];
+                double firstLengthSquared = (firstX * firstX) + (firstY * firstY);
+                double secondLengthSquared = (secondX * secondX) + (secondY * secondY);
+                if (firstLengthSquared < 4 || secondLengthSquared < 4)
+                    return false;
+
+                double dot = (firstX * secondX) + (firstY * secondY);
+                double perpendicularTolerance = Math.Sqrt(firstLengthSquared * secondLengthSquared) * 0.02;
+                if (Math.Abs(dot) > perpendicularTolerance)
+                    return false;
+            }
+
+            return true;
         }
 
         // ----- Task 25/26/27: text markup / area highlight / sticky note -----
