@@ -7,6 +7,10 @@ Defines the Inno Setup package for the OpenNotes Windows desktop application.
 
 ## Open Threads / Resume Context
 
+- **Status:** ready_for_release (5.2.8 eraser stylus-crash hotfix)
+- Default version is `5.2.8`; local release gates are GREEN and the tag-triggered workflow must build and publish the installer and portable ZIP from the verified release commit. The stable AppId and upgrade behavior remain unchanged.
+- A workflow-equivalent self-contained `win-x64` publish succeeded locally. This host has no Inno Setup 6, so no local installer success is claimed; GitHub Actions installs Inno Setup and the remote release asset remains authoritative.
+
 - **Status:** released (5.2.7 page-rotation drawing hotfix)
 - Default installer version is `5.2.7`; GitHub Actions run `33389316845` published the final installer and portable ZIP. The stable AppId and upgrade behavior remain unchanged.
 - **Status:** ready_for_release (5.2.0)

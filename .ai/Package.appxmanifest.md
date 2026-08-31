@@ -1,4 +1,5 @@
 # Package.appxmanifest
+> 2026-08-31 GREEN: package Version is 5.2.8.0; AppX name and publisher compatibility values are preserved.
 > 2026-08-30 GREEN: package version is 5.2.6.0; AppX name and publisher compatibility values are unchanged.
 > 2026-08-28 GREEN: package version is 5.2.4.0; AppX identity and publisher compatibility values are preserved.
 
@@ -15,6 +16,7 @@ Declares the compatible Windows package identity and release version.
 
 ## Current Status
 
+- Version is `5.2.8.0`; identity and publisher compatibility values stay unchanged.
 - Version is `5.2.4.0`; identity and publisher compatibility values stay unchanged.
 - Version is `5.2.2.0`; identity and publisher compatibility values stay unchanged.
 - Version is `5.2.1.0`; identity and publisher compatibility values stay unchanged.

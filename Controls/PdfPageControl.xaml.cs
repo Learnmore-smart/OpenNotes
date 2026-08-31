@@ -3398,18 +3398,23 @@ namespace Caelum.Controls
             if (points == null || points.Count == 0)
                 return;
 
-            var erasePathPoints = new StylusPointCollection();
+            // Device packets can carry tilt/button properties in a
+            // StylusPointDescription that is incompatible with the default
+            // description of a newly-created StylusPointCollection. Eraser
+            // geometry only consumes coordinates, so normalize immediately
+            // instead of copying device-specific StylusPoint instances.
+            var erasePathPoints = new List<Point>();
             if (_lastErasePoint.HasValue)
             {
                 var previous = _lastErasePoint.Value;
-                erasePathPoints.Add(new StylusPoint(previous.X, previous.Y));
+                erasePathPoints.Add(previous);
             }
 
             foreach (var point in points)
-                erasePathPoints.Add(point);
+                erasePathPoints.Add(new Point(point.X, point.Y));
 
             var lastPoint = erasePathPoints[erasePathPoints.Count - 1];
-            _lastErasePoint = new Point(lastPoint.X, lastPoint.Y);
+            _lastErasePoint = lastPoint;
 
             var eraserRects = CreateEraserRects(erasePathPoints);
             if (eraserRects.Count == 0)
@@ -3419,10 +3424,7 @@ namespace Caelum.Controls
             // its axis-aligned bounds or sampled vertices. Keep one shape and
             // one path for this pointer update so sparse lines and generated
             // shapes can be hit/split between their stored points.
-            var eraserPath = erasePathPoints
-                .Cast<StylusPoint>()
-                .Select(point => new Point(point.X, point.Y))
-                .ToList();
+            var eraserPath = erasePathPoints;
             var eraserShape = new RectangleStylusShape(_eraserSize, _eraserSize);
 
             // Hidden Ink lives above InkCanvas, so include it in the same
@@ -3727,7 +3729,7 @@ namespace Caelum.Controls
             }
         }
 
-        private List<Rect> CreateEraserRects(StylusPointCollection points)
+        private List<Rect> CreateEraserRects(IReadOnlyList<Point> points)
         {
             var eraserRects = new List<Rect>(points.Count);
             foreach (var pt in points)

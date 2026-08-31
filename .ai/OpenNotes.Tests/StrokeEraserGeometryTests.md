@@ -2,6 +2,12 @@
 
 ## Exact eraser regression coverage (2026-08-30)
 
+- **2026-08-31 stylus crash regression:** reproduces the shipped 5.2.7 crash with an
+  eraser packet whose `StylusPointDescription` includes a device property beyond
+  X/Y/pressure. It was RED with the same incompatible-description exception,
+  then GREEN after production normalized the path to coordinates; whole-stroke
+  erase semantics are asserted in the same test.
+
 - **Scope:** STA production tests invoke the page control's private erase gesture seam and assert visible `InkCanvas` stroke results without synthesizing device events.
 - **Whole-stroke safety:** a bounds-overlapping diagonal that is not touched by the rectangular eraser path remains intact.
 - **Pixel geometry:** a sparse two-point line is split when the eraser crosses its segment, proving erasure is path-aware rather than sample-point-only.

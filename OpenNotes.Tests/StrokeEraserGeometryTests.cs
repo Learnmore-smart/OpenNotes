@@ -105,6 +105,24 @@ public sealed class StrokeEraserGeometryTests
     }
 
     [Test]
+    public void Eraser_AcceptsStylusPacketsWithExtendedDeviceProperties()
+    {
+        var page = CreatePage(wholeStroke: true);
+        page.AddStrokeQuiet(CreateStroke(new Point(0, 50), new Point(100, 50)));
+
+        BeginEraseGestureMethod.Invoke(page, null);
+        Assert.DoesNotThrow(
+            () => EraseStrokesAtPointsMethod.Invoke(
+                page,
+                new object[] { ToExtendedStylusPoints(new Point(50, 50)) }),
+            "Real digitizer packets may include tilt/button properties and must not crash the eraser path.");
+        EndEraseGestureMethod.Invoke(page, null);
+
+        Assert.That(page.GetStrokes(), Is.Empty,
+            "Normalizing device packets to coordinates must preserve whole-stroke erasing.");
+    }
+
+    [Test]
     public void UndoThenEraseAgain_CreatesASecondValidEraseGesture()
     {
         var page = CreatePage(wholeStroke: false);
@@ -471,6 +489,20 @@ public sealed class StrokeEraserGeometryTests
         {
             new StylusPoint(point.X, point.Y)
         };
+    }
+
+    private static StylusPointCollection ToExtendedStylusPoints(Point point)
+    {
+        var description = new StylusPointDescription(new[]
+        {
+            new StylusPointPropertyInfo(StylusPointProperties.X),
+            new StylusPointPropertyInfo(StylusPointProperties.Y),
+            new StylusPointPropertyInfo(StylusPointProperties.NormalPressure),
+            new StylusPointPropertyInfo(StylusPointProperties.XTiltOrientation)
+        });
+        var points = new StylusPointCollection(description);
+        points.Add(new StylusPoint(point.X, point.Y, 0.5f, description, new[] { 1800 }));
+        return points;
     }
 
     private static object CreateStrokesErasedAction(

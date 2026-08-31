@@ -1,4 +1,5 @@
 # OpenNotes.csproj
+> 2026-08-31 GREEN: package/assembly/file/informational metadata are 5.2.8/5.2.8.0 for the eraser stylus-crash hotfix; `RootNamespace=Caelum` and all compatibility identities remain unchanged.
 > 2026-08-30 GREEN: package/assembly/file/informational metadata are 5.2.6/5.2.6.0 for the editor reliability, page reorder, editable shape, and detachable-tab release; compatibility identities remain unchanged.
 > 2026-08-28 GREEN: package/assembly/file/informational metadata are 5.2.4/5.2.4.0 for the selection/text/ruler regression release; `RootNamespace=Caelum` and all compatibility identities are preserved.
 > Last updated: 2026-08-24（5.0.0 release metadata） | Protection: STANDARD

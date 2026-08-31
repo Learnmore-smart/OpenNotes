@@ -1,6 +1,14 @@
 # Controls/PdfPageControl.xaml(.cs)
 
-## Exact eraser path geometry (2026-08-30) — IN PROGRESS
+## Exact eraser path geometry (2026-08-30) — GREEN
+
+- **2026-08-31 stylus crash root cause/fix:** Windows .NET Runtime event 1026 showed
+  `EraseStrokesAtPoints` throws `ArgumentException` at the per-point copy into a
+  default `StylusPointCollection` when real hardware packets carry a different
+  `StylusPointDescription`. The eraser path consumes only X/Y, so normalize its
+  transient geometry to `Point` values instead of mixing device packet schemas.
+  Exact WPF path hit-testing, pixel splitting, gesture continuity, placement
+  history, and Hidden Ink behavior remain unchanged.
 
 - **Input geometry:** eraser gestures are represented by one rectangular `RectangleStylusShape` swept along the collected pointer path. Candidate bounds are used only as a cheap prefilter; visible-path intersection is authoritative.
 - **Whole-stroke mode:** `Stroke.HitTest` decides whether the eraser path actually touches a stroke. A stroke whose bounding rectangle overlaps the eraser rectangle but whose visible path is elsewhere must remain.
@@ -9,7 +17,10 @@
 - **Cancellation:** `CancelInteraction` clears `_isErasing`, `_erasePoints`, the pending erase payload, and `_lastErasePoint` before releasing InkCanvas capture; the mouse-down eraser path sets `_isErasing` so deactivation/lost-capture cleanup can identify it.
 - **Mouse completion:** mouse-up commits and clears the erase transaction before releasing capture, because WPF raises `LostMouseCapture` synchronously and the cancellation path must not restore a successfully erased gesture.
 - **History boundary:** `ApplyErasedStroke` still captures `StrokePlacement` before removal and for every fragment after insertion; repeated erase after placement-backed undo must operate on the restored live reference.
-- **Evidence:** focused coverage is being added in `OpenNotes.Tests/StrokeEraserGeometryTests.cs`; production changes remain pending until the red tests demonstrate the old bounds/sample behavior.
+- **Evidence:** the extended-property regression was RED with the same
+  incompatible-description exception and source line as the shipped crash, then
+  GREEN after coordinate normalization. Focused eraser coverage passes 11/11,
+  the full suite passes 374/374, and Release build has 0 errors.
 
 ## v5.2.4 ruler constraint follow-up (2026-08-27) — IN PROGRESS
 
