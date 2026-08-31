@@ -12,6 +12,8 @@ Defines the .NET 8 WPF desktop build, assembly identity, release version, runtim
 
 ## Open Threads / Resume Context
 
+- **Status:** ready_for_release (5.2.7 page-rotation drawing hotfix)
+- Project, assembly, file and informational versions are aligned to `5.2.7` / `5.2.7.0`; the `Caelum` root namespace and Windows x64 self-contained release settings remain unchanged. Release build and full tests are GREEN before tagging.
 - **Status:** ready_for_release (5.2.1 large-PDF crash hotfix)
 - Project, assembly, file and informational versions are aligned to `5.2.1`;
   the `Caelum` namespace and compatibility identities remain unchanged.

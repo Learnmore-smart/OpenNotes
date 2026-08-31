@@ -1,4 +1,5 @@
 # Services/ProductInfo.cs
+> 2026-08-31 GREEN: visible version is 5.2.7 for the page-rotation drawing hotfix; all Caelum/WindowsNotesApp identities, storage, and compatibility URLs remain unchanged.
 > 2026-08-30 GREEN: visible version is 5.2.6 for the editor reliability, page reorder, editable shape, and detachable-tab release; legacy compatibility values remain unchanged.
 > 2026-08-28 GREEN: visible version is 5.2.4 for the selection/text/ruler regression release; Caelum/WindowsNotesApp compatibility identifiers, data root and URLs are preserved.
 > Last updated: 2026-08-24（5.0.0 release metadata）| Protection: STANDARD
@@ -14,7 +15,7 @@ Single source of truth for the visible OpenNotes brand and the compatibility ide
 - `LegacyAppxIdentity`: `WindowsNotesApp`
 - `RepositoryUrl`: `https://github.com/Learnmore-smart/Windows-Notes`
 - `WebsiteUrl`: `https://learnmore-smart.github.io/Windows-Notes/`
-- `Version`: `5.2.4`
+- `Version`: `5.2.7`
 - `Description`: localized through `LocalizationService.Get("Product.Description")`
 
 ## Important Notes / NEVER Change
@@ -45,6 +46,7 @@ Single source of truth for the visible OpenNotes brand and the compatibility ide
 
 ## Change History
 
+- 2026-08-31: Bumped the visible version to `5.2.7` for the page-rotation drawing hotfix; compatibility identifiers and URLs remain unchanged.
 - 2026-08-21: Added `OPENNOTES_DATA_ROOT` as an opt-in isolated-run root while preserving the legacy production directory.
 - 2026-08-24: Bumped the visible product version to `5.0.0`; legacy namespace, storage path, AppX identity, repository and website URLs remain unchanged.
 - 2026-08-24: Bumped the visible product version to `5.0.1` for the home-hover startup-crash patch; compatibility identifiers and URLs remain unchanged.

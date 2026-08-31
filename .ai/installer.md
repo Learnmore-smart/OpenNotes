@@ -7,6 +7,8 @@ Defines the Inno Setup package for the OpenNotes Windows desktop application.
 
 ## Open Threads / Resume Context
 
+- **Status:** ready_for_release (5.2.7 page-rotation drawing hotfix)
+- Default installer version is `5.2.7`; the tag workflow will build the final installer and portable ZIP. The stable AppId and upgrade behavior remain unchanged.
 - **Status:** ready_for_release (5.2.0)
 - The default version is `5.2.0`; the tag-triggered workflow will build and publish the installer and portable ZIP from the release commit.
 - **Status:** ready_for_release (5.1.2)
