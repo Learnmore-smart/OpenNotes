@@ -162,6 +162,177 @@ public class PdfServicePageEditingTests
     }
 
     [Test]
+    public async Task RotatePageAsync_SwapsDisplayAspectAndKeepsOwnedDrawingAttachedToPage()
+    {
+        string filePath = Path.Combine(_tempDirectory, "rotate-drawing.pdf");
+        CreatePdf(filePath, (200, 300));
+        var annotations = new Dictionary<int, PageAnnotation>
+        {
+            [0] = new PageAnnotation
+            {
+                Strokes =
+                {
+                    new StrokeAnnotation
+                    {
+                        R = 20,
+                        G = 80,
+                        B = 220,
+                        FitToCurve = false,
+                        ShapeGroupId = "shape-rotate",
+                        ShapeKind = "rectangle",
+                        Points =
+                        {
+                            new[] { 10d, 20d },
+                            new[] { 50d, 80d }
+                        }
+                    }
+                },
+                HiddenInks =
+                {
+                    new HiddenInkAnnotation
+                    {
+                        Id = "hidden-rotate",
+                        Points =
+                        {
+                            new[] { 20d, 30d },
+                            new[] { 60d, 90d }
+                        }
+                    }
+                }
+            }
+        };
+
+        var writer = new PdfService();
+        var rotated = new PdfService();
+        var reloaded = new PdfService();
+        try
+        {
+            await writer.SaveAnnotationsToPdfAsync(filePath, annotations);
+            await writer.RotatePageAsync(filePath, 0);
+            await rotated.LoadPdfAsync(filePath);
+
+            var (width, height) = rotated.GetPageSizeInDips(0);
+            var displayedStroke = rotated.ExtractedAnnotations[0].Strokes.Single();
+            var displayedHiddenInk = rotated.ExtractedAnnotations[0].HiddenInks.Single();
+            Assert.Multiple(() =>
+            {
+                Assert.That(width, Is.EqualTo(400).Within(0.75),
+                    "A 200x300-point page rotated 90 degrees must display landscape width.");
+                Assert.That(height, Is.EqualTo(200 * 96d / 72d).Within(0.75));
+                Assert.That(displayedStroke.Points[0][0], Is.EqualTo(380).Within(0.01));
+                Assert.That(displayedStroke.Points[0][1], Is.EqualTo(10).Within(0.01));
+                Assert.That(displayedStroke.Points[1][0], Is.EqualTo(320).Within(0.01));
+                Assert.That(displayedStroke.Points[1][1], Is.EqualTo(50).Within(0.01));
+                Assert.That(displayedStroke.ShapeGroupId, Is.EqualTo("shape-rotate"));
+                Assert.That(displayedStroke.ShapeKind, Is.EqualTo("rectangle"));
+                Assert.That(displayedHiddenInk.Points[0][0], Is.EqualTo(370).Within(0.01));
+                Assert.That(displayedHiddenInk.Points[0][1], Is.EqualTo(20).Within(0.01));
+                Assert.That(displayedHiddenInk.Points[1][0], Is.EqualTo(310).Within(0.01));
+                Assert.That(displayedHiddenInk.Points[1][1], Is.EqualTo(60).Within(0.01));
+            });
+
+            await rotated.SaveAnnotationsToPdfAsync(filePath, rotated.ExtractedAnnotations);
+            await reloaded.LoadPdfAsync(filePath);
+            var stableStroke = reloaded.ExtractedAnnotations[0].Strokes.Single();
+            var stableHiddenInk = reloaded.ExtractedAnnotations[0].HiddenInks.Single();
+            Assert.That(stableStroke.Points[0][0], Is.EqualTo(380).Within(0.01));
+            Assert.That(stableStroke.Points[0][1], Is.EqualTo(10).Within(0.01));
+            Assert.That(stableStroke.Points[1][0], Is.EqualTo(320).Within(0.01));
+            Assert.That(stableStroke.Points[1][1], Is.EqualTo(50).Within(0.01),
+                "Saving a rotated page must inverse-transform the displayed drawing exactly once.");
+            Assert.That(stableHiddenInk.Points[0][0], Is.EqualTo(370).Within(0.01));
+            Assert.That(stableHiddenInk.Points[0][1], Is.EqualTo(20).Within(0.01));
+            Assert.That(stableHiddenInk.Points[1][0], Is.EqualTo(310).Within(0.01));
+            Assert.That(stableHiddenInk.Points[1][1], Is.EqualTo(60).Within(0.01));
+        }
+        finally
+        {
+            await reloaded.DisposeAsync();
+            await rotated.DisposeAsync();
+            await writer.DisposeAsync();
+        }
+    }
+
+    [Test]
+    public async Task RotatePageAsync_MapsDrawingThroughEveryQuarterTurnWithoutDrift()
+    {
+        for (int quarterTurns = 1; quarterTurns <= 3; quarterTurns++)
+        {
+            string filePath = Path.Combine(_tempDirectory, $"rotate-{quarterTurns}-turns.pdf");
+            CreatePdf(filePath, (200, 300));
+            var annotations = new Dictionary<int, PageAnnotation>
+            {
+                [0] = new PageAnnotation
+                {
+                    Strokes =
+                    {
+                        new StrokeAnnotation
+                        {
+                            Points =
+                            {
+                                new[] { 10d, 20d },
+                                new[] { 50d, 80d }
+                            }
+                        }
+                    }
+                }
+            };
+
+            var writer = new PdfService();
+            var rotated = new PdfService();
+            var reloaded = new PdfService();
+            try
+            {
+                await writer.SaveAnnotationsToPdfAsync(filePath, annotations);
+                await writer.RotatePageAsync(filePath, 0, quarterTurns);
+                await rotated.LoadPdfAsync(filePath);
+
+                var (width, height) = rotated.GetPageSizeInDips(0);
+                double portraitWidth = 200d * 96d / 72d;
+                double portraitHeight = 300d * 96d / 72d;
+                Assert.Multiple(() =>
+                {
+                    Assert.That(width, Is.EqualTo(quarterTurns % 2 == 0 ? portraitWidth : portraitHeight).Within(0.75));
+                    Assert.That(height, Is.EqualTo(quarterTurns % 2 == 0 ? portraitHeight : portraitWidth).Within(0.75));
+                });
+
+                double[][] expected = quarterTurns switch
+                {
+                    1 => new[] { new[] { 380d, 10d }, new[] { 320d, 50d } },
+                    2 => new[] { new[] { 200d * 96d / 72d - 10d, 380d }, new[] { 200d * 96d / 72d - 50d, 320d } },
+                    _ => new[] { new[] { 20d, 200d * 96d / 72d - 10d }, new[] { 80d, 200d * 96d / 72d - 50d } }
+                };
+
+                var displayedStroke = rotated.ExtractedAnnotations[0].Strokes.Single();
+                AssertStrokePoints(displayedStroke, expected, $"quarter turn {quarterTurns}");
+
+                await rotated.SaveAnnotationsToPdfAsync(filePath, rotated.ExtractedAnnotations);
+                await reloaded.LoadPdfAsync(filePath);
+                AssertStrokePoints(
+                    reloaded.ExtractedAnnotations[0].Strokes.Single(),
+                    expected,
+                    $"quarter turn {quarterTurns} after save/reload");
+            }
+            finally
+            {
+                await reloaded.DisposeAsync();
+                await rotated.DisposeAsync();
+                await writer.DisposeAsync();
+            }
+        }
+    }
+
+    private static void AssertStrokePoints(StrokeAnnotation stroke, double[][] expected, string message)
+    {
+        Assert.That(stroke.Points, Has.Count.EqualTo(expected.Length), message);
+        for (int index = 0; index < expected.Length; index++)
+        {
+            Assert.That(stroke.Points[index][0], Is.EqualTo(expected[index][0]).Within(0.01), message);
+            Assert.That(stroke.Points[index][1], Is.EqualTo(expected[index][1]).Within(0.01), message);
+        }
+    }
+
+    [Test]
     public async Task InsertPdfPagesAsync_InsertsInclusiveSourceRange()
     {
         string targetPath = Path.Combine(_tempDirectory, "target.pdf");

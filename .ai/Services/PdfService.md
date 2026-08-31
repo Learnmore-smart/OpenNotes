@@ -1,5 +1,13 @@
 # Services/PdfService.cs
 
+## Page rotation geometry regression (2026-08-31) — GREEN
+
+- Root cause: structural rotation persisted `/Rotate`, and Pdfium already exposed the correct rotated page size, but PdfSharpCore's `PdfPage.Width`/`Height` also became rotation-aware while `/InkList` remained in the page's raw default user space. Extraction therefore used the wrong Y basis (including negative points at 90 degrees), so the WPF drawing overlay no longer followed the rotated bitmap.
+- `PdfPageDisplayGeometry` reads the raw CropBox (falling back to MediaBox), preserves non-zero box origins, normalizes `/Rotate`, and supplies exact reversible 0/90/180/270 mappings between raw PDF coordinates and top-left display DIPs.
+- Owned ordinary ink, grouped shape strokes, dashed shape strokes, and Hidden Ink now use that geometry during extraction and the inverse geometry during save. Ink appearance bounds clamp against the raw page box rather than rotation-aware `Width`/`Height`.
+- Preserve Pdfium's rotated display dimensions, foreign annotations, strip/rebuild ownership, DIP/PDF scaling, shape metadata, and atomic replacement.
+- Verification: the original save → rotate → reload regression is GREEN for swapped aspect and clockwise points; expanded coverage is GREEN for 90/180/270, shape metadata, Hidden Ink, and repeated save/reload without drift.
+
 ## Sidebar page reorder (2026-08-30) — GREEN for focused scope
 
 - ReorderPagesAsync is the structural write boundary for sidebar drag/drop. It receives a zero-based final destination index after source removal, preserves full page objects/content, uses the normal path/lifetime/document lease and defensive reload, and remains compatible with snapshot undo/redo in EditorPage.

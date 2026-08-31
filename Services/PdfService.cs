@@ -72,6 +72,76 @@ namespace Caelum.Services
             public Dictionary<int, Models.PageAnnotation> ExtractedAnnotations { get; init; } = new();
         }
 
+        /// <summary>
+        /// Maps between the PDF page's unrotated default user space and the
+        /// top-left DIP coordinate space shown by Pdfium/WPF. PdfSharpCore's
+        /// Page.Width/Page.Height are rotation-aware, while annotation
+        /// coordinates remain relative to the raw page box.
+        /// </summary>
+        private readonly struct PdfPageDisplayGeometry
+        {
+            public PdfPageDisplayGeometry(double left, double bottom, double right, double top, int rotationDegrees)
+            {
+                Left = left;
+                Bottom = bottom;
+                Right = right;
+                Top = top;
+                RotationDegrees = rotationDegrees;
+            }
+
+            public double Left { get; }
+            public double Bottom { get; }
+            public double Right { get; }
+            public double Top { get; }
+            public double WidthPoints => Right - Left;
+            public double HeightPoints => Top - Bottom;
+            public double WidthDips => WidthPoints * PdfPointToDipScale;
+            public double HeightDips => HeightPoints * PdfPointToDipScale;
+            public int RotationDegrees { get; }
+
+            public Point PdfToDisplayDips(double pdfX, double pdfY)
+            {
+                double x = (pdfX - Left) * PdfPointToDipScale;
+                double y = (Top - pdfY) * PdfPointToDipScale;
+                return RotationDegrees switch
+                {
+                    90 => new Point(HeightDips - y, x),
+                    180 => new Point(WidthDips - x, HeightDips - y),
+                    270 => new Point(y, WidthDips - x),
+                    _ => new Point(x, y)
+                };
+            }
+
+            public Point DisplayDipsToPdf(double displayX, double displayY)
+            {
+                double x;
+                double y;
+                switch (RotationDegrees)
+                {
+                    case 90:
+                        x = displayY;
+                        y = HeightDips - displayX;
+                        break;
+                    case 180:
+                        x = WidthDips - displayX;
+                        y = HeightDips - displayY;
+                        break;
+                    case 270:
+                        x = WidthDips - displayY;
+                        y = displayX;
+                        break;
+                    default:
+                        x = displayX;
+                        y = displayY;
+                        break;
+                }
+
+                return new Point(
+                    Left + (x / PdfPointToDipScale),
+                    Top - (y / PdfPointToDipScale));
+            }
+        }
+
         public sealed class PdfTextCharacterInfo
         {
             public int Offset { get; init; }
@@ -653,6 +723,21 @@ namespace Caelum.Services
             }
         }
 
+        private static PdfPageDisplayGeometry GetPageDisplayGeometry(PdfSharpCore.Pdf.PdfPage page)
+        {
+            PdfSharpPdfRectangle box = page.CropBox;
+            if (box == null || box.IsEmpty || Math.Abs(box.Width) < double.Epsilon || Math.Abs(box.Height) < double.Epsilon)
+                box = page.MediaBox;
+
+            double left = Math.Min(box.X1, box.X2);
+            double right = Math.Max(box.X1, box.X2);
+            double bottom = Math.Min(box.Y1, box.Y2);
+            double top = Math.Max(box.Y1, box.Y2);
+            int rotation = ((page.Rotate % 360) + 360) % 360;
+            rotation = ((rotation + 45) / 90 * 90) % 360;
+            return new PdfPageDisplayGeometry(left, bottom, right, top, rotation);
+        }
+
         private static void InsertPdfPagesCore(string targetPath, string sourcePath, int insertIndex, int startPage, int endPage)
         {
             if (!File.Exists(targetPath))
@@ -1010,6 +1095,7 @@ namespace Caelum.Services
                 cancellationToken.ThrowIfCancellationRequested();
                 var page = document.Pages[i];
                 double pageHeight = page.Height.Point;
+                var pageGeometry = GetPageDisplayGeometry(page);
                 var pageAnnots = new Models.PageAnnotation();
 
                 var annots = page.Elements.GetArray("/Annots");
@@ -1074,7 +1160,8 @@ namespace Caelum.Services
                                             {
                                                 double ptX = GetDouble(pointArray.Elements[pIdx]);
                                                 double ptY = GetDouble(pointArray.Elements[pIdx + 1]);
-                                                points.Add(new[] { ptX * scale, (pageHeight - ptY) * scale });
+                                                Point displayPoint = pageGeometry.PdfToDisplayDips(ptX, ptY);
+                                                points.Add(new[] { displayPoint.X, displayPoint.Y });
                                             }
 
                                             if (points.Count > 0)
@@ -1546,6 +1633,7 @@ namespace Caelum.Services
                     {
                         var pdfPage = document.Pages[i];
                         double pageHeight = pdfPage.Height.Point;
+                        var pageGeometry = GetPageDisplayGeometry(pdfPage);
 
                         var annots = pdfPage.Elements.GetArray("/Annots");
                         if (annots != null)
@@ -1757,8 +1845,9 @@ namespace Caelum.Services
                             var pointArray = new PdfArray();
                             foreach (var pt in stroke.Points)
                             {
-                                double pdfX = pt[0] * scale;
-                                double pdfY = pageHeight - (pt[1] * scale);
+                                Point pdfPoint = pageGeometry.DisplayDipsToPdf(pt[0], pt[1]);
+                                double pdfX = pdfPoint.X;
+                                double pdfY = pdfPoint.Y;
                                 pointArray.Elements.Add(new PdfReal(pdfX));
                                 pointArray.Elements.Add(new PdfReal(pdfY));
                                 pdfPoints.Add(new Point(pdfX, pdfY));
@@ -1770,10 +1859,10 @@ namespace Caelum.Services
                                 pdfPoints.Add(new Point(pdfPoints[0].X + strokeWidth, pdfPoints[0].Y));
 
                             double padding = Math.Max(strokeWidth, 1.0);
-                            double minX = Math.Max(0, pdfPoints.Min(point => point.X) - padding);
-                            double maxX = Math.Min(pdfPage.Width.Point, pdfPoints.Max(point => point.X) + padding);
-                            double minY = Math.Max(0, pdfPoints.Min(point => point.Y) - padding);
-                            double maxY = Math.Min(pdfPage.Height.Point, pdfPoints.Max(point => point.Y) + padding);
+                            double minX = Math.Max(pageGeometry.Left, pdfPoints.Min(point => point.X) - padding);
+                            double maxX = Math.Min(pageGeometry.Right, pdfPoints.Max(point => point.X) + padding);
+                            double minY = Math.Max(pageGeometry.Bottom, pdfPoints.Min(point => point.Y) - padding);
+                            double maxY = Math.Min(pageGeometry.Top, pdfPoints.Max(point => point.Y) + padding);
                             double appearanceWidth = Math.Max(1.0, maxX - minX);
                             double appearanceHeight = Math.Max(1.0, maxY - minY);
 
@@ -1815,7 +1904,7 @@ namespace Caelum.Services
                         // must remain covered when opened elsewhere.
                         foreach (var hiddenInk in pageAnnots.HiddenInks ?? new List<Models.HiddenInkAnnotation>())
                         {
-                            WriteHiddenInkAnnotation(document, pdfPage, hiddenInk, scale, pageHeight);
+                            WriteHiddenInkAnnotation(document, pdfPage, hiddenInk, scale, pageGeometry);
                         }
 
                         foreach (var highlight in pageAnnots.Highlights)
@@ -1939,7 +2028,7 @@ namespace Caelum.Services
             PdfSharpCore.Pdf.PdfPage pdfPage,
             Models.HiddenInkAnnotation hiddenInk,
             double scale,
-            double pageHeight)
+            PdfPageDisplayGeometry pageGeometry)
         {
             if (hiddenInk?.Points == null || hiddenInk.Points.Count == 0)
                 return;
@@ -1947,7 +2036,7 @@ namespace Caelum.Services
             var points = hiddenInk.Points
                 .Where(point => point != null && point.Length >= 2
                     && double.IsFinite(point[0]) && double.IsFinite(point[1]))
-                .Select(point => new Point(point[0] * scale, pageHeight - (point[1] * scale)))
+                .Select(point => pageGeometry.DisplayDipsToPdf(point[0], point[1]))
                 .ToList();
             if (points.Count == 0)
                 return;
@@ -1956,10 +2045,10 @@ namespace Caelum.Services
 
             double strokeWidth = Math.Max(hiddenInk.Size * scale, 0.5);
             double padding = Math.Max(strokeWidth, 1.0);
-            double minX = Math.Max(0, points.Min(point => point.X) - padding);
-            double maxX = Math.Min(pdfPage.Width.Point, points.Max(point => point.X) + padding);
-            double minY = Math.Max(0, points.Min(point => point.Y) - padding);
-            double maxY = Math.Min(pdfPage.Height.Point, points.Max(point => point.Y) + padding);
+            double minX = Math.Max(pageGeometry.Left, points.Min(point => point.X) - padding);
+            double maxX = Math.Min(pageGeometry.Right, points.Max(point => point.X) + padding);
+            double minY = Math.Max(pageGeometry.Bottom, points.Min(point => point.Y) - padding);
+            double maxY = Math.Min(pageGeometry.Top, points.Max(point => point.Y) + padding);
             double appearanceWidth = Math.Max(1.0, maxX - minX);
             double appearanceHeight = Math.Max(1.0, maxY - minY);
 
