@@ -8,9 +8,9 @@ Mirror the approved design for a user-triggered GitHub Release update check from
 
 ## Open Threads / Resume Context
 
-- **Status:** design_approved
+- **Status:** implemented_and_verified
 - **Intent:** Add a localized `Check for updates` command between Settings and About, backed by a testable GitHub Releases client and explicit result/error dialogs.
-- **Next steps:** 1) user reviews the written spec; 2) create the implementation plan; 3) follow RED/GREEN tests; 4) run focused and full verification.
+- **Result:** Manual update checking, strict GitHub release parsing, localized MainWindow UI, trusted browser launch, and failure/cancellation handling are implemented. Final evidence: focused 33/33, full 399/399, Release build 0 errors, i18n 304 catalog entries / 494 calls / 0 hard-coded visible strings, and clean diff check.
 - **Constraints:** No startup/background checks, automatic downloads, silent installation, prerelease adoption, or changes to release/version metadata.
 
 ## Agent Decisions / Thoughts
