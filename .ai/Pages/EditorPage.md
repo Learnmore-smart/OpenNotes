@@ -1,5 +1,12 @@
 # Pages/EditorPage.xaml.cs
 
+## Shape line-style and atomic undo follow-up (2026-08-31) — GREEN
+
+- Remove DashedLine from the geometry picker and add a separate session-only localized Solid/Dashed toggle.
+- Propagate style independently from ShapeKind and consume one completed-shape batch with ItemsAddedAction.
+- Preserve ordinary freehand history, stable group metadata, selection, and PDF persistence.
+- Evidence: real EditorPage history coverage verifies one arrow action removes/restores shaft and head together; full suite 378/378 and Release build 0 errors.
+
 ## Sidebar page reorder (2026-08-30) — GREEN for focused scope
 
 - The drag carries source row identity, load session, normalized path, and source model in an immutable payload that survives synchronous DoDragDrop; mutable state is cleared only after the drag returns or at cancellation/reload boundaries.

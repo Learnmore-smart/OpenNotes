@@ -196,14 +196,15 @@ public sealed class EditorToolbarVisualSourceTests
     }
 
     [Test]
-    public void ToolPopupsExposeDashedLineBoundedScrollingAndOneRowPenToggles()
+    public void ToolPopupsExposeLineStyleBoundedScrollingAndOneRowPenToggles()
     {
         var source = File.ReadAllText(Path.Combine(FindProjectRoot(), "Pages", "EditorPage.xaml.cs"));
 
         Assert.Multiple(() =>
         {
-            Assert.That(source, Does.Contain("Editor.ShapeDashedLine"));
-            Assert.That(source, Does.Contain("ShapeKind.DashedLine"));
+            Assert.That(source, Does.Contain("Editor.ShapeLineStyleHeader"));
+            Assert.That(source, Does.Contain("Editor.Shape.Style.Solid"));
+            Assert.That(source, Does.Contain("Editor.Shape.Style.Dashed"));
             Assert.That(source, Does.Contain("EnableToolPopupScrolling"));
             Assert.That(source, Does.Contain("VerticalScrollBarVisibility = ScrollBarVisibility.Auto"));
             Assert.That(source, Does.Contain("new UniformGrid { Columns = 3"));

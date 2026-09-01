@@ -20,6 +20,30 @@ public sealed class ShapeStrokeMetadataTests
     }
 
     [Test]
+    public void BuildDashedPolyline_CarriesDashPhaseAcrossCorners()
+    {
+        var parts = ShapeStrokeMetadata.BuildDashedPolyline(
+            new[]
+            {
+                new Point(0, 0),
+                new Point(15, 0),
+                new Point(15, 20)
+            },
+            dashLength: 20,
+            gapLength: 5);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(parts, Has.Count.EqualTo(2));
+            Assert.That(parts[0], Has.Count.EqualTo(3),
+                "The first dash should continue around the corner instead of restarting.");
+            Assert.That(parts[0][1], Is.EqualTo(new Point(15, 0)));
+            Assert.That(parts[0][2], Is.EqualTo(new Point(15, 5)));
+            Assert.That(parts[1][0], Is.EqualTo(new Point(15, 10)));
+        });
+    }
+
+    [Test]
     public void ApplyAndRead_RoundTripsLogicalShapeIdentityOnWpfStroke()
     {
         var stroke = new Stroke(new StylusPointCollection

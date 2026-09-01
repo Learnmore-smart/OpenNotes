@@ -41,34 +41,76 @@ public static class ShapeStrokeMetadata
         Point start,
         Point end,
         double dashLength,
+        double gapLength) =>
+        BuildDashedPolyline(new[] { start, end }, dashLength, gapLength);
+
+    public static IReadOnlyList<IReadOnlyList<Point>> BuildDashedPolyline(
+        IReadOnlyList<Point> points,
+        double dashLength,
         double gapLength)
     {
+        ArgumentNullException.ThrowIfNull(points);
         if (dashLength <= 0)
             throw new ArgumentOutOfRangeException(nameof(dashLength));
         if (gapLength < 0)
             throw new ArgumentOutOfRangeException(nameof(gapLength));
-
-        double dx = end.X - start.X;
-        double dy = end.Y - start.Y;
-        double length = Math.Sqrt((dx * dx) + (dy * dy));
-        if (length <= double.Epsilon)
-            return Array.Empty<IReadOnlyList<Point>>();
-
-        double unitX = dx / length;
-        double unitY = dy / length;
-        double cycle = dashLength + gapLength;
         var parts = new List<IReadOnlyList<Point>>();
+        if (points.Count < 2)
+            return parts;
 
-        for (double offset = 0; offset < length; offset += cycle)
+        bool drawingDash = true;
+        double patternRemaining = dashLength;
+        List<Point> currentDash = null;
+
+        for (int segmentIndex = 1; segmentIndex < points.Count; segmentIndex++)
         {
-            double dashEnd = Math.Min(offset + dashLength, length);
-            parts.Add(new[]
+            Point start = points[segmentIndex - 1];
+            Point end = points[segmentIndex];
+            double dx = end.X - start.X;
+            double dy = end.Y - start.Y;
+            double length = Math.Sqrt((dx * dx) + (dy * dy));
+            if (length <= double.Epsilon)
+                continue;
+
+            double unitX = dx / length;
+            double unitY = dy / length;
+            double offset = 0;
+            while (offset < length)
             {
-                new Point(start.X + (unitX * offset), start.Y + (unitY * offset)),
-                new Point(start.X + (unitX * dashEnd), start.Y + (unitY * dashEnd))
-            });
+                double step = Math.Min(patternRemaining, length - offset);
+                Point from = new(start.X + (unitX * offset), start.Y + (unitY * offset));
+                Point to = new(start.X + (unitX * (offset + step)), start.Y + (unitY * (offset + step)));
+
+                if (drawingDash)
+                {
+                    currentDash ??= new List<Point> { from };
+                    if (currentDash[^1] != to)
+                        currentDash.Add(to);
+                }
+
+                offset += step;
+                patternRemaining -= step;
+                if (patternRemaining <= double.Epsilon)
+                {
+                    if (drawingDash && currentDash is { Count: > 1 })
+                        parts.Add(currentDash);
+                    currentDash = null;
+                    drawingDash = !drawingDash;
+                    patternRemaining = drawingDash ? dashLength : gapLength;
+
+                    // A zero-length gap means consecutive dashes are equivalent
+                    // to one continuous stroke, but still must make progress.
+                    if (!drawingDash && patternRemaining <= double.Epsilon)
+                    {
+                        drawingDash = true;
+                        patternRemaining = dashLength;
+                    }
+                }
+            }
         }
 
+        if (currentDash is { Count: > 1 })
+            parts.Add(currentDash);
         return parts;
     }
 

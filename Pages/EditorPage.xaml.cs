@@ -75,6 +75,7 @@ namespace Caelum.Pages
         private Color _shapeColor = Colors.Black;
         private double _shapeSize = 2.0;
         private ShapeKind _shapeKind = ShapeKind.Line;
+        private bool _shapeIsDashed;
         private double _currentFontSize = 18.0;
         private bool _textBold;
         private bool _textItalic;
@@ -3932,7 +3933,6 @@ namespace Caelum.Pages
             var choices = new (ShapeKind Kind, string Label, string AutomationId)[]
             {
                 (ShapeKind.Line, LocalizationService.Get("Editor.ShapeLine"), "Editor.Shape.Line"),
-                (ShapeKind.DashedLine, LocalizationService.Get("Editor.ShapeDashedLine"), "Editor.Shape.DashedLine"),
                 (ShapeKind.Rectangle, LocalizationService.Get("Editor.ShapeRectangle"), "Editor.Shape.Rectangle"),
                 (ShapeKind.Ellipse, LocalizationService.Get("Editor.ShapeEllipse"), "Editor.Shape.Ellipse"),
                 (ShapeKind.Arrow, LocalizationService.Get("Editor.ShapeArrow"), "Editor.Shape.Arrow"),
@@ -3971,10 +3971,54 @@ namespace Caelum.Pages
                     ApplyToolToAllPages();
             }
 
-            // Sub-type section sits above the size slider.
+            var styleHeader = ThemeSubtleHeader(new TextBlock
+            {
+                Text = LocalizationService.Get("Editor.ShapeLineStyleHeader"),
+                FontSize = 13,
+                FontWeight = FontWeights.SemiBold,
+                Margin = new Thickness(0, 12, 0, 10)
+            });
+            var styleGrid = new UniformGrid { Columns = 2 };
+            ToggleButton solidButton = null;
+            ToggleButton dashedButton = null;
+            solidButton = BuildVectorModeToggleButton(
+                LocalizationService.Get("Editor.ShapeSolid"),
+                "Editor.Shape.Style.Solid",
+                BuildShapePreview(ShapeKind.Line),
+                new Thickness(4),
+                activated: () => SelectDashedStyle(false));
+            dashedButton = BuildVectorModeToggleButton(
+                LocalizationService.Get("Editor.ShapeDashed"),
+                "Editor.Shape.Style.Dashed",
+                BuildShapePreview(ShapeKind.DashedLine),
+                new Thickness(4),
+                activated: () => SelectDashedStyle(true));
+            styleGrid.Children.Add(solidButton);
+            styleGrid.Children.Add(dashedButton);
+
+            void ApplyStyleVisual()
+            {
+                StyleVectorModeToggleButton(solidButton, !_shapeIsDashed);
+                StyleVectorModeToggleButton(dashedButton, _shapeIsDashed);
+            }
+
+            void SelectDashedStyle(bool isDashed)
+            {
+                if (_shapeIsDashed == isDashed)
+                    return;
+                _shapeIsDashed = isDashed;
+                ApplyStyleVisual();
+                if (_currentTool == ToolType.Shape)
+                    ApplyToolToAllPages();
+            }
+
+            // Geometry and line-style sections sit above the size slider.
+            panel.Children.Insert(0, styleGrid);
+            panel.Children.Insert(0, styleHeader);
             panel.Children.Insert(0, shapeGrid);
             panel.Children.Insert(0, header);
             ApplyVisual();
+            ApplyStyleVisual();
         }
 
         /// <summary>
@@ -7004,6 +7048,7 @@ namespace Caelum.Pages
                     pageControl.InkMutated += PageControl_InkMutated;
                     pageControl.QuietStrokeMutation += PageControl_QuietStrokeMutation;
                     pageControl.StrokeCollectedUndoable += PageControl_StrokeCollectedUndoable;
+                    pageControl.ShapeCommittedUndoable += PageControl_ShapeCommittedUndoable;
                     pageControl.StrokesErased += PageControl_StrokesErased;
                     pageControl.StrokeRecognized += PageControl_StrokeRecognized;
                     pageControl.ImagesChanged += PageControl_ImagesChanged;
@@ -10221,6 +10266,7 @@ namespace Caelum.Pages
                         break;
                     case ToolType.Shape:
                         page.CurrentShape = _shapeKind;
+                        page.ShapeIsDashed = _shapeIsDashed;
                         page.ShapeColor = _shapeColor;
                         page.ShapeStrokeSize = _shapeSize;
                         page.SetInputMode(CustomInkInputProcessingMode.Shape);
@@ -14188,6 +14234,19 @@ namespace Caelum.Pages
                 PushUndoAction(new StrokeAddedAction(page, stroke));
         }
 
+        private void PageControl_ShapeCommittedUndoable(
+            object sender,
+            IReadOnlyList<System.Windows.Ink.Stroke> strokes)
+        {
+            if (sender is PdfPageControl page && strokes?.Count > 0)
+            {
+                PushUndoAction(new ItemsAddedAction(
+                    page,
+                    strokes.ToList(),
+                    new List<Grid>()));
+            }
+        }
+
         private void PageControl_StrokesErased(object sender, StrokesErasedEventArgs e)
         {
             if (sender is PdfPageControl page)
@@ -14320,6 +14379,7 @@ namespace Caelum.Pages
                 pageControl.InkMutated -= PageControl_InkMutated;
                 pageControl.QuietStrokeMutation -= PageControl_QuietStrokeMutation;
                 pageControl.StrokeCollectedUndoable -= PageControl_StrokeCollectedUndoable;
+                pageControl.ShapeCommittedUndoable -= PageControl_ShapeCommittedUndoable;
                 pageControl.StrokesErased -= PageControl_StrokesErased;
                 pageControl.StrokeRecognized -= PageControl_StrokeRecognized;
                 pageControl.ImagesChanged -= PageControl_ImagesChanged;

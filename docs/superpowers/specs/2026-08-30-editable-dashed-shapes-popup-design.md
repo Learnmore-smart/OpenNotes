@@ -35,3 +35,9 @@ The pen behavior controls become one compact three-column row with the existing 
 - STA tests for group selection/move/resize/style/undo and selection retention.
 - Model, clipboard, and PDF round-trip tests for metadata.
 - Popup source/STA tests for one-row behavior toggles, bounded scrolling, localization, and AutomationIds.
+# 2026-08-31 follow-up: dashed style and atomic completion
+
+- The shape picker represents geometry only; dashed line is no longer a geometry tile.
+- A separate session-only Solid/Dashed toggle applies to every geometry.
+- Dashed visuals use real separated WPF ink segments with one logical group id.
+- Pointer-up publishes the complete group as one history action, so Undo/Redo removes or restores the full arrow or dashed shape.

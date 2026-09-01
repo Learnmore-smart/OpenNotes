@@ -1,5 +1,12 @@
 # Controls/PdfPageControl.xaml(.cs)
 
+## Shape line-style and atomic undo follow-up (2026-08-31) — GREEN
+
+- Add independent ShapeIsDashed; segment any shape outline into real ink dashes with gaps.
+- CommitShape publishes one completed-shape batch event, not one history event per part.
+- Generated parts retain group id, part index, geometry kind, and dashed metadata.
+- Dashed polyline phase continues across geometry corners; focused shape/history coverage passes 47/47.
+
 ## Exact eraser path geometry (2026-08-30) — GREEN
 
 - **2026-08-31 stylus crash root cause/fix:** Windows .NET Runtime event 1026 showed

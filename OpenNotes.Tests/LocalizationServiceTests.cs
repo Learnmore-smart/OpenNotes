@@ -35,14 +35,17 @@ public sealed class LocalizationCoverageTests
     }
 
     [Test]
-    public void DashedLineHasTheRequestedThreeLanguageLabel()
+    public void ShapeLineStylesHaveThreeLanguageLabels()
     {
-        var entry = LocalizationService.GetCatalog()["Editor.ShapeDashedLine"];
+        var catalog = LocalizationService.GetCatalog();
         Assert.Multiple(() =>
         {
-            Assert.That(entry.English, Is.EqualTo("Dashed line"));
-            Assert.That(entry.Chinese, Is.EqualTo("虚线"));
-            Assert.That(entry.French, Is.EqualTo("Ligne pointillée"));
+            Assert.That(catalog["Editor.ShapeLineStyleHeader"],
+                Is.EqualTo(("Line style", "线型", "Style de ligne")));
+            Assert.That(catalog["Editor.ShapeSolid"],
+                Is.EqualTo(("Solid", "实线", "Continue")));
+            Assert.That(catalog["Editor.ShapeDashed"],
+                Is.EqualTo(("Dashed", "虚线", "Pointillée")));
         });
     }
 

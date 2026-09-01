@@ -12,3 +12,7 @@ Defines stable WPF stroke property keys for logical shapes and builds real dashe
 - Dashed gaps contain no ink and therefore do not hit or erase.
 - Property keys are stable across releases and copied into `StrokeAnnotation` for persistence.
 
+## Open Threads / Resume Context
+
+- **Status:** complete (2026-08-31)
+- BuildDashedPolyline carries dash/gap phase across arbitrary polyline corners and BuildDashedLine delegates to it.

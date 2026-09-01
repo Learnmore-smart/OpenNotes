@@ -370,6 +370,7 @@ namespace Caelum.Controls
         /// <summary>Raised after a quiet undo/redo/delete stroke mutation. Unlike InkMutated, this never marks the document dirty or creates history.</summary>
         public event EventHandler QuietStrokeMutation;
         public event EventHandler<Stroke> StrokeCollectedUndoable;
+        public event EventHandler<IReadOnlyList<Stroke>> ShapeCommittedUndoable;
         public event EventHandler<StrokesErasedEventArgs> StrokesErased;
         public event EventHandler<StrokeRecognizedEventArgs> StrokeRecognized;
         public event EventHandler<CustomInkInputProcessingMode> ModeChanged;
@@ -647,6 +648,9 @@ namespace Caelum.Controls
 
         /// <summary>Stroke width used when committing a shape.</summary>
         public double ShapeStrokeSize { get; set; } = 2.0;
+
+        /// <summary>Whether newly committed shapes use real separated dash strokes.</summary>
+        public bool ShapeIsDashed { get; set; }
 
         // Shape drag state (anchor = pointer-down point, current = live point).
         private const double ShapeDragThreshold = 4.0; // px; below this a tap commits nothing
@@ -2649,7 +2653,7 @@ namespace Caelum.Controls
             {
                 Stroke = new SolidColorBrush(ShapeColor),
                 StrokeThickness = Math.Max(1.0, ShapeStrokeSize),
-                StrokeDashArray = new DoubleCollection { 4, 2 },
+                StrokeDashArray = ShapeIsDashed ? new DoubleCollection { 4, 2 } : null,
                 Opacity = 0.6,
                 IsHitTestVisible = false
             };
@@ -2808,10 +2812,8 @@ namespace Caelum.Controls
         /// <summary>
         /// Converts the finished drag into ink strokes and feeds them through
         /// the standard pipeline (InkCanvas.Strokes → InkMutated →
-        /// StrokeCollectedUndoable), so undo / selection / copy-paste / save
-        /// all work exactly like freehand ink. Line/Rectangle/Ellipse commit
-        /// ONE stroke; the arrow commits TWO (shaft + head 'V') → two undo
-        /// steps by design.
+        /// one completed-shape event), so undo / selection / copy-paste / save
+        /// all work through the existing ordinary-ink pipeline.
         /// </summary>
         private void CommitShape()
         {
@@ -2825,27 +2827,38 @@ namespace Caelum.Controls
                 IgnorePressure = true // uniform width, no pressure jitter
             };
 
-            List<List<Point>> segments;
+            List<List<Point>> baseSegments;
             if (CurrentShape == ShapeKind.Arrow)
             {
                 BuildArrowGeometry(_shapeAnchor, _shapeCurrent, ShapeStrokeSize, out var shaft, out var head);
-                segments = new List<List<Point>> { shaft, head };
+                baseSegments = new List<List<Point>> { shaft, head };
             }
             else if (CurrentShape == ShapeKind.DashedLine)
             {
-                double dashLength = Math.Max(ShapeStrokeSize * 4.0, 10.0);
-                double gapLength = Math.Max(ShapeStrokeSize * 2.5, 6.0);
-                segments = ShapeStrokeMetadata.BuildDashedLine(
-                        _shapeAnchor, _shapeCurrent, dashLength, gapLength)
-                    .Select(part => part.ToList())
-                    .ToList();
+                baseSegments = new List<List<Point>>
+                {
+                    BuildShapeOutline(ShapeKind.Line, _shapeAnchor, _shapeCurrent)
+                };
             }
             else
             {
-                segments = new List<List<Point>>
+                baseSegments = new List<List<Point>>
                 {
                     BuildShapeOutline(CurrentShape, _shapeAnchor, _shapeCurrent)
                 };
+            }
+
+            bool isDashed = ShapeIsDashed || CurrentShape == ShapeKind.DashedLine;
+            List<List<Point>> segments = baseSegments;
+            if (isDashed)
+            {
+                double dashLength = Math.Max(ShapeStrokeSize * 4.0, 10.0);
+                double gapLength = Math.Max(ShapeStrokeSize * 2.5, 6.0);
+                segments = baseSegments
+                    .SelectMany(segment => ShapeStrokeMetadata.BuildDashedPolyline(
+                        segment, dashLength, gapLength))
+                    .Select(part => part.ToList())
+                    .ToList();
             }
 
             string groupId = Guid.NewGuid().ToString("N");
@@ -2863,14 +2876,14 @@ namespace Caelum.Controls
                     groupId,
                     CurrentShape.ToString(),
                     partIndex,
-                    CurrentShape == ShapeKind.DashedLine);
+                    isDashed);
                 AddStrokeToCollection(stroke);
                 committed.Add(stroke);
             }
 
             InkMutated?.Invoke(this, EventArgs.Empty);
-            foreach (var stroke in committed)
-                StrokeCollectedUndoable?.Invoke(this, stroke);
+            if (committed.Count > 0)
+                ShapeCommittedUndoable?.Invoke(this, committed);
         }
 
         #endregion
