@@ -7,6 +7,8 @@ Defines the Inno Setup package for the OpenNotes Windows desktop application.
 
 ## Open Threads / Resume Context
 
+- **Status:** released (5.2.8 eraser stylus-crash hotfix)
+- GitHub Actions run `33461186472` published both final assets from tag commit `a3d1569`. The downloaded installer and Portable hashes match GitHub metadata; the Portable executable reports 5.2.8.0, includes `x64/pdfium.dll`, and passed an isolated startup smoke with zero new crash events. Stable AppId and upgrade behavior remain unchanged.
 - **Status:** ready_for_release (5.2.8 eraser stylus-crash hotfix)
 - Default version is `5.2.8`; local release gates are GREEN and the tag-triggered workflow must build and publish the installer and portable ZIP from the verified release commit. The stable AppId and upgrade behavior remain unchanged.
 - A workflow-equivalent self-contained `win-x64` publish succeeded locally. This host has no Inno Setup 6, so no local installer success is claimed; GitHub Actions installs Inno Setup and the remote release asset remains authoritative.
