@@ -24,7 +24,7 @@ public sealed class MainWindowUpdateCheckSourceTests
             Assert.That(xaml, Does.Contain(
                 "x:Name=\"CheckForUpdatesMenuItem\" Click=\"CheckForUpdates_Click\""));
             Assert.That(utilities, Does.Contain(
-                "CheckForUpdatesMenuItem.Header = LocalizationService.Get("));
+                "CheckForUpdatesMenuItem.Header = _isUpdateCheckInProgress"));
             Assert.That(utilities, Does.Contain("\"Main.CheckForUpdates\""));
             Assert.That(utilities, Does.Contain("\"Main.CheckingForUpdates\""));
         });

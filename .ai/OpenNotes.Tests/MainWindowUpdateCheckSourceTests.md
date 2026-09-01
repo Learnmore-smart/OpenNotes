@@ -16,6 +16,7 @@ Source-level regression contract for More-menu ordering, update click wiring, lo
 
 - **Status:** complete
 - **Coverage:** command ordering/wiring, live localization, busy disable/restore, close cancellation, trusted URI revalidation, and shell execution.
+- The source contract also keeps the busy-header conditional outside literal catalog lookups, matching the static i18n verifier.
 
 ## Change History
 
