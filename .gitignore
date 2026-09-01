@@ -506,3 +506,6 @@ build_log.txt
 # Local .NET tooling state
 .dotnet-cli/
 .dotnet-home/
+
+# Local Git worktrees
+.worktrees/
