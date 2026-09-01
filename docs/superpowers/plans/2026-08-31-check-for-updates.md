@@ -40,7 +40,7 @@ UpdateCheckResult result = await service.CheckAsync(new Version(5, 2, 7, 0));
 Assert.That(result.LatestVersion, Is.EqualTo(new Version(5, 3, 0, 0)));
 Assert.That(result.IsUpdateAvailable, Is.True);
 Assert.That(result.ReleaseUri.AbsoluteUri,
-    Is.EqualTo(https://github.com/Learnmore-smart/Windows-Notes/releases/tag/v5.3.0));
+    Is.EqualTo("https://github.com/Learnmore-smart/Windows-Notes/releases/tag/v5.3.0"));
 ```
 
 Cover newer/equal/local-newer versions; leading `v`; two-to-four parts; malformed tags/JSON; unsafe URLs; HTTP errors; transport; timeout; cancellation; and required headers.
@@ -72,7 +72,7 @@ public sealed class UpdateCheckException : Exception
 public sealed class UpdateCheckService
 {
     public static readonly Uri LatestReleaseApiUri =
-        new(https://api.github.com/repos/Learnmore-smart/Windows-Notes/releases/latest);
+        new("https://api.github.com/repos/Learnmore-smart/Windows-Notes/releases/latest");
     public UpdateCheckService(HttpClient? httpClient = null);
     public Task<UpdateCheckResult> CheckAsync(
         Version installedVersion, CancellationToken cancellationToken = default);
@@ -122,9 +122,9 @@ Expected: failures for missing catalog entries, menu item, click handler, and li
 Insert:
 
 ```xml
-<MenuItem x:Name=SettingsMenuItem Click=Settings_Click/>
-<MenuItem x:Name=CheckForUpdatesMenuItem Click=CheckForUpdates_Click/>
-<MenuItem x:Name=AboutMenuItem Click=About_Click/>
+<MenuItem x:Name="SettingsMenuItem" Click="Settings_Click"/>
+<MenuItem x:Name="CheckForUpdatesMenuItem" Click="CheckForUpdates_Click"/>
+<MenuItem x:Name="AboutMenuItem" Click="About_Click"/>
 ```
 
 Add the menu header to `ApplyLocalization()`. Add one service instance, a busy flag, and a cancellation source to MainWindow. The click handler disables/renames the item, reads `Assembly.GetEntryAssembly()?.GetName().Version`, awaits `CheckAsync`, shows the up-to-date or available dialog, and opens only a revalidated trusted release URI. Catch `UpdateCheckException` and browser `Win32Exception` with the localized retry message. In `finally`, dispose the cancellation source, clear busy state, re-enable the item, and restore its localized header. Cancel the request in the existing `Closed` callback without showing a shutdown error.
