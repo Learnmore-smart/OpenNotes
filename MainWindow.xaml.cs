@@ -1,7 +1,10 @@
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -42,6 +45,9 @@ namespace Caelum
             new Dictionary<Frame, HashSet<EditorPage>>();
         private CancellationTokenSource _windowCloseCts;
         private CancellationTokenSource _toastCts;
+        private CancellationTokenSource _updateCheckCts;
+        private readonly UpdateCheckService _updateCheckService = new UpdateCheckService();
+        private bool _isUpdateCheckInProgress;
         private static readonly TimeSpan CloseWorkflowTimeout = TimeSpan.FromSeconds(30);
 
         public MainWindow()
@@ -62,6 +68,7 @@ namespace Caelum
             LocalizationService.LanguageChanged += LocalizationService_LanguageChanged;
             Closed += (_, __) =>
             {
+                _updateCheckCts?.Cancel();
                 Deactivated -= MainWindow_Deactivated;
                 LocalizationService.LanguageChanged -= LocalizationService_LanguageChanged;
                 TabDragCoordinator.Unregister(this);
@@ -1664,6 +1671,98 @@ namespace Caelum
         private void Settings_Click(object sender, RoutedEventArgs e)
         {
             OpenSettingsDialog();
+        }
+
+        private async void CheckForUpdates_Click(object sender, RoutedEventArgs e)
+        {
+            if (_isUpdateCheckInProgress)
+                return;
+
+            _isUpdateCheckInProgress = true;
+            CheckForUpdatesMenuItem.IsEnabled = false;
+            CheckForUpdatesMenuItem.Header =
+                LocalizationService.Get("Main.CheckingForUpdates");
+            var requestCts = new CancellationTokenSource();
+            _updateCheckCts = requestCts;
+
+            try
+            {
+                Version installedVersion =
+                    Assembly.GetEntryAssembly()?.GetName().Version ??
+                    Version.Parse(ProductInfo.Version);
+                UpdateCheckResult result = await _updateCheckService.CheckAsync(
+                    installedVersion,
+                    requestCts.Token);
+
+                string installedDisplay = FormatDisplayVersion(result.InstalledVersion);
+                if (!result.IsUpdateAvailable)
+                {
+                    await DialogService.ShowInfoAsync(
+                        this,
+                        LocalizationService.Get("Main.UpToDateTitle"),
+                        string.Format(
+                            LocalizationService.Get("Main.UpToDateMessage"),
+                            installedDisplay));
+                    return;
+                }
+
+                bool? openRelease = await DialogService.ShowDialogAsync(
+                    this,
+                    LocalizationService.Get("Main.UpdateAvailableTitle"),
+                    string.Format(
+                        LocalizationService.Get("Main.UpdateAvailableMessage"),
+                        installedDisplay,
+                        FormatDisplayVersion(result.LatestVersion)),
+                    LocalizationService.Get("Common.Cancel"),
+                    LocalizationService.Get("Main.ViewRelease"));
+
+                if (openRelease == true)
+                    OpenTrustedReleasePage(result.ReleaseUri);
+            }
+            catch (OperationCanceledException) when (requestCts.IsCancellationRequested)
+            {
+                // The window is closing; do not create another owner-modal dialog.
+            }
+            catch (Exception ex) when (
+                ex is UpdateCheckException or Win32Exception)
+            {
+                await DialogService.ShowErrorAsync(
+                    this,
+                    LocalizationService.Get("Main.UpdateCheckFailedTitle"),
+                    LocalizationService.Get("Main.UpdateCheckFailedMessage"));
+            }
+            finally
+            {
+                requestCts.Dispose();
+                if (ReferenceEquals(_updateCheckCts, requestCts))
+                    _updateCheckCts = null;
+
+                _isUpdateCheckInProgress = false;
+                CheckForUpdatesMenuItem.IsEnabled = true;
+                CheckForUpdatesMenuItem.Header =
+                    LocalizationService.Get("Main.CheckForUpdates");
+            }
+        }
+
+        private static void OpenTrustedReleasePage(Uri releaseUri)
+        {
+            if (!UpdateCheckService.IsTrustedReleaseUri(releaseUri))
+            {
+                throw new UpdateCheckException(
+                    UpdateCheckFailureKind.InvalidResponse,
+                    "The release URL is not trusted.");
+            }
+
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = releaseUri.AbsoluteUri,
+                UseShellExecute = true
+            });
+        }
+
+        private static string FormatDisplayVersion(Version version)
+        {
+            return version.Revision > 0 ? version.ToString(4) : version.ToString(3);
         }
 
         private async void About_Click(object sender, RoutedEventArgs e)

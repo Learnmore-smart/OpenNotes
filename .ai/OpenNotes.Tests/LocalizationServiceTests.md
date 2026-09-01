@@ -7,6 +7,7 @@ Test translation catalog completeness, placeholder parity, and language-change n
 
 ## Open Threads / Resume Context
 
+- **2026-09-01 update check complete:** Exact three-language assertions cover all nine update-check labels/messages; the focused localization/MainWindow filter passes 11/11.
 - v5.2.6 asserts the exact EN/ZH/FR `Editor.ShapeDashedLine` values, including “Ligne pointillée”.
 - **Status:** complete for Wave 3 source/test scope — catalog remains three-language complete after obsolete Fit/Ink Analysis keys are removed.
 - Add tests before changing catalog behavior; all three languages must have non-empty values for every key.

@@ -47,6 +47,42 @@ public sealed class LocalizationCoverageTests
     }
 
     [Test]
+    public void UpdateCheckHasCompleteThreeLanguageCopyWithMatchingPlaceholders()
+    {
+        var catalog = LocalizationService.GetCatalog();
+        var expected = new Dictionary<string, (string English, string Chinese, string French)>
+        {
+            ["Main.CheckForUpdates"] = ("Check for updates", "检查更新", "Rechercher des mises à jour"),
+            ["Main.CheckingForUpdates"] = ("Checking for updates…", "正在检查更新…", "Recherche de mises à jour…"),
+            ["Main.UpdateAvailableTitle"] = ("Update available", "有可用更新", "Mise à jour disponible"),
+            ["Main.UpdateAvailableMessage"] = (
+                "Version {1} is available. You are using {0}.",
+                "新版本 {1} 可用。当前版本：{0}。",
+                "La version {1} est disponible. Vous utilisez la version {0}."),
+            ["Main.UpToDateTitle"] = ("You're up to date", "已是最新版本", "OpenNotes est à jour"),
+            ["Main.UpToDateMessage"] = (
+                "You're using the latest version ({0}).",
+                "当前已是最新版本（{0}）。",
+                "Vous utilisez la dernière version ({0})."),
+            ["Main.UpdateCheckFailedTitle"] = (
+                "Couldn't check for updates",
+                "无法检查更新",
+                "Impossible de rechercher les mises à jour"),
+            ["Main.UpdateCheckFailedMessage"] = (
+                "Check your internet connection and try again.",
+                "请检查网络连接后重试。",
+                "Vérifiez votre connexion Internet et réessayez."),
+            ["Main.ViewRelease"] = ("View release", "查看更新", "Voir la version")
+        };
+
+        foreach (var entry in expected)
+        {
+            Assert.That(catalog.ContainsKey(entry.Key), Is.True, entry.Key);
+            Assert.That(catalog[entry.Key], Is.EqualTo(entry.Value), entry.Key);
+        }
+    }
+
+    [Test]
     public void ApplyingLanguageRaisesLanguageChanged()
     {
         int notifications = 0;

@@ -34,6 +34,10 @@ namespace Caelum
             SortByNameMenuItem.Header = LocalizationService.Get("Main.SortByName");
             SortByDateMenuItem.Header = LocalizationService.Get("Main.SortByDate");
             SettingsMenuItem.Header = LocalizationService.Get("Main.Settings");
+            CheckForUpdatesMenuItem.Header = LocalizationService.Get(
+                _isUpdateCheckInProgress
+                    ? "Main.CheckingForUpdates"
+                    : "Main.CheckForUpdates");
             AboutMenuItem.Header = LocalizationService.Get("Main.About");
             NewTabButton.ToolTip = LocalizationService.Get("Main.NewTabTooltip");
             RefreshOpenContentLocalization();

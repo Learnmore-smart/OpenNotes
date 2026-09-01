@@ -14,6 +14,8 @@ Shared settings, localization, tab refresh, and settings-dialog orchestration fo
 
 ## Open Threads
 
+- `CheckForUpdatesMenuItem` uses the existing `ApplyLocalization()` refresh path and retains the checking-state label across language changes.
+- Localize `CheckForUpdatesMenuItem` through the existing `ApplyLocalization()` refresh path.
 - Keep this mirror synchronized when settings or theme propagation changes.
 
 ## V5 Completion Status
