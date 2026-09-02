@@ -24,10 +24,36 @@ internal static class PdfAtomicFile
     internal static void SaveDocument(PdfDocument document, string tempPath)
     {
         ArgumentNullException.ThrowIfNull(document);
+        RemoveInvalidCropBoxes(document);
         using var outputStream = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None);
         document.Save(outputStream, false);
         outputStream.Flush(true);
     }
+
+    internal static void RemoveInvalidCropBoxes(PdfDocument document)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+
+        // A missing CropBox inherits MediaBox. PdfSharpCore can instead persist an
+        // empty rectangle after its CropBox getter has been read, so remove only
+        // zero-area values and let standards-compliant viewers use that fallback.
+        for (int i = 0; i < document.PageCount; i++)
+        {
+            var page = document.Pages[i];
+            if (!page.Elements.ContainsKey("/CropBox"))
+                continue;
+
+            var cropBox = page.Elements.GetRectangle("/CropBox");
+            if (!HasUsableArea(cropBox))
+                page.Elements.Remove("/CropBox");
+        }
+    }
+
+    internal static bool HasUsableArea(PdfRectangle rectangle) =>
+        rectangle != null &&
+        !rectangle.IsEmpty &&
+        Math.Abs(rectangle.Width) > double.Epsilon &&
+        Math.Abs(rectangle.Height) > double.Epsilon;
 
     internal static void CopyFile(string sourcePath, string targetPath)
     {

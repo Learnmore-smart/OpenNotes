@@ -1,4 +1,5 @@
 # OpenNotes.Tests/ProductInfoTests.cs
+> 2026-09-02 GREEN: the 5.2.9 visible-version contract failed against stale 5.2.8 production metadata, then passed 2/2 after alignment; compatibility assertions remain unchanged.
 > 2026-08-31 GREEN: the 5.2.8 visible-version contract failed against stale 5.2.7 production metadata, then passed 2/2 after alignment; compatibility assertions remain unchanged.
 > 2026-08-31 GREEN: the 5.2.7 visible-version contract failed against stale 5.2.6 production metadata, then passed 2/2 after alignment; compatibility assertions remain unchanged.
 > 2026-08-30 GREEN: the visible product-version expectation is 5.2.6; all legacy compatibility assertions remain unchanged.
@@ -32,6 +33,7 @@ Verify the visible OpenNotes brand while protecting the Caelum data-directory an
 
 | Date | Change | Author |
 |---|---|---|
+| 2026-09-02 | Advanced the visible-version contract to 5.2.9 with observed RED/GREEN coverage and unchanged compatibility assertions. | Codex |
 | 2026-08-31 | Advanced the visible-version contract to 5.2.8 with observed RED/GREEN coverage and unchanged compatibility assertions. | Codex |
 | 2026-08-31 | Advanced the visible-version contract to 5.2.7 with observed RED/GREEN coverage and unchanged compatibility assertions. | Codex |
 | 2026-08-26 | Advanced the visible-version contract to 5.2.3 with verified RED/GREEN coverage and unchanged compatibility assertions. | Codex |

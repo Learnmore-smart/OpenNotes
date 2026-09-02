@@ -1,4 +1,5 @@
 # installer.iss
+> 2026-09-02 GREEN: default installer version is 5.2.9 for Edge-PDF compatibility; AppId, per-user semantics, and upgrade compatibility remain preserved.
 > 2026-08-31 GREEN: default installer version is 5.2.8; AppId, per-user semantics, and upgrade compatibility are preserved.
 > 2026-08-30 GREEN: default installer version is 5.2.6; AppId and per-user upgrade behavior are preserved.
 > 2026-08-28 GREEN: default installer version is 5.2.4; AppId and per-user upgrade behavior are preserved.

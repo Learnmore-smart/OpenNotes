@@ -725,9 +725,19 @@ namespace Caelum.Services
 
         private static PdfPageDisplayGeometry GetPageDisplayGeometry(PdfSharpCore.Pdf.PdfPage page)
         {
-            PdfSharpPdfRectangle box = page.CropBox;
-            if (box == null || box.IsEmpty || Math.Abs(box.Width) < double.Epsilon || Math.Abs(box.Height) < double.Epsilon)
+            // Do not use page.CropBox here. PdfSharpCore calls GetRectangle(..., create: true)
+            // and materializes a missing value as [0 0 0 0], which Edge clips to a blank page.
+            PdfSharpPdfRectangle box = page.Elements.ContainsKey("/CropBox")
+                ? page.Elements.GetRectangle("/CropBox")
+                : null;
+
+            if (!PdfAtomicFile.HasUsableArea(box))
+            {
+                if (page.Elements.ContainsKey("/CropBox"))
+                    page.Elements.Remove("/CropBox");
+
                 box = page.MediaBox;
+            }
 
             double left = Math.Min(box.X1, box.X2);
             double right = Math.Max(box.X1, box.X2);
@@ -1348,6 +1358,7 @@ namespace Caelum.Services
                 }
             }
 
+            PdfAtomicFile.RemoveInvalidCropBoxes(document);
             document.Save(outputStream);
             return extractedAnnotations;
         }

@@ -11,6 +11,8 @@ Preserves the legacy Windows package identity and version metadata for compatibl
 
 ## Open Threads / Resume Context
 
+- **Status:** ready_for_release (5.2.9 Edge-PDF compatibility release)
+- Package version is `5.2.9.0`; `WindowsNotesApp` and `CN=Learnmore_smart` remain unchanged.
 - **Status:** released (5.2.7 page-rotation drawing hotfix)
 - Package version is `5.2.7.0`; `WindowsNotesApp` and `CN=Learnmore_smart` remain unchanged.
 - **Status:** ready_for_release (5.2.0 feature release)

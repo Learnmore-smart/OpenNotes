@@ -895,4 +895,100 @@ public class PdfServiceAnnotationSavingTests
         page.Elements.Add("/Annots", annots);
         document.Save(filePath);
     }
+
+    [Test]
+    public async Task SaveAnnotationsToPdfAsync_DoesNotMaterializeMissingCropBox()
+    {
+        string filePath = Path.Combine(_tempDirectory, "edge-compat.pdf");
+        CreateTestPdf(filePath);
+
+        using (var source = PdfReader.Open(filePath, PdfDocumentOpenMode.ReadOnly))
+        {
+            Assert.That(source.Pages[0].Elements.ContainsKey("/CropBox"), Is.False,
+                "The regression fixture must start without an explicit CropBox.");
+        }
+
+        await using var service = new PdfService();
+        await service.LoadPdfAsync(filePath);
+        await service.SaveAnnotationsToPdfAsync(filePath, new Dictionary<int, PageAnnotation>
+        {
+            [0] = new PageAnnotation
+            {
+                Texts = new List<TextAnnotation>
+                {
+                    new TextAnnotation { Text = "Edge test", X = 100, Y = 100, FontSize = 14, R = 0, G = 0, B = 0 }
+                },
+                Strokes = new List<StrokeAnnotation>
+                {
+                    new StrokeAnnotation
+                    {
+                        R = 0, G = 120, B = 215, A = 255, Size = 2,
+                        Points = new List<double[]> { new[] { 50d, 50d }, new[] { 100d, 100d } }
+                    }
+                }
+            }
+        });
+
+        using var doc = PdfReader.Open(filePath, PdfDocumentOpenMode.ReadOnly);
+        Assert.That(doc.PageCount, Is.EqualTo(1));
+        Assert.That(doc.Pages[0].Elements.ContainsKey("/CropBox"), Is.False,
+            "Saving must not turn the default MediaBox fallback into an explicit zero-area CropBox.");
+    }
+
+    [Test]
+    public async Task SaveAnnotationsToPdfAsync_RemovesExistingZeroAreaCropBox()
+    {
+        string filePath = Path.Combine(_tempDirectory, "corrupted-cropbox.pdf");
+        CreateTestPdf(filePath);
+
+        using (var corruptDoc = PdfReader.Open(filePath, PdfDocumentOpenMode.Modify))
+        {
+            var page = corruptDoc.Pages[0];
+            page.Elements.SetRectangle("/CropBox", new PdfSharpCore.Pdf.PdfRectangle(new XRect(0, 0, 0, 0)));
+            corruptDoc.Save(filePath);
+        }
+
+        using (var corruptDoc = PdfReader.Open(filePath, PdfDocumentOpenMode.ReadOnly))
+        {
+            Assert.That(corruptDoc.Pages[0].Elements.ContainsKey("/CropBox"), Is.True,
+                "The regression fixture must contain an explicit zero-area CropBox.");
+            Assert.That(PdfAtomicFile.HasUsableArea(corruptDoc.Pages[0].Elements.GetRectangle("/CropBox")), Is.False);
+        }
+
+        await using var service = new PdfService();
+        await service.LoadPdfAsync(filePath);
+        await service.SaveAnnotationsToPdfAsync(filePath, service.ExtractedAnnotations);
+
+        using var repairedDoc = PdfReader.Open(filePath, PdfDocumentOpenMode.ReadOnly);
+        Assert.That(repairedDoc.Pages[0].Elements.ContainsKey("/CropBox"), Is.False,
+            "An explicit zero-area CropBox must be removed so viewers fall back to MediaBox.");
+    }
+
+    [Test]
+    public async Task SaveAnnotationsToPdfAsync_PreservesValidExplicitCropBox()
+    {
+        string filePath = Path.Combine(_tempDirectory, "valid-cropbox.pdf");
+        CreateTestPdf(filePath);
+
+        using (var source = PdfReader.Open(filePath, PdfDocumentOpenMode.Modify))
+        {
+            source.Pages[0].Elements.SetRectangle("/CropBox", new PdfSharpCore.Pdf.PdfRectangle(new XRect(36, 48, 540, 696)));
+            source.Save(filePath);
+        }
+
+        await using var service = new PdfService();
+        await service.LoadPdfAsync(filePath);
+        await service.SaveAnnotationsToPdfAsync(filePath, service.ExtractedAnnotations);
+
+        using var saved = PdfReader.Open(filePath, PdfDocumentOpenMode.ReadOnly);
+        Assert.That(saved.Pages[0].Elements.ContainsKey("/CropBox"), Is.True);
+        var cropBox = saved.Pages[0].Elements.GetRectangle("/CropBox");
+        Assert.Multiple(() =>
+        {
+            Assert.That(cropBox.X1, Is.EqualTo(36).Within(0.001));
+            Assert.That(cropBox.Y1, Is.EqualTo(48).Within(0.001));
+            Assert.That(cropBox.X2, Is.EqualTo(576).Within(0.001));
+            Assert.That(cropBox.Y2, Is.EqualTo(744).Within(0.001));
+        });
+    }
 }
