@@ -490,8 +490,14 @@ $RECYCLE.BIN/
 .agent/
 .agents/
 .codebuddy/
+.codeartsdoer/
+.codegraph/
+.claude/
+.cursor/
+.cline/
 .kiro/
 .qoder/
+.roo/
 .trae/
 .vscode/
 .windsurf/
@@ -509,3 +515,16 @@ build_log.txt
 
 # Local Git worktrees
 .worktrees/
+
+# Temporary directories and test outputs
+[Tt]mp/
+[Tt]emp/
+.tmp/
+.temp/
+.pytest_cache/
+
+# Python Virtual Environments
+.venv/
+venv/
+env/
+
