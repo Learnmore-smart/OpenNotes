@@ -12,8 +12,8 @@ Defines the .NET 8 WPF desktop build, assembly identity, release version, runtim
 
 ## Open Threads / Resume Context
 
-- **Status:** ready_for_release (5.2.9 Edge-PDF compatibility release)
-- Project, assembly, file and informational versions are aligned to `5.2.9` / `5.2.9.0`; the `Caelum` root namespace and Windows x64 self-contained release settings remain unchanged. The local workflow-equivalent publish and eight-second isolated startup smoke are green; GitHub Actions will build the authoritative installer.
+- **Status:** released (5.2.9 Edge-PDF compatibility release)
+- Tag `v5.2.9` points to `f96373b`; GitHub Actions run `33690709203` published both final assets. The downloaded Portable executable reports FileVersion `5.2.9.0` / ProductVersion `5.2.9+f96373b488d990026ec0ace1918b1a57369d24d0`, contains x64 Pdfium, and passed an isolated eight-second startup smoke. The `Caelum` root namespace and Windows x64 self-contained release settings remain unchanged.
 - **Status:** released (5.2.8 eraser stylus-crash hotfix)
 - Project/assembly metadata in tag `v5.2.8` is aligned to 5.2.8/5.2.8.0. GitHub Actions run `33461186472` published both verified assets; the downloaded Portable executable identifies commit `a3d1569`.
 - **Status:** ready_for_release (5.2.8 eraser stylus-crash hotfix)

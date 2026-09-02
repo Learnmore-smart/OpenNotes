@@ -1,5 +1,5 @@
 # OpenNotes.csproj
-> 2026-09-02 GREEN: package/assembly/file/informational metadata are 5.2.9/5.2.9.0 for the Edge-PDF compatibility release; `RootNamespace=Caelum`, self-contained win-x64 settings, and all compatibility identities remain unchanged.
+> 2026-09-02 RELEASED: package/assembly/file/informational metadata are 5.2.9/5.2.9.0 in tag `v5.2.9`; `RootNamespace=Caelum`, self-contained win-x64 settings, and all compatibility identities remain unchanged.
 > 2026-08-31 GREEN: package/assembly/file/informational metadata are 5.2.8/5.2.8.0 for the eraser stylus-crash hotfix; `RootNamespace=Caelum` and all compatibility identities remain unchanged.
 > 2026-08-30 GREEN: package/assembly/file/informational metadata are 5.2.6/5.2.6.0 for the editor reliability, page reorder, editable shape, and detachable-tab release; compatibility identities remain unchanged.
 > 2026-08-28 GREEN: package/assembly/file/informational metadata are 5.2.4/5.2.4.0 for the selection/text/ruler regression release; `RootNamespace=Caelum` and all compatibility identities are preserved.

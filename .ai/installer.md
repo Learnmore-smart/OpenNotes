@@ -7,8 +7,8 @@ Defines the Inno Setup package for the OpenNotes Windows desktop application.
 
 ## Open Threads / Resume Context
 
-- **Status:** ready_for_release (5.2.9 Edge-PDF compatibility release)
-- The default installer version is `5.2.9`; the stable AppId and per-user upgrade behavior are preserved. Inno Setup is absent on this host, so the green local self-contained `OpenNotes.exe` publish/startup smoke is the local packaging gate and the tag-triggered GitHub workflow remains authoritative for `OpenNotes-Setup-5.2.9.exe` and the portable ZIP.
+- **Status:** released (5.2.9 Edge-PDF compatibility release)
+- GitHub Actions run `33690709203` published `OpenNotes-Setup-5.2.9.exe` (56,112,949 bytes; SHA-256 `dfbc6e34423ab425f0be39911f0a81dbc7001f630acd77309796f86f0bed2943`) and `OpenNotes-Portable-win-x64-5.2.9.zip` (80,705,653 bytes; SHA-256 `9b78b62506afd93b17e7f3125d260f807ac89bf6ca171b8aea3e5c28ea562872`). Downloaded hashes match GitHub digests, and the Portable executable passed metadata/native-runtime/startup verification. The stable AppId and per-user upgrade behavior remain preserved.
 - **Status:** released (5.2.8 eraser stylus-crash hotfix)
 - GitHub Actions run `33461186472` published both final assets from tag commit `a3d1569`. The downloaded installer and Portable hashes match GitHub metadata; the Portable executable reports 5.2.8.0, includes `x64/pdfium.dll`, and passed an isolated startup smoke with zero new crash events. Stable AppId and upgrade behavior remain unchanged.
 - **Status:** ready_for_release (5.2.8 eraser stylus-crash hotfix)
