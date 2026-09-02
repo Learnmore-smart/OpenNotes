@@ -9,6 +9,8 @@ Central catalog for English, Simplified Chinese, and French UI strings and cultu
 
 ## Open Threads / Resume Context
 - 2026-08-31 shape follow-up replaces the geometry-specific dashed-line label with localized line-style header/Solid/Dashed labels; catalog tests cover exact EN/ZH/FR values.
+- **2026-09-01 update check complete:** Nine EN/ZH/FR labels/messages cover checking, available/current results, failure, and the release-page action with matching placeholders.
+- v5.2.6 adds `Editor.ShapeDashedLine`: “Dashed line” / “虚线” / “Ligne pointillée”, preserving literal catalog lookup and three-language parity.
 - v5.2.6 adds the three-language `Editor.SelectedDrawingStyle` header for Select-popup color/width editing.
 - **Complete:** Triangle, Diamond, Parallelogram, Pentagon, and Hexagon have EN/ZH/FR names in the editor shape picker. Literal lookup calls preserve the static i18n audit; live popup rebuild behavior remains unchanged.
 - Checklist and Two-column cards have complete placeholder-free EN/ZH/FR title and hint keys.

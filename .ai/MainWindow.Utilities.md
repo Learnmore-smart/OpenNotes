@@ -14,6 +14,9 @@ Shared settings, localization, tab refresh, and settings-dialog orchestration fo
 
 ## Open Threads
 
+- `CheckForUpdatesMenuItem` uses the existing `ApplyLocalization()` refresh path and retains the checking-state label across language changes.
+- The busy-state conditional wraps two literal `LocalizationService.Get` calls so `tools/verify-i18n.ps1` can statically prove both catalog keys.
+- Localize `CheckForUpdatesMenuItem` through the existing `ApplyLocalization()` refresh path.
 - Keep this mirror synchronized when settings or theme propagation changes.
 
 ## V5 Completion Status

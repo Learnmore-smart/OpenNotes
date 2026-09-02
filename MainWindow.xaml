@@ -233,6 +233,7 @@
                             <Button.ContextMenu>
                                 <ContextMenu x:Name="MoreContextMenu">
                                     <MenuItem x:Name="SettingsMenuItem" Click="Settings_Click"/>
+                                    <MenuItem x:Name="CheckForUpdatesMenuItem" Click="CheckForUpdates_Click"/>
                                     <MenuItem x:Name="AboutMenuItem" Click="About_Click"/>
                                 </ContextMenu>
                             </Button.ContextMenu>
