@@ -37,23 +37,68 @@ internal static class PdfAtomicFile
         // A missing CropBox inherits MediaBox. PdfSharpCore can instead persist an
         // empty rectangle after its CropBox getter has been read, so remove only
         // zero-area values and let standards-compliant viewers use that fallback.
+        var visited = new System.Collections.Generic.HashSet<PdfDictionary>();
+
+        if (document.Pages != null)
+        {
+            SanitizeDictionaryCropBox(document.Pages);
+            visited.Add(document.Pages);
+        }
+
         for (int i = 0; i < document.PageCount; i++)
         {
             var page = document.Pages[i];
-            if (!page.Elements.ContainsKey("/CropBox"))
-                continue;
+            if (page != null && visited.Add(page))
+            {
+                SanitizeDictionaryCropBox(page);
+            }
 
-            var cropBox = page.Elements.GetRectangle("/CropBox");
+            PdfDictionary current = page;
+            while (current != null && current.Elements.ContainsKey("/Parent"))
+            {
+                PdfDictionary parentDict = null;
+                try
+                {
+                    parentDict = current.Elements.GetDictionary("/Parent");
+                }
+                catch
+                {
+                    break;
+                }
+
+                if (parentDict == null || !visited.Add(parentDict))
+                    break;
+
+                SanitizeDictionaryCropBox(parentDict);
+                current = parentDict;
+            }
+        }
+    }
+
+    private static void SanitizeDictionaryCropBox(PdfDictionary dictionary)
+    {
+        if (dictionary == null || !dictionary.Elements.ContainsKey("/CropBox"))
+            return;
+
+        try
+        {
+            var cropBox = dictionary.Elements.GetRectangle("/CropBox");
             if (!HasUsableArea(cropBox))
-                page.Elements.Remove("/CropBox");
+                dictionary.Elements.Remove("/CropBox");
+        }
+        catch
+        {
+            dictionary.Elements.Remove("/CropBox");
         }
     }
 
     internal static bool HasUsableArea(PdfRectangle rectangle) =>
         rectangle != null &&
         !rectangle.IsEmpty &&
-        Math.Abs(rectangle.Width) > double.Epsilon &&
-        Math.Abs(rectangle.Height) > double.Epsilon;
+        double.IsFinite(rectangle.Width) &&
+        double.IsFinite(rectangle.Height) &&
+        Math.Abs(rectangle.Width) > 1e-4 &&
+        Math.Abs(rectangle.Height) > 1e-4;
 
     internal static void CopyFile(string sourcePath, string targetPath)
     {

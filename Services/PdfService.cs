@@ -727,23 +727,65 @@ namespace Caelum.Services
         {
             // Do not use page.CropBox here. PdfSharpCore calls GetRectangle(..., create: true)
             // and materializes a missing value as [0 0 0 0], which Edge clips to a blank page.
-            PdfSharpPdfRectangle box = page.Elements.ContainsKey("/CropBox")
-                ? page.Elements.GetRectangle("/CropBox")
-                : null;
+            PdfSharpPdfRectangle box = null;
+            if (page.Elements.ContainsKey("/CropBox"))
+            {
+                try
+                {
+                    box = page.Elements.GetRectangle("/CropBox");
+                }
+                catch
+                {
+                    box = null;
+                }
+            }
 
             if (!PdfAtomicFile.HasUsableArea(box))
             {
                 if (page.Elements.ContainsKey("/CropBox"))
                     page.Elements.Remove("/CropBox");
 
-                box = page.MediaBox;
+                try
+                {
+                    box = page.MediaBox;
+                }
+                catch
+                {
+                    box = null;
+                }
+            }
+
+            if (!PdfAtomicFile.HasUsableArea(box))
+            {
+                double width = 612;
+                double height = 792;
+                try
+                {
+                    if (page.Width.Point > 0 && double.IsFinite(page.Width.Point))
+                        width = page.Width.Point;
+                    if (page.Height.Point > 0 && double.IsFinite(page.Height.Point))
+                        height = page.Height.Point;
+                }
+                catch
+                {
+                }
+                box = new PdfSharpPdfRectangle(new XRect(0, 0, width, height));
             }
 
             double left = Math.Min(box.X1, box.X2);
             double right = Math.Max(box.X1, box.X2);
             double bottom = Math.Min(box.Y1, box.Y2);
             double top = Math.Max(box.Y1, box.Y2);
-            int rotation = ((page.Rotate % 360) + 360) % 360;
+            int rotateVal = 0;
+            try
+            {
+                rotateVal = page.Rotate;
+            }
+            catch
+            {
+                rotateVal = 0;
+            }
+            int rotation = ((rotateVal % 360) + 360) % 360;
             rotation = ((rotation + 45) / 90 * 90) % 360;
             return new PdfPageDisplayGeometry(left, bottom, right, top, rotation);
         }

@@ -991,4 +991,406 @@ public class PdfServiceAnnotationSavingTests
             Assert.That(cropBox.Y2, Is.EqualTo(744).Within(0.001));
         });
     }
+
+    [Test]
+    public async Task SaveAnnotationsToPdfAsync_Chapter15WavesSimulation_RepairsZeroCropBoxAndPreservesAllAnnotations()
+    {
+        string filePath = Path.Combine(_tempDirectory, "Chapter15_waves_simulated.pdf");
+
+        // 1. Create an 87-page presentation PDF with 960x540 dimensions
+        using (var doc = new PdfDocument())
+        {
+            for (int i = 0; i < 87; i++)
+            {
+                var page = doc.AddPage();
+                page.Width = 960;
+                page.Height = 540;
+
+                // Corrupt every page with an invalid zero-area /CropBox [0 0 0 0]
+                page.Elements.SetRectangle("/CropBox", new PdfSharpCore.Pdf.PdfRectangle(new XRect(0, 0, 0, 0)));
+            }
+
+            // 2. Add over 1,500 handwritten ink strokes across 41 pages (pages 0..40, 37 strokes each = 1,517 strokes)
+            int strokeCounter = 0;
+            for (int pageIdx = 0; pageIdx < 41; pageIdx++)
+            {
+                var page = doc.Pages[pageIdx];
+                var annots = new PdfArray(doc);
+                for (int s = 0; s < 37; s++)
+                {
+                    strokeCounter++;
+                    var inkAnnot = new PdfDictionary(doc);
+                    inkAnnot.Elements.SetName("/Type", "/Annot");
+                    inkAnnot.Elements.SetName("/Subtype", "/Ink");
+                    inkAnnot.Elements.SetString("/NM", $"wna_ink_{Guid.NewGuid():N}");
+
+                    var inkList = new PdfArray(doc);
+                    var strokePoints = new PdfArray(doc);
+                    // Sample stroke with multiple points in 960x540 coordinate space
+                    double startX = 100 + (s * 10);
+                    double startY = 100 + (s * 5);
+                    strokePoints.Elements.Add(new PdfReal(startX));
+                    strokePoints.Elements.Add(new PdfReal(startY));
+                    strokePoints.Elements.Add(new PdfReal(startX + 20));
+                    strokePoints.Elements.Add(new PdfReal(startY + 30));
+                    strokePoints.Elements.Add(new PdfReal(startX + 40));
+                    strokePoints.Elements.Add(new PdfReal(startY + 10));
+                    inkList.Elements.Add(strokePoints);
+
+                    inkAnnot.Elements.Add("/InkList", inkList);
+                    inkAnnot.Elements.SetRectangle("/Rect", new PdfSharpCore.Pdf.PdfRectangle(new XRect(startX, startY, 40, 30)));
+
+                    var colorArray = new PdfArray(doc);
+                    colorArray.Elements.Add(new PdfReal(0.1));
+                    colorArray.Elements.Add(new PdfReal(0.2));
+                    colorArray.Elements.Add(new PdfReal(0.8));
+                    inkAnnot.Elements.Add("/C", colorArray);
+
+                    annots.Elements.Add(inkAnnot);
+                }
+                page.Elements.Add("/Annots", annots);
+            }
+
+            doc.Save(filePath);
+            Assert.That(strokeCounter, Is.EqualTo(1517));
+        }
+
+        // 3. Load via PdfService, verify extraction and display dimensions
+        await using var service = new PdfService();
+        await service.LoadPdfAsync(filePath);
+        Assert.That(service.PageCount, Is.EqualTo(87));
+
+        int extractedStrokeCount = 0;
+        foreach (var kvp in service.ExtractedAnnotations)
+        {
+            extractedStrokeCount += kvp.Value.Strokes.Count;
+        }
+        Assert.That(extractedStrokeCount, Is.EqualTo(1517), "All 1,517 strokes must be extracted cleanly.");
+
+        // 4. Save annotations back
+        await service.SaveAnnotationsToPdfAsync(filePath, service.ExtractedAnnotations);
+
+        // 5. Verify the saved file standards compliance and geometry
+        using var verifiedDoc = PdfReader.Open(filePath, PdfDocumentOpenMode.ReadOnly);
+        Assert.That(verifiedDoc.PageCount, Is.EqualTo(87));
+
+        for (int i = 0; i < verifiedDoc.PageCount; i++)
+        {
+            var page = verifiedDoc.Pages[i];
+            Assert.That(page.Elements.ContainsKey("/CropBox"), Is.False,
+                $"Page {i} must NOT have an explicit zero-area CropBox.");
+            Assert.That(page.Width.Point, Is.EqualTo(960).Within(0.001),
+                $"Page {i} Width must be 960 points.");
+            Assert.That(page.Height.Point, Is.EqualTo(540).Within(0.001),
+                $"Page {i} Height must be 540 points.");
+        }
+
+        // 6. Verify page rendering runs cleanly without exceptions
+        var renderedFirstPage = await service.RenderPageAsync(0);
+        Assert.That(renderedFirstPage, Is.Not.Null);
+    }
+
+    [Test]
+    public async Task SaveAnnotationsToPdfAsync_MixedPages_HandlesValidCorruptAndMissingCropBoxes()
+    {
+        string filePath = Path.Combine(_tempDirectory, "mixed-cropboxes.pdf");
+
+        using (var doc = new PdfDocument())
+        {
+            // Page 0: Valid explicit CropBox
+            var p0 = doc.AddPage();
+            p0.Width = 612; p0.Height = 792;
+            p0.Elements.SetRectangle("/CropBox", new PdfSharpCore.Pdf.PdfRectangle(new XRect(36, 48, 540, 696)));
+
+            // Page 1: Default missing CropBox (MediaBox only)
+            var p1 = doc.AddPage();
+            p1.Width = 612; p1.Height = 792;
+
+            // Page 2: Corrupted zero-area CropBox [0 0 0 0]
+            var p2 = doc.AddPage();
+            p2.Width = 612; p2.Height = 792;
+            p2.Elements.SetRectangle("/CropBox", new PdfSharpCore.Pdf.PdfRectangle(new XRect(0, 0, 0, 0)));
+
+            // Page 3: Corrupted degenerate horizontal line CropBox [0 0 612 0]
+            var p3 = doc.AddPage();
+            p3.Width = 612; p3.Height = 792;
+            p3.Elements.SetRectangle("/CropBox", new PdfSharpCore.Pdf.PdfRectangle(new XRect(0, 0, 612, 0)));
+
+            // Page 4: Corrupted degenerate vertical line CropBox [0 0 0 792]
+            var p4 = doc.AddPage();
+            p4.Width = 612; p4.Height = 792;
+            p4.Elements.SetRectangle("/CropBox", new PdfSharpCore.Pdf.PdfRectangle(new XRect(0, 0, 0, 792)));
+
+            // Page 5: Inverted valid CropBox [576 744 36 48] (Math.Abs width=540, height=696)
+            var p5 = doc.AddPage();
+            p5.Width = 612; p5.Height = 792;
+            p5.Elements.SetRectangle("/CropBox", new PdfSharpCore.Pdf.PdfRectangle(new XPoint(576, 744), new XPoint(36, 48)));
+
+            // Page 6: Degenerate point CropBox [100 100 100 100]
+            var p6 = doc.AddPage();
+            p6.Width = 612; p6.Height = 792;
+            p6.Elements.SetRectangle("/CropBox", new PdfSharpCore.Pdf.PdfRectangle(new XRect(100, 100, 0, 0)));
+
+            // Page 7: Corrupted malformed CropBox array with fewer than 4 elements
+            var p7 = doc.AddPage();
+            p7.Width = 612; p7.Height = 792;
+            var malformedArray = new PdfArray(doc);
+            malformedArray.Elements.Add(new PdfReal(0));
+            malformedArray.Elements.Add(new PdfReal(0));
+            p7.Elements.Add("/CropBox", malformedArray);
+
+            doc.Save(filePath);
+        }
+
+        await using var service = new PdfService();
+        await service.LoadPdfAsync(filePath);
+        await service.SaveAnnotationsToPdfAsync(filePath, service.ExtractedAnnotations);
+
+        using var saved = PdfReader.Open(filePath, PdfDocumentOpenMode.ReadOnly);
+        Assert.That(saved.PageCount, Is.EqualTo(8));
+
+        // Page 0: Valid CropBox preserved
+        Assert.That(saved.Pages[0].Elements.ContainsKey("/CropBox"), Is.True);
+        var cb0 = saved.Pages[0].Elements.GetRectangle("/CropBox");
+        Assert.That(cb0.Width, Is.EqualTo(540).Within(0.001));
+        Assert.That(cb0.Height, Is.EqualTo(696).Within(0.001));
+
+        // Page 1: No CropBox materialized
+        Assert.That(saved.Pages[1].Elements.ContainsKey("/CropBox"), Is.False);
+
+        // Page 2: Corrupted [0 0 0 0] stripped
+        Assert.That(saved.Pages[2].Elements.ContainsKey("/CropBox"), Is.False);
+
+        // Page 3: Degenerate horizontal stripped
+        Assert.That(saved.Pages[3].Elements.ContainsKey("/CropBox"), Is.False);
+
+        // Page 4: Degenerate vertical stripped
+        Assert.That(saved.Pages[4].Elements.ContainsKey("/CropBox"), Is.False);
+
+        // Page 5: Inverted valid CropBox preserved
+        Assert.That(saved.Pages[5].Elements.ContainsKey("/CropBox"), Is.True);
+        var cb5 = saved.Pages[5].Elements.GetRectangle("/CropBox");
+        Assert.That(Math.Abs(cb5.Width), Is.EqualTo(540).Within(0.001));
+        Assert.That(Math.Abs(cb5.Height), Is.EqualTo(696).Within(0.001));
+
+        // Page 6: Degenerate point stripped
+        Assert.That(saved.Pages[6].Elements.ContainsKey("/CropBox"), Is.False);
+
+        // Page 7: Malformed array stripped
+        Assert.That(saved.Pages[7].Elements.ContainsKey("/CropBox"), Is.False);
+    }
+
+    [Test]
+    public async Task SaveAnnotationsToPdfAsync_InheritedPagesCropBox_RemovesZeroAreaCropBoxFromPagesNode()
+    {
+        string filePath = Path.Combine(_tempDirectory, "inherited-pages-cropbox.pdf");
+        CreateTestPdf(filePath);
+
+        using (var doc = PdfReader.Open(filePath, PdfDocumentOpenMode.Modify))
+        {
+            // Corrupt the root Pages collection dictionary with a zero-area CropBox
+            doc.Pages.Elements.SetRectangle("/CropBox", new PdfSharpCore.Pdf.PdfRectangle(new XRect(0, 0, 0, 0)));
+            doc.Save(filePath);
+        }
+
+        await using var service = new PdfService();
+        await service.LoadPdfAsync(filePath);
+        await service.SaveAnnotationsToPdfAsync(filePath, service.ExtractedAnnotations);
+
+        using var saved = PdfReader.Open(filePath, PdfDocumentOpenMode.ReadOnly);
+        Assert.That(saved.Pages.Elements.ContainsKey("/CropBox"), Is.False,
+            "The root Pages dictionary must have invalid zero-area CropBox removed.");
+    }
+
+    [Test]
+    public async Task SaveAnnotationsToPdfAsync_DeepPageTreeHierarchy_RemovesZeroAreaCropBoxFromIntermediateNodes()
+    {
+        string filePath = Path.Combine(_tempDirectory, "deep-page-tree-cropbox.pdf");
+        CreateTestPdf(filePath);
+
+        using (var doc = PdfReader.Open(filePath, PdfDocumentOpenMode.Modify))
+        {
+            var page = doc.Pages[0];
+            var intermediatePages = new PdfDictionary(doc);
+            intermediatePages.Elements.SetName("/Type", "/Pages");
+            intermediatePages.Elements.SetInteger("/Count", 1);
+            intermediatePages.Elements.SetRectangle("/CropBox", new PdfSharpCore.Pdf.PdfRectangle(new XRect(0, 0, 0, 0)));
+            intermediatePages.Elements.Add("/Parent", doc.Pages);
+            doc.Internals.AddObject(intermediatePages);
+
+            var kids = new PdfArray(doc);
+            kids.Elements.Add(page);
+            intermediatePages.Elements.Add("/Kids", kids);
+
+            page.Elements["/Parent"] = intermediatePages;
+
+            var rootKids = doc.Pages.Elements.GetArray("/Kids");
+            if (rootKids != null)
+            {
+                rootKids.Elements.Clear();
+                rootKids.Elements.Add(intermediatePages);
+            }
+
+            doc.Save(filePath);
+        }
+
+        await using var service = new PdfService();
+        await service.LoadPdfAsync(filePath);
+        await service.SaveAnnotationsToPdfAsync(filePath, service.ExtractedAnnotations);
+
+        using var saved = PdfReader.Open(filePath, PdfDocumentOpenMode.ReadOnly);
+        var page0 = saved.Pages[0];
+        Assert.That(page0.Elements.ContainsKey("/CropBox"), Is.False);
+        if (page0.Elements.ContainsKey("/Parent"))
+        {
+            var parent = page0.Elements.GetDictionary("/Parent");
+            Assert.That(parent.Elements.ContainsKey("/CropBox"), Is.False,
+                "Intermediate /Pages node must have invalid zero-area CropBox removed.");
+        }
+    }
+
+    [Test]
+    public async Task SaveAnnotationsToPdfAsync_IndirectReferenceCropBox_RemovesZeroAreaIndirectCropBox()
+    {
+        string filePath = Path.Combine(_tempDirectory, "indirect-cropbox.pdf");
+        CreateTestPdf(filePath);
+
+        using (var doc = PdfReader.Open(filePath, PdfDocumentOpenMode.Modify))
+        {
+            var cropBoxArray = new PdfArray(doc);
+            cropBoxArray.Elements.Add(new PdfReal(0));
+            cropBoxArray.Elements.Add(new PdfReal(0));
+            cropBoxArray.Elements.Add(new PdfReal(0));
+            cropBoxArray.Elements.Add(new PdfReal(0));
+            doc.Internals.AddObject(cropBoxArray);
+            doc.Pages[0].Elements.Add("/CropBox", cropBoxArray);
+            doc.Save(filePath);
+        }
+
+        await using var service = new PdfService();
+        await service.LoadPdfAsync(filePath);
+        await service.SaveAnnotationsToPdfAsync(filePath, service.ExtractedAnnotations);
+
+        using var saved = PdfReader.Open(filePath, PdfDocumentOpenMode.ReadOnly);
+        Assert.That(saved.Pages[0].Elements.ContainsKey("/CropBox"), Is.False,
+            "Indirect zero-area CropBox must be removed.");
+    }
+
+    [Test]
+    public async Task SaveAnnotationsToPdfAsync_ValidNegativeCoordinateCropBox_PreservesCropBox()
+    {
+        string filePath = Path.Combine(_tempDirectory, "negative-cropbox.pdf");
+        CreateTestPdf(filePath);
+
+        using (var doc = PdfReader.Open(filePath, PdfDocumentOpenMode.Modify))
+        {
+            // Valid CropBox with negative origins: [-50, -50, 450, 450] (Width=500, Height=500)
+            doc.Pages[0].Elements.SetRectangle("/CropBox", new PdfSharpCore.Pdf.PdfRectangle(new XRect(-50, -50, 500, 500)));
+            doc.Save(filePath);
+        }
+
+        await using var service = new PdfService();
+        await service.LoadPdfAsync(filePath);
+        await service.SaveAnnotationsToPdfAsync(filePath, service.ExtractedAnnotations);
+
+        using var saved = PdfReader.Open(filePath, PdfDocumentOpenMode.ReadOnly);
+        Assert.That(saved.Pages[0].Elements.ContainsKey("/CropBox"), Is.True,
+            "Valid CropBox with negative coordinates must be preserved.");
+        var cb = saved.Pages[0].Elements.GetRectangle("/CropBox");
+        Assert.Multiple(() =>
+        {
+            Assert.That(cb.X1, Is.EqualTo(-50).Within(0.001));
+            Assert.That(cb.Y1, Is.EqualTo(-50).Within(0.001));
+            Assert.That(cb.Width, Is.EqualTo(500).Within(0.001));
+            Assert.That(cb.Height, Is.EqualTo(500).Within(0.001));
+        });
+    }
+
+    [Test]
+    public async Task SaveAnnotationsToPdfAsync_PreservesOutlinesAndAllAnnotationTypesWithZeroCropBoxRepair()
+    {
+        string filePath = Path.Combine(_tempDirectory, "outlines-annotations-repair.pdf");
+
+        // 1. Create a 2-page document with outlines and zero-area CropBox
+        using (var doc = new PdfDocument())
+        {
+            var p0 = doc.AddPage();
+            p0.Width = 612; p0.Height = 792;
+            p0.Elements.SetRectangle("/CropBox", new PdfSharpCore.Pdf.PdfRectangle(new XRect(0, 0, 0, 0)));
+
+            var p1 = doc.AddPage();
+            p1.Width = 612; p1.Height = 792;
+            p1.Elements.SetRectangle("/CropBox", new PdfSharpCore.Pdf.PdfRectangle(new XRect(0, 0, 0, 0)));
+
+            // Add bookmarks/outlines
+            var rootOutline = doc.Outlines.Add("Chapter 1", p0, true);
+            rootOutline.Outlines.Add("Section 1.1", p1, true);
+
+            doc.Save(filePath);
+        }
+
+        // 2. Add annotations across pages
+        var annotations = new Dictionary<int, PageAnnotation>();
+        var page0Annots = new PageAnnotation();
+        page0Annots.Texts.Add(new TextAnnotation { Text = "Chapter Title", X = 50, Y = 50, FontSize = 16, R = 0, G = 0, B = 0 });
+        page0Annots.Strokes.Add(new StrokeAnnotation
+        {
+            R = 200, G = 50, B = 50, A = 255, Size = 3,
+            Points = new List<double[]> { new[] { 10d, 10d }, new[] { 20d, 20d }, new[] { 30d, 30d } }
+        });
+        page0Annots.Highlights.Add(new HighlightAnnotation
+        {
+            R = 255, G = 255, B = 0, A = 128,
+            Rects = new List<double[]> { new[] { 50d, 50d, 100d, 20d } }
+        });
+        page0Annots.StickyNotes.Add(new StickyNoteAnnotation
+        {
+            Id = "sticky-1",
+            X = 200, Y = 200, Text = "Review this",
+            R = 255, G = 235, B = 59
+        });
+        byte[] testImageBytes = new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A }; // PNG header stub
+        // Create a valid 1x1 PNG image for ImageAnnotation
+        using (var bmp = new System.Drawing.Bitmap(1, 1))
+        using (var ms = new MemoryStream())
+        {
+            bmp.Save(ms, System.Drawing.Imaging.ImageFormat.Png);
+            page0Annots.Images.Add(new ImageAnnotation
+            {
+                X = 300, Y = 300, Width = 50, Height = 50,
+                ImageDataBase64 = Convert.ToBase64String(ms.ToArray())
+            });
+        }
+        annotations[0] = page0Annots;
+
+        await using (var service = new PdfService())
+        {
+            await service.LoadPdfAsync(filePath);
+            await service.SaveAnnotationsToPdfAsync(filePath, annotations);
+        }
+
+        // 3. Verify the repaired document
+        using var savedDoc = PdfReader.Open(filePath, PdfDocumentOpenMode.ReadOnly);
+        Assert.That(savedDoc.PageCount, Is.EqualTo(2));
+        Assert.That(savedDoc.Pages[0].Elements.ContainsKey("/CropBox"), Is.False, "Page 0 zero-area CropBox must be removed.");
+        Assert.That(savedDoc.Pages[1].Elements.ContainsKey("/CropBox"), Is.False, "Page 1 zero-area CropBox must be removed.");
+
+        // Verify outlines are preserved
+        Assert.That(savedDoc.Outlines.Count, Is.EqualTo(1));
+        Assert.That(savedDoc.Outlines[0].Title, Is.EqualTo("Chapter 1"));
+        Assert.That(savedDoc.Outlines[0].Outlines.Count, Is.EqualTo(1));
+        Assert.That(savedDoc.Outlines[0].Outlines[0].Title, Is.EqualTo("Section 1.1"));
+
+        // Verify annotations round-trip
+        await using var verifyService = new PdfService();
+        await verifyService.LoadPdfAsync(filePath);
+        Assert.That(verifyService.ExtractedAnnotations.ContainsKey(0), Is.True);
+        var extracted = verifyService.ExtractedAnnotations[0];
+        Assert.That(extracted.Texts.Count, Is.EqualTo(1));
+        Assert.That(extracted.Texts[0].Text, Is.EqualTo("Chapter Title"));
+        Assert.That(extracted.Strokes.Count, Is.EqualTo(1));
+        Assert.That(extracted.Highlights.Count, Is.EqualTo(1));
+        Assert.That(extracted.StickyNotes.Count, Is.EqualTo(1));
+        Assert.That(extracted.Images.Count, Is.EqualTo(1));
+    }
 }
