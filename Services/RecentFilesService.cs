@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -55,8 +55,35 @@ namespace Caelum.Services
             }
         }
 
+        private static string BackupFilePath =>
+            Path.Combine(ProductInfo.GetDataDirectory(), "recent_files.json.bak");
+
+        private static string BookmarksFilePath =>
+            Path.Combine(ProductInfo.GetDataDirectory(), "bookmarks.json");
+
         private static string LegacyFilePath =>
             Path.Combine(ProductInfo.GetDataDirectory(), "recent_files.txt");
+
+        public static string GetLibraryDisplayName(RecentFileEntry entry)
+        {
+            if (entry == null)
+                return string.Empty;
+
+            if (!string.IsNullOrWhiteSpace(entry.DisplayName))
+                return entry.DisplayName.Trim();
+
+            if (string.IsNullOrWhiteSpace(entry.Path))
+                return string.Empty;
+
+            try
+            {
+                return Path.GetFileName(entry.Path);
+            }
+            catch (Exception)
+            {
+                return entry.Path.Trim();
+            }
+        }
 
         /// <summary>
         /// Returns the list of recent file entries (most recent first).
@@ -398,15 +425,16 @@ namespace Caelum.Services
             try
             {
                 if (!File.Exists(FilePath))
-                    return LoadLegacy();
+                    return RestoreIfEmpty(LoadLegacy());
 
                 var json = File.ReadAllText(FilePath);
                 if (string.IsNullOrWhiteSpace(json))
-                    return new List<RecentFileEntry>();
+                    return RestoreIfEmpty(new List<RecentFileEntry>());
 
                 try
                 {
                     var entries = JsonSerializer.Deserialize<List<RecentFileEntry>>(json) ?? new List<RecentFileEntry>();
+                    entries = RestoreIfEmpty(entries);
                     if (NormalizeEntries(entries))
                         Save(entries);
 
@@ -415,8 +443,83 @@ namespace Caelum.Services
                 catch (JsonException)
                 {
                     var legacyPaths = JsonSerializer.Deserialize<List<string>>(json) ?? new List<string>();
-                    return legacyPaths.Select(path => CreateEntry(path, null, null, null, false)).ToList();
+                    return RestoreIfEmpty(legacyPaths.Select(path => CreateEntry(path, null, null, null, false)).ToList());
                 }
+            }
+            catch
+            {
+                return RestoreIfEmpty(new List<RecentFileEntry>());
+            }
+        }
+
+        private static List<RecentFileEntry> RestoreIfEmpty(List<RecentFileEntry> entries)
+        {
+            entries ??= new List<RecentFileEntry>();
+            if (entries.Any(entry =>
+                    entry != null &&
+                    (entry.IsFolder || (entry.IsFile && !string.IsNullOrWhiteSpace(entry.Path)))))
+                return entries;
+
+            var restored = TryReadEntries(BackupFilePath);
+            if (restored.Count > 0)
+            {
+                Save(restored);
+                return restored;
+            }
+
+            restored = RecoverFromBookmarks();
+            if (restored.Count > 0)
+                Save(restored);
+
+            return restored.Count > 0 ? restored : entries;
+        }
+
+        private static List<RecentFileEntry> TryReadEntries(string path)
+        {
+            try
+            {
+                if (!File.Exists(path))
+                    return new List<RecentFileEntry>();
+
+                var json = File.ReadAllText(path);
+                if (string.IsNullOrWhiteSpace(json))
+                    return new List<RecentFileEntry>();
+
+                var entries = JsonSerializer.Deserialize<List<RecentFileEntry>>(json) ?? new List<RecentFileEntry>();
+                return entries
+                    .Where(entry => entry != null && entry.IsFile && !string.IsNullOrWhiteSpace(entry.Path))
+                    .Select(CloneEntry)
+                    .ToList();
+            }
+            catch
+            {
+                return new List<RecentFileEntry>();
+            }
+        }
+
+        private static List<RecentFileEntry> RecoverFromBookmarks()
+        {
+            try
+            {
+                if (!File.Exists(BookmarksFilePath))
+                    return new List<RecentFileEntry>();
+
+                var parsed = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(File.ReadAllText(BookmarksFilePath));
+                if (parsed == null || parsed.Count == 0)
+                    return new List<RecentFileEntry>();
+
+                var recovered = new List<RecentFileEntry>();
+                foreach (var path in parsed.Keys)
+                {
+                    if (string.IsNullOrWhiteSpace(path) || !path.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase))
+                        continue;
+                    if (!File.Exists(path))
+                        continue;
+
+                    recovered.Add(CreateEntry(path, null, File.GetLastWriteTimeUtc(path), null, false));
+                }
+
+                return recovered;
             }
             catch
             {
@@ -475,12 +578,15 @@ namespace Caelum.Services
                     continue;
                 }
 
-                if (string.IsNullOrWhiteSpace(entry.Path) || !File.Exists(entry.Path))
+                if (string.IsNullOrWhiteSpace(entry.Path))
                 {
                     entries.RemoveAt(i);
                     changed = true;
                     continue;
                 }
+
+                if (!File.Exists(entry.Path))
+                    continue;
 
                 DateTime currentLastModifiedUtc;
                 try
@@ -489,8 +595,6 @@ namespace Caelum.Services
                 }
                 catch
                 {
-                    entries.RemoveAt(i);
-                    changed = true;
                     continue;
                 }
 
@@ -689,12 +793,41 @@ namespace Caelum.Services
         {
             try
             {
+                int incomingFiles = entries.Count(entry => entry != null && entry.IsFile);
+                if (incomingFiles == 0 && File.Exists(FilePath))
+                {
+                    var existing = TryReadEntries(FilePath);
+                    if (existing.Count > 0)
+                    {
+                        TryWriteBackup(File.ReadAllText(FilePath));
+                        return;
+                    }
+                }
+
+                if (File.Exists(FilePath) && incomingFiles > 0)
+                    TryWriteBackup(File.ReadAllText(FilePath));
+
                 var json = JsonSerializer.Serialize(entries, new JsonSerializerOptions { WriteIndented = true });
                 File.WriteAllText(FilePath, json);
             }
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"[RecentFilesService] Save failed: {ex.Message}");
+            }
+        }
+
+        private static void TryWriteBackup(string json)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(json) || json.Trim() == "[]")
+                    return;
+
+                File.WriteAllText(BackupFilePath, json);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[RecentFilesService] Backup failed: {ex.Message}");
             }
         }
     }

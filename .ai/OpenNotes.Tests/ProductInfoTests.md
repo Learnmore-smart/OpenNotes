@@ -1,5 +1,5 @@
 # OpenNotes.Tests/ProductInfoTests.cs
-> 2026-09-05 GREEN: the 5.2.11 visible-version contract failed against stale 5.2.10 production metadata, then passed after alignment; compatibility assertions remain unchanged.
+> 2026-09-06 GREEN: the 5.2.12 visible-version contract failed against stale 5.2.11 production metadata, then passed after alignment; compatibility assertions remain unchanged.
 > 2026-09-02 GREEN: the 5.2.9 visible-version contract failed against stale 5.2.8 production metadata, then passed 2/2 after alignment; compatibility assertions remain unchanged.
 > 2026-08-31 GREEN: the 5.2.8 visible-version contract failed against stale 5.2.7 production metadata, then passed 2/2 after alignment; compatibility assertions remain unchanged.
 > 2026-08-31 GREEN: the 5.2.7 visible-version contract failed against stale 5.2.6 production metadata, then passed 2/2 after alignment; compatibility assertions remain unchanged.

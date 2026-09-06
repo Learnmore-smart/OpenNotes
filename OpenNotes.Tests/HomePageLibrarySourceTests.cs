@@ -18,6 +18,9 @@ public sealed class HomePageLibrarySourceTests
             Assert.That(page, Does.Contain("IsChoosingMoveTarget"));
             Assert.That(utilities, Does.Contain("Home.Selection.Delete"));
             Assert.That(utilities, Does.Contain("TrySendToRecycleBin"));
+            Assert.That(page, Does.Contain("DragDrop.DoDragDrop"));
+            Assert.That(page, Does.Contain("DragDropEffects.Copy"));
+            Assert.That(page, Does.Not.Contain("DragDrop.DoDragDrop((DependencyObject)sender, dataObject, DragDropEffects.Move)"));
         });
     }
 

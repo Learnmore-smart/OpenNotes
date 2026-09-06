@@ -1086,7 +1086,7 @@ namespace Caelum.Pages
 
             try
             {
-                DragDrop.DoDragDrop((DependencyObject)sender, dataObject, DragDropEffects.Move);
+                DragDrop.DoDragDrop((DependencyObject)sender, dataObject, DragDropEffects.Copy);
             }
             finally
             {

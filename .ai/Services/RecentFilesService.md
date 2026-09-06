@@ -14,12 +14,12 @@ Stores the OpenNotes library index and legacy text migration data under the comp
 
 ## Open Threads / Resume Context
 
-- **Status:** ready_for_next
-- The service now uses `ProductInfo.GetDataDirectory()` so isolated editor smoke can open a PDF without attempting to write the user's AppData.
-- JSON/legacy-file names and current pruning/deduplication behavior remain unchanged.
+- **Status:** complete
+- Missing PDFs stay in `recent_files.json`. Empty index restores from `.bak` then existing `bookmarks.json` PDF keys. `GetLibraryDisplayName` falls back to the file name. Save refuses to replace a non-empty file list with zero files.
 
 ## Change History
 
 | Date | Change | Author |
 |---|---|---|
+| 2026-09-06 | Keep missing library PDFs, restore empty index from bak/bookmarks, `GetLibraryDisplayName`. | Cursor |
 | 2026-08-21 | Added the mirror and routed the service through the test-only data-root seam; production remains `%LOCALAPPDATA%\Caelum`. | Codex |
