@@ -53,6 +53,100 @@
         </Style>
         <Style TargetType="{x:Type ToolTip}" BasedOn="{StaticResource EditorToolTipStyle}"/>
 
+        <Style x:Key="ModernTextBox" TargetType="TextBox">
+            <Setter Property="Background" Value="{DynamicResource ThemeControlBrush}"/>
+            <Setter Property="Foreground" Value="{DynamicResource ThemeTextBrush}"/>
+            <Setter Property="CaretBrush" Value="{DynamicResource ThemeTextBrush}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource ThemeBorderBrush}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="8,5"/>
+            <Setter Property="MinHeight" Value="28"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+            <Setter Property="SnapsToDevicePixels" Value="True"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TextBox">
+                        <Border x:Name="Bd"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="8"
+                                Padding="{TemplateBinding Padding}"
+                                SnapsToDevicePixels="True">
+                            <ScrollViewer x:Name="PART_ContentHost" Focusable="False"
+                                          HorizontalScrollBarVisibility="Hidden"
+                                          VerticalScrollBarVisibility="Hidden"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource ThemeAccentBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource ThemeFocusBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="Bd" Property="Opacity" Value="0.55"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="ModernListBoxItem" TargetType="ListBoxItem">
+            <Setter Property="Padding" Value="10,8"/>
+            <Setter Property="Margin" Value="0,1"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Foreground" Value="{DynamicResource ThemeTextBrush}"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ListBoxItem">
+                        <Border x:Name="Bg" Background="{TemplateBinding Background}" CornerRadius="8" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bg" Property="Background" Value="{DynamicResource ThemeControlHoverBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="Bg" Property="Background" Value="{DynamicResource ThemeSelectionBrush}"/>
+                                <Setter Property="Foreground" Value="{DynamicResource ThemeSelectionForegroundBrush}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="ModernListBox" TargetType="ListBox">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Foreground" Value="{DynamicResource ThemeTextBrush}"/>
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled"/>
+            <Setter Property="ItemContainerStyle" Value="{StaticResource ModernListBoxItem}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ListBox">
+                        <Border Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="8"
+                                SnapsToDevicePixels="True">
+                            <ScrollViewer Focusable="False" Padding="0"
+                                          HorizontalScrollBarVisibility="{TemplateBinding ScrollViewer.HorizontalScrollBarVisibility}"
+                                          VerticalScrollBarVisibility="Auto">
+                                <ItemsPresenter/>
+                            </ScrollViewer>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <Style x:Key="ToolbarIconPathStyle" TargetType="Path">
             <Setter Property="Width" Value="19"/>
             <Setter Property="Height" Value="19"/>
@@ -166,7 +260,9 @@
         <Style x:Key="ToolbarSeparatorStyle" TargetType="Border">
             <Setter Property="Width" Value="1"/>
             <Setter Property="Height" Value="20"/>
-            <Setter Property="Margin" Value="6,8"/>
+            <Setter Property="Margin" Value="6,0"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="SnapsToDevicePixels" Value="True"/>
             <Setter Property="Background" Value="{DynamicResource ThemeMenuSeparatorBrush}"/>
         </Style>
 
@@ -475,7 +571,6 @@
                         AutomationProperties.AutomationId="Editor.PenToolButton">
                     <Grid Width="22" Height="22">
                         <controls:LucideIcon x:Name="PenIcon" Kind="PenLine" Width="18" Height="18"
-                                             VerticalAlignment="Top"
                                              Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=ToggleButton}}"/>
                         <Border x:Name="PenColorIndicator"
                                 Width="12" Height="2.5"
@@ -492,7 +587,6 @@
                         AutomationProperties.AutomationId="Editor.HighlighterToolButton">
                     <Grid Width="22" Height="22">
                         <controls:LucideIcon x:Name="HighlighterIcon" Kind="Highlighter" Width="18" Height="18"
-                                             VerticalAlignment="Top"
                                              Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=ToggleButton}}"/>
                         <Border x:Name="HighlighterColorIndicator"
                                 Width="12" Height="2.5"
@@ -972,15 +1066,16 @@
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
-                    <TextBox x:Name="PdfSearchTextBox" Margin="0,0,8,0" VerticalContentAlignment="Center"
+                    <TextBox x:Name="PdfSearchTextBox" Margin="0,0,8,0" Style="{StaticResource ModernTextBox}"
                              KeyDown="PdfSearchTextBox_KeyDown" TextChanged="PdfSearchTextBox_TextChanged"/>
-                    <Button Grid.Column="1" Width="30" Click="ClosePdfSearchButton_Click">
-                        <controls:LucideIcon Kind="X" Width="14" Height="14" Stroke="{DynamicResource ThemeForegroundBrush}"/>
+                    <Button Grid.Column="1" Width="32" Height="32" Click="ClosePdfSearchButton_Click"
+                            Style="{StaticResource ToolbarButtonStyle}" Padding="0" MinWidth="32">
+                        <controls:LucideIcon Kind="X" Width="14" Height="14" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
                     </Button>
                 </Grid>
                 <TextBlock x:Name="PdfSearchStatusTextBlock" DockPanel.Dock="Bottom" Margin="2,6,2,0"
                            Foreground="{DynamicResource ThemeSubtleForegroundBrush}" FontSize="11"/>
-                <ListBox x:Name="PdfSearchResultsListBox" Margin="0,8,0,0" BorderThickness="0"
+                <ListBox x:Name="PdfSearchResultsListBox" Margin="0,8,0,0" Style="{StaticResource ModernListBox}"
                          SelectionChanged="PdfSearchResultsListBox_SelectionChanged"/>
             </DockPanel>
         </Border>
@@ -993,8 +1088,8 @@
                  Panel.ZIndex="10"/>
 
         <!-- Loading Overlay -->
-        <Grid x:Name="LoadingOverlay"
-              Background="{DynamicResource ThemeSurfaceBrush}" Opacity="0.92" Visibility="Collapsed">
+        <Grid x:Name="LoadingOverlay" Visibility="Collapsed" Panel.ZIndex="40">
+            <Border Background="{DynamicResource ThemeWindowBrush}" Opacity="0.28" IsHitTestVisible="True"/>
             <Border CornerRadius="14" Padding="28,20" HorizontalAlignment="Center" VerticalAlignment="Center"
                     Background="{DynamicResource ThemeSurfaceBrush}"
                     BorderBrush="{DynamicResource ThemeBorderBrush}"

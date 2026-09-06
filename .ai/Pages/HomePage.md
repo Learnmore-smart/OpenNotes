@@ -19,6 +19,8 @@ Displays the document/folder home surface inside the MainWindow tab shell.
 - Home smooth scrolling consumes `ThemeService.GetAnimationDuration`; ReduceMotion cancels the Rendering subscription and jumps to the target offset.
 - Add-tile, folder, and file hover scale effects now run through the code-behind `AnimateTileScale` helper and `ThemeService.GetAnimationDuration`; the retired fixed `0.2/0.3` second storyboards cannot bypass ReduceMotion.
 
+- **2026-09-05 library:** Dragging PDFs onto a folder tile still uses `FolderTile_Drop` + `IsDropTarget`. Selection Move enters `IsChoosingMoveTarget` and completes by clicking a folder or breadcrumb (no bottom menu). Folder right-click color swatches write `RecentFilesService.SetFolderColor`. Delete file confirms with `DialogService.ShowDangerConfirmAsync` then `RecycleBinService.TrySendToRecycleBin` before removing the library index. “Remove from library” is unchanged.
+
 ## Constraints
 
 - Preserve existing HomeTile bindings and file/folder navigation.

@@ -4,6 +4,8 @@
 
 Stores the OpenNotes library index and legacy text migration data under the compatible Caelum data directory.
 
+- **2026-09-05:** `RecentFileEntry.Color` is an optional hex string. `SetFolderColor` / `NormalizeFolderColor` persist it; missing JSON fields stay empty so the home UI keeps the default amber.
+
 ## Important Notes / NEVER Change
 
 - The default root remains `%LOCALAPPDATA%\Caelum`.

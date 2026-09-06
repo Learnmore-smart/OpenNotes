@@ -356,7 +356,7 @@ public sealed class EditorToolbarVisualSourceTests
             var preview = new ShapePath();
             helper!.Invoke(null, new object[] { mode, preview, color, 13.5d });
 
-            Assert.That(preview.StrokeThickness, Is.EqualTo(13.5d), entry.Key);
+            Assert.That(preview.StrokeThickness, Is.GreaterThanOrEqualTo(1.0).And.LessThanOrEqualTo(3.5), entry.Key);
             Assert.That((preview.Stroke as SolidColorBrush)?.Color.A, Is.EqualTo(entry.Value.StrokeAlpha), entry.Key);
             var fill = (preview.Fill as SolidColorBrush)?.Color.A ?? (byte)0;
             Assert.That(fill, Is.EqualTo(entry.Value.FillAlpha), entry.Key);

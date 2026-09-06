@@ -1,5 +1,9 @@
 # Services/PdfService.cs
 
+## Annotation rotation metadata (2026-09-05)
+
+- Owned FreeText / Stamp / Sticky write optional `/WNARotation`. Missing keys load as 0. Strip/rebuild, DIP coordinates, and atomic save are unchanged.
+
 ## Page rotation geometry regression (2026-08-31) — GREEN
 
 - Root cause: structural rotation persisted `/Rotate`, and Pdfium already exposed the correct rotated page size, but PdfSharpCore's `PdfPage.Width`/`Height` also became rotation-aware while `/InkList` remained in the page's raw default user space. Extraction therefore used the wrong Y basis (including negative points at 90 degrees), so the WPF drawing overlay no longer followed the rotated bitmap.

@@ -54,7 +54,9 @@
 
         <!-- Selection Transform Layer (for select/move/scale) -->
         <Canvas x:Name="SelectionOverlayCanvas" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
-                Background="Transparent" Visibility="Collapsed" IsHitTestVisible="True"/>
+                Background="Transparent" Visibility="Collapsed" IsHitTestVisible="True"
+                Stylus.IsPressAndHoldEnabled="True"
+                Stylus.IsFlicksEnabled="False"/>
 
         <!-- Study mode: opaque freehand masks. The canvas itself has no
              background, so only a mask path is hit-testable; clicks elsewhere

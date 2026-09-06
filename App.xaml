@@ -51,6 +51,7 @@
             <SolidColorBrush x:Key="ThemeTextBrush" Color="#1F2937"/>
             <SolidColorBrush x:Key="ThemeSubtleTextBrush" Color="#4B5563"/>
             <SolidColorBrush x:Key="ThemeDangerBrush" Color="#B42318"/>
+            <SolidColorBrush x:Key="ThemeWindowOutlineBrush" Color="#1F2937"/>
             <Duration x:Key="ThemeAnimationDuration">0:0:0.16</Duration>
             <sys:Double x:Key="ThemeSurfaceOpacity">0.96</sys:Double>
             <sys:Double x:Key="ThemeShadowOpacity">0.12</sys:Double>
@@ -474,6 +475,109 @@
                 <Setter Property="Padding" Value="8,4"/>
             </Style>
 
+            <Style x:Key="ModernTextBox" TargetType="TextBox">
+                <Setter Property="Background" Value="{DynamicResource ThemeControlBrush}"/>
+                <Setter Property="Foreground" Value="{DynamicResource ThemeTextBrush}"/>
+                <Setter Property="CaretBrush" Value="{DynamicResource ThemeTextBrush}"/>
+                <Setter Property="BorderBrush" Value="{DynamicResource ThemeBorderBrush}"/>
+                <Setter Property="BorderThickness" Value="1"/>
+                <Setter Property="Padding" Value="8,5"/>
+                <Setter Property="MinHeight" Value="28"/>
+                <Setter Property="FontSize" Value="13"/>
+                <Setter Property="VerticalContentAlignment" Value="Center"/>
+                <Setter Property="SnapsToDevicePixels" Value="True"/>
+                <Setter Property="FocusVisualStyle" Value="{StaticResource SettingsFocusVisualStyle}"/>
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="TextBox">
+                            <Border x:Name="Bd"
+                                    Background="{TemplateBinding Background}"
+                                    BorderBrush="{TemplateBinding BorderBrush}"
+                                    BorderThickness="{TemplateBinding BorderThickness}"
+                                    CornerRadius="8"
+                                    Padding="{TemplateBinding Padding}"
+                                    SnapsToDevicePixels="True">
+                                <ScrollViewer x:Name="PART_ContentHost" Focusable="False"
+                                              HorizontalScrollBarVisibility="Hidden"
+                                              VerticalScrollBarVisibility="Hidden"/>
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource ThemeAccentBrush}"/>
+                                </Trigger>
+                                <Trigger Property="IsKeyboardFocused" Value="True">
+                                    <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource ThemeFocusBrush}"/>
+                                </Trigger>
+                                <Trigger Property="IsEnabled" Value="False">
+                                    <Setter TargetName="Bd" Property="Opacity" Value="0.55"/>
+                                    <Setter Property="Foreground" Value="{DynamicResource ThemeSubtleTextBrush}"/>
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+
+            <Style x:Key="ModernListBoxItem" TargetType="ListBoxItem">
+                <Setter Property="Padding" Value="10,8"/>
+                <Setter Property="Margin" Value="0,1"/>
+                <Setter Property="Cursor" Value="Hand"/>
+                <Setter Property="Foreground" Value="{DynamicResource ThemeTextBrush}"/>
+                <Setter Property="Background" Value="Transparent"/>
+                <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="ListBoxItem">
+                            <Border x:Name="Bg" Background="{TemplateBinding Background}" CornerRadius="8" Padding="{TemplateBinding Padding}">
+                                <ContentPresenter/>
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter TargetName="Bg" Property="Background" Value="{DynamicResource ThemeControlHoverBrush}"/>
+                                </Trigger>
+                                <Trigger Property="IsSelected" Value="True">
+                                    <Setter TargetName="Bg" Property="Background" Value="{DynamicResource ThemeSelectionBrush}"/>
+                                    <Setter Property="Foreground" Value="{DynamicResource ThemeSelectionForegroundBrush}"/>
+                                </Trigger>
+                                <Trigger Property="IsEnabled" Value="False">
+                                    <Setter Property="Foreground" Value="{DynamicResource ThemeSubtleTextBrush}"/>
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+
+            <Style x:Key="ModernListBox" TargetType="ListBox">
+                <Setter Property="Background" Value="Transparent"/>
+                <Setter Property="BorderThickness" Value="0"/>
+                <Setter Property="Foreground" Value="{DynamicResource ThemeTextBrush}"/>
+                <Setter Property="Padding" Value="0"/>
+                <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled"/>
+                <Setter Property="ScrollViewer.VerticalScrollBarVisibility" Value="Auto"/>
+                <Setter Property="ScrollViewer.CanContentScroll" Value="True"/>
+                <Setter Property="ItemContainerStyle" Value="{StaticResource ModernListBoxItem}"/>
+                <Setter Property="FocusVisualStyle" Value="{StaticResource SettingsFocusVisualStyle}"/>
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="ListBox">
+                            <Border Background="{TemplateBinding Background}"
+                                    BorderBrush="{TemplateBinding BorderBrush}"
+                                    BorderThickness="{TemplateBinding BorderThickness}"
+                                    CornerRadius="8"
+                                    Padding="{TemplateBinding Padding}"
+                                    SnapsToDevicePixels="True">
+                                <ScrollViewer Focusable="False" Padding="0" Style="{StaticResource SleekScrollViewer}"
+                                              HorizontalScrollBarVisibility="{TemplateBinding ScrollViewer.HorizontalScrollBarVisibility}"
+                                              VerticalScrollBarVisibility="{TemplateBinding ScrollViewer.VerticalScrollBarVisibility}">
+                                    <ItemsPresenter SnapsToDevicePixels="{TemplateBinding SnapsToDevicePixels}"/>
+                                </ScrollViewer>
+                            </Border>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+
             <Style x:Key="DialogPrimaryButton" TargetType="Button">
                 <Setter Property="Background" Value="{DynamicResource ThemeAccentBrush}"/>
                 <Setter Property="Foreground" Value="{DynamicResource ThemeSurfaceBrush}"/>
@@ -518,6 +622,11 @@
                         <Setter Property="Foreground" Value="{DynamicResource ThemeSubtleTextBrush}"/>
                     </Trigger>
                 </Style.Triggers>
+            </Style>
+
+            <Style x:Key="DialogDangerButton" TargetType="Button" BasedOn="{StaticResource DialogPrimaryButton}">
+                <Setter Property="Background" Value="{DynamicResource ThemeDangerBrush}"/>
+                <Setter Property="Foreground" Value="#FFFFFF"/>
             </Style>
 
             <Style x:Key="DialogSecondaryButton" TargetType="Button">

@@ -2033,6 +2033,7 @@ namespace Caelum.Services
                                 annot.Elements.SetString(PdfAnnotation.Keys.Contents, Convert.ToBase64String(imageBytes));
                                 annot.Elements.SetString("/NM", $"wna_img_{Guid.NewGuid()}");
                                 annot.Elements.SetInteger("/F", 4); // Printable
+                                SetAnnotationRotationMetadata(annot, image.RotationDegrees);
                                 annot.Elements["/AP"] = CreateAppearanceDictionary(document, pdfForm);
 
                                 AddAnnotationToPage(pdfPage, annot);
@@ -2435,6 +2436,7 @@ namespace Caelum.Services
                 new PdfSharpPdfRectangle(new XRect(x, yBottom, iconWidthPt, iconHeightPt)));
             dict.Elements.SetReal("/WNAWidth", iconWidthPt);
             dict.Elements.SetReal("/WNAHeight", iconHeightPt);
+            SetAnnotationRotationMetadata(dict, note.RotationDegrees);
 
             if (!string.IsNullOrEmpty(note.Text))
                 dict.Elements.SetString(PdfAnnotation.Keys.Contents, note.Text, PdfStringEncoding.Unicode);
@@ -2991,6 +2993,7 @@ namespace Caelum.Services
                         + alignmentMatch.Groups["alignment"].Value.Substring(1).ToLowerInvariant();
             }
 
+            annotation.RotationDegrees = GetAnnotationRotationMetadata(dict);
             return annotation;
         }
 
@@ -3011,6 +3014,27 @@ namespace Caelum.Services
         {
             annotation.Elements.SetInteger("/WNAutoWidth", textItem?.Width > 0 ? 0 : 1);
             annotation.Elements.SetInteger("/WNAutoHeight", textItem?.Height > 0 ? 0 : 1);
+            SetAnnotationRotationMetadata(annotation, textItem?.RotationDegrees ?? 0);
+        }
+
+        private static void SetAnnotationRotationMetadata(PdfDictionary annotation, double degrees)
+        {
+            if (annotation?.Elements == null)
+                return;
+
+            double normalized = AnnotationTransform.NormalizeDegrees(degrees);
+            if (Math.Abs(normalized) < 0.01)
+                return;
+
+            annotation.Elements.SetReal("/WNARotation", normalized);
+        }
+
+        private static double GetAnnotationRotationMetadata(PdfDictionary dict)
+        {
+            if (dict?.Elements == null || !dict.Elements.ContainsKey("/WNARotation"))
+                return 0;
+
+            return GetDouble(dict.Elements.GetValue("/WNARotation"), 0);
         }
 
         // ----- Task 19: image annotations (/Stamp) -----
@@ -3057,7 +3081,8 @@ namespace Caelum.Services
                 X = rect.X1 * scale,
                 Y = (pageHeight - rect.Y1 - rect.Height) * scale,
                 Width = rect.Width * scale,
-                Height = rect.Height * scale
+                Height = rect.Height * scale,
+                RotationDegrees = GetAnnotationRotationMetadata(dict)
             };
         }
 
@@ -3354,7 +3379,8 @@ namespace Caelum.Services
                 Y = (pageHeight - rect.Y1 - rect.Height) * scale,
                 Text = ExtractAnnotationText(dict),
                 Width = widthPt * scale,
-                Height = heightPt * scale
+                Height = heightPt * scale,
+                RotationDegrees = GetAnnotationRotationMetadata(dict)
             };
 
             var colorArray = dict.Elements.GetArray("/C");

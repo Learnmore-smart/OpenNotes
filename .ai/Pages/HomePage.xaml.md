@@ -11,6 +11,8 @@ Defines the library landing surface, create/open affordances, selection state an
 - **Status:** complete (5.1.2)
 - Home create/open, selection, navigation and empty-state glyphs now use the shared Lucide renderer without changing tile behavior.
 
+- **2026-09-05:** File-tile clipart uses `ThemeSurfaceAltBrush` / `ThemeAccentBrush` / `ThemeInkBrush` / `ThemeMarginBrush` / `ThemePaperBrush` instead of hard-coded amber/red. Folder tiles still bind `FolderTabBrush` from the optional library `Color`.
+
 ## Important Notes / NEVER Change
 
 - Keep home-tile animation transforms mutable and preserve existing startup-crash safeguards.

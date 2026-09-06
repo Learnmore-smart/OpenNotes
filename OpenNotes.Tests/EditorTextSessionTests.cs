@@ -63,7 +63,8 @@ public sealed class EditorTextSessionTests
                         null,
                         null,
                         null,
-                        null
+                        null,
+                        0d
                     })!;
                 var textBox = container.Children.OfType<TextBox>().Single();
 
@@ -278,7 +279,8 @@ public sealed class EditorTextSessionTests
                 null,
                 null,
                 null,
-                null
+                null,
+                0d
             })!;
         textBox = container.Children.OfType<TextBox>().Single();
 

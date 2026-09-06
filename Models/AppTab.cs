@@ -8,7 +8,7 @@ namespace Caelum.Models
     public class AppTab : INotifyPropertyChanged
     {
         private string _title = "Home";
-        private string _icon = "\uE80F";
+        private string _icon = "Home";
         private string _filePath;
         private Frame _frame;
         private bool _isActive;

@@ -46,6 +46,11 @@ public sealed class MainWindowUpdateCheckSourceTests
             Assert.That(source, Does.Contain("_updateCheckCts?.Cancel();"));
             Assert.That(source, Does.Contain("UpdateCheckService.IsTrustedReleaseUri"));
             Assert.That(source, Does.Contain("UseShellExecute = true"));
+            Assert.That(source, Does.Contain("GetUpdateCheckFailureMessage"));
+            Assert.That(source, Does.Contain("Main.UpdateCheckFailedNetwork"));
+            Assert.That(source, Does.Contain("Main.UpdateCheckFailedTimeout"));
+            Assert.That(source, Does.Contain("Main.UpdateCheckFailedHttp"));
+            Assert.That(source, Does.Contain("Main.UpdateCheckFailedInvalid"));
         });
     }
 

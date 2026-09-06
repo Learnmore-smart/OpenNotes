@@ -27,11 +27,32 @@ namespace Caelum.Services
             string cancelButtonText = null,
             string okButtonText = null)
         {
+            return await ShowDialogAsync(owner, title, content, cancelButtonText, okButtonText, dangerConfirm: false);
+        }
+
+        public static async System.Threading.Tasks.Task<bool?> ShowDangerConfirmAsync(
+            Window owner,
+            string title,
+            string content,
+            string cancelButtonText,
+            string confirmButtonText)
+        {
+            return await ShowDialogAsync(owner, title, content, cancelButtonText, confirmButtonText, dangerConfirm: true);
+        }
+
+        private static async System.Threading.Tasks.Task<bool?> ShowDialogAsync(
+            Window owner,
+            string title,
+            string content,
+            string cancelButtonText,
+            string okButtonText,
+            bool dangerConfirm)
+        {
             var dialog = new Window
             {
                 Title = title,
-                Width = 520,
-                Height = 320,
+                Width = dangerConfirm ? 420 : 520,
+                Height = dangerConfirm ? 236 : 320,
                 WindowStartupLocation = WindowStartupLocation.CenterOwner,
                 Owner = owner,
                 ResizeMode = ResizeMode.NoResize,
@@ -166,7 +187,8 @@ namespace Caelum.Services
                     Content = okButtonText,
                     IsDefault = true
                 };
-                var priStyle = Application.Current.TryFindResource("DialogPrimaryButton") as Style;
+                var priStyle = Application.Current.TryFindResource(
+                    dangerConfirm ? "DialogDangerButton" : "DialogPrimaryButton") as Style;
                 if (priStyle != null)
                 {
                     okBtn.Style = priStyle;

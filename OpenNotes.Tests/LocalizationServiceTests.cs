@@ -75,6 +75,22 @@ public sealed class LocalizationCoverageTests
                 "Check your internet connection and try again.",
                 "请检查网络连接后重试。",
                 "Vérifiez votre connexion Internet et réessayez."),
+            ["Main.UpdateCheckFailedNetwork"] = (
+                "Couldn't reach GitHub. Check your internet connection and try again.",
+                "无法连接到 GitHub。请检查网络连接后重试。",
+                "Impossible de joindre GitHub. Vérifiez votre connexion Internet et réessayez."),
+            ["Main.UpdateCheckFailedTimeout"] = (
+                "The update check timed out. Try again in a moment.",
+                "检查更新超时，请稍后重试。",
+                "La recherche de mises à jour a expiré. Réessayez dans un instant."),
+            ["Main.UpdateCheckFailedHttp"] = (
+                "GitHub returned an unexpected response. Try again later.",
+                "GitHub 返回了异常响应，请稍后再试。",
+                "GitHub a renvoyé une réponse inattendue. Réessayez plus tard."),
+            ["Main.UpdateCheckFailedInvalid"] = (
+                "The update information from GitHub was not trusted. Try again later.",
+                "来自 GitHub 的更新信息未通过校验，请稍后再试。",
+                "Les informations de mise à jour GitHub n'ont pas pu être vérifiées. Réessayez plus tard."),
             ["Main.ViewRelease"] = ("View release", "查看更新", "Voir la version")
         };
 

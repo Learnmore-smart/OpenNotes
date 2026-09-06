@@ -14,3 +14,4 @@ Defines global WPF theme resources and shared control templates.
 ## Current Change
 
 - V5.1.2 replaces the ComboBox font chevron with an inline Lucide path so standalone ResourceDictionary parsing remains supported.
+- 2026-09-05: `ModernTextBox` and `ModernListBox` restyle remaining Aero search controls. `DialogDangerButton` remains the danger confirm style.

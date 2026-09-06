@@ -68,6 +68,44 @@ public sealed class TabDragCoordinatorTests
             Assert.That(source, Does.Contain("new MainWindow(createHomeTab: false)"));
             Assert.That(source, Does.Not.Contain("// Check if this file is already open"));
             Assert.That(source, Does.Contain("TabDragCoordinator.BeginDrag"));
+            Assert.That(source, Does.Contain("TabDragPreview"));
+            Assert.That(source, Does.Contain("GiveFeedback"));
+        });
+    }
+
+    [Test]
+    public void DetachMovesTheLiveTabInsteadOfReopeningTheFile()
+    {
+        var source = ReadProjectFile("MainWindow.xaml.cs");
+        int detachStart = source.IndexOf("private void DetachTabToNewWindow(AppTab tab)", StringComparison.Ordinal);
+        int openStart = source.IndexOf("public void OpenFileInNewTab(", StringComparison.Ordinal);
+        Assert.That(detachStart, Is.GreaterThanOrEqualTo(0));
+        Assert.That(openStart, Is.GreaterThan(detachStart));
+        string detachBody = source[detachStart..openStart];
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(detachBody, Does.Contain("TransferTabTo"));
+            Assert.That(detachBody, Does.Contain("new MainWindow(createHomeTab: false)"));
+            Assert.That(detachBody, Does.Not.Contain("OpenFileInNewTab"));
+            Assert.That(detachBody, Does.Not.Contain("NavigateActiveTabToFile"));
+        });
+    }
+
+    [Test]
+    public void TabDragOverTheWindowKeepsMoveEffectSoPageDropsDoNotDetach()
+    {
+        var source = ReadProjectFile("MainWindow.xaml.cs");
+        Assert.Multiple(() =>
+        {
+            Assert.That(source, Does.Contain("private void Window_DragOver"));
+            Assert.That(source, Does.Not.Contain(
+                """
+                if (TabDragCoordinator.TryGetPayload(e.Data, out _))
+                {
+                    e.Effects = DragDropEffects.None;
+                """));
+            Assert.That(source, Does.Contain("e.Effects = DragDropEffects.Move"));
         });
     }
 

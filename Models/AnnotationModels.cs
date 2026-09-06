@@ -91,6 +91,7 @@ namespace Caelum.Models
         public bool Italic { get; set; }
         public string FontFamily { get; set; } = "Segoe UI";
         public string Alignment { get; set; } = "Left";
+        public double RotationDegrees { get; set; }
     }
 
     public class HighlightAnnotation
@@ -117,6 +118,7 @@ namespace Caelum.Models
         public double Height { get; set; }
         public string Format { get; set; } = "png"; // "png" or "jpeg"
         public string ImageDataBase64 { get; set; }
+        public double RotationDegrees { get; set; }
     }
 
     /// <summary>
@@ -194,5 +196,6 @@ namespace Caelum.Models
         public byte R { get; set; } = 253;
         public byte G { get; set; } = 231;
         public byte B { get; set; } = 138;
+        public double RotationDegrees { get; set; }
     }
 }

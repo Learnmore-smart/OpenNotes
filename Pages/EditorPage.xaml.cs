@@ -128,10 +128,23 @@ namespace Caelum.Pages
         private double _rotateStartPointerAngle; // pointer angle around center at rotate start
         private double _rotateStartRulerAngle;
 
-        private const double RulerLength = 360.0;
+        private const double DefaultRulerLength = 360.0;
+        private const double MinRulerLength = 80.0;
+        private double _rulerLength = DefaultRulerLength;
         private const double RulerHeight = 56.0;
         private const double RulerEndCapZone = 14.0;      // end zones rotate instead of move
         private const double RulerRotationSnapDegrees = 15.0;
+        private bool _isResizingRuler;
+        private bool _rulerResizeFromLeft;
+        private Canvas _rulerTickCanvas;
+        private FrameworkElement _rulerLeftLengthHandle;
+        private FrameworkElement _rulerRightLengthHandle;
+
+        private Popup _selectionActionBar;
+        private Button _selectionActionCopyButton;
+        private Button _selectionActionPasteButton;
+        private Button _selectionActionDeleteButton;
+        private ContextMenu _blankContextMenu;
 
         private readonly PdfService _pdfService;
         // Every asynchronous menu/sidebar/undo continuation captures this
@@ -733,6 +746,32 @@ namespace Caelum.Pages
                 foreach (var stroke in _strokes.OrderBy(p => p.Index))
                     _page.AddStrokeQuiet(stroke.ForOwner(_page, stroke.Index));
                 foreach (var container in _containers) _page.AddTextContainerQuiet(container);
+                return Task.CompletedTask;
+            }
+        }
+
+        private class HighlightAddedAction : IUndoAction
+        {
+            private readonly PdfPageControl _page;
+            private readonly HighlightAnnotation _highlight;
+
+            public HighlightAddedAction(PdfPageControl page, HighlightAnnotation highlight)
+            {
+                _page = page;
+                _highlight = highlight;
+            }
+
+            public bool LeavesDocumentDirty => true;
+
+            public Task UndoAsync()
+            {
+                _page.RemoveHighlight(_highlight);
+                return Task.CompletedTask;
+            }
+
+            public Task RedoAsync()
+            {
+                _page.AddHighlight(_highlight);
                 return Task.CompletedTask;
             }
         }
@@ -1583,6 +1622,39 @@ namespace Caelum.Pages
             }
         }
 
+        private class SelectionRotateAction : IUndoAction
+        {
+            private readonly PdfPageControl _page;
+            private readonly double _totalDegrees;
+            private readonly System.Windows.Point _center;
+            private readonly List<System.Windows.Ink.Stroke> _strokes;
+            private readonly List<System.Windows.Controls.Grid> _containers;
+
+            public SelectionRotateAction(PdfPageControl page, double totalDegrees, System.Windows.Point center,
+                List<System.Windows.Ink.Stroke> strokes, List<System.Windows.Controls.Grid> containers)
+            {
+                _page = page;
+                _totalDegrees = totalDegrees;
+                _center = center;
+                _strokes = strokes;
+                _containers = containers;
+            }
+
+            public bool LeavesDocumentDirty => true;
+
+            public Task UndoAsync()
+            {
+                _page.RotateItemsDirectly(_strokes, _containers, -_totalDegrees, _center);
+                return Task.CompletedTask;
+            }
+
+            public Task RedoAsync()
+            {
+                _page.RotateItemsDirectly(_strokes, _containers, _totalDegrees, _center);
+                return Task.CompletedTask;
+            }
+        }
+
         private sealed class DocumentSnapshotAction : IUndoAction
         {
             private readonly EditorPage _owner;
@@ -2096,6 +2168,7 @@ namespace Caelum.Pages
 
             if (clearCopiedText)
                 _selectedPdfText = null;
+            UpdateSelectionActionBar();
         }
 
         private bool TryCopySelectedPdfTextToClipboard()
@@ -2279,6 +2352,7 @@ namespace Caelum.Pages
 
             _pdfTextSelectionPage.SetPdfTextSelectionRects(BuildPdfTextSelectionRects(_pdfTextSelectionInfo, start, end));
             _selectedPdfText = _pdfTextSelectionInfo.Text.Substring(start, end - start + 1);
+            UpdateSelectionActionBar();
         }
 
         private async void PageControl_PdfTextSelectionPointerPressed(object sender, PdfTextSelectionPointerEventArgs e)
@@ -2387,7 +2461,9 @@ namespace Caelum.Pages
                 {
                     if (_highlighterApplyMode == HighlighterApplyMode.TextHighlight)
                     {
-                        _pdfTextSelectionPage.AddHighlightAnnotation(rects, _highlighterColor);
+                        var highlight = _pdfTextSelectionPage.AddHighlightAnnotation(rects, _highlighterColor);
+                        if (highlight != null)
+                            PushUndoAction(new HighlightAddedAction(_pdfTextSelectionPage, highlight));
                         MarkDirty();
                     }
                     else
@@ -4247,8 +4323,12 @@ namespace Caelum.Pages
 
         private static double GetHighlighterPreviewStrokeThickness(HighlighterApplyMode mode, double size)
         {
-            _ = mode;
-            return Math.Max(1.0, size);
+            return mode switch
+            {
+                HighlighterApplyMode.Freehand => Math.Clamp(1.6 + (size - 2.0) * (1.2 / 46.0), 1.6, 2.8),
+                HighlighterApplyMode.AreaHighlight => 1.4,
+                _ => 1.8
+            };
         }
 
         private static byte GetHighlighterPreviewStrokeOpacity(HighlighterApplyMode mode)
@@ -4328,21 +4408,21 @@ namespace Caelum.Pages
         {
             var data = mode switch
             {
-                HighlighterApplyMode.TextHighlight => "M3,9 L25,9 M3,15 L25,15",
-                HighlighterApplyMode.Underline => "M3,16 L25,16",
-                HighlighterApplyMode.StrikeOut => "M3,6 L25,18",
-                HighlighterApplyMode.Squiggly => "M3,13 C6,7 8,19 11,13 S16,7 19,13 S22,19 25,13",
-                HighlighterApplyMode.AreaHighlight => "M4,5 L24,5 L24,17 L4,17 Z",
-                _ => "M3,14 C6,5 8,20 12,10 C15,4 18,17 21,8 C22,6 24,7 25,6"
+                HighlighterApplyMode.TextHighlight => "M3,7 H25 M3,14 H25",
+                HighlighterApplyMode.Underline => "M4,6 H24 M4,11 H18 M3,16 H25",
+                HighlighterApplyMode.StrikeOut => "M4,6 H24 M3,11 H25 M4,16 H20",
+                HighlighterApplyMode.Squiggly => "M4,6 H24 M3,14 C6,10 8,18 11,14 S16,10 19,14 S22,18 25,14",
+                HighlighterApplyMode.AreaHighlight => "M4,4 L24,4 L24,18 L4,18 Z",
+                _ => "M4,15 C7,7 11,19 15,10 C18,3 21,17 24,8"
             };
 
             return new Path
             {
                 Width = 28,
-                Height = 22,
+                Height = 20,
                 Stretch = Stretch.Uniform,
                 Fill = Brushes.Transparent,
-                StrokeThickness = 1.0,
+                StrokeThickness = 1.8,
                 StrokeStartLineCap = PenLineCap.Round,
                 StrokeEndLineCap = PenLineCap.Round,
                 StrokeLineJoin = PenLineJoin.Round,
@@ -4385,8 +4465,7 @@ namespace Caelum.Pages
                 Margin = new Thickness(0, 0, 0, 10)
             });
 
-            var row1 = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 8) };
-            var row2 = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 14) };
+            var modeGrid = new UniformGrid { Columns = 3, Margin = new Thickness(0, 0, 0, 12) };
 
             var modes = new (HighlighterApplyMode Mode, string Label, string AutomationId)[]
             {
@@ -4405,11 +4484,20 @@ namespace Caelum.Pages
             {
                 foreach (var pair in buttons)
                 {
-                    StyleVectorModeToggleButton(pair.Value, pair.Key == _highlighterApplyMode);
+                    bool active = pair.Key == _highlighterApplyMode;
+                    StyleVectorModeToggleButton(pair.Value, active);
                     if (pair.Value.Tag is Path preview)
                     {
                         _highlighterModePreviews[pair.Key] = preview;
                         ApplyHighlighterPreviewColor(pair.Key, preview);
+                    }
+                    if (pair.Value.Content is StackPanel content &&
+                        content.Children.OfType<TextBlock>().FirstOrDefault() is TextBlock text)
+                    {
+                        text.SetResourceReference(
+                            TextBlock.ForegroundProperty,
+                            active ? "ThemeAccentBrush" : "ThemeForegroundBrush");
+                        text.FontWeight = active ? FontWeights.SemiBold : FontWeights.Normal;
                     }
                 }
             }
@@ -4424,28 +4512,77 @@ namespace Caelum.Pages
                 // Switch the live tool immediately so the user can start
                 // applying right away; the popup stays open for further
                 // color/size tweaks.
-                ActivateTool(ToolType.None);
                 ActivateHighlighterModeTool();
             }
 
             for (int i = 0; i < modes.Length; i++)
             {
                 var mode = modes[i].Mode;
-                var button = BuildVectorModeToggleButton(
-                    modes[i].Label,
-                    modes[i].AutomationId,
-                    BuildHighlighterModePreview(mode),
-                    new Thickness(0, 0, i % 3 < 2 ? 6 : 0, 0),
-                    activated: () => SelectMode(mode));
+                var preview = BuildHighlighterModePreview(mode);
+                var textBlock = new TextBlock
+                {
+                    Text = modes[i].Label,
+                    FontSize = 11,
+                    TextAlignment = TextAlignment.Center,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    Margin = new Thickness(0, 3, 0, 0)
+                };
+                textBlock.SetResourceReference(TextBlock.ForegroundProperty, "ThemeForegroundBrush");
+
+                var contentPanel = new StackPanel
+                {
+                    Orientation = Orientation.Vertical,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+                contentPanel.Children.Add(preview);
+                contentPanel.Children.Add(textBlock);
+
+                var button = new ToggleButton
+                {
+                    Height = 54,
+                    MinWidth = 32,
+                    MinHeight = 32,
+                    Margin = new Thickness(2),
+                    Padding = new Thickness(4),
+                    BorderThickness = new Thickness(1),
+                    Cursor = Cursors.Hand,
+                    Focusable = true,
+                    Tag = preview,
+                    ToolTip = modes[i].Label,
+                    Content = contentPanel
+                };
+                ApplyToolbarPopupToggleStyle(button);
+                ToolTipService.SetToolTip(button, modes[i].Label);
+                AutomationProperties.SetAutomationId(button, modes[i].AutomationId);
+                AutomationProperties.SetName(button, modes[i].Label);
+                AutomationProperties.SetHelpText(button, modes[i].Label);
+                KeyboardNavigation.SetIsTabStop(button, true);
+                button.Click += (_, e) =>
+                {
+                    SelectMode(mode);
+                    button.IsChecked = true;
+                    e.Handled = true;
+                };
+
                 buttons[mode] = button;
-                (i < 3 ? row1 : row2).Children.Add(button);
+                modeGrid.Children.Add(button);
             }
 
-            panel.Children.Insert(0, row2);
-            panel.Children.Insert(0, row1);
+            panel.Children.Insert(0, modeGrid);
             panel.Children.Insert(0, header);
             ApplyVisual();
         }
+
+        private ToolType GetActiveHighlighterToolType() => _highlighterApplyMode switch
+        {
+            HighlighterApplyMode.Freehand => ToolType.Highlighter,
+            HighlighterApplyMode.AreaHighlight => ToolType.AreaHighlight,
+            _ => ToolType.TextHighlight,
+        };
+
+        private static bool IsHighlighterTool(ToolType tool) =>
+            tool == ToolType.Highlighter || tool == ToolType.TextHighlight || tool == ToolType.AreaHighlight;
 
         /// <summary>
         /// Task 25/27: activates the ToolType matching the current highlighter
@@ -4454,12 +4591,7 @@ namespace Caelum.Pages
         /// </summary>
         private void ActivateHighlighterModeTool()
         {
-            var tool = _highlighterApplyMode switch
-            {
-                HighlighterApplyMode.Freehand => ToolType.Highlighter,
-                HighlighterApplyMode.AreaHighlight => ToolType.AreaHighlight,
-                _ => ToolType.TextHighlight,
-            };
+            var tool = GetActiveHighlighterToolType();
             if (_currentTool != tool)
                 ActivateTool(tool);
             else
@@ -5320,7 +5452,8 @@ namespace Caelum.Pages
                             Bold = textBox.FontWeight >= FontWeights.Bold,
                             Italic = textBox.FontStyle == FontStyles.Italic,
                             FontFamily = textBox.FontFamily?.Source ?? "Segoe UI",
-                            Alignment = textBox.TextAlignment.ToString()
+                            Alignment = textBox.TextAlignment.ToString(),
+                            RotationDegrees = PdfPageControl.ReadAnnotationRotation(container)
                         };
 
                         pageAnnotation.Texts.Add(textAnnotation);
@@ -5338,7 +5471,8 @@ namespace Caelum.Pages
                                 Width = container.ActualWidth > 0 ? container.ActualWidth : container.Width,
                                 Height = container.ActualHeight > 0 ? container.ActualHeight : container.Height,
                                 Format = PdfService.DetectImageFormat(imageData),
-                                ImageDataBase64 = Convert.ToBase64String(imageData)
+                                ImageDataBase64 = Convert.ToBase64String(imageData),
+                                RotationDegrees = PdfPageControl.ReadAnnotationRotation(container)
                             });
                         }
                     }
@@ -5354,7 +5488,8 @@ namespace Caelum.Pages
                             Height = container.ActualHeight > 0 ? container.ActualHeight : container.Height,
                             R = sticky.R,
                             G = sticky.G,
-                            B = sticky.B
+                            B = sticky.B,
+                            RotationDegrees = PdfPageControl.ReadAnnotationRotation(container)
                         });
                     }
                 }
@@ -5533,7 +5668,8 @@ namespace Caelum.Pages
                             Bold = textAnnotation.Bold,
                             Italic = textAnnotation.Italic,
                             FontFamily = textAnnotation.FontFamily,
-                            Alignment = textAnnotation.Alignment
+                            Alignment = textAnnotation.Alignment,
+                            RotationDegrees = textAnnotation.RotationDegrees
                         };
 
                         // Create the text box on the target page
@@ -5551,7 +5687,8 @@ namespace Caelum.Pages
                             fontFamily: offsetTextAnnotation.FontFamily,
                             alignment: ParseTextAlignment(offsetTextAnnotation.Alignment),
                             width: offsetTextAnnotation.Width > 0 ? offsetTextAnnotation.Width : null,
-                            height: offsetTextAnnotation.Height > 0 ? offsetTextAnnotation.Height : null);
+                            height: offsetTextAnnotation.Height > 0 ? offsetTextAnnotation.Height : null,
+                            rotationDegrees: offsetTextAnnotation.RotationDegrees);
                         if (c != null)
                         {
                             pastedContainers.Add(c);
@@ -5580,6 +5717,7 @@ namespace Caelum.Pages
                             imageAnnotation.Width, imageAnnotation.Height);
                         if (img != null)
                         {
+                            PdfPageControl.ApplyAnnotationRotation(img, imageAnnotation.RotationDegrees);
                             pastedContainers.Add(img);
                         }
                     }
@@ -5601,7 +5739,8 @@ namespace Caelum.Pages
                             Height = sticky.Height,
                             R = sticky.R,
                             G = sticky.G,
-                            B = sticky.B
+                            B = sticky.B,
+                            RotationDegrees = sticky.RotationDegrees
                         };
                         var pasted = targetPage.AddStickyNote(pastedSticky);
                         if (pasted != null)
@@ -5905,7 +6044,8 @@ namespace Caelum.Pages
                             fontFamily: textBox.FontFamily?.Source,
                             alignment: textBox.TextAlignment,
                             width: GetPersistedTextWidth(container),
-                            height: GetPersistedTextHeight(container));
+                            height: GetPersistedTextHeight(container),
+                            rotationDegrees: PdfPageControl.ReadAnnotationRotation(container));
                         if (clone != null)
                             clonedContainers.Add(clone);
                     }
@@ -5921,7 +6061,10 @@ namespace Caelum.Pages
                                 container.ActualWidth > 0 ? container.ActualWidth : container.Width,
                                 container.ActualHeight > 0 ? container.ActualHeight : container.Height);
                             if (clone != null)
+                            {
+                                PdfPageControl.ApplyAnnotationRotation(clone, PdfPageControl.ReadAnnotationRotation(container));
                                 clonedContainers.Add(clone);
+                            }
                         }
                     }
                     else if (page.GetOverlayData(container) is StickyNoteAnnotation sticky)
@@ -5936,7 +6079,8 @@ namespace Caelum.Pages
                             Height = container.ActualHeight > 0 ? container.ActualHeight : container.Height,
                             R = sticky.R,
                             G = sticky.G,
-                            B = sticky.B
+                            B = sticky.B,
+                            RotationDegrees = PdfPageControl.ReadAnnotationRotation(container)
                         });
                         if (clone != null)
                             clonedContainers.Add(clone);
@@ -6036,11 +6180,14 @@ namespace Caelum.Pages
 
         private void FixToolPopupZOrder()
         {
+            EnsureSelectionActionBar();
             _transientUiRegistry.Register(_penPopup);
             _transientUiRegistry.Register(_highlighterPopup);
             _transientUiRegistry.Register(_eraserPopup);
             _transientUiRegistry.Register(_shapePopup);
             _transientUiRegistry.Register(_selectionPopup);
+            _transientUiRegistry.Register(_selectionActionBar);
+            _transientUiRegistry.Register(_blankContextMenu);
             _transientUiRegistry.Register(_textColorPopup);
             _transientUiRegistry.Register(PdfViewerContextMenu);
             _transientUiRegistry.Register(_textFontFamilyCombo);
@@ -6050,6 +6197,8 @@ namespace Caelum.Pages
             PopupZOrderHelper.FixPopupTopmost(_eraserPopup);
             PopupZOrderHelper.FixPopupTopmost(_shapePopup);
             PopupZOrderHelper.FixPopupTopmost(_selectionPopup);
+            PopupZOrderHelper.FixPopupTopmost(_selectionActionBar);
+            PopupZOrderHelper.FixContextMenuTopmost(_blankContextMenu);
             PopupZOrderHelper.FixPopupTopmost(_textColorPopup);
             PopupZOrderHelper.FixContextMenuTopmost(PdfViewerContextMenu);
             PopupZOrderHelper.FixComboBoxPopupTopmost(_textFontFamilyCombo);
@@ -6067,6 +6216,8 @@ namespace Caelum.Pages
             PopupZOrderHelper.UnfixPopupTopmost(_eraserPopup);
             PopupZOrderHelper.UnfixPopupTopmost(_shapePopup);
             PopupZOrderHelper.UnfixPopupTopmost(_selectionPopup);
+            PopupZOrderHelper.UnfixPopupTopmost(_selectionActionBar);
+            PopupZOrderHelper.UnfixContextMenuTopmost(_blankContextMenu);
             PopupZOrderHelper.UnfixPopupTopmost(_textColorPopup);
             PopupZOrderHelper.UnfixPopupTopmost(_stickyNotePopup);
             PopupZOrderHelper.UnfixComboBoxPopupTopmost(_textFontFamilyCombo);
@@ -6849,7 +7000,8 @@ namespace Caelum.Pages
             if (toolToKeepOpen != ToolType.Pen && _penPopup != null)
                 _penPopup.IsOpen = false;
 
-            if (toolToKeepOpen != ToolType.Highlighter && _highlighterPopup != null)
+            bool keepHighlighter = IsHighlighterTool(toolToKeepOpen);
+            if (!keepHighlighter && _highlighterPopup != null)
                 _highlighterPopup.IsOpen = false;
 
             if (toolToKeepOpen != ToolType.Eraser && _eraserPopup != null)
@@ -6916,7 +7068,8 @@ namespace Caelum.Pages
         {
             if (_isUpdatingToolState) return;
 
-            var isActiveTool = _currentTool == tool;
+            bool isHighlighterTarget = IsHighlighterTool(tool);
+            var isActiveTool = _currentTool == tool || (isHighlighterTarget && IsHighlighterTool(_currentTool));
             CloseToolPopups();
 
             if (isActiveTool)
@@ -7064,6 +7217,8 @@ namespace Caelum.Pages
                     pageControl.SelectionChanged += PageControl_SelectionChanged;
                     pageControl.SelectionMoveCompleted += PageControl_SelectionMoveCompleted;
                     pageControl.SelectionResizeCompleted += PageControl_SelectionResizeCompleted;
+                    pageControl.SelectionRotateCompleted += PageControl_SelectionRotateCompleted;
+                    pageControl.BlankContextRequested += PageControl_BlankContextRequested;
 
                     // Task 22: ruler snap provider. The page queries the
                     // active ruler edge at stroke-collection time; the
@@ -9040,8 +9195,6 @@ namespace Caelum.Pages
 
         private void PageControl_SelectionChanged(object sender, AnnotationSelectionChangedEventArgs e)
         {
-            if (_currentTool != ToolType.Select) return;
-
             if (sender is PdfPageControl page)
             {
                 if (e.HasSelection)
@@ -9049,6 +9202,237 @@ namespace Caelum.Pages
                 else if (_activeSelectionPage == page)
                     _activeSelectionPage = null;
             }
+
+            UpdateSelectionActionBar();
+        }
+
+        private void PageControl_SelectionRotateCompleted(object sender, SelectionRotateCompletedEventArgs e)
+        {
+            if (sender is not PdfPageControl page) return;
+            PushUndoAction(new SelectionRotateAction(page, e.TotalDegrees, e.Center, e.SelectedStrokes, e.SelectedTextContainers));
+            MarkDirty();
+            UpdateSelectionActionBar();
+        }
+
+        private void PageControl_BlankContextRequested(object sender, EventArgs e)
+        {
+            ShowBlankContextMenu();
+        }
+
+        private void EnsureSelectionActionBar()
+        {
+            if (_selectionActionBar != null)
+            {
+                RefreshSelectionActionBarLocalization();
+                return;
+            }
+
+            _selectionActionCopyButton = CreateSelectionActionButton("Editor.Action.Copy", SelectionActionBar_Copy);
+            _selectionActionPasteButton = CreateSelectionActionButton("Editor.Action.Paste", SelectionActionBar_Paste);
+            _selectionActionDeleteButton = CreateSelectionActionButton("Editor.Action.Delete", SelectionActionBar_Delete);
+
+            var panel = new StackPanel { Orientation = Orientation.Horizontal };
+            panel.Children.Add(_selectionActionCopyButton);
+            panel.Children.Add(_selectionActionPasteButton);
+            panel.Children.Add(_selectionActionDeleteButton);
+
+            var border = new Border
+            {
+                CornerRadius = new CornerRadius(8),
+                BorderThickness = new Thickness(1),
+                Padding = new Thickness(4),
+                Child = panel
+            };
+            border.SetResourceReference(Border.BackgroundProperty, "ThemeSurfaceBrush");
+            border.SetResourceReference(Border.BorderBrushProperty, "ThemeBorderBrush");
+
+            _selectionActionBar = new Popup
+            {
+                AllowsTransparency = true,
+                StaysOpen = true,
+                Placement = PlacementMode.Relative,
+                Child = border
+            };
+        }
+
+        private static Button CreateSelectionActionButton(string key, RoutedEventHandler click)
+        {
+            var button = new Button
+            {
+                MinWidth = 32,
+                MinHeight = 32,
+                Padding = new Thickness(8, 4, 8, 4),
+                Margin = new Thickness(2, 0, 2, 0),
+                Cursor = Cursors.Hand,
+                Content = LocalizeEditorAction(key),
+                Tag = key
+            };
+            button.SetResourceReference(FrameworkElement.StyleProperty, "DialogSecondaryButton");
+            button.Click += click;
+            return button;
+        }
+
+        private void RefreshSelectionActionBarLocalization()
+        {
+            foreach (var button in new[] { _selectionActionCopyButton, _selectionActionPasteButton, _selectionActionDeleteButton })
+            {
+                if (button?.Tag is string key)
+                    button.Content = LocalizeEditorAction(key);
+            }
+        }
+
+        private static bool HasPasteableClipboard()
+        {
+            try
+            {
+                return Clipboard.ContainsText() || Clipboard.ContainsImage();
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private void UpdateSelectionActionBar()
+        {
+            EnsureSelectionActionBar();
+            bool pdfTextOnly = !string.IsNullOrEmpty(_selectedPdfText)
+                && (_activeSelectionPage == null || !_activeSelectionPage.HasSelection);
+            bool hasAnnotationSelection = _activeSelectionPage != null && _activeSelectionPage.HasSelection;
+            if (!pdfTextOnly && !hasAnnotationSelection)
+            {
+                _selectionActionBar.IsOpen = false;
+                return;
+            }
+
+            _selectionActionCopyButton.Visibility = Visibility.Visible;
+            _selectionActionDeleteButton.Visibility = hasAnnotationSelection ? Visibility.Visible : Visibility.Collapsed;
+            _selectionActionPasteButton.Visibility = hasAnnotationSelection && HasPasteableClipboard()
+                ? Visibility.Visible
+                : Visibility.Collapsed;
+
+            PdfPageControl page = hasAnnotationSelection ? _activeSelectionPage : _pdfTextSelectionPage;
+            if (page == null)
+            {
+                _selectionActionBar.IsOpen = false;
+                return;
+            }
+
+            Rect bounds = hasAnnotationSelection
+                ? page.GetSelectionBounds()
+                : new Rect(8, 8, 80, 24);
+            _selectionActionBar.PlacementTarget = page;
+            _selectionActionBar.HorizontalOffset = bounds.Left + (bounds.Width / 2) - 54;
+            _selectionActionBar.VerticalOffset = Math.Max(0, bounds.Top - 44);
+            _selectionActionBar.IsOpen = true;
+        }
+
+        private void SelectionActionBar_Copy(object sender, RoutedEventArgs e)
+        {
+            if (_activeSelectionPage != null && _activeSelectionPage.HasSelection)
+                CopySelection();
+            else
+                TryCopySelectedPdfTextToClipboard();
+        }
+
+        private void SelectionActionBar_Paste(object sender, RoutedEventArgs e)
+        {
+            PasteSelection();
+            UpdateSelectionActionBar();
+        }
+
+        private void SelectionActionBar_Delete(object sender, RoutedEventArgs e)
+        {
+            DeleteSelection();
+            UpdateSelectionActionBar();
+        }
+
+        private void ShowBlankContextMenu()
+        {
+            EnsureBlankContextMenu();
+            bool hasSelection = _activeSelectionPage != null && _activeSelectionPage.HasSelection;
+            bool canPaste = HasPasteableClipboard();
+            foreach (var item in _blankContextMenu.Items.OfType<MenuItem>())
+            {
+                string key = item.Tag as string;
+                if (key == "Editor.Action.Copy" || key == "Editor.Action.Delete")
+                    item.Visibility = hasSelection ? Visibility.Visible : Visibility.Collapsed;
+                else if (key == "Editor.Action.Paste")
+                    item.Visibility = canPaste ? Visibility.Visible : Visibility.Collapsed;
+                item.Header = LocalizeEditorAction(key);
+            }
+
+            _blankContextMenu.PlacementTarget = this;
+            _blankContextMenu.Placement = PlacementMode.MousePoint;
+            PopupZOrderHelper.FixContextMenuTopmost(_blankContextMenu);
+            _blankContextMenu.IsOpen = true;
+        }
+
+        private void EnsureBlankContextMenu()
+        {
+            if (_blankContextMenu != null)
+                return;
+
+            _blankContextMenu = new ContextMenu();
+            _blankContextMenu.Items.Add(CreateBlankMenuItem("Editor.Action.Copy", (_, __) =>
+            {
+                if (_activeSelectionPage != null && _activeSelectionPage.HasSelection)
+                    CopySelection();
+            }));
+            _blankContextMenu.Items.Add(CreateBlankMenuItem("Editor.Action.Paste", (_, __) => PasteSelection()));
+            _blankContextMenu.Items.Add(CreateBlankMenuItem("Editor.Action.SelectAll", (_, __) =>
+            {
+                ActivateTool(ToolType.Select);
+                var page = _pageControls.Count == 0 ? null : _pageControls[GetCurrentPageIndex()];
+                if (page != null)
+                {
+                    page.SelectAllAnnotations();
+                    _activeSelectionPage = page;
+                    UpdateSelectionActionBar();
+                }
+            }));
+            _blankContextMenu.Items.Add(CreateBlankMenuItem("Editor.Action.RefreshPage", async (_, __) =>
+            {
+                await RefreshCurrentDocumentPreservingEditsAsync();
+            }));
+            _blankContextMenu.Items.Add(CreateBlankMenuItem("Editor.Action.Delete", (_, __) =>
+            {
+                DeleteSelection();
+                UpdateSelectionActionBar();
+            }));
+        }
+
+        private static MenuItem CreateBlankMenuItem(string key, RoutedEventHandler click)
+        {
+            var item = new MenuItem
+            {
+                Header = LocalizeEditorAction(key),
+                Tag = key
+            };
+            item.Click += click;
+            return item;
+        }
+
+        private static string LocalizeEditorAction(string key)
+        {
+            return key switch
+            {
+                "Editor.Action.Copy" => LocalizationService.Get("Editor.Action.Copy"),
+                "Editor.Action.Paste" => LocalizationService.Get("Editor.Action.Paste"),
+                "Editor.Action.Delete" => LocalizationService.Get("Editor.Action.Delete"),
+                "Editor.Action.SelectAll" => LocalizationService.Get("Editor.Action.SelectAll"),
+                "Editor.Action.RefreshPage" => LocalizationService.Get("Editor.Action.RefreshPage"),
+                _ => key
+            };
+        }
+
+        private async Task RefreshCurrentDocumentPreservingEditsAsync()
+        {
+            if (string.IsNullOrWhiteSpace(_currentPdfPath))
+                return;
+
+            await SaveCurrentDocumentAsync();
+            await LoadPdf(_currentPdfPath);
         }
 
         private void PageControl_SelectionMoveCompleted(object sender, SelectionMoveCompletedEventArgs e)
@@ -9122,6 +9506,7 @@ namespace Caelum.Pages
             if (sender is not PdfPageControl page) return;
             var action = new SelectionResizeAction(page, e.TotalScale, e.Anchor, e.SelectedStrokes, e.SelectedTextContainers);
             PushUndoAction(action);
+            UpdateSelectionActionBar();
         }
 
         private void PenToolButton_Click(object sender, RoutedEventArgs e)
@@ -9131,7 +9516,8 @@ namespace Caelum.Pages
 
         private void HighlighterToolButton_Click(object sender, RoutedEventArgs e)
         {
-            ToggleToolButton(ToolType.Highlighter, HighlighterToolButton, _highlighterPopup);
+            var activeTool = GetActiveHighlighterToolType();
+            ToggleToolButton(activeTool, HighlighterToolButton, _highlighterPopup);
         }
 
         private void HiddenInkToolButton_Click(object sender, RoutedEventArgs e)
@@ -9319,6 +9705,7 @@ namespace Caelum.Pages
                 // keep dragging an invisible ruler.
                 _isDraggingRuler = false;
                 _isRotatingRuler = false;
+                _isResizingRuler = false;
             }
         }
 
@@ -9332,11 +9719,11 @@ namespace Caelum.Pages
         {
             if (_rulerVisual != null) return;
 
-            _rulerRotate = new RotateTransform(0, RulerLength / 2, RulerHeight / 2);
+            _rulerRotate = new RotateTransform(0, _rulerLength / 2, RulerHeight / 2);
 
             var ruler = new Grid
             {
-                Width = RulerLength,
+                Width = _rulerLength,
                 Height = RulerHeight,
                 // Keep the ruler body draggable even though its visual
                 // children are intentionally non-hit-testable. The full
@@ -9364,23 +9751,9 @@ namespace Caelum.Pages
             rulerBody.Opacity = 0.92;
             ruler.Children.Add(rulerBody);
 
-            // Tick marks along the top edge: minor every 10px, major every
-            // 50px (labels intentionally skipped in v1).
-            for (double x = 10; x < RulerLength; x += 10)
-            {
-                bool major = Math.Abs(x % 50) < 0.01;
-                var tick = new Line
-                {
-                    X1 = x, Y1 = 0,
-                    X2 = x, Y2 = major ? 12 : 6,
-                    Stroke = Brushes.Transparent,
-                    StrokeThickness = 1,
-                    IsHitTestVisible = false
-                };
-                tick.SetResourceReference(System.Windows.Shapes.Shape.StrokeProperty, "ThemeSubtleTextBrush");
-                tick.Opacity = 0.72;
-                ruler.Children.Add(tick);
-            }
+            _rulerTickCanvas = new Canvas { IsHitTestVisible = false };
+            RebuildRulerTicks();
+            ruler.Children.Add(_rulerTickCanvas);
 
             // Centre rotation handle dot.
             var rulerCenterDot = new Ellipse
@@ -9404,6 +9777,11 @@ namespace Caelum.Pages
             var rightCap = new Rectangle { Width = RulerEndCapZone, Height = RulerHeight, Fill = capFill, Cursor = Cursors.SizeNESW, HorizontalAlignment = HorizontalAlignment.Right };
             ruler.Children.Add(leftCap);
             ruler.Children.Add(rightCap);
+
+            _rulerLeftLengthHandle = CreateRulerLengthHandle(HorizontalAlignment.Left);
+            _rulerRightLengthHandle = CreateRulerLengthHandle(HorizontalAlignment.Right);
+            ruler.Children.Add(_rulerLeftLengthHandle);
+            ruler.Children.Add(_rulerRightLengthHandle);
 
             // Interactions: left-drag the body = move; left-drag either end
             // cap OR right-drag anywhere = rotate. Stylus/touch input is
@@ -9440,7 +9818,15 @@ namespace Caelum.Pages
             // coordinates are the ruler's own (unrotated) frame — the end
             // zones stay the first/last 14px of the body at any angle.
             var local = e.GetPosition(_rulerVisual);
-            bool inEndZone = local.X < RulerEndCapZone || local.X > RulerLength - RulerEndCapZone;
+            if (IsRulerLengthHandle(e.OriginalSource as DependencyObject, out bool fromLeft))
+            {
+                StartRulerLengthResize(e.GetPosition(RulerOverlayCanvas), fromLeft);
+                _rulerVisual.CaptureMouse();
+                e.Handled = true;
+                return;
+            }
+
+            bool inEndZone = local.X < RulerEndCapZone || local.X > _rulerLength - RulerEndCapZone;
 
             StartRulerManipulation(e.GetPosition(RulerOverlayCanvas), rotating: inEndZone);
             _rulerVisual.CaptureMouse();
@@ -9462,18 +9848,146 @@ namespace Caelum.Pages
         {
             _isDraggingRuler = !rotating;
             _isRotatingRuler = rotating;
+            _isResizingRuler = false;
             _rulerDragOffset = new Point(viewportPoint.X - _rulerCenter.X, viewportPoint.Y - _rulerCenter.Y);
             _rotateStartPointerAngle = Math.Atan2(viewportPoint.Y - _rulerCenter.Y, viewportPoint.X - _rulerCenter.X) * 180.0 / Math.PI;
             _rotateStartRulerAngle = _rulerAngle;
         }
 
+        private void StartRulerLengthResize(Point viewportPoint, bool fromLeft)
+        {
+            _isResizingRuler = true;
+            _rulerResizeFromLeft = fromLeft;
+            _isDraggingRuler = false;
+            _isRotatingRuler = false;
+            UpdateRulerLengthFromPointer(viewportPoint);
+        }
+
+        private static FrameworkElement CreateRulerLengthHandle(HorizontalAlignment alignment)
+        {
+            var handle = new Ellipse
+            {
+                Width = 12,
+                Height = 12,
+                Cursor = Cursors.SizeWE,
+                HorizontalAlignment = alignment,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(alignment == HorizontalAlignment.Left ? 2 : 0, 0, alignment == HorizontalAlignment.Right ? 2 : 0, 0),
+                Tag = alignment == HorizontalAlignment.Left ? "ruler-length-left" : "ruler-length-right"
+            };
+            handle.SetResourceReference(Shape.FillProperty, "ThemeSurfaceBrush");
+            handle.SetResourceReference(Shape.StrokeProperty, "ThemeAccentBrush");
+            handle.StrokeThickness = 1.5;
+            return handle;
+        }
+
+        private bool IsRulerLengthHandle(DependencyObject source, out bool fromLeft)
+        {
+            fromLeft = false;
+            while (source != null && source != _rulerVisual)
+            {
+                if (source is FrameworkElement element)
+                {
+                    if (ReferenceEquals(element, _rulerLeftLengthHandle) || (element.Tag as string) == "ruler-length-left")
+                    {
+                        fromLeft = true;
+                        return true;
+                    }
+                    if (ReferenceEquals(element, _rulerRightLengthHandle) || (element.Tag as string) == "ruler-length-right")
+                    {
+                        fromLeft = false;
+                        return true;
+                    }
+                }
+                source = VisualTreeHelper.GetParent(source);
+            }
+            return false;
+        }
+
+        private void RebuildRulerTicks()
+        {
+            if (_rulerTickCanvas == null)
+                return;
+
+            _rulerTickCanvas.Children.Clear();
+            for (double x = 10; x < _rulerLength; x += 10)
+            {
+                bool major = Math.Abs(x % 50) < 0.01;
+                var tick = new Line
+                {
+                    X1 = x, Y1 = 0,
+                    X2 = x, Y2 = major ? 12 : 6,
+                    StrokeThickness = 1,
+                    IsHitTestVisible = false
+                };
+                tick.SetResourceReference(Shape.StrokeProperty, "ThemeSubtleTextBrush");
+                tick.Opacity = 0.72;
+                _rulerTickCanvas.Children.Add(tick);
+            }
+        }
+
+        private void ApplyRulerLengthToVisual()
+        {
+            if (_rulerVisual == null)
+                return;
+
+            _rulerVisual.Width = _rulerLength;
+            if (_rulerRotate != null)
+            {
+                _rulerRotate.CenterX = _rulerLength / 2;
+                _rulerRotate.CenterY = RulerHeight / 2;
+            }
+            RebuildRulerTicks();
+            UpdateRulerPosition();
+        }
+
+        private void UpdateRulerLengthFromPointer(Point viewportPoint)
+        {
+            double rad = _rulerAngle * Math.PI / 180.0;
+            double dirX = Math.Cos(rad);
+            double dirY = Math.Sin(rad);
+            double half = _rulerLength / 2;
+            var left = new Point(_rulerCenter.X - half * dirX, _rulerCenter.Y - half * dirY);
+            var right = new Point(_rulerCenter.X + half * dirX, _rulerCenter.Y + half * dirY);
+
+            double t = ((viewportPoint.X - _rulerCenter.X) * dirX) + ((viewportPoint.Y - _rulerCenter.Y) * dirY);
+            var projected = new Point(_rulerCenter.X + t * dirX, _rulerCenter.Y + t * dirY);
+
+            if (_rulerResizeFromLeft)
+                left = projected;
+            else
+                right = projected;
+
+            double dx = right.X - left.X;
+            double dy = right.Y - left.Y;
+            double length = Math.Sqrt((dx * dx) + (dy * dy));
+            if (length < MinRulerLength)
+            {
+                double scale = MinRulerLength / Math.Max(length, 0.001);
+                if (_rulerResizeFromLeft)
+                    left = new Point(right.X - dx * scale, right.Y - dy * scale);
+                else
+                    right = new Point(left.X + dx * scale, left.Y + dy * scale);
+                length = MinRulerLength;
+            }
+
+            _rulerLength = length;
+            _rulerCenter = new Point((left.X + right.X) / 2, (left.Y + right.Y) / 2);
+            ClampRulerCenter();
+            ApplyRulerLengthToVisual();
+        }
+
         private void Ruler_MouseMove(object sender, MouseEventArgs e)
         {
-            if (!_isDraggingRuler && !_isRotatingRuler) return;
+            if (!_isDraggingRuler && !_isRotatingRuler && !_isResizingRuler) return;
 
             var p = e.GetPosition(RulerOverlayCanvas);
 
-            if (_isDraggingRuler)
+            if (_isResizingRuler)
+            {
+                UpdateRulerLengthFromPointer(p);
+            }
+            else if (_isDraggingRuler)
             {
                 _rulerCenter = new Point(p.X - _rulerDragOffset.X, p.Y - _rulerDragOffset.Y);
                 ClampRulerCenter();
@@ -9489,11 +10003,12 @@ namespace Caelum.Pages
 
         private void Ruler_MouseButtonUp(object sender, MouseButtonEventArgs e)
         {
-            if (!_isDraggingRuler && !_isRotatingRuler) return;
+            if (!_isDraggingRuler && !_isRotatingRuler && !_isResizingRuler) return;
 
             _rulerVisual?.ReleaseMouseCapture();
             _isDraggingRuler = false;
             _isRotatingRuler = false;
+            _isResizingRuler = false;
             e.Handled = true;
         }
 
@@ -9501,11 +10016,12 @@ namespace Caelum.Pages
         {
             _isDraggingRuler = false;
             _isRotatingRuler = false;
+            _isResizingRuler = false;
         }
 
         private void UpdateRulerPosition()
         {
-            Canvas.SetLeft(_rulerVisual, _rulerCenter.X - RulerLength / 2);
+            Canvas.SetLeft(_rulerVisual, _rulerCenter.X - _rulerLength / 2);
             Canvas.SetTop(_rulerVisual, _rulerCenter.Y - RulerHeight / 2);
         }
 
@@ -9553,7 +10069,7 @@ namespace Caelum.Pages
             // (pre-rotation -Y rotated by the ruler angle).
             double dirX = cos, dirY = sin;
             double upX = sin, upY = -cos;
-            double halfLen = RulerLength / 2;
+            double halfLen = _rulerLength / 2;
             double halfHeight = RulerHeight / 2;
 
             var topA = new Point(
@@ -10225,6 +10741,7 @@ namespace Caelum.Pages
                 switch (_currentTool)
                 {
                     case ToolType.None:
+                    case ToolType.TextHighlight:
                         page.SetInputMode(CustomInkInputProcessingMode.None);
                         break;
                     case ToolType.Pen:
@@ -12432,7 +12949,8 @@ namespace Caelum.Pages
             string fontFamily = null,
             TextAlignment? alignment = null,
             double? width = null,
-            double? height = null)
+            double? height = null,
+            double rotationDegrees = 0)
         {
             var textPadding = new Thickness(10, 8, 10, 8);
             bool useDefaultSize = text == null && (!width.HasValue || width.Value <= 0) && (!height.HasValue || height.Value <= 0);
@@ -12598,6 +13116,7 @@ namespace Caelum.Pages
 
             Canvas.SetLeft(container, Math.Max(0, initialLeft));
             Canvas.SetTop(container, Math.Max(0, initialTop));
+            PdfPageControl.ApplyAnnotationRotation(container, rotationDegrees);
             Panel.SetZIndex(container, 1000);
 
             container.PreviewMouseLeftButtonDown += TextContainerBorder_MouseLeftButtonDown;
@@ -13518,7 +14037,8 @@ namespace Caelum.Pages
                             Bold = containerTb.FontWeight >= FontWeights.Bold,
                             Italic = containerTb.FontStyle == FontStyles.Italic,
                             FontFamily = containerTb.FontFamily?.Source ?? "Segoe UI",
-                            Alignment = containerTb.TextAlignment.ToString()
+                            Alignment = containerTb.TextAlignment.ToString(),
+                            RotationDegrees = PdfPageControl.ReadAnnotationRotation((Grid)containerTb.Parent)
                         });
                     }
                     else if (element is TextBox tb)
@@ -13555,7 +14075,8 @@ namespace Caelum.Pages
                         Width = imageContainer.ActualWidth > 0 ? imageContainer.ActualWidth : imageContainer.Width,
                         Height = imageContainer.ActualHeight > 0 ? imageContainer.ActualHeight : imageContainer.Height,
                         Format = PdfService.DetectImageFormat(imageData),
-                        ImageDataBase64 = Convert.ToBase64String(imageData)
+                        ImageDataBase64 = Convert.ToBase64String(imageData),
+                        RotationDegrees = PdfPageControl.ReadAnnotationRotation(imageContainer)
                     });
                 }
 
@@ -13629,7 +14150,8 @@ namespace Caelum.Pages
                             Height = container.ActualHeight > 0 ? container.ActualHeight : container.Height,
                             R = note.R,
                             G = note.G,
-                            B = note.B
+                            B = note.B,
+                            RotationDegrees = PdfPageControl.ReadAnnotationRotation(container)
                         });
                     }
                 }
@@ -13696,7 +14218,8 @@ namespace Caelum.Pages
                                 bold: ta.Bold,
                                 italic: ta.Italic,
                                 fontFamily: ta.FontFamily,
-                                alignment: ParseTextAlignment(ta.Alignment));
+                                alignment: ParseTextAlignment(ta.Alignment),
+                                rotationDegrees: ta.RotationDegrees);
                         }
 
                         foreach (var hl in pa.Highlights)
@@ -13715,7 +14238,9 @@ namespace Caelum.Pages
                             try { imageBytes = Convert.FromBase64String(ia.ImageDataBase64); }
                             catch { continue; }
 
-                            page.AddImage(imageBytes, new Point(ia.X, ia.Y), ia.Width, ia.Height);
+                            var imageContainer = page.AddImage(imageBytes, new Point(ia.X, ia.Y), ia.Width, ia.Height);
+                            if (imageContainer != null)
+                                PdfPageControl.ApplyAnnotationRotation(imageContainer, ia.RotationDegrees);
                         }
 
                         foreach (var markup in pa.TextMarkups)
@@ -14244,6 +14769,10 @@ namespace Caelum.Pages
                     page,
                     strokes.ToList(),
                     new List<Grid>()));
+                ActivateTool(ToolType.Select);
+                page.SelectItems(strokes, new List<Grid>());
+                _activeSelectionPage = page;
+                UpdateSelectionActionBar();
             }
         }
 
@@ -14394,6 +14923,8 @@ namespace Caelum.Pages
                 pageControl.SelectionChanged -= PageControl_SelectionChanged;
                 pageControl.SelectionMoveCompleted -= PageControl_SelectionMoveCompleted;
                 pageControl.SelectionResizeCompleted -= PageControl_SelectionResizeCompleted;
+                pageControl.SelectionRotateCompleted -= PageControl_SelectionRotateCompleted;
+                pageControl.BlankContextRequested -= PageControl_BlankContextRequested;
                 pageControl.UnfixTransientUiHooks();
             }
         }

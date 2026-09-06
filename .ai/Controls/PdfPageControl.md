@@ -1,5 +1,11 @@
 # Controls/PdfPageControl.xaml(.cs)
 
+## Selection rotate and blank context (2026-09-05)
+
+- Top-edge rotate handle; `RotateItemsDirectly` + `SelectionRotateCompleted`. Ink/shapes transform points; text/image/sticky use `RotateTransform` + `RotationDegrees`.
+- `BlankContextRequested` from double-click / stylus HoldEnter / RightTap on the selection overlay (InkCanvas press-and-hold stays off).
+- `GetContainerAxisAlignedBounds` includes rotated AABB.
+
 ## Shape line-style and atomic undo follow-up (2026-08-31) — GREEN
 
 - Add independent ShapeIsDashed; segment any shape outline into real ink dashes with gaps.

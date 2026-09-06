@@ -134,7 +134,7 @@ public sealed class ThemeSurfaceSourceTests
                 "ThemeWindowBrush", "ThemeWorkspaceBrush", "ThemeSidebarBrush", "ThemeToolbarBrush",
                 "ThemeSurfaceBrush", "ThemeControlBrush", "ThemeBorderBrush", "ThemeTextBrush",
                 "ThemeSubtleTextBrush", "ThemeAccentBrush", "ThemeFocusBrush", "ThemeSelectionBrush",
-                "ThemeDangerBrush", "ThemeWorkspaceBackdropBrush"
+                "ThemeDangerBrush", "ThemeWorkspaceBackdropBrush", "ThemeWindowOutlineBrush"
             })
                 Assert.That(app, Does.Contain(token), token);
 

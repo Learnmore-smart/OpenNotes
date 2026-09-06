@@ -16,6 +16,11 @@ namespace Caelum.Pages
     {
         public event PropertyChangedEventHandler PropertyChanged;
 
+        public bool IsChoosingMoveTarget { get; private set; }
+
+        public bool CanChooseMoveTarget =>
+            HasSelectedTiles && (IsInsideFolder || HomeTiles.Any(tile => tile.IsFolder));
+
         public int SelectedTileCount => HomeTiles.Count(tile => tile.IsFile && tile.IsSelected);
 
         public bool HasSelectedTiles => SelectedTileCount > 0;
@@ -26,7 +31,9 @@ namespace Caelum.Pages
             ? LocalizationService.Format("Home.Selection.Count", SelectedTileCount)
             : LocalizationService.Get("Home.Selection.None");
 
-        public string SelectionHint => LocalizationService.Get("Home.Selection.Hint");
+        public string SelectionHint => IsChoosingMoveTarget
+            ? LocalizationService.Get("Home.Selection.MoveHint")
+            : LocalizationService.Get("Home.Selection.Hint");
 
         public string SelectionClearText => LocalizationService.Get("Home.Selection.Clear");
 
@@ -35,6 +42,8 @@ namespace Caelum.Pages
         public string SelectionMoveText => LocalizationService.Get("Home.Selection.Move");
 
         public string SelectionRemoveText => LocalizationService.Get("Home.Selection.Remove");
+
+        public string SelectionDeleteText => LocalizationService.Get("Home.Selection.Delete");
 
         public string SelectionSelectAllText => LocalizationService.Get("Home.Selection.SelectAll");
 
@@ -45,7 +54,15 @@ namespace Caelum.Pages
 
         private void RefreshSelectionState()
         {
+            if (!HasSelectedTiles && IsChoosingMoveTarget)
+            {
+                IsChoosingMoveTarget = false;
+                ClearFolderPlacementHighlights();
+            }
+
             OnPropertyChanged(nameof(IsSelectionMode));
+            OnPropertyChanged(nameof(IsChoosingMoveTarget));
+            OnPropertyChanged(nameof(CanChooseMoveTarget));
             OnPropertyChanged(nameof(SelectedTileCount));
             OnPropertyChanged(nameof(HasSelectedTiles));
             OnPropertyChanged(nameof(CanSelectAllTiles));
@@ -55,6 +72,7 @@ namespace Caelum.Pages
             OnPropertyChanged(nameof(SelectionDoneText));
             OnPropertyChanged(nameof(SelectionMoveText));
             OnPropertyChanged(nameof(SelectionRemoveText));
+            OnPropertyChanged(nameof(SelectionDeleteText));
             OnPropertyChanged(nameof(SelectionSelectAllText));
             GetMainWindow()?.RefreshSelectButtonVisualState();
         }
@@ -74,7 +92,11 @@ namespace Caelum.Pages
 
             IsSelectionMode = isEnabled;
             if (!IsSelectionMode)
+            {
+                IsChoosingMoveTarget = false;
                 ClearSelectedTiles(refreshState: false);
+                ClearFolderPlacementHighlights();
+            }
 
             RefreshSelectionState();
         }
@@ -202,68 +224,93 @@ namespace Caelum.Pages
 
         private void MoveSelectionButton_Click(object sender, RoutedEventArgs e)
         {
+            if (!HasSelectedTiles)
+                return;
+
+            if (!CanChooseMoveTarget)
+                return;
+
+            IsChoosingMoveTarget = !IsChoosingMoveTarget;
+            UpdateFolderPlacementHighlights();
+            RefreshSelectionState();
+        }
+
+        private async Task MoveSelectedTilesToFolderAsync(string folderId)
+        {
             var selectedTiles = HomeTiles
                 .Where(candidate => candidate.IsFile && candidate.IsSelected)
                 .ToList();
-
             if (selectedTiles.Count == 0)
                 return;
 
-            var contextMenu = new System.Windows.Controls.ContextMenu();
+            foreach (var tile in selectedTiles)
+                RecentFilesService.MoveToFolder(tile.Path, folderId);
 
-            if (IsInsideFolder)
-            {
-                var rootMenuItem = new System.Windows.Controls.MenuItem { Header = LocalizationService.Get("Home.LibraryRoot") };
-                rootMenuItem.Click += async (s, args) =>
-                {
-                    foreach (var tile in selectedTiles) RecentFilesService.MoveToFolder(tile.Path, null);
-                    await RefreshCurrentFolderAsync();
-                    ClearSelectedTiles();
-                };
-                contextMenu.Items.Add(rootMenuItem);
+            IsChoosingMoveTarget = false;
+            ClearFolderPlacementHighlights();
+            await RefreshCurrentFolderAsync();
+            ClearSelectedTiles();
+        }
 
-                var currentFolder = RecentFilesService.GetFolder(_currentFolderId);
-                if (currentFolder != null && !string.IsNullOrWhiteSpace(currentFolder.ParentFolderId))
-                {
-                    var parentFolder = RecentFilesService.GetFolder(currentFolder.ParentFolderId);
-                    if (parentFolder != null)
-                    {
-                        var parentMenuItem = new System.Windows.Controls.MenuItem { Header = parentFolder.DisplayName };
-                        parentMenuItem.Click += async (s, args) =>
-                        {
-                            foreach (var tile in selectedTiles) RecentFilesService.MoveToFolder(tile.Path, parentFolder.Id);
-                            await RefreshCurrentFolderAsync();
-                            ClearSelectedTiles();
-                        };
-                        contextMenu.Items.Add(parentMenuItem);
-                    }
-                }
+        private void UpdateFolderPlacementHighlights()
+        {
+            foreach (var tile in HomeTiles.Where(candidate => candidate.IsFolder))
+                tile.IsDropTarget = IsChoosingMoveTarget;
+        }
 
-                contextMenu.Items.Add(new System.Windows.Controls.Separator());
-            }
+        private void ClearFolderPlacementHighlights()
+        {
+            foreach (var tile in HomeTiles.Where(candidate => candidate.IsFolder))
+                tile.IsDropTarget = false;
+        }
 
-            var folderTiles = HomeTiles.Where(t => t.IsFolder).ToList();
-            foreach (var folder in folderTiles)
-            {
-                var menuItem = new System.Windows.Controls.MenuItem { Header = folder.FileName };
-                menuItem.Click += async (s, args) =>
-                {
-                    foreach (var tile in selectedTiles) RecentFilesService.MoveToFolder(tile.Path, folder.Id);
-                    await RefreshCurrentFolderAsync();
-                    ClearSelectedTiles();
-                };
-                contextMenu.Items.Add(menuItem);
-            }
+        private async void DeleteSelectionButton_Click(object sender, RoutedEventArgs e)
+        {
+            await DeleteSelectedTilesAsync();
+        }
 
-            if (contextMenu.Items.Count == 0 || (contextMenu.Items.Count == 1 && contextMenu.Items[0] is System.Windows.Controls.Separator))
-            {
+        private async Task DeleteSelectedTilesAsync()
+        {
+            var selectedTiles = HomeTiles
+                .Where(tile => tile.IsFile && tile.IsSelected)
+                .ToList();
+            if (selectedTiles.Count == 0)
                 return;
+
+            var owner = Window.GetWindow(this);
+            bool? confirmed = await DialogService.ShowDangerConfirmAsync(
+                owner,
+                LocalizationService.Get("Home.Selection.DeleteTitle"),
+                LocalizationService.Format("Home.Selection.DeleteMessage", selectedTiles.Count),
+                LocalizationService.Get("Common.Cancel"),
+                LocalizationService.Get("Home.Selection.Delete"));
+            if (confirmed != true)
+                return;
+
+            int deleted = 0;
+            foreach (var tile in selectedTiles)
+            {
+                if (TryDeleteLibraryFile(tile.Path))
+                    deleted++;
             }
 
-            contextMenu.PlacementTarget = sender as UIElement;
-            contextMenu.Placement = System.Windows.Controls.Primitives.PlacementMode.Top;
-            TrackOpenContextMenu(contextMenu, IsInsideFolder ? "move-root" : "move");
-            contextMenu.IsOpen = true;
+            await RefreshCurrentFolderAsync();
+            RefreshSelectionState();
+            if (Window.GetWindow(this) is MainWindow mw && deleted > 0)
+                mw.ShowToast(LocalizationService.Format("Home.Selection.DeletedCount", deleted), "Trash2");
+        }
+
+        internal static bool TryDeleteLibraryFile(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+                return false;
+
+            bool recycled = !File.Exists(path) || RecycleBinService.TrySendToRecycleBin(path);
+            if (!recycled)
+                return false;
+
+            RecentFilesService.Remove(path);
+            return true;
         }
 
         private void OpenContainingFolder(HomeTile tile)

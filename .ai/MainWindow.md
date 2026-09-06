@@ -41,6 +41,8 @@ Owns the single-window Frame/tab shell, application chrome, startup theme and gl
 - Wave5 review keeps the outer shell root on the live `ThemeDeskBrush` alias (updated by `ThemeService` for backdrop/theme changes); inner workspace/title/search surfaces remain dynamic and PDF page pixels are outside this shell resource.
 - The More/settings command retains the stable `MoreButton` AutomationId used by the isolated Settings UIA smoke.
 
+- **2026-09-05 Win11 chrome:** Tab `Icon` values are Lucide names `Home` / `FileText`. `EnableAcrylicBlur` still sets DWM attribute 38 to `DWMSBT_NONE`, and additionally sets attribute 33 to `DWMWCP_ROUND`. Close-tab PreviewMouseLeftButtonDown and follow-the-cursor tab drag remain unchanged.
+
 ## Constraints
 
 - Preserve the single MainWindow + Frame-tab architecture.

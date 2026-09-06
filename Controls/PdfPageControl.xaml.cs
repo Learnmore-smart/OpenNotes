@@ -67,6 +67,21 @@ namespace Caelum.Controls
         public List<System.Windows.Controls.Grid> SelectedTextContainers { get; }
     }
 
+    public sealed class SelectionRotateCompletedEventArgs : EventArgs
+    {
+        public SelectionRotateCompletedEventArgs(double totalDegrees, Point center, List<System.Windows.Ink.Stroke> strokes, List<System.Windows.Controls.Grid> containers)
+        {
+            TotalDegrees = totalDegrees;
+            Center = center;
+            SelectedStrokes = strokes;
+            SelectedTextContainers = containers;
+        }
+        public double TotalDegrees { get; }
+        public Point Center { get; }
+        public List<System.Windows.Ink.Stroke> SelectedStrokes { get; }
+        public List<System.Windows.Controls.Grid> SelectedTextContainers { get; }
+    }
+
     public sealed class PdfTextSelectionPointerEventArgs : EventArgs
     {
         public PdfTextSelectionPointerEventArgs(Point position, MouseButtonState leftButton)
@@ -377,6 +392,8 @@ namespace Caelum.Controls
         public event EventHandler<AnnotationSelectionChangedEventArgs> SelectionChanged;
         public event EventHandler<SelectionMoveCompletedEventArgs> SelectionMoveCompleted;
         public event EventHandler<SelectionResizeCompletedEventArgs> SelectionResizeCompleted;
+        public event EventHandler<SelectionRotateCompletedEventArgs> SelectionRotateCompleted;
+        public event EventHandler BlankContextRequested;
         /// <summary>Task 19: raised when an image annotation is added (EditorPage marks the document dirty).</summary>
         public event EventHandler ImagesChanged;
         /// <summary>Task 27: raised after an area-highlight drag commits; the editor pushes undo + dirty.</summary>
@@ -460,8 +477,13 @@ namespace Caelum.Controls
         private double _totalDragDeltaX;
         private double _totalDragDeltaY;
         private bool _isResizingSelection;
+        private bool _isRotatingSelection;
         private int _resizeHandleIndex; // 0=TL, 1=TR, 2=BL, 3=BR
         private Point _resizeAnchorPoint;
+        private Point _rotateCenter;
+        private double _rotateStartPointerAngle;
+        private double _lastRotationDegrees;
+        private double _totalRotationDegrees;
         private double _resizeStartHandleDist;
         private double _lastResizeScale;
         private bool _suppressSelectionCaptureCancellation;
@@ -473,6 +495,7 @@ namespace Caelum.Controls
             public double Width;
             public double Height;
             public double FontSize;
+            public double RotationDegrees;
         }
 
         private sealed class SelectionInteractionSnapshot
@@ -1835,6 +1858,7 @@ namespace Caelum.Controls
             SelectionOverlayCanvas.StylusMove += SelectionOverlayCanvas_StylusMove;
             SelectionOverlayCanvas.StylusUp += SelectionOverlayCanvas_StylusUp;
             SelectionOverlayCanvas.LostStylusCapture += SelectionOverlayCanvas_LostStylusCapture;
+            SelectionOverlayCanvas.StylusSystemGesture += SelectionOverlayCanvas_StylusSystemGesture;
 
             // Fix for auto-scroll bug: Prevent ScrollViewer from scrolling when InkCanvas gets focus
             this.RequestBringIntoView += PdfPageControl_RequestBringIntoView;
@@ -1886,6 +1910,7 @@ namespace Caelum.Controls
             SelectionOverlayCanvas.StylusMove -= SelectionOverlayCanvas_StylusMove;
             SelectionOverlayCanvas.StylusUp -= SelectionOverlayCanvas_StylusUp;
             SelectionOverlayCanvas.LostStylusCapture -= SelectionOverlayCanvas_LostStylusCapture;
+            SelectionOverlayCanvas.StylusSystemGesture -= SelectionOverlayCanvas_StylusSystemGesture;
 
             this.RequestBringIntoView -= PdfPageControl_RequestBringIntoView;
         }
@@ -4814,6 +4839,7 @@ namespace Caelum.Controls
             ImageOverlayCanvas.Children.Add(container);
             _overlayData[container] = note;
             SetStickyNotePositionQuiet(container, new Point(note.X, note.Y));
+            ApplyAnnotationRotation(container, note.RotationDegrees);
             ImagesChanged?.Invoke(this, EventArgs.Empty);
             return container;
         }
@@ -5298,7 +5324,8 @@ namespace Caelum.Controls
                         double.IsNaN(Canvas.GetTop(container)) ? 0 : Canvas.GetTop(container)),
                     Width = container.Width,
                     Height = container.Height,
-                    FontSize = textBox?.FontSize ?? double.NaN
+                    FontSize = textBox?.FontSize ?? double.NaN,
+                    RotationDegrees = ReadAnnotationRotation(container)
                 });
             }
 
@@ -5344,12 +5371,13 @@ namespace Caelum.Controls
                 var textBox = container.Children.OfType<TextBox>().FirstOrDefault();
                 if (textBox != null && !double.IsNaN(item.FontSize) && item.FontSize > 0)
                     textBox.FontSize = item.FontSize;
+                ApplyAnnotationRotation(container, item.RotationDegrees);
             }
         }
 
         private void CancelSelectionInteraction(bool restoreSnapshot)
         {
-            bool active = _isSelecting || _isDraggingSelection || _isResizingSelection
+            bool active = _isSelecting || _isDraggingSelection || _isResizingSelection || _isRotatingSelection
                 || _selectionInteractionSnapshot != null
                 || SelectionOverlayCanvas.IsMouseCaptured
                 || SelectionOverlayCanvas.IsStylusCaptured;
@@ -5375,7 +5403,10 @@ namespace Caelum.Controls
             _isSelecting = false;
             _isDraggingSelection = false;
             _isResizingSelection = false;
+            _isRotatingSelection = false;
             _lastResizeScale = 1.0;
+            _lastRotationDegrees = 0;
+            _totalRotationDegrees = 0;
             _totalDragDeltaX = 0;
             _totalDragDeltaY = 0;
             if (this.Parent is System.Windows.Controls.Grid pageGrid)
@@ -5439,7 +5470,10 @@ namespace Caelum.Controls
             _isSelecting = false;
             _isDraggingSelection = false;
             _isResizingSelection = false;
+            _isRotatingSelection = false;
             _lastResizeScale = 1.0;
+            _lastRotationDegrees = 0;
+            _totalRotationDegrees = 0;
             _totalDragDeltaX = 0;
             _totalDragDeltaY = 0;
             _freeSelectionPath = null;
@@ -5622,6 +5656,86 @@ namespace Caelum.Controls
             InkMutated?.Invoke(this, EventArgs.Empty);
         }
 
+        public void RotateItemsDirectly(List<Stroke> strokes, List<Grid> containers, double degrees, Point center)
+        {
+            if ((strokes == null || strokes.Count == 0) && (containers == null || containers.Count == 0))
+                return;
+            if (Math.Abs(degrees) < 0.001)
+                return;
+
+            if (strokes != null)
+            {
+                foreach (var stroke in strokes)
+                {
+                    if (stroke == null)
+                        continue;
+                    var newPoints = new StylusPointCollection();
+                    foreach (var pt in stroke.StylusPoints)
+                    {
+                        var rotated = AnnotationTransform.RotatePoint(new Point(pt.X, pt.Y), center, degrees);
+                        newPoints.Add(new StylusPoint(rotated.X, rotated.Y, pt.PressureFactor));
+                    }
+                    stroke.StylusPoints = newPoints;
+                }
+            }
+
+            if (containers != null)
+            {
+                foreach (var container in containers)
+                {
+                    if (container == null)
+                        continue;
+
+                    double width = container.ActualWidth > 0 ? container.ActualWidth
+                        : (!double.IsNaN(container.Width) && container.Width > 0 ? container.Width : 0);
+                    double height = container.ActualHeight > 0 ? container.ActualHeight
+                        : (!double.IsNaN(container.Height) && container.Height > 0 ? container.Height : 0);
+                    double left = double.IsNaN(Canvas.GetLeft(container)) ? 0 : Canvas.GetLeft(container);
+                    double top = double.IsNaN(Canvas.GetTop(container)) ? 0 : Canvas.GetTop(container);
+                    var itemCenter = new Point(left + width / 2, top + height / 2);
+                    var rotatedCenter = AnnotationTransform.RotatePoint(itemCenter, center, degrees);
+                    var newLeft = rotatedCenter.X - width / 2;
+                    var newTop = rotatedCenter.Y - height / 2;
+
+                    if (IsStickyNoteContainer(container))
+                        SetStickyNotePositionQuiet(container, new Point(newLeft, newTop));
+                    else
+                    {
+                        Canvas.SetLeft(container, newLeft);
+                        Canvas.SetTop(container, newTop);
+                    }
+
+                    ApplyAnnotationRotation(container, ReadAnnotationRotation(container) + degrees);
+                    if (GetOverlayData(container) is ImageAnnotation image)
+                        image.RotationDegrees = ReadAnnotationRotation(container);
+                    else if (GetOverlayData(container) is StickyNoteAnnotation note)
+                        note.RotationDegrees = ReadAnnotationRotation(container);
+                }
+            }
+
+            UpdateSelectionVisuals();
+            InkMutated?.Invoke(this, EventArgs.Empty);
+        }
+
+        public static void ApplyAnnotationRotation(FrameworkElement element, double degrees)
+        {
+            if (element == null)
+                return;
+
+            element.RenderTransformOrigin = new Point(0.5, 0.5);
+            double normalized = AnnotationTransform.NormalizeDegrees(degrees);
+            element.RenderTransform = Math.Abs(normalized) < 0.01
+                ? Transform.Identity
+                : new RotateTransform(normalized);
+        }
+
+        public static double ReadAnnotationRotation(FrameworkElement element)
+        {
+            return element?.RenderTransform is RotateTransform rotate
+                ? AnnotationTransform.NormalizeDegrees(rotate.Angle)
+                : 0;
+        }
+
         public Rect GetSelectionBounds()
         {
             if (_selectedStrokes.Count == 0 && _selectedTextContainers.Count == 0)
@@ -5640,17 +5754,7 @@ namespace Caelum.Controls
 
             foreach (var container in _selectedTextContainers)
             {
-                var left = Canvas.GetLeft(container);
-                var top = Canvas.GetTop(container);
-                // Image containers carry an explicit Width/Height (Task 19);
-                // fall back to it before the first layout pass so the paste
-                // auto-select bbox is correct immediately. Text containers
-                // leave Width/Height NaN → 0, matching the old behaviour.
-                var width = container.ActualWidth > 0 ? container.ActualWidth
-                    : (!double.IsNaN(container.Width) && container.Width > 0 ? container.Width : 0);
-                var height = container.ActualHeight > 0 ? container.ActualHeight
-                    : (!double.IsNaN(container.Height) && container.Height > 0 ? container.Height : 0);
-                var rect = new Rect(left, top, width, height);
+                var rect = GetContainerAxisAlignedBounds(container);
                 if (bounds.IsEmpty)
                     bounds = rect;
                 else
@@ -5658,6 +5762,36 @@ namespace Caelum.Controls
             }
 
             return bounds;
+        }
+
+        private static Rect GetContainerAxisAlignedBounds(Grid container)
+        {
+            var left = Canvas.GetLeft(container);
+            var top = Canvas.GetTop(container);
+            if (double.IsNaN(left)) left = 0;
+            if (double.IsNaN(top)) top = 0;
+            var width = container.ActualWidth > 0 ? container.ActualWidth
+                : (!double.IsNaN(container.Width) && container.Width > 0 ? container.Width : 0);
+            var height = container.ActualHeight > 0 ? container.ActualHeight
+                : (!double.IsNaN(container.Height) && container.Height > 0 ? container.Height : 0);
+            var rect = new Rect(left, top, width, height);
+            double rotation = ReadAnnotationRotation(container);
+            if (Math.Abs(rotation) < 0.01)
+                return rect;
+
+            var center = new Point(rect.X + rect.Width / 2, rect.Y + rect.Height / 2);
+            var corners = new[]
+            {
+                AnnotationTransform.RotatePoint(rect.TopLeft, center, rotation),
+                AnnotationTransform.RotatePoint(rect.TopRight, center, rotation),
+                AnnotationTransform.RotatePoint(rect.BottomLeft, center, rotation),
+                AnnotationTransform.RotatePoint(rect.BottomRight, center, rotation)
+            };
+            double minX = corners.Min(p => p.X);
+            double minY = corners.Min(p => p.Y);
+            double maxX = corners.Max(p => p.X);
+            double maxY = corners.Max(p => p.Y);
+            return new Rect(minX, minY, Math.Max(0, maxX - minX), Math.Max(0, maxY - minY));
         }
 
         public bool HasSelection => _selectedStrokes.Count > 0 || _selectedTextContainers.Count > 0;
@@ -5765,7 +5899,45 @@ namespace Caelum.Controls
                 SelectionOverlayCanvas.Children.Add(handle);
             }
 
+            var rotateHandle = GetRotateHandlePoint(bounds);
+            var stem = new System.Windows.Shapes.Line
+            {
+                X1 = bounds.Left + bounds.Width / 2,
+                Y1 = bounds.Top - 4,
+                X2 = rotateHandle.X,
+                Y2 = rotateHandle.Y,
+                StrokeThickness = 1.5,
+                IsHitTestVisible = false
+            };
+            stem.SetResourceReference(System.Windows.Shapes.Shape.StrokeProperty, "ThemeAccentBrush");
+            SelectionOverlayCanvas.Children.Add(stem);
+
+            var rotateKnob = new System.Windows.Shapes.Ellipse
+            {
+                Width = 14,
+                Height = 14,
+                Cursor = Cursors.Hand,
+                StrokeThickness = 1.5,
+                Effect = new System.Windows.Media.Effects.DropShadowEffect
+                {
+                    BlurRadius = 6,
+                    ShadowDepth = 0,
+                    Opacity = ThemeService.GetShadowOpacity(),
+                    Color = Colors.Black
+                }
+            };
+            rotateKnob.SetResourceReference(System.Windows.Shapes.Shape.FillProperty, "ThemeSurfaceBrush");
+            rotateKnob.SetResourceReference(System.Windows.Shapes.Shape.StrokeProperty, "ThemeAccentBrush");
+            Canvas.SetLeft(rotateKnob, rotateHandle.X - 7);
+            Canvas.SetTop(rotateKnob, rotateHandle.Y - 7);
+            SelectionOverlayCanvas.Children.Add(rotateKnob);
+
             SelectionChanged?.Invoke(this, new AnnotationSelectionChangedEventArgs(true, bounds));
+        }
+
+        private static Point GetRotateHandlePoint(Rect bounds)
+        {
+            return new Point(bounds.Left + bounds.Width / 2, bounds.Top - 22);
         }
 
         private void AddPerItemOutline(Rect bounds)
@@ -5935,6 +6107,20 @@ namespace Caelum.Controls
             if (HasSelection)
             {
                 var bounds = GetSelectionBounds();
+                var rotateHandle = GetRotateHandlePoint(bounds);
+                var rotateHit = new Rect(rotateHandle.X - 10, rotateHandle.Y - 10, 20, 20);
+                if (rotateHit.Contains(point))
+                {
+                    CaptureSelectionInteractionSnapshot();
+                    _isRotatingSelection = true;
+                    _rotateCenter = new Point(bounds.Left + bounds.Width / 2, bounds.Top + bounds.Height / 2);
+                    _rotateStartPointerAngle = Math.Atan2(point.Y - _rotateCenter.Y, point.X - _rotateCenter.X) * 180.0 / Math.PI;
+                    _lastRotationDegrees = 0;
+                    _totalRotationDegrees = 0;
+                    CaptureSelectionInput(fromStylus);
+                    if (this.Parent is System.Windows.Controls.Grid pgRotate) { System.Windows.Controls.Panel.SetZIndex(pgRotate, 999); }
+                    return;
+                }
 
                 // Check corner handles first (resize)
                 var cornerHandles = new[] {
@@ -6176,6 +6362,16 @@ namespace Caelum.Controls
                 ScaleSelection(deltaScale, _resizeAnchorPoint);
                 Cursor = GetResizeCursor(_resizeHandleIndex);
             }
+            else if (_isRotatingSelection)
+            {
+                double pointerAngle = Math.Atan2(point.Y - _rotateCenter.Y, point.X - _rotateCenter.X) * 180.0 / Math.PI;
+                double total = AnnotationTransform.NormalizeDegrees(pointerAngle - _rotateStartPointerAngle);
+                double delta = total - _lastRotationDegrees;
+                _lastRotationDegrees = total;
+                _totalRotationDegrees = total;
+                RotateItemsDirectly(_selectedStrokes, _selectedTextContainers, delta, _rotateCenter);
+                Cursor = Cursors.Hand;
+            }
             else if (_isDraggingSelection)
             {
                 var deltaX = point.X - _dragStartPoint.X;
@@ -6226,6 +6422,13 @@ namespace Caelum.Controls
                     }
                 }
 
+                var rotateHandle = GetRotateHandlePoint(bounds);
+                if (new Rect(rotateHandle.X - 10, rotateHandle.Y - 10, 20, 20).Contains(point))
+                {
+                    Cursor = Cursors.Hand;
+                    return;
+                }
+
                 var inflatedBounds = bounds;
                 inflatedBounds.Inflate(8, 8);
                 Cursor = inflatedBounds.Contains(point) ? Cursors.SizeAll : Cursors.Cross;
@@ -6263,6 +6466,32 @@ namespace Caelum.Controls
                         new List<Stroke>(_selectedStrokes),
                         new List<Grid>(_selectedTextContainers)));
                 _lastResizeScale = 1.0;
+                _selectionInteractionSnapshot = null;
+            }
+            else if (_isRotatingSelection)
+            {
+                _isRotatingSelection = false;
+                if (this.Parent is System.Windows.Controls.Grid pGrid) { System.Windows.Controls.Panel.SetZIndex(pGrid, 0); }
+                _suppressSelectionCaptureCancellation = true;
+                try
+                {
+                    if (SelectionOverlayCanvas.IsMouseCaptured)
+                        SelectionOverlayCanvas.ReleaseMouseCapture();
+                    if (SelectionOverlayCanvas.IsStylusCaptured)
+                        SelectionOverlayCanvas.ReleaseStylusCapture();
+                }
+                finally
+                {
+                    _suppressSelectionCaptureCancellation = false;
+                }
+
+                if (Math.Abs(_totalRotationDegrees) > 0.5)
+                    SelectionRotateCompleted?.Invoke(this, new SelectionRotateCompletedEventArgs(
+                        _totalRotationDegrees, _rotateCenter,
+                        new List<Stroke>(_selectedStrokes),
+                        new List<Grid>(_selectedTextContainers)));
+                _lastRotationDegrees = 0;
+                _totalRotationDegrees = 0;
                 _selectionInteractionSnapshot = null;
             }
             else if (_isDraggingSelection)
@@ -6549,8 +6778,27 @@ namespace Caelum.Controls
         private void SelectionOverlayCanvas_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
         {
             if (!_isSelectionMode) return;
+            if (e.ClickCount >= 2)
+            {
+                CancelSelectionInteraction(restoreSnapshot: false);
+                ClearSelection();
+                BlankContextRequested?.Invoke(this, EventArgs.Empty);
+                e.Handled = true;
+                return;
+            }
             var point = e.GetPosition(SelectionOverlayCanvas);
             SelectionOverlayCanvas_MouseLeftButtonDownCore(point);
+            e.Handled = true;
+        }
+
+        private void SelectionOverlayCanvas_StylusSystemGesture(object sender, StylusSystemGestureEventArgs e)
+        {
+            if (!_isSelectionMode)
+                return;
+            if (e.SystemGesture != SystemGesture.HoldEnter && e.SystemGesture != SystemGesture.RightTap)
+                return;
+
+            BlankContextRequested?.Invoke(this, EventArgs.Empty);
             e.Handled = true;
         }
 
@@ -6596,7 +6844,7 @@ namespace Caelum.Controls
 
         public IReadOnlyList<HighlightAnnotation> GetHighlights() => _highlights;
 
-        public void AddHighlightAnnotation(IReadOnlyList<Rect> rects, Color color)
+        public HighlightAnnotation AddHighlightAnnotation(IReadOnlyList<Rect> rects, Color color)
         {
             var highlight = new HighlightAnnotation
             {
@@ -6613,12 +6861,28 @@ namespace Caelum.Controls
 
             _highlights.Add(highlight);
             RenderHighlightVisual(highlight);
+            return highlight;
         }
 
         public void AddHighlight(HighlightAnnotation highlight)
         {
+            if (highlight == null) return;
             _highlights.Add(highlight);
             RenderHighlightVisual(highlight);
+        }
+
+        public void RemoveHighlight(HighlightAnnotation highlight)
+        {
+            if (highlight == null) return;
+            _highlights.Remove(highlight);
+            RefreshHighlightsVisuals();
+        }
+
+        public void RefreshHighlightsVisuals()
+        {
+            HighlightsCanvas.Children.Clear();
+            foreach (var hl in _highlights)
+                RenderHighlightVisual(hl);
         }
 
         private void RenderHighlightVisual(HighlightAnnotation highlight)

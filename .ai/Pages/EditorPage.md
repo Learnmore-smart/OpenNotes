@@ -1,5 +1,12 @@
 # Pages/EditorPage.xaml.cs
 
+## Selection chrome, rotation, ruler length (2026-09-05)
+
+- Selection action bar: copy/paste/delete; paste hidden when clipboard is empty; PDF text selection shows copy only. Registered with `_transientUiRegistry` + `PopupZOrderHelper`.
+- Blank canvas: mouse double-click / stylus press-and-hold raises `BlankContextRequested`. Refresh saves first via `SaveCurrentDocumentAsync`.
+- Shape commit auto-selects until a blank click. `SelectionRotateAction` undoes rotation. Copy/paste/load persist `RotationDegrees`.
+- Session ruler length is `_rulerLength` (min 80); ends drag to resize, caps still rotate. Overlay is not saved.
+
 ## Shape line-style and atomic undo follow-up (2026-08-31) — GREEN
 
 - Remove DashedLine from the geometry picker and add a separate session-only localized Solid/Dashed toggle.

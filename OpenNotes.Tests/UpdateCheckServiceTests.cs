@@ -34,6 +34,23 @@ public sealed class UpdateCheckServiceTests
     }
 
     [Test]
+    public async Task CheckAsyncAcceptsCurrentOpenNotesReleaseUrl()
+    {
+        var handler = new StubHttpMessageHandler((_, _) => Task.FromResult(JsonResponse(
+            """{"tag_name":"v5.3.0","html_url":"https://github.com/Learnmore-smart/OpenNotes/releases/tag/v5.3.0"}""")));
+        using var client = new HttpClient(handler);
+
+        UpdateCheckResult result = await new UpdateCheckService(client).CheckAsync(new Version(5, 2, 7, 0));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.LatestVersion, Is.EqualTo(new Version(5, 3, 0, 0)));
+            Assert.That(result.ReleaseUri.AbsoluteUri,
+                Is.EqualTo("https://github.com/Learnmore-smart/OpenNotes/releases/tag/v5.3.0"));
+        });
+    }
+
+    [Test]
     public async Task CheckAsyncSendsGitHubCompatibleRequestMetadata()
     {
         HttpRequestMessage? captured = null;
@@ -41,7 +58,7 @@ public sealed class UpdateCheckServiceTests
         {
             captured = request;
             return Task.FromResult(JsonResponse(
-                """{"tag_name":"v5.3.0","html_url":"https://github.com/Learnmore-smart/Windows-Notes/releases/tag/v5.3.0"}"""));
+                """{"tag_name":"v5.3.0","html_url":"https://github.com/Learnmore-smart/OpenNotes/releases/tag/v5.3.0"}"""));
         });
         using var client = new HttpClient(handler);
 
@@ -51,6 +68,8 @@ public sealed class UpdateCheckServiceTests
         Assert.Multiple(() =>
         {
             Assert.That(captured!.RequestUri, Is.EqualTo(UpdateCheckService.LatestReleaseApiUri));
+            Assert.That(captured.RequestUri!.AbsoluteUri,
+                Does.Contain("Learnmore-smart/OpenNotes/releases/latest"));
             Assert.That(captured.Headers.Accept.Select(value => value.MediaType),
                 Does.Contain("application/vnd.github+json"));
             Assert.That(captured.Headers.UserAgent.ToString(), Is.EqualTo($"OpenNotes/{ProductInfo.Version}"));
@@ -144,9 +163,12 @@ public sealed class UpdateCheckServiceTests
 
     [TestCase("https://github.com/Learnmore-smart/Windows-Notes/releases/tag/v5.3.0", true)]
     [TestCase("https://github.com/learnmore-smart/windows-notes/releases/latest", true)]
+    [TestCase("https://github.com/Learnmore-smart/OpenNotes/releases/tag/v5.3.0", true)]
+    [TestCase("https://github.com/learnmore-smart/opennotes/releases/latest", true)]
     [TestCase("http://github.com/Learnmore-smart/Windows-Notes/releases/tag/v5.3.0", false)]
     [TestCase("https://github.com.evil.test/Learnmore-smart/Windows-Notes/releases/tag/v5.3.0", false)]
     [TestCase("https://github.com/Learnmore-smart/Windows-Notes/issues/1", false)]
+    [TestCase("https://github.com/Learnmore-smart/OpenNotes/issues/1", false)]
     public void TrustedReleaseUriIsFailClosed(string value, bool expected)
     {
         Assert.That(UpdateCheckService.IsTrustedReleaseUri(new Uri(value)), Is.EqualTo(expected));

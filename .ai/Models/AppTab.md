@@ -1,6 +1,6 @@
 # AppTab
 
-> Last updated: 2026-08-30 | Protection: STANDARD
+> Last updated: 2026-09-05 | Protection: STANDARD
 
 ## Purpose
 
@@ -26,5 +26,6 @@ Represents one tab and owns its live WPF `Frame`, title/icon metadata, and optio
 
 | Date | Change | Author |
 |---|---|---|
+| 2026-09-05 | Default `Icon` is the Lucide name `Home`; document tabs use `FileText` instead of MDL2 codepoints. | Cursor |
 | 2026-08-30 | Added transfer invariants for cross-window tab ownership. | Codex |
 | 2026-08-30 | MainWindow now transfers the live tab/frame without changing AppTab identity. | Codex |

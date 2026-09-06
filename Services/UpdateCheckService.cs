@@ -43,13 +43,19 @@ public sealed class UpdateCheckException : Exception
 public sealed class UpdateCheckService
 {
     private static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(10);
-    private const string ReleasePathPrefix =
-        "/Learnmore-smart/Windows-Notes/releases/";
+    private static readonly string[] TrustedReleasePathPrefixes =
+    {
+        "/Learnmore-smart/OpenNotes/releases/",
+        "/Learnmore-smart/Windows-Notes/releases/"
+    };
 
     private readonly HttpClient _httpClient;
     private readonly TimeSpan _requestTimeout;
 
     public static readonly Uri LatestReleaseApiUri =
+        new("https://api.github.com/repos/Learnmore-smart/OpenNotes/releases/latest");
+
+    internal static readonly Uri LegacyLatestReleaseApiUri =
         new("https://api.github.com/repos/Learnmore-smart/Windows-Notes/releases/latest");
 
     public UpdateCheckService(HttpClient? httpClient = null)
@@ -76,28 +82,38 @@ public sealed class UpdateCheckService
 
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(_requestTimeout);
-        using var request = new HttpRequestMessage(HttpMethod.Get, LatestReleaseApiUri);
-        request.Headers.Accept.Add(
-            new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
-        request.Headers.UserAgent.ParseAdd($"OpenNotes/{ProductInfo.Version}");
-        request.Headers.Add("X-GitHub-Api-Version", "2022-11-28");
 
         try
         {
-            using HttpResponseMessage response =
-                await _httpClient.SendAsync(request, timeout.Token).ConfigureAwait(false);
-
-            if (!response.IsSuccessStatusCode)
+            HttpResponseMessage response = await SendLatestReleaseRequestAsync(
+                LatestReleaseApiUri,
+                timeout.Token).ConfigureAwait(false);
+            try
             {
-                throw new UpdateCheckException(
-                    UpdateCheckFailureKind.HttpStatus,
-                    $"GitHub returned HTTP {(int)response.StatusCode}.");
-            }
+                if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+                {
+                    response.Dispose();
+                    response = await SendLatestReleaseRequestAsync(
+                        LegacyLatestReleaseApiUri,
+                        timeout.Token).ConfigureAwait(false);
+                }
 
-            string json = await response.Content
-                .ReadAsStringAsync(timeout.Token)
-                .ConfigureAwait(false);
-            return ParseResponse(json, normalizedInstalled);
+                if (!response.IsSuccessStatusCode)
+                {
+                    throw new UpdateCheckException(
+                        UpdateCheckFailureKind.HttpStatus,
+                        $"GitHub returned HTTP {(int)response.StatusCode}.");
+                }
+
+                string json = await response.Content
+                    .ReadAsStringAsync(timeout.Token)
+                    .ConfigureAwait(false);
+                return ParseResponse(json, normalizedInstalled);
+            }
+            finally
+            {
+                response.Dispose();
+            }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -146,10 +162,32 @@ public sealed class UpdateCheckService
 
     internal static bool IsTrustedReleaseUri(Uri? uri)
     {
-        return uri is { IsAbsoluteUri: true } &&
-        string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase) &&
-        string.Equals(uri.Host, "github.com", StringComparison.OrdinalIgnoreCase) &&
-        uri.AbsolutePath.StartsWith(ReleasePathPrefix, StringComparison.OrdinalIgnoreCase);
+        if (uri is not { IsAbsoluteUri: true } ||
+            !string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(uri.Host, "github.com", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        foreach (string prefix in TrustedReleasePathPrefixes)
+        {
+            if (uri.AbsolutePath.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        return false;
+    }
+
+    private async Task<HttpResponseMessage> SendLatestReleaseRequestAsync(
+        Uri requestUri,
+        CancellationToken cancellationToken)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, requestUri);
+        request.Headers.Accept.Add(
+            new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
+        request.Headers.UserAgent.ParseAdd($"OpenNotes/{ProductInfo.Version}");
+        request.Headers.Add("X-GitHub-Api-Version", "2022-11-28");
+        return await _httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
     }
 
     private static UpdateCheckResult ParseResponse(

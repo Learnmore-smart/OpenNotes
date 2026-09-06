@@ -9,9 +9,9 @@ public static class ProductInfo
     public const string LegacyName = "Caelum";
     public const string LegacyDataDirectoryName = "Caelum";
     public const string LegacyAppxIdentity = "WindowsNotesApp";
-    public const string RepositoryUrl = "https://github.com/Learnmore-smart/Windows-Notes";
-    public const string WebsiteUrl = "https://learnmore-smart.github.io/Windows-Notes/";
-    public const string Version = "5.2.10";
+    public const string RepositoryUrl = "https://github.com/Learnmore-smart/OpenNotes";
+    public const string WebsiteUrl = "https://learnmore-smart.github.io/OpenNotes/";
+    public const string Version = "5.2.11";
     public const string DataRootOverrideEnvironmentVariable = "OPENNOTES_DATA_ROOT";
     public static string Description => LocalizationService.Get("Product.Description");
 

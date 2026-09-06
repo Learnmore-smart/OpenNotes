@@ -15,6 +15,8 @@ Creates the application's small asynchronous information/error dialog without in
 - Reuses the application button styles and localization service.
 - Builds the close-button `ControlTemplate` completely, including its keyboard-focus trigger, before assigning it to the live Button. This avoids WPF sealing the template before `Triggers.Add` runs.
 
+- **2026-09-05:** `ShowDangerConfirmAsync` uses `DialogDangerButton`, keeps Cancel as the secondary action, and uses a compact 420×236 window. Ordinary info/error dialogs stay 520×320.
+
 ## Important Notes / NEVER Change
 
 - Keep `ShowInfoAsync`, `ShowErrorAsync`, and `ShowDialogAsync` signatures compatible with existing callers.

@@ -432,7 +432,7 @@ public sealed class StickyNoteInteractionTests
         var container = (Grid)createTextBox.Invoke(editor, new object?[]
         {
             page, new Point(40, 44), null, null, "gesture", false, false,
-            null, null, null, null, null, null
+            null, null, null, null, null, null, 0d
         })!;
         double originalX = Canvas.GetLeft(container);
         double originalY = Canvas.GetTop(container);

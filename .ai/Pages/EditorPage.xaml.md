@@ -11,6 +11,8 @@
 
 Toolbar and editor-surface markup for the single OpenNotes PDF editor page.
 
+- **2026-09-05 Wave 6:** `ToolbarSeparatorStyle` is vertically centered and snaps to pixels. Pen/Highlighter icons are no longer `VerticalAlignment=Top`. `LoadingOverlay` is a light 28% veil plus spinner (Reduce Motion still stops `LoadingRotate`). PDF search uses `ModernTextBox` / `ModernListBox`.
+
 ## What It Does
 
 - Keeps the existing Hidden Ink tool command/binding and localized tooltip hook.

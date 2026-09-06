@@ -27,6 +27,8 @@ namespace Caelum.Services
 
         public DateTime LastOpenedUtc { get; set; }
 
+        public string Color { get; set; } = string.Empty;
+
         [JsonIgnore]
         public bool IsFolder => string.Equals(EntryType, RecentFilesService.FolderEntryType, StringComparison.OrdinalIgnoreCase);
 
@@ -41,17 +43,20 @@ namespace Caelum.Services
     {
         internal const string FileEntryType = "file";
         internal const string FolderEntryType = "folder";
-        private static readonly string _filePath;
-        private static readonly string _legacyFilePath;
         private static readonly object _lock = new();
 
-        static RecentFilesService()
+        private static string FilePath
         {
-            var dir = ProductInfo.GetDataDirectory();
-            Directory.CreateDirectory(dir);
-            _filePath = Path.Combine(dir, "recent_files.json");
-            _legacyFilePath = Path.Combine(dir, "recent_files.txt");
+            get
+            {
+                var dir = ProductInfo.GetDataDirectory();
+                Directory.CreateDirectory(dir);
+                return Path.Combine(dir, "recent_files.json");
+            }
         }
+
+        private static string LegacyFilePath =>
+            Path.Combine(ProductInfo.GetDataDirectory(), "recent_files.txt");
 
         /// <summary>
         /// Returns the list of recent file entries (most recent first).
@@ -324,6 +329,39 @@ namespace Caelum.Services
             return MoveToFolder(filePath, null);
         }
 
+        public static bool SetFolderColor(string folderId, string color)
+        {
+            if (string.IsNullOrWhiteSpace(folderId))
+                return false;
+
+            string normalized = NormalizeFolderColor(color);
+            lock (_lock)
+            {
+                var entries = Load();
+                var folder = entries.FirstOrDefault(entry =>
+                    entry.IsFolder &&
+                    string.Equals(entry.Id, folderId, StringComparison.OrdinalIgnoreCase));
+                if (folder == null)
+                    return false;
+
+                folder.Color = normalized;
+                Save(entries);
+                return true;
+            }
+        }
+
+        internal static string NormalizeFolderColor(string color)
+        {
+            if (string.IsNullOrWhiteSpace(color))
+                return string.Empty;
+
+            string trimmed = color.Trim();
+            if (trimmed.StartsWith('#') && (trimmed.Length == 7 || trimmed.Length == 9))
+                return trimmed.ToUpperInvariant();
+
+            return string.Empty;
+        }
+
         public static bool UpdatePath(string oldPath, string newPath)
         {
             if (string.IsNullOrWhiteSpace(oldPath) || string.IsNullOrWhiteSpace(newPath))
@@ -359,10 +397,10 @@ namespace Caelum.Services
         {
             try
             {
-                if (!File.Exists(_filePath))
+                if (!File.Exists(FilePath))
                     return LoadLegacy();
 
-                var json = File.ReadAllText(_filePath);
+                var json = File.ReadAllText(FilePath);
                 if (string.IsNullOrWhiteSpace(json))
                     return new List<RecentFileEntry>();
 
@@ -390,9 +428,9 @@ namespace Caelum.Services
         {
             try
             {
-                if (!File.Exists(_legacyFilePath)) return new List<RecentFileEntry>();
+                if (!File.Exists(LegacyFilePath)) return new List<RecentFileEntry>();
 
-                var content = File.ReadAllText(_legacyFilePath);
+                var content = File.ReadAllText(LegacyFilePath);
                 var entries = content
                     .Split('|', StringSplitOptions.RemoveEmptyEntries)
                     .Select(path => path.Trim())
@@ -601,7 +639,8 @@ namespace Caelum.Services
                 Path = entry.Path,
                 PageCount = entry.PageCount,
                 LastModifiedUtc = entry.LastModifiedUtc,
-                LastOpenedUtc = entry.LastOpenedUtc
+                LastOpenedUtc = entry.LastOpenedUtc,
+                Color = entry.Color ?? string.Empty
             };
         }
 
@@ -651,7 +690,7 @@ namespace Caelum.Services
             try
             {
                 var json = JsonSerializer.Serialize(entries, new JsonSerializerOptions { WriteIndented = true });
-                File.WriteAllText(_filePath, json);
+                File.WriteAllText(FilePath, json);
             }
             catch (Exception ex)
             {

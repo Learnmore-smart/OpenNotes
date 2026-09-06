@@ -43,7 +43,8 @@ namespace Caelum.Services
                 ["ThemePaperAltBrush"] = "#F8F9FA",
                 ["ThemeInkBrush"] = "#2563EB",
                 ["ThemeMarginBrush"] = "#C2414B",
-                ["ThemeMarkBrush"] = "#D9A72E"
+                ["ThemeMarkBrush"] = "#D9A72E",
+                ["ThemeWindowOutlineBrush"] = "#1F2937"
             };
 
         private static readonly IReadOnlyDictionary<string, string> DarkPalette =
@@ -75,7 +76,8 @@ namespace Caelum.Services
                 ["ThemePaperAltBrush"] = "#1D2A37",
                 ["ThemeInkBrush"] = "#6EACEA",
                 ["ThemeMarginBrush"] = "#ED7A80",
-                ["ThemeMarkBrush"] = "#F2C75C"
+                ["ThemeMarkBrush"] = "#F2C75C",
+                ["ThemeWindowOutlineBrush"] = "#9CA3AF"
             };
 
         private static readonly IReadOnlyDictionary<string, string> HighContrastPalette =
@@ -108,7 +110,8 @@ namespace Caelum.Services
                 ["ThemePaperAltBrush"] = "#1A1A1A",
                 ["ThemeInkBrush"] = "#00FFFF",
                 ["ThemeMarginBrush"] = "#FF8080",
-                ["ThemeMarkBrush"] = "#FFFF00"
+                ["ThemeMarkBrush"] = "#FFFF00",
+                ["ThemeWindowOutlineBrush"] = "#FFFFFF"
             };
 
         public static bool IsDark { get; private set; }
@@ -288,6 +291,7 @@ namespace Caelum.Services
                 resources["ThemeInkBrush"] = SystemColors.HotTrackBrush;
                 resources["ThemeMarginBrush"] = SystemColors.HighlightBrush;
                 resources["ThemeMarkBrush"] = SystemColors.HighlightBrush;
+                resources["ThemeWindowOutlineBrush"] = SystemColors.ActiveBorderBrush;
             }
 
             var workspaceBrush = IsHighContrast

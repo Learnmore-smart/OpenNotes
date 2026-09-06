@@ -14,11 +14,11 @@
 - `AnnotationData`（行 5-9）：`Version=1` + `Dictionary<string, PageAnnotation> Pages`（**键为字符串页号**，如 "0"；粘贴路径 `PasteSelection` 取 `Pages["0"]`）。
 - `PageAnnotation`：`Strokes` / `Texts` / `Highlights` / `Images` / `StickyNotes`，以及独立的 `HiddenInks` List。Hidden Ink 不混入普通笔迹，避免普通橡皮或选择操作误改学习遮罩。
 - `StrokeAnnotation`（行 35-48）：`R/G/B`（byte）+ `A=255`、`Size=2.0`（DIP 宽度）、`IsHighlighter`、`FitToCurve`、`Points` 为 `List<double[]>`——**每个点仅 [x, y] 两个元素**（无压力/时间戳，压感只在渲染层用 StylusPoints，不落盘）。缺失的旧 JSON 字段默认 `true`，保持历史曲线渲染。
-- `TextAnnotation`（行 67-86）：`Text`、`X/Y`（DIP 左上角）、`R/G/B`、`FontSize=18`、`Width/Height` 和 `Bold/Italic/FontFamily/Alignment`。Width/Height 为 0 表示旧文档的自动尺寸；正值表示可保存、可换行的真实文本框矩形。
+- `TextAnnotation`（行 67-86）：`Text`、`X/Y`（DIP 左上角）、`R/G/B`、`FontSize=18`、`Width/Height`、`Bold/Italic/FontFamily/Alignment` 以及可选 `RotationDegrees`（默认 0，旧 JSON 兼容）。Width/Height 为 0 表示旧文档的自动尺寸；正值表示可保存、可换行的真实文本框矩形。
 - `HighlightAnnotation`（行 40-48）：`Rects` 每项 `[X, Y, Width, Height]`（DIP，Y 为顶部）、默认色 `R=255,G=255,B=0`（黄）、`A=128` 半透明。
-- `ImageAnnotation`（Task 19）：`X/Y/Width/Height`（DIP，左上角 + 显式尺寸——装载/粘贴副本按此复原不重新适配）、`Format`（"png"|"jpeg"，仅信息性——解码与 PDF 嵌入都靠魔数嗅探）、`ImageDataBase64`（**原始编码字节** base64——保存 PDF 时原样进 /Stamp /Contents，免重编码无损往返）。
+- `ImageAnnotation`（Task 19）：`X/Y/Width/Height`（DIP，左上角 + 显式尺寸——装载/粘贴副本按此复原不重新适配）、`Format`（"png"|"jpeg"，仅信息性——解码与 PDF 嵌入都靠魔数嗅探）、`ImageDataBase64`（**原始编码字节** base64——保存 PDF 时原样进 /Stamp /Contents，免重编码无损往返）、可选 `RotationDegrees`（默认 0）。
 - `HiddenInkAnnotation`（学习模式）：`Id`、`R/G/B/A`（新对象默认不透明中性灰 `#C7CDD4`；已序列化的显式白色 `255/255/255` 原样保留）、`Size=28`（DIP）、`RevealDurationMs`（默认 3000ms）和 `Points`（DIP `[x,y]` 点列）。Reveal 的临时显示状态不序列化，文档重开时遮罩始终恢复为隐藏状态。
-- `StickyNoteAnnotation`（Task 26）：稳定 `Id`、`X/Y/Text`、`Width/Height`（默认 36 DIP，旧 JSON 缺失时回退）和 `R/G/B`（默认浅黄）。这些字段同时服务 sidecar、版本/剪贴板 JSON、duplicate/cross-page selection 和 PDF `/Text` round-trip。
+- `StickyNoteAnnotation`（Task 26）：稳定 `Id`、`X/Y/Text`、`Width/Height`（默认 36 DIP，旧 JSON 缺失时回退）、`R/G/B`（默认浅黄）以及可选 `RotationDegrees`。这些字段同时服务 sidecar、版本/剪贴板 JSON、duplicate/cross-page selection 和 PDF `/Text` round-trip。
 - 序列化：`System.Text.Json` 默认行为（属性名 PascalCase）；`VersionControlService` 直接序列化 `Dictionary<int, PageAnnotation>`（**注意键是 int**，与 AnnotationData 的 string 键不同）；剪贴板走 `AnnotationData`。
 
 ## Public API / 关键成员（表）
@@ -27,11 +27,11 @@
 | `AnnotationData` | `Version` / `Pages` | 版本号=1；Pages 键为 string 页号 |
 | `PageAnnotation` | `Strokes/Texts/Highlights/Images/StickyNotes/HiddenInks` | 注释容器；`HiddenInks` 是独立的学习遮罩集合 |
 | `StrokeAnnotation` | `R/G/B/A/Size/IsHighlighter/FitToCurve/Points` | Points 元素仅 [x,y]；FitToCurve 旧 JSON 默认 true |
-| `TextAnnotation` | `Text/X/Y/R/G/B/FontSize/Width/Height/Bold/Italic/FontFamily/Alignment` | 0 尺寸保持旧文档自动布局；正值保存真实矩形 |
+| `TextAnnotation` | `Text/X/Y/R/G/B/FontSize/Width/Height/Bold/Italic/FontFamily/Alignment/RotationDegrees` | 0 尺寸保持旧文档自动布局；正值保存真实矩形；旋转默认 0 |
 | `HighlightAnnotation` | `Rects([X,Y,W,H])/R/G/B/A` | 默认黄色 A=128 |
-| `ImageAnnotation` | `X/Y/Width/Height/Format/ImageDataBase64` | Task 19：原始编码字节 base64（无损往返） |
+| `ImageAnnotation` | `X/Y/Width/Height/Format/ImageDataBase64/RotationDegrees` | Task 19：原始编码字节 base64（无损往返）；旋转默认 0 |
 | `HiddenInkAnnotation` | `Id/R/G/B/A/Size/RevealDurationMs/Points` | 不透明自由手绘遮罩；Points 为 DIP；临时 reveal 状态不落盘 |
-| `StickyNoteAnnotation` | `Id/X/Y/Text/Width/Height/R/G/B` | 可编辑便签；稳定身份、DIP 位置/尺寸/颜色，旧 JSON 兼容默认值 |
+| `StickyNoteAnnotation` | `Id/X/Y/Text/Width/Height/R/G/B/RotationDegrees` | 可编辑便签；稳定身份、DIP 位置/尺寸/颜色/旋转，旧 JSON 兼容默认值 |
 
 ## Dependencies
 - 被 `Services/PdfService.cs`（读写 PDF 注释）、`Services/VersionControlService.cs`（快照 JSON）、`Pages/EditorPage.xaml.cs`（CollectAnnotations/加载/undo）、`Controls/PdfPageControl.xaml.cs`（普通笔迹与 Hidden Ink 渲染）引用。

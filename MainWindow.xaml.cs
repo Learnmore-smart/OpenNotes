@@ -163,7 +163,7 @@ namespace Caelum
                 return;
             if (TabDragCoordinator.TryGetPayload(e.Data, out _))
             {
-                e.Effects = DragDropEffects.None;
+                e.Effects = DragDropEffects.Move;
                 e.Handled = true;
                 return;
             }
@@ -181,7 +181,7 @@ namespace Caelum
                 return;
             if (TabDragCoordinator.TryGetPayload(e.Data, out _))
             {
-                e.Effects = DragDropEffects.None;
+                e.Effects = DragDropEffects.Move;
                 e.Handled = true;
                 return;
             }
@@ -251,7 +251,7 @@ namespace Caelum
 
         public void AddNewHomeTab(bool activate = true)
         {
-            var tab = new AppTab { Title = GetHomeTabTitle(), Icon = "\uE80F" };
+            var tab = new AppTab { Title = GetHomeTabTitle(), Icon = "Home" };
             var frame = new Frame
             {
                 NavigationUIVisibility = NavigationUIVisibility.Hidden,
@@ -484,8 +484,7 @@ namespace Caelum
             RecentFilesService.AddOrPromote(filePath);
 
             var name = Path.GetFileNameWithoutExtension(filePath);
-            var ext = Path.GetExtension(filePath).ToLowerInvariant();
-            string icon = ext == ".pdf" ? "\uEA90" : "\uE7C3"; // PDF icon or generic document
+            string icon = "FileText";
 
             var tab = new AppTab { Title = name, Icon = icon, FilePath = filePath };
             var frame = new Frame
@@ -535,7 +534,7 @@ namespace Caelum
             }
 
             UpdateNavButtons();
-            RebuildTabBar();
+            RefreshTabBarChrome();
             RefreshSelectButtonVisualState();
         }
 
@@ -711,6 +710,78 @@ namespace Caelum
             }
         }
 
+        private void RefreshTabBarChrome()
+        {
+            if (TabBar.Children.Count != _tabs.Count)
+            {
+                RebuildTabBar();
+                return;
+            }
+
+            for (int i = 0; i < _tabs.Count; i++)
+            {
+                if (TabBar.Children[i] is not Border border || !ReferenceEquals(border.Tag, _tabs[i]))
+                {
+                    RebuildTabBar();
+                    return;
+                }
+
+                ApplyTabChrome(border, _tabs[i]);
+            }
+        }
+
+        private void ApplyTabChrome(Border border, AppTab tab)
+        {
+            bool isActive = tab == _activeTab;
+            var transparentBackground = Brushes.Transparent;
+            if (border.Child is not StackPanel panel)
+                return;
+
+            LucideIcon icon = null;
+            TextBlock title = null;
+            Button closeBtn = null;
+            foreach (var child in panel.Children)
+            {
+                if (child is LucideIcon lucide)
+                    icon = lucide;
+                else if (child is TextBlock text)
+                    title = text;
+                else if (child is Button button)
+                    closeBtn = button;
+            }
+
+            if (isActive)
+            {
+                UseThemeBrush(border, Border.BackgroundProperty, "ThemeSurfaceAltBrush");
+                UseThemeBrush(border, Border.BorderBrushProperty, "ThemeBorderBrush");
+                border.BorderThickness = new Thickness(1);
+            }
+            else
+            {
+                border.Background = transparentBackground;
+                border.BorderBrush = transparentBackground;
+                border.BorderThickness = new Thickness(0);
+            }
+
+            if (icon != null)
+                UseThemeBrush(icon, System.Windows.Shapes.Shape.StrokeProperty, isActive ? "ThemeForegroundBrush" : "ThemeSubtleForegroundBrush");
+
+            if (title != null)
+            {
+                title.Text = tab.Title.Length > 20 ? tab.Title.Substring(0, 17) + "..." : tab.Title;
+                title.FontWeight = isActive ? FontWeights.Medium : FontWeights.Normal;
+                UseThemeBrush(title, TextBlock.ForegroundProperty, isActive ? "ThemeForegroundBrush" : "ThemeSubtleForegroundBrush");
+            }
+
+            if (closeBtn != null)
+            {
+                closeBtn.Visibility = _tabs.Count > 1 ? Visibility.Visible : Visibility.Collapsed;
+                closeBtn.Opacity = isActive ? 1 : 0.72;
+            }
+
+            border.ToolTip = tab.Title;
+        }
+
         private static Brush GetThemeBrush(string key, Brush fallback)
         {
             return Application.Current?.TryFindResource(key) as Brush ?? fallback;
@@ -771,12 +842,12 @@ namespace Caelum
             var closeBtn = new Button
             {
                 Content = closeIcon,
-                Width = 20,
-                Height = 20,
+                Width = 32,
+                Height = 32,
                 Background = transparentBackground,
                 BorderThickness = new Thickness(0),
                 Cursor = Cursors.Hand,
-                Margin = new Thickness(6, 0, 0, 0),
+                Margin = new Thickness(2, 0, -4, 0),
                 VerticalAlignment = VerticalAlignment.Center,
                 Visibility = _tabs.Count > 1 ? Visibility.Visible : Visibility.Collapsed,
                 Opacity = isActive ? 1 : 0.72,
@@ -805,6 +876,11 @@ namespace Caelum
             closeBtn.Template = closeBtnTemplate;
 
             var capturedTab = tab;
+            closeBtn.PreviewMouseLeftButtonDown += (s, e) =>
+            {
+                e.Handled = true;
+                CloseTab(capturedTab);
+            };
             closeBtn.Click += (s, e) => { e.Handled = true; CloseTab(capturedTab); };
 
             var panel = new StackPanel();
@@ -818,6 +894,7 @@ namespace Caelum
             var border = new Border
             {
                 Child = panel,
+                Tag = tab,
                 Background = isActive ? activeBackground : transparentBackground,
                 BorderBrush = isActive ? activeBorderBrush : transparentBackground,
                 BorderThickness = isActive ? new Thickness(1) : new Thickness(0),
@@ -887,6 +964,8 @@ namespace Caelum
                 TabDragPayload dragPayload = null;
                 DragDropEffects dragResult = DragDropEffects.None;
                 QueryContinueDragEventHandler queryContinueDrag = null;
+                GiveFeedbackEventHandler giveFeedback = null;
+                TabDragPreview preview = null;
                 try
                 {
                     dragPayload = TabDragCoordinator.BeginDrag(this, capturedTab);
@@ -900,13 +979,25 @@ namespace Caelum
                         if (queryArgs.EscapePressed || queryArgs.Action == DragAction.Cancel)
                             TabDragCoordinator.CancelDrag(dragPayload);
                     };
+                    giveFeedback = (feedbackSender, feedbackArgs) =>
+                    {
+                        preview ??= new TabDragPreview(capturedTab);
+                        preview.MoveToCursor();
+                        feedbackArgs.UseDefaultCursors = false;
+                        Mouse.SetCursor(Cursors.Arrow);
+                        feedbackArgs.Handled = true;
+                    };
                     border.QueryContinueDrag += queryContinueDrag;
+                    border.GiveFeedback += giveFeedback;
                     dragResult = DragDrop.DoDragDrop(border, dragData, DragDropEffects.Move);
                 }
                 finally
                 {
                     if (queryContinueDrag != null)
                         border.QueryContinueDrag -= queryContinueDrag;
+                    if (giveFeedback != null)
+                        border.GiveFeedback -= giveFeedback;
+                    preview?.Dispose();
                     _isTabDragInProgress = false;
                     if (_tabDragCandidate == capturedTab)
                         _tabDragCandidate = null;
@@ -1247,14 +1338,14 @@ namespace Caelum
             if (ActiveFrame?.Content is HomePage)
             {
                 _activeTab.Title = GetHomeTabTitle();
-                _activeTab.Icon = "\uE80F";
+                _activeTab.Icon = "Home";
                 _activeTab.FilePath = null;
             }
             else if (ActiveFrame?.Content is EditorPage ep && !string.IsNullOrEmpty(ep.CurrentPdfPath))
             {
                 _activeTab.Title = Path.GetFileNameWithoutExtension(ep.CurrentPdfPath);
                 _activeTab.FilePath = ep.CurrentPdfPath;
-                _activeTab.Icon = Path.GetExtension(ep.CurrentPdfPath).ToLowerInvariant() == ".pdf" ? "\uEA90" : "\uE7C3";
+                _activeTab.Icon = "FileText";
             }
             RebuildTabBar();
         }
@@ -1275,7 +1366,7 @@ namespace Caelum
             var name = Path.GetFileNameWithoutExtension(filePath);
             _activeTab.Title = name;
             _activeTab.FilePath = filePath;
-            _activeTab.Icon = Path.GetExtension(filePath).ToLowerInvariant() == ".pdf" ? "\uEA90" : "\uE7C3";
+            _activeTab.Icon = "FileText";
             if (ActiveFrame?.Content is EditorPage currentEditor)
                 currentEditor.SetHostActive(false);
             ActiveFrame?.Navigate(new EditorPage(filePath, promptSaveAsAfterLoad, pendingLibraryFolderId, isNotebookDraft));
@@ -1293,7 +1384,7 @@ namespace Caelum
             {
                 tab.FilePath = newPath;
                 tab.Title = Path.GetFileNameWithoutExtension(newPath);
-                tab.Icon = Path.GetExtension(newPath).ToLowerInvariant() == ".pdf" ? "\uEA90" : "\uE7C3";
+                tab.Icon = "FileText";
 
                 if (tab.Frame?.Content is EditorPage editor)
                     editor.UpdateCurrentPdfPath(newPath);
@@ -1324,7 +1415,7 @@ namespace Caelum
 
             tab.FilePath = newPath;
             tab.Title = Path.GetFileNameWithoutExtension(newPath);
-            tab.Icon = Path.GetExtension(newPath).ToLowerInvariant() == ".pdf" ? "\uEA90" : "\uE7C3";
+            tab.Icon = "FileText";
             if (ReferenceEquals(tab, _activeTab))
                 UpdateActiveTabInfo();
             else
@@ -1729,7 +1820,7 @@ namespace Caelum
                 await DialogService.ShowErrorAsync(
                     this,
                     LocalizationService.Get("Main.UpdateCheckFailedTitle"),
-                    LocalizationService.Get("Main.UpdateCheckFailedMessage"));
+                    GetUpdateCheckFailureMessage(ex));
             }
             finally
             {
@@ -1742,6 +1833,23 @@ namespace Caelum
                 CheckForUpdatesMenuItem.Header =
                     LocalizationService.Get("Main.CheckForUpdates");
             }
+        }
+
+        private static string GetUpdateCheckFailureMessage(Exception ex)
+        {
+            if (ex is UpdateCheckException update)
+            {
+                return update.Kind switch
+                {
+                    UpdateCheckFailureKind.Network => LocalizationService.Get("Main.UpdateCheckFailedNetwork"),
+                    UpdateCheckFailureKind.Timeout => LocalizationService.Get("Main.UpdateCheckFailedTimeout"),
+                    UpdateCheckFailureKind.HttpStatus => LocalizationService.Get("Main.UpdateCheckFailedHttp"),
+                    UpdateCheckFailureKind.InvalidResponse => LocalizationService.Get("Main.UpdateCheckFailedInvalid"),
+                    _ => LocalizationService.Get("Main.UpdateCheckFailedMessage")
+                };
+            }
+
+            return LocalizationService.Get("Main.UpdateCheckFailedMessage");
         }
 
         private static void OpenTrustedReleasePage(Uri releaseUri)
@@ -1908,9 +2016,11 @@ namespace Caelum
 
         private void EnableAcrylicBlur(IntPtr handle)
         {
-            // Solid white background — no acrylic/DWM backdrop needed
-            int backdropType = 1; // DWMWCP_DEFAULT
+            // Keep an opaque client area (no Acrylic/Mica) and round the Win11 frame.
+            int backdropType = 1; // DWMSBT_NONE
             DwmSetWindowAttribute(handle, 38, ref backdropType, Marshal.SizeOf(typeof(int)));
+            int cornerPreference = 2; // DWMWCP_ROUND
+            DwmSetWindowAttribute(handle, 33, ref cornerPreference, Marshal.SizeOf(typeof(int)));
         }
     }
 }

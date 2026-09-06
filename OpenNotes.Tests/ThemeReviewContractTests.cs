@@ -215,7 +215,8 @@ public sealed class ThemeReviewContractTests
         foreach (string token in new[]
         {
             "ThemeWindowBrush", "ThemeWorkspaceBrush", "ThemeSidebarBrush", "ThemeToolbarBrush",
-            "ThemeControlBrush", "ThemeTextBrush", "ThemeSubtleTextBrush", "ThemeDangerBrush"
+            "ThemeControlBrush", "ThemeTextBrush", "ThemeSubtleTextBrush", "ThemeDangerBrush",
+            "ThemeWindowOutlineBrush"
         })
         {
             Assert.That(production, Does.Contain(token), $"{token} is declared but has no production consumer.");

@@ -358,6 +358,12 @@ namespace Caelum.Pages
             if (sender is not Button button || button.Tag is not HomeTile tile || !tile.IsFolder)
                 return;
 
+            if (IsChoosingMoveTarget)
+            {
+                _ = MoveSelectedTilesToFolderAsync(tile.Id);
+                return;
+            }
+
             _currentFolderId = tile.Id;
             _currentFolderName = tile.FileName;
             _ = RefreshCurrentFolderAsync();
@@ -434,6 +440,10 @@ namespace Caelum.Pages
 
             menu.Items.Add(new Separator { Margin = new Thickness(0, 4, 0, 4) });
 
+            var deleteItem = CreateMenuItem(LocalizationService.Get("Home.Context.Delete"), "Trash2", foregroundResourceKey: "ThemeDangerBrush");
+            deleteItem.Click += async (_, _) => await DeleteFileTileAsync(tile);
+            menu.Items.Add(deleteItem);
+
             var removeItem = CreateMenuItem(LocalizationService.Get("Home.Context.Remove"), "\uE74D", foregroundResourceKey: "ThemeDangerBrush");
             removeItem.Click += async (_, _) => await RemoveFileTileAsync(tile);
             menu.Items.Add(removeItem);
@@ -463,6 +473,19 @@ namespace Caelum.Pages
             var renameItem = CreateMenuItem(LocalizationService.Get("Home.Context.Rename"), "\uE70F");
             renameItem.Click += async (_, _) => await RenameTileAsync(tile);
             menu.Items.Add(renameItem);
+
+            var colorItem = CreateMenuItem(LocalizationService.Get("Home.Context.Color"), "Folder");
+            foreach (var swatch in FolderColorSwatches)
+            {
+                var swatchItem = new MenuItem { Header = LocalizeFolderColor(swatch.Key), Tag = swatch.Hex };
+                swatchItem.Click += async (_, _) =>
+                {
+                    RecentFilesService.SetFolderColor(tile.Id, swatch.Hex);
+                    await RefreshCurrentFolderAsync();
+                };
+                colorItem.Items.Add(swatchItem);
+            }
+            menu.Items.Add(colorItem);
 
             menu.Items.Add(new Separator { Margin = new Thickness(0, 4, 0, 4) });
 
@@ -505,7 +528,14 @@ namespace Caelum.Pages
                 {
                     SetMenuItemText(items, 0, LocalizationService.Get("Home.Context.Open"));
                     SetMenuItemText(items, 1, LocalizationService.Get("Home.Context.Rename"));
-                    SetMenuItemText(items, 2, LocalizationService.Get("Home.Context.RemoveFolder"));
+                    SetMenuItemText(items, 2, LocalizationService.Get("Home.Context.Color"));
+                    if (items.Count > 2)
+                    {
+                        var swatchItems = items[2].Items.OfType<MenuItem>().ToList();
+                        for (int i = 0; i < swatchItems.Count && i < FolderColorSwatches.Length; i++)
+                            swatchItems[i].Header = LocalizeFolderColor(FolderColorSwatches[i].Key);
+                    }
+                    SetMenuItemText(items, 3, LocalizationService.Get("Home.Context.RemoveFolder"));
                 }
                 else if (kind == "file")
                 {
@@ -518,7 +548,8 @@ namespace Caelum.Pages
                     SetMenuItemText(items, 3 + offset, LocalizationService.Get("Home.Context.CopyPath"));
                     SetMenuItemText(items, 4 + offset, LocalizationService.Get("Home.Context.OpenFolder"));
                     SetMenuItemText(items, 5 + offset, LocalizationService.Get("Home.Context.Export"));
-                    SetMenuItemText(items, 6 + offset, LocalizationService.Get("Home.Context.Remove"));
+                    SetMenuItemText(items, items.Count - 2, LocalizationService.Get("Home.Context.Delete"));
+                    SetMenuItemText(items, items.Count - 1, LocalizationService.Get("Home.Context.Remove"));
                 }
                 else if (kind == "move-root")
                 {
@@ -922,6 +953,55 @@ namespace Caelum.Pages
             }
         }
 
+        private async Task DeleteFileTileAsync(HomeTile tile)
+        {
+            if (tile == null || !tile.IsFile)
+                return;
+
+            var owner = Window.GetWindow(this);
+            bool? confirmed = await DialogService.ShowDangerConfirmAsync(
+                owner,
+                LocalizationService.Get("Home.DeleteTitle"),
+                LocalizationService.Format("Home.DeleteMessage", tile.FileName),
+                LocalizationService.Get("Common.Cancel"),
+                LocalizationService.Get("Home.Context.Delete"));
+            if (confirmed != true)
+                return;
+
+            if (TryDeleteLibraryFile(tile.Path) && Window.GetWindow(this) is MainWindow mw)
+                mw.ShowToast(LocalizationService.Format("Home.Selection.DeletedCount", 1), "Trash2");
+
+            await RefreshCurrentFolderAsync();
+        }
+
+        private static readonly (string Key, string Hex)[] FolderColorSwatches =
+        {
+            ("Home.FolderColor.Amber", "#F59E0B"),
+            ("Home.FolderColor.Red", "#EF4444"),
+            ("Home.FolderColor.Orange", "#F97316"),
+            ("Home.FolderColor.Green", "#22C55E"),
+            ("Home.FolderColor.Blue", "#3B82F6"),
+            ("Home.FolderColor.Purple", "#8B5CF6"),
+            ("Home.FolderColor.Pink", "#EC4899"),
+            ("Home.FolderColor.Slate", "#64748B")
+        };
+
+        private static string LocalizeFolderColor(string key)
+        {
+            return key switch
+            {
+                "Home.FolderColor.Amber" => LocalizationService.Get("Home.FolderColor.Amber"),
+                "Home.FolderColor.Red" => LocalizationService.Get("Home.FolderColor.Red"),
+                "Home.FolderColor.Orange" => LocalizationService.Get("Home.FolderColor.Orange"),
+                "Home.FolderColor.Green" => LocalizationService.Get("Home.FolderColor.Green"),
+                "Home.FolderColor.Blue" => LocalizationService.Get("Home.FolderColor.Blue"),
+                "Home.FolderColor.Purple" => LocalizationService.Get("Home.FolderColor.Purple"),
+                "Home.FolderColor.Pink" => LocalizationService.Get("Home.FolderColor.Pink"),
+                "Home.FolderColor.Slate" => LocalizationService.Get("Home.FolderColor.Slate"),
+                _ => key
+            };
+        }
+
         private async Task RemoveFileTileAsync(HomeTile tile)
         {
             if (tile == null || !tile.IsFile)
@@ -945,8 +1025,15 @@ namespace Caelum.Pages
             if (!IsInsideFolder)
                 return;
 
-            var parentFolder = RecentFilesService.GetFolder(_currentFolderId)?.ParentFolderId;
-            _currentFolderId = parentFolder ?? string.Empty;
+            if (IsChoosingMoveTarget)
+            {
+                var parentFolder = RecentFilesService.GetFolder(_currentFolderId)?.ParentFolderId;
+                _ = MoveSelectedTilesToFolderAsync(string.IsNullOrWhiteSpace(parentFolder) ? null : parentFolder);
+                return;
+            }
+
+            var parent = RecentFilesService.GetFolder(_currentFolderId)?.ParentFolderId;
+            _currentFolderId = parent ?? string.Empty;
             _currentFolderName = RecentFilesService.GetFolder(_currentFolderId)?.DisplayName ?? string.Empty;
             _ = RefreshCurrentFolderAsync();
         }
@@ -995,6 +1082,7 @@ namespace Caelum.Pages
             dataObject.SetData(HomePageDragDropHelper.LibraryTilePathsDataFormat, _dragCandidatePaths);
             if (_dragCandidatePaths.Length == 1)
                 dataObject.SetData(HomePageDragDropHelper.LibraryTilePathDataFormat, _dragCandidatePaths[0]);
+            dataObject.SetData(DataFormats.FileDrop, _dragCandidatePaths);
 
             try
             {
@@ -1331,6 +1419,56 @@ namespace Caelum.Pages
         }
 
         private bool _isDropTarget;
+
+        private string _color = string.Empty;
+        public string Color
+        {
+            get => _color;
+            private set
+            {
+                _color = value ?? string.Empty;
+                OnPropertyChanged(nameof(Color));
+                OnPropertyChanged(nameof(FolderTabBrush));
+                OnPropertyChanged(nameof(FolderBodyBrush));
+                OnPropertyChanged(nameof(FolderLineBrush));
+                OnPropertyChanged(nameof(FolderLineAltBrush));
+            }
+        }
+
+        public System.Windows.Media.Brush FolderTabBrush => CreateFolderBrush(0.18, "#FBBF24");
+        public System.Windows.Media.Brush FolderBodyBrush => CreateFolderBrush(0.0, "#F59E0B");
+        public System.Windows.Media.Brush FolderLineBrush => CreateFolderBrush(0.45, "#FDE68A");
+        public System.Windows.Media.Brush FolderLineAltBrush => CreateFolderBrush(0.28, "#FCD34D");
+
+        private System.Windows.Media.SolidColorBrush CreateFolderBrush(double lighten, string fallbackHex)
+        {
+            var color = ParseFolderColor(Color, fallbackHex);
+            if (lighten > 0)
+                color = MixWithWhite(color, lighten);
+            return new System.Windows.Media.SolidColorBrush(color);
+        }
+
+        private static System.Windows.Media.Color ParseFolderColor(string hex, string fallbackHex)
+        {
+            try
+            {
+                return (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(
+                    string.IsNullOrWhiteSpace(hex) ? fallbackHex : hex);
+            }
+            catch
+            {
+                return (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(fallbackHex);
+            }
+        }
+
+        private static System.Windows.Media.Color MixWithWhite(System.Windows.Media.Color color, double amount)
+        {
+            amount = Math.Clamp(amount, 0, 1);
+            return System.Windows.Media.Color.FromRgb(
+                (byte)(color.R + (255 - color.R) * amount),
+                (byte)(color.G + (255 - color.G) * amount),
+                (byte)(color.B + (255 - color.B) * amount));
+        }
         public bool IsDropTarget
         {
             get => _isDropTarget;
@@ -1468,7 +1606,8 @@ namespace Caelum.Pages
                 ParentFolderId = entry?.ParentFolderId ?? string.Empty,
                 _displayName = entry?.DisplayName ?? string.Empty,
                 _childCount = childCount,
-                _lastModified = entry?.LastModifiedUtc?.ToLocalTime() ?? default
+                _lastModified = entry?.LastModifiedUtc?.ToLocalTime() ?? default,
+                Color = entry?.Color ?? string.Empty
             };
         }
     }
