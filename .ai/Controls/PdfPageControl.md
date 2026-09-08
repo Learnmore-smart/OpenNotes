@@ -1,5 +1,23 @@
 # Controls/PdfPageControl.xaml(.cs)
 
+## Open Threads / Resume Context
+
+- **Status:** complete
+- **Intent:** After freehand writing, leftover InkCanvas mouse/stylus capture must not keep chrome from receiving the next pointer. `CancelInteraction` always releases ink captures, including native `EditingMode.Ink`.
+- **Next steps:** none.
+
+## Bug Fixes
+
+| Date | Bug | Cause | Fix |
+|------|-----|-------|-----|
+| 2026-09-08 | After writing on a PDF, tab/window close sometimes does nothing | Native inking can keep InkCanvas capture; `CancelInteraction` only released erase/shape/laser/area captures | Always `ReleaseInkCaptures`; treat InkCanvas capture as an active interaction |
+
+## Bug Fixes
+
+| Date | Bug | Cause | Fix |
+|------|-----|-------|-----|
+| 2026-09-08 | After writing on a PDF, tab/window close sometimes does nothing | Native inking can keep InkCanvas capture; `CancelInteraction` only released erase/shape/laser/area captures | Always `ReleaseInkCaptures`; treat InkCanvas capture as an active interaction |
+
 ## Selection rotate and blank context (2026-09-05)
 
 - Top-edge rotate handle; `RotateItemsDirectly` + `SelectionRotateCompleted`. Ink/shapes transform points; text/image/sticky use `RotateTransform` + `RotationDegrees`.

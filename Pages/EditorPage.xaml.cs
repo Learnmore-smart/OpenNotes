@@ -10178,9 +10178,17 @@ namespace Caelum.Pages
             CancelTextResize(restoreBounds: true);
             ResetThumbnailDragState();
             ClearThumbnailDropIndicator();
+            _isPenScrolling = false;
+            _isMiddleMousePanning = false;
+            if (PdfScrollViewer?.IsMouseCaptured == true)
+                PdfScrollViewer.ReleaseMouseCapture();
+            if (PdfScrollViewer?.IsStylusCaptured == true)
+                PdfScrollViewer.ReleaseStylusCapture();
             InteractionCancellation.CancelAll(_pageControls, reason);
             _isDelegatingSelection = false;
             _selectionDelegateTarget = null;
+            Mouse.Capture(null);
+            Stylus.Capture(null);
         }
 
         /// <summary>

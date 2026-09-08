@@ -1,5 +1,10 @@
 # OpenNotes.Tests/StrokeEraserGeometryTests.cs
 
+## Open Threads / Resume Context
+
+- **Status:** complete
+- **Intent:** STA regression captures InkCanvas in inking mode and asserts `CancelInteraction` releases mouse/stylus capture so tab chrome can receive the next pointer.
+
 ## Exact eraser regression coverage (2026-08-30)
 
 - **2026-08-31 stylus crash regression:** reproduces the shipped 5.2.7 crash with an

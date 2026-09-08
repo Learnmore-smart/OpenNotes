@@ -46,6 +46,7 @@ Owns the single-window Frame/tab shell, application chrome, startup theme and gl
 ## Open Threads / Resume Context
 
 - **Status:** complete
+- **Intent:** Tab X and window close work after inking: CloseTab releases captures, tab X handles PreviewStylusDown with press-and-hold disabled, and PrepareForClose is WaitAsync-bounded.
 - Window FileDrop accepts Word; convert to sibling PDF before `NavigateActiveTabToFile` / `OpenFileInNewTab`.
 
 ## Constraints

@@ -1,5 +1,5 @@
 # PROJECT_CONTEXT — OpenNotes（Caelum legacy compatibility）
-> Last updated: 2026-09-08（5.2.13 Word import + Excel chart paste） | Protection: STANDARD | 本文件为 File Guardian 记忆镜像的根文档，所有 Agent 在动代码前必读。
+> Last updated: 2026-09-08（5.2.14 tab-close-after-inking hotfix） | Protection: STANDARD | 本文件为 File Guardian 记忆镜像的根文档，所有 Agent 在动代码前必读。
 
 ## 项目概览
 
@@ -51,6 +51,7 @@ WPF (.NET 8) PDF 笔记应用，正式产品和工作区名称为 **OpenNotes**�
 5. **单窗口 Frame 标签架构**（MainWindow `List<AppTab> _tabs` + Frame.Navigate）。
 
 ## Current Work
+- 2026-09-08: OpenNotes 5.2.14 tab-close-after-inking hotfix. After writing, leftover InkCanvas capture and mouse-only chrome handlers could leave the tab X / window close dead. Close now releases pointer captures, handles stylus on close chrome, and bounds PrepareForClose with WaitAsync. Visible version is 5.2.14/5.2.14.0; Caelum namespace/data, WindowsNotesApp identity, and installer AppId remain compatible. Tag `v5.2.14` is the release trigger.
 - 2026-09-08: Word import plus Excel-chart paste for 5.2.13. Word `.doc`/`.docx`/`.docm` convert to a sibling PDF and stay untouched; library/editor stay PDF-only. Ctrl+V must rasterize Excel chart EMF/DIB/PNG onto the existing image-annotation path because WPF `Clipboard.ContainsImage()` is often false for charts. Unicode FreeText baseline appearance fix ships in the same release.
 - 2026-09-06: OpenNotes 5.2.12 is a WPF hotfix for the 5.2.11 library wipe. `RecentFilesService` no longer persist-prunes missing PDFs, restores from `recent_files.json.bak` / bookmark paths, and library tile drags use FileDrop Copy. Visible version is 5.2.12/5.2.12.0; Caelum namespace/data, WindowsNotesApp identity, and installer AppId remain compatible. Tag `v5.2.12` is the release trigger.
 - 2026-09-02: OpenNotes 5.2.10 PDF Edge-compatibility and tree-wide CropBox sanitization release is ready for commit/tag publication. Hardened PdfAtomicFile with full page-tree traversal to sanitize inherited CropBoxes up to root /Pages dictionaries, added safe geometry fallbacks in PdfService, and verified existing affected PDFs restore cleanly in Microsoft Edge with all annotations intact. Release suite passes 412/412 tests with 0 failures. Caelum namespace/data, WindowsNotesApp identity, installer AppId, and repository URL remain untouched.

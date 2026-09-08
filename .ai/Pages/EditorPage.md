@@ -3,7 +3,7 @@
 ## Open Threads / Resume Context
 
 - **Status:** complete
-- **Intent:** Paste Excel charts. `PasteClipboardImage` and `HasPasteableClipboard` use `ClipboardImageDecoder` (EMF/DIB/PNG). Selection-bar Paste tries image paste first, same as Ctrl+V.
+- **Intent:** `CancelInteraction` also drops PdfScrollViewer and global mouse/stylus capture so a finished ink/pen-scroll gesture cannot steal the next chrome tap.
 
 ## Selection chrome, rotation, ruler length (2026-09-05)
 

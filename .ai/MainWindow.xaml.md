@@ -8,6 +8,8 @@ Defines the custom OpenNotes window chrome, tab strip, global commands, frame ho
 
 ## Open Threads / Resume Context
 
+- **Status:** complete
+- **Intent:** Title-bar Close handles PreviewStylusDown after inking, because InkCanvas can stop stylus-to-mouse promotion.
 - **2026-09-01 complete:** `CheckForUpdatesMenuItem` sits between Settings and About without changing `MoreButton` AutomationId or popup ownership.
 - **2026-09-01:** Insert the localized `CheckForUpdatesMenuItem` between Settings and About without changing `MoreButton` AutomationId or popup ownership.
 - **Status:** complete (5.1.2)

@@ -7,8 +7,8 @@ Defines the Inno Setup package for the OpenNotes Windows desktop application.
 
 ## Open Threads / Resume Context
 
-- **Status:** ready_for_release (5.2.13 Word import + Excel chart paste)
-- Default version is `5.2.13`; tag `v5.2.13` triggers GitHub Actions to publish installer and portable ZIP. AppId and per-user upgrade remain unchanged.
+- **Status:** ready_for_release (5.2.14 tab-close-after-inking hotfix)
+- Default version is `5.2.14`; tag `v5.2.14` triggers GitHub Actions to publish installer and portable ZIP. AppId and per-user upgrade remain unchanged.
 - **Status:** released (5.2.9 Edge-PDF compatibility release)
 - GitHub Actions run `33690709203` published `OpenNotes-Setup-5.2.9.exe` (56,112,949 bytes; SHA-256 `dfbc6e34423ab425f0be39911f0a81dbc7001f630acd77309796f86f0bed2943`) and `OpenNotes-Portable-win-x64-5.2.9.zip` (80,705,653 bytes; SHA-256 `9b78b62506afd93b17e7f3125d260f807ac89bf6ca171b8aea3e5c28ea562872`). Downloaded hashes match GitHub digests, and the Portable executable passed metadata/native-runtime/startup verification. The stable AppId and per-user upgrade behavior remain preserved.
 - **Status:** released (5.2.8 eraser stylus-crash hotfix)

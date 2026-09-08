@@ -81,7 +81,7 @@ public sealed class PerformanceLifecycleSourceTests
             Assert.That(source, Does.Contain("protected override void OnClosing(System.ComponentModel.CancelEventArgs e)"));
             Assert.That(source, Does.Not.Contain("protected override async void OnClosing"));
             Assert.That(source, Does.Contain("e.Cancel = true;"));
-            Assert.That(source, Does.Contain("if (!await editor.PrepareForCloseAsync(timeout.Token))"));
+            Assert.That(source, Does.Contain("if (!await editor.PrepareForCloseAsync(timeout.Token).WaitAsync(timeout.Token))"));
             Assert.That(source, Does.Contain("if (!await editor.PrepareForNavigationAsync(timeout.Token))"));
             Assert.That(source, Does.Contain("Task<bool> releaseTask = editor.ReleaseResourcesAsync();"));
             Assert.That(source, Does.Contain("releaseTask.WaitAsync(cancellationToken)"));

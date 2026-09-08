@@ -1,5 +1,5 @@
 # OpenNotes.Tests/ProductInfoTests.cs
-> 2026-09-08 GREEN: the 5.2.13 visible-version contract aligns Word import + Excel chart paste; compatibility assertions remain unchanged.
+> 2026-09-08 GREEN: the 5.2.14 visible-version contract aligns the tab-close-after-inking hotfix; compatibility assertions remain unchanged.
 > 2026-09-02 GREEN: the 5.2.9 visible-version contract failed against stale 5.2.8 production metadata, then passed 2/2 after alignment; compatibility assertions remain unchanged.
 > 2026-08-31 GREEN: the 5.2.8 visible-version contract failed against stale 5.2.7 production metadata, then passed 2/2 after alignment; compatibility assertions remain unchanged.
 > 2026-08-31 GREEN: the 5.2.7 visible-version contract failed against stale 5.2.6 production metadata, then passed 2/2 after alignment; compatibility assertions remain unchanged.

@@ -217,6 +217,49 @@ public sealed class StrokeEraserGeometryTests
     }
 
     [Test]
+    public void CancelInteraction_ReleasesNativeInkCanvasCapture()
+    {
+        var page = CreatePage(wholeStroke: false);
+        page.SetInputMode(CustomInkInputProcessingMode.Inking);
+
+        var host = new Window
+        {
+            Width = 320,
+            Height = 240,
+            Content = page,
+            ShowInTaskbar = false,
+            WindowStyle = WindowStyle.ToolWindow
+        };
+
+        try
+        {
+            host.Show();
+            if (!page.InkCanvas.CaptureMouse())
+            {
+                Assert.Ignore("Mouse capture requires an active interactive desktop session.");
+            }
+
+            Assert.That(page.HasActiveInteraction, Is.True,
+                "Native inking capture must count as an active interaction so chrome close can cancel it.");
+
+            page.CancelInteraction("tab close after writing");
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(page.InkCanvas.IsMouseCaptured, Is.False,
+                    "CancelInteraction must release leftover InkCanvas mouse capture after writing.");
+                Assert.That(page.InkCanvas.IsStylusCaptured, Is.False,
+                    "CancelInteraction must release leftover InkCanvas stylus capture after writing.");
+                Assert.That(page.HasActiveInteraction, Is.False);
+            });
+        }
+        finally
+        {
+            host.Close();
+        }
+    }
+
+    [Test]
     public void MouseUp_CommitsEraseBeforeReleasingMouseCapture()
     {
         var page = CreatePage(wholeStroke: false);

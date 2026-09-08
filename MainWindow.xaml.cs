@@ -89,6 +89,9 @@ namespace Caelum
             TabBar.DragOver += TabBar_DragOver;
             TabBar.Drop += TabBar_Drop;
 
+            Stylus.SetIsPressAndHoldEnabled(CloseButton, false);
+            Stylus.SetIsFlicksEnabled(CloseButton, false);
+
             // The normal application window starts with Home.  Detached
             // windows receive an existing AppTab after construction so the
             // original Frame/editor state is preserved.
@@ -576,12 +579,32 @@ namespace Caelum
             RefreshSelectButtonVisualState();
         }
 
+        private void ReleasePointerCapturesForChrome()
+        {
+            Mouse.Capture(null);
+            Stylus.Capture(null);
+            if (ActiveFrame?.Content is EditorPage editor)
+                editor.CancelInteraction("chrome pointer");
+        }
+
+        private void ChromeButton_PreviewStylusDown(object sender, StylusDownEventArgs e)
+        {
+            ReleasePointerCapturesForChrome();
+            if (sender is not Button button)
+                return;
+
+            e.Handled = true;
+            button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        }
+
         private async void CloseTab(AppTab tab)
         {
             if (tab == null || !_tabs.Contains(tab))
                 return;
             if (_windowCloseWorkflowActive || _navigationWorkflowActive || !_tabCloseWorkflows.Add(tab))
                 return;
+
+            ReleasePointerCapturesForChrome();
 
             // A tab is not removed until the editor has persisted its newest
             // generation and released native resources. A failed save keeps
@@ -601,7 +624,7 @@ namespace Caelum
                 {
                     activeEditor = editor;
                     bool wasDirty = editor.IsDirty;
-                    if (!await editor.PrepareForCloseAsync(timeout.Token))
+                    if (!await editor.PrepareForCloseAsync(timeout.Token).WaitAsync(timeout.Token))
                     {
                         foreach (var prepared in preparedEditors)
                             prepared.CancelClosePreparation();
@@ -914,7 +937,14 @@ namespace Caelum
             closeBtn.Template = closeBtnTemplate;
 
             var capturedTab = tab;
+            Stylus.SetIsPressAndHoldEnabled(closeBtn, false);
+            Stylus.SetIsFlicksEnabled(closeBtn, false);
             closeBtn.PreviewMouseLeftButtonDown += (s, e) =>
+            {
+                e.Handled = true;
+                CloseTab(capturedTab);
+            };
+            closeBtn.PreviewStylusDown += (s, e) =>
             {
                 e.Handled = true;
                 CloseTab(capturedTab);
@@ -1548,7 +1578,7 @@ namespace Caelum
                 foreach (var editor in allEditors)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    if (!await editor.PrepareForCloseAsync(cancellationToken))
+                    if (!await editor.PrepareForCloseAsync(cancellationToken).WaitAsync(cancellationToken))
                         return;
 
                     preparedEditors.Add(editor);

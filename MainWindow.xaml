@@ -257,7 +257,7 @@
                         <Button x:Name="MaximizeButton" Click="MaximizeButton_Click" Style="{StaticResource TitleBarButtonStyle}" WindowChrome.IsHitTestVisibleInChrome="True">
                             <controls:LucideIcon x:Name="MaximizeIcon" Kind="Square" Width="12" Height="12" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
                         </Button>
-                        <Button x:Name="CloseButton" Click="CloseButton_Click" Style="{StaticResource CloseButtonStyle}" WindowChrome.IsHitTestVisibleInChrome="True">
+                        <Button x:Name="CloseButton" Click="CloseButton_Click" PreviewStylusDown="ChromeButton_PreviewStylusDown" Style="{StaticResource CloseButtonStyle}" WindowChrome.IsHitTestVisibleInChrome="True">
                             <controls:LucideIcon Kind="X" Width="13" Height="13" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
                         </Button>
                     </StackPanel>

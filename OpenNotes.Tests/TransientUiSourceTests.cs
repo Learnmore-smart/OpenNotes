@@ -90,6 +90,28 @@ public sealed class TransientUiSourceTests
             Assert.That(editor, Does.Contain("TextResizeHandle_LostStylusCapture"));
             Assert.That(page, Does.Contain("SelectionOverlayCanvas_LostMouseCapture"));
             Assert.That(page, Does.Contain("SelectionOverlayCanvas_LostStylusCapture"));
+            Assert.That(page, Does.Contain("|| InkCanvas.IsMouseCaptured"));
+            Assert.That(page, Does.Contain("|| InkCanvas.IsStylusCaptured"));
+            int cancel = page.IndexOf("public void CancelInteraction(string reason = null)", StringComparison.Ordinal);
+            Assert.That(cancel, Is.GreaterThanOrEqualTo(0));
+            string cancelBody = page[cancel..];
+            int cancelEnd = cancelBody.IndexOf("\r\n        private void ReleaseInkCaptures()", StringComparison.Ordinal);
+            if (cancelEnd < 0)
+                cancelEnd = cancelBody.IndexOf("\n        private void ReleaseInkCaptures()", StringComparison.Ordinal);
+            Assert.That(cancelEnd, Is.GreaterThan(0));
+            int clearSelection = cancelBody.IndexOf("ClearPdfTextSelection();", StringComparison.Ordinal);
+            int lastRelease = cancelBody.LastIndexOf("ReleaseInkCaptures();", cancelEnd, StringComparison.Ordinal);
+            Assert.That(clearSelection, Is.GreaterThanOrEqualTo(0));
+            Assert.That(lastRelease, Is.GreaterThan(clearSelection));
+            int editorCancel = editor.IndexOf("public void CancelInteraction(string reason = null)", StringComparison.Ordinal);
+            Assert.That(editorCancel, Is.GreaterThanOrEqualTo(0));
+            string editorCancelBody = editor[editorCancel..];
+            int editorCancelEnd = editorCancelBody.IndexOf("\r\n        public void SetHostActive", StringComparison.Ordinal);
+            if (editorCancelEnd < 0)
+                editorCancelEnd = editorCancelBody.IndexOf("\n        public void SetHostActive", StringComparison.Ordinal);
+            Assert.That(editorCancelEnd, Is.GreaterThan(0));
+            Assert.That(editorCancelBody[..editorCancelEnd], Does.Contain("Mouse.Capture(null)"));
+            Assert.That(editorCancelBody[..editorCancelEnd], Does.Contain("Stylus.Capture(null)"));
             Assert.That(mainWindow, Does.Contain("editor.CancelInteraction(\"window deactivated\")"));
             Assert.That(mainWindow.IndexOf("editor.CancelInteraction(\"window deactivated\")"), Is.LessThan(
                 mainWindow.IndexOf("editor.CloseTransientUi(\"window deactivated\")")));

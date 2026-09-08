@@ -289,7 +289,9 @@ namespace Caelum.Controls
             || _isAreaHighlightDragging
             || _isErasing
             || PdfTextSelectionCanvas.IsMouseCaptured
-            || PdfTextSelectionCanvas.IsStylusCaptured;
+            || PdfTextSelectionCanvas.IsStylusCaptured
+            || InkCanvas.IsMouseCaptured
+            || InkCanvas.IsStylusCaptured;
 
         /// <summary>
         /// Cancels every page-local transient gesture.  Transform snapshots
@@ -352,6 +354,10 @@ namespace Caelum.Controls
             if (PdfTextSelectionCanvas.IsStylusCaptured)
                 PdfTextSelectionCanvas.ReleaseStylusCapture();
             ClearPdfTextSelection();
+            // Native inking keeps capture after a stroke on some digitizers.
+            // Chrome (tab/window close) cannot receive the next pointer until
+            // this is released, including when the gesture never hit erase/shape.
+            ReleaseInkCaptures();
         }
 
         private void ReleaseInkCaptures()
