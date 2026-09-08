@@ -1,5 +1,5 @@
 # Services/ProductInfo.cs
-> 2026-09-06 GREEN: visible version is 5.2.12 for the library-index wipe hotfix; every Caelum/WindowsNotesApp identity, data root, and URL remains unchanged.
+> 2026-09-08 GREEN: visible version is 5.2.13 for Word import and Excel chart paste; every Caelum/WindowsNotesApp identity, data root, and URL remains unchanged.
 > 2026-09-02 GREEN: visible version is 5.2.9 for Edge-PDF compatibility; every Caelum/WindowsNotesApp identity, data root, and URL remains unchanged.
 > 2026-08-31 GREEN: visible version is 5.2.8 for the eraser stylus-crash hotfix; every Caelum/WindowsNotesApp identity, data root, and URL remains unchanged.
 > 2026-08-31 GREEN: visible version is 5.2.7 for the page-rotation drawing hotfix; all Caelum/WindowsNotesApp identities, storage, and compatibility URLs remain unchanged.
@@ -18,7 +18,7 @@ Single source of truth for the visible OpenNotes brand and the compatibility ide
 - `LegacyAppxIdentity`: `WindowsNotesApp`
 - `RepositoryUrl`: `https://github.com/Learnmore-smart/Windows-Notes`
 - `WebsiteUrl`: `https://learnmore-smart.github.io/Windows-Notes/`
-- `Version`: `5.2.12`
+- `Version`: `5.2.13`
 - `Description`: localized through `LocalizationService.Get("Product.Description")`
 
 ## Important Notes / NEVER Change

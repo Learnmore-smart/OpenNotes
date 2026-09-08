@@ -45,7 +45,17 @@ namespace OpenNotes.Tests
             data.SetData(DataFormats.FileDrop, new[] { @"C:\Docs\one.pdf", @"C:\Docs\two.txt" });
 
             Assert.That(HomePageDragDropHelper.HasSupportedFolderDropPayload(data), Is.True);
-            Assert.That(HomePageDragDropHelper.GetDroppedPdfPaths(data), Is.EqualTo(new[] { @"C:\Docs\one.pdf" }));
+            Assert.That(HomePageDragDropHelper.GetDroppedImportablePaths(data), Is.EqualTo(new[] { @"C:\Docs\one.pdf" }));
+        }
+
+        [Test]
+        public void HasSupportedFolderDropPayload_ReturnsTrue_ForExternalWordDrop()
+        {
+            var data = new DataObject();
+            data.SetData(DataFormats.FileDrop, new[] { @"C:\Docs\essay.docx", @"C:\Docs\two.txt" });
+
+            Assert.That(HomePageDragDropHelper.HasSupportedFolderDropPayload(data), Is.True);
+            Assert.That(HomePageDragDropHelper.GetDroppedImportablePaths(data), Is.EqualTo(new[] { @"C:\Docs\essay.docx" }));
         }
 
         [Test]

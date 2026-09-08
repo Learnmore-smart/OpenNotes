@@ -1,5 +1,5 @@
 # PROJECT_CONTEXT — OpenNotes（Caelum legacy compatibility）
-> Last updated: 2026-09-06（5.2.12 library wipe hotfix） | Protection: STANDARD | 本文件为 File Guardian 记忆镜像的根文档，所有 Agent 在动代码前必读。
+> Last updated: 2026-09-08（5.2.13 Word import + Excel chart paste） | Protection: STANDARD | 本文件为 File Guardian 记忆镜像的根文档，所有 Agent 在动代码前必读。
 
 ## 项目概览
 
@@ -51,6 +51,7 @@ WPF (.NET 8) PDF 笔记应用，正式产品和工作区名称为 **OpenNotes**�
 5. **单窗口 Frame 标签架构**（MainWindow `List<AppTab> _tabs` + Frame.Navigate）。
 
 ## Current Work
+- 2026-09-08: Word import plus Excel-chart paste for 5.2.13. Word `.doc`/`.docx`/`.docm` convert to a sibling PDF and stay untouched; library/editor stay PDF-only. Ctrl+V must rasterize Excel chart EMF/DIB/PNG onto the existing image-annotation path because WPF `Clipboard.ContainsImage()` is often false for charts. Unicode FreeText baseline appearance fix ships in the same release.
 - 2026-09-06: OpenNotes 5.2.12 is a WPF hotfix for the 5.2.11 library wipe. `RecentFilesService` no longer persist-prunes missing PDFs, restores from `recent_files.json.bak` / bookmark paths, and library tile drags use FileDrop Copy. Visible version is 5.2.12/5.2.12.0; Caelum namespace/data, WindowsNotesApp identity, and installer AppId remain compatible. Tag `v5.2.12` is the release trigger.
 - 2026-09-02: OpenNotes 5.2.10 PDF Edge-compatibility and tree-wide CropBox sanitization release is ready for commit/tag publication. Hardened PdfAtomicFile with full page-tree traversal to sanitize inherited CropBoxes up to root /Pages dictionaries, added safe geometry fallbacks in PdfService, and verified existing affected PDFs restore cleanly in Microsoft Edge with all annotations intact. Release suite passes 412/412 tests with 0 failures. Caelum namespace/data, WindowsNotesApp identity, installer AppId, and repository URL remain untouched.
 - 2026-09-02: OpenNotes 5.2.9 Edge-PDF compatibility release is published from tag commit `f96373b`. GitHub Actions run `33690709203` completed successfully and produced a non-draft/non-prerelease Release. Public verification: `OpenNotes-Setup-5.2.9.exe` is 56,112,949 bytes with SHA-256 `dfbc6e34423ab425f0be39911f0a81dbc7001f630acd77309796f86f0bed2943`; `OpenNotes-Portable-win-x64-5.2.9.zip` is 80,705,653 bytes with SHA-256 `9b78b62506afd93b17e7f3125d260f807ac89bf6ca171b8aea3e5c28ea562872`. Downloaded hashes match GitHub digests. The Portable executable reports FileVersion `5.2.9.0` / ProductVersion `5.2.9+f96373b488d990026ec0ace1918b1a57369d24d0`, contains `x64/pdfium.dll`, and remained alive through an isolated eight-second startup smoke. Release-source gates remain GREEN: ProductInfo 2/2 after expected RED, Release suite 381/381, clean-archive i18n 297 catalog entries/484 calls/0 hard-coded strings, and local self-contained publish/startup smoke. Caelum namespace/data, WindowsNotesApp identity, installer AppId, and unrelated website work remain untouched.

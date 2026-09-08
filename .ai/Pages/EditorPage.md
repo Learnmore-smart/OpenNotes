@@ -1,5 +1,10 @@
 # Pages/EditorPage.xaml.cs
 
+## Open Threads / Resume Context
+
+- **Status:** complete
+- **Intent:** Paste Excel charts. `PasteClipboardImage` and `HasPasteableClipboard` use `ClipboardImageDecoder` (EMF/DIB/PNG). Selection-bar Paste tries image paste first, same as Ctrl+V.
+
 ## Selection chrome, rotation, ruler length (2026-09-05)
 
 - Selection action bar: copy/paste/delete; paste hidden when clipboard is empty; PDF text selection shows copy only. Registered with `_transientUiRegistry` + `PopupZOrderHelper`.
@@ -253,7 +258,7 @@ Wave 1 note: shape replacement undo stores only session token/index and immutabl
 - **滚动条点击即达**（Task 11，行 1810-1865）：`InstallScrollbarTrackJump`（EditorPage_Loaded 调用）经 `PdfScrollViewer.Template.FindName` 取 `PART_VerticalScrollBar`/`PART_HorizontalScrollBar`，为每根滚动条创建显式 `MouseButtonEventHandler` 实例后再 Remove/Add `PreviewMouseLeftButtonDown`，避免 WPF 路由事件的委托类型不匹配，同时覆盖 Loaded 反复触发与模板重应用；handler `ScrollBarTrackJump_MouseLeftButtonDown`：OriginalSource 在 Thumb 子树内→跳过（原生拖拽）；否则经 `PART_Track` 取 thumb/track 几何，`ratio = (clickPos − thumbLen/2)/(trackLen − thumbLen)` clamp 0..1（垂直 Track `IsDirectionReversed=True`，clickPos 先归一化为值增大方向），`CancelSmoothScroll()` → `ScrollToVerticalOffset/HorizontalOffset(ratio × Scrollable*)`（同步直跳，无动画无分页步进）→ `SyncSmoothScrollState()` 同步滚轮动画基准 → `e.Handled=true`。配套放行：`PdfScrollViewer_PreviewMouseDown` 与 `PdfScrollViewer_PreviewStylusDown` 开头以 `IsOriginalSourceOverScrollbar`（FindAncestor\<ScrollBar\>，行 3123）放行滚动条子树的左键/笔输入——否则 Select 工具选择委托（页面 50px buffer 覆盖滚动条）会在祖先层 handle 掉事件、None 工具笔点击会被 pen-scroll capture 吞掉。App.xaml 滚动条模板零改动。
 - **粘贴** `PasteSelection`（行 2850）：从剪贴板 JSON 反序列化 `AnnotationData`（只取 Pages["0"]）；目标页优先 `_lastClickedPage`，否则 `_activeSelectionPage`/首页；有点击点时按内容包围盒 minX/minY 把粘贴内容**对齐到 `_lastClickedPoint`**（Task 19 起包围盒含 Images），否则偏移 (20,20)；重建 Stroke/Text/**Image（Task 19：AddImage 显式宽高复原副本尺寸，仅位置吃偏移）** 后 `PushUndoAction(new ItemsAddedAction(...))` → 清其它页残留选区 → `targetPage.SelectItems(pastedStrokes, pastedContainers)` **自动全选粘贴内容**（Task 8.2）→ `MarkDirty()`；异常仅 Console 吞掉。
 - **图片注释（Task 19）**：
-  - **剪贴板粘贴** `PasteClipboardImage`：Ctrl+V 先于 PasteSelection 执行——`Clipboard.ContainsImage()` → GetImage()（失败再取 "PNG" 自定义格式 MemoryStream→BitmapFrame，浏览器复制走此路径）→ `EncodeBitmapSourceToPng`（PngBitmapEncoder）→ `page.AddImage(bytes, pos)`（落点：`_lastClickedPage==目标页` 用 `_lastClickedPoint`，否则页中心并二次居中）→ 单容器 `ItemsAddedAction` → 清他页选区 → `SelectItems` 自动选中 → MarkDirty → Toast「图片已粘贴」。返回 false（剪贴板无图）则回落 PasteSelection。
+  - **剪贴板粘贴** `PasteClipboardImage`：Ctrl+V 先于 PasteSelection。`ClipboardImageDecoder` 读取 PNG / Bitmap / DIB / EnhancedMetafile（Excel 图表）并可选 Win32 `CF_ENHMETAFILE`，再 `AddImage`。WPF `ContainsImage()` 对 Excel 图表经常为 false，因此不再作为前置条件。选区栏 Paste 同样先走图片粘贴。
   - **拖放** ctor 接线 `PreviewDragOver`/`Drop`（Page 根 XAML 已有 AllowDrop=True 此前是死设置）：DragOver 对 FileDrop 含 .png/.jpg/.jpeg → e.Handled + Effects=Copy；Drop → `e.GetPosition(PagesContainer)` + TranslatePoint 逐页命中（与 FindPageAtContainerPoint 同款换算）找落点页，未命中（页间隙/chrome）回落 GetFirstVisiblePage 页中心；逐文件 `File.ReadAllBytes` → `AddImage`（多文件 +20px 阶梯落点）→ 批量 `ItemsAddedAction` + `SelectItems` + MarkDirty + Toast「图片已插入」。`IsSupportedImageFile`/`SupportedImageExtensions` 静态辅助（注意 `System.IO.Path` 全限定——本文件有 Shapes.Path 歧义）。
   - **收集/装载** `CollectAnnotations` 遍历 `page.ImageContainers`+`GetImageData` 产出 `pa.Images`（base64 原始字节 + Format 魔数嗅探 `PdfService.DetectImageFormat`）；`LoadAnnotationsFromPdfServiceAsync` 以保存的 X/Y/W/H **显式尺寸** `AddImage` 复原，全程 `_isLoadingAnnotations=true` 抑制 `ImagesChanged`→MarkDirty（装载不得置脏文档），finally 复位。
   - **复制/剪切/Ctrl+D** CopySelection 容器循环加 image else-if 分支（base64 + 实际宽高入 Images）；CutSelection=Copy+Delete 零改动即通；DuplicateSelection image 分支用原始字节 AddImage 保活体尺寸。

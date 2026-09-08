@@ -468,6 +468,40 @@ public class PdfServiceAnnotationSavingTests
             "CJK font subset must be embedded so external viewers can render the text");
     }
 
+    [TestCase("你好")]
+    [TestCase("你好\n世界")]
+    public async Task SaveAnnotationsToPdfAsync_UnicodeBaselineStaysInsideAppearance(string text)
+    {
+        string filePath = Path.Combine(_tempDirectory, "unicode-baseline.pdf");
+        CreateTestPdf(filePath);
+        var service = new PdfService();
+        try
+        {
+            await service.SaveAnnotationsToPdfAsync(filePath, new Dictionary<int, PageAnnotation>
+            {
+                [0] = new PageAnnotation
+                {
+                    Texts = new List<TextAnnotation>
+                    {
+                        new() { Text = text, X = 100, Y = 100, Width = 240, Height = 80, FontSize = 16 }
+                    }
+                }
+            });
+        }
+        finally { await service.DisposeAsync(); }
+
+        using var document = PdfReader.Open(filePath, PdfDocumentOpenMode.ReadOnly);
+        var annotation = GetAnnotationDictionary(document.Pages[0].Elements.GetArray("/Annots")!.Elements[0]);
+        var form = annotation.Elements.GetDictionary("/AP")!.Elements.GetDictionary("/N")!;
+        string content = System.Text.Encoding.ASCII.GetString(form.Stream.UnfilteredValue);
+        var position = System.Text.RegularExpressions.Regex.Match(content, @"([\d.-]+)\s+([\d.-]+)\s+Td");
+        Assert.That(position.Success, Is.True, content);
+        double baseline = double.Parse(position.Groups[2].Value, System.Globalization.CultureInfo.InvariantCulture);
+        // 80 DIPs = 60 pt high; first baseline is 1.2 em (14.4 pt) below the top.
+        Assert.That(baseline, Is.EqualTo(45.6).Within(0.02),
+            "The Unicode baseline must match the Latin baseline, without subtracting font ascent. " + content);
+    }
+
     [Test]
     public async Task SaveAnnotationsToPdfAsync_CjkFreeTextRoundTripsThroughParser()
     {

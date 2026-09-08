@@ -135,3 +135,8 @@ PDF 核心服务：PdfiumViewer 负责加载/渲染"剥离注释后的干净流"
 - 2026-08-23: Wave 2 implementation complete for automated scope: shared path lease covers SaveAnnotationsCore plus reload, preserving strip/rebuild, stream ownership, DIP transforms, foreign annotation retention and atomic Move. Eight concurrent service instances produce a readable final PDF.
 - 2026-08-23: Wave 2 final review: Insert/Delete/Reorder/Duplicate/Rotate/PDF/image import now use the same path/lifetime/document helper; public loads and `CreateBlankPdfAsync` also join the normalized path lease; defensive reload checks close the native-load window and dispose a rejected native document/backing stream independently; failed disposal is retryable. Structural queued-before/after-dispose and same-path gate tests are green.
 - 2026-08-24: Wave6 Sticky Note `/NM` now carries the stable model Id and additive size/colour metadata; owned legacy notes still parse through `/Rect` and default values, while foreign `/Text` annotations remain preserved.
+
+## 2026-09-06 FreeText clipping investigation
+- Plan: verify the Unicode XGraphics appearance baseline. Current code subtracts ascent before passing a baseline to DrawString, moving glyphs above the form bounds. Preserve rectangle, metadata, and existing Latin layout; correct the Unicode baseline after a failing saved-stream regression.
+- Verified: both saved-stream regressions failed with a 10.3125 pt upward shift before the fix; after removing the extra ascent subtraction, all 29 annotation-saving tests pass. Actual user PDF and Edge visual confirmation remain outstanding.
+- Final verification: 55/55 PdfService tests pass. Full suite aborted after 35 passes due to test-host FailFast in System.SR / MS.Win32.HwndSubclass; no full-suite success claimed.

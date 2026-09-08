@@ -30,3 +30,8 @@ Exercise the production PdfService strip/rebuild path against isolated temporary
 |---|---|---|
 | 2026-08-30 | Added GREEN PDF `FitToCurve` metadata round-trip and legacy rectangle recovery regressions. | Codex |
 | 2026-08-23 | Added Wave 2 PDF save/readability, Hidden Ink legacy/default, stream ownership and disposal-race integration contracts. | Codex |
+
+## 2026-09-06 Unicode appearance regression
+- Plan: assert the actual saved first-line text position matches the intended baseline inside the appearance bounds, including multiline text; run RED/GREEN and the save suite.
+- Verified: both saved-stream regressions failed with a 10.3125 pt upward shift before the fix; after removing the extra ascent subtraction, all 29 annotation-saving tests pass. Actual user PDF and Edge visual confirmation remain outstanding.
+- Expanded verification: 55/55 PdfService tests pass; full suite aborted in WPF HwndSubclass/System.SR after 35 passes.

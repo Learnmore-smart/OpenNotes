@@ -141,14 +141,13 @@ namespace Caelum
 
         // 鈹€鈹€鈹€ Drag & Drop 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
-        private static readonly string[] SupportedDropExtensions = { ".pdf" };
+        private static readonly string[] SupportedDropExtensions = { ".pdf", ".doc", ".docx", ".docm" };
 
         private bool HasSupportedFiles(DragEventArgs e)
         {
             if (!e.Data.GetDataPresent(DataFormats.FileDrop)) return false;
             var files = (string[])e.Data.GetData(DataFormats.FileDrop);
-            return files != null && files.Any(f =>
-                SupportedDropExtensions.Contains(Path.GetExtension(f).ToLowerInvariant()));
+            return files != null && files.Any(WordDocumentImport.IsImportablePath);
         }
 
         private bool ShouldDeferWindowFileDrop(DragEventArgs e)
@@ -193,7 +192,7 @@ namespace Caelum
             e.Handled = true;
         }
 
-        private void Window_Drop(object sender, DragEventArgs e)
+        private async void Window_Drop(object sender, DragEventArgs e)
         {
             if (IsTabDragOverTabStrip(e) || TabDragCoordinator.TryGetPayload(e.Data, out _))
                 return;
@@ -205,30 +204,69 @@ namespace Caelum
             var files = (string[])e.Data.GetData(DataFormats.FileDrop);
             if (files == null) return;
 
-            var pdfFiles = files.Where(f =>
-                SupportedDropExtensions.Contains(Path.GetExtension(f).ToLowerInvariant())).ToList();
+            var importableFiles = files.Where(WordDocumentImport.IsImportablePath).ToList();
 
-            if (pdfFiles.Count == 0) return;
+            if (importableFiles.Count == 0) return;
 
             // If the active tab is on the Home page, open the first file in-place
             bool isHomePage = ActiveFrame?.Content is HomePage;
             bool first = true;
 
-            foreach (var file in pdfFiles)
+            foreach (var file in importableFiles)
             {
+                var pdfPath = await TryImportDroppedDocumentAsync(file);
+                if (string.IsNullOrWhiteSpace(pdfPath))
+                    continue;
+
                 if (first && isHomePage)
                 {
                     // Open directly in the current Home tab
-                    NavigateActiveTabToFile(file);
+                    NavigateActiveTabToFile(pdfPath);
                     first = false;
                 }
                 else
                 {
-                    OpenFileInNewTab(file);
+                    OpenFileInNewTab(pdfPath);
                     first = false;
                 }
             }
             e.Handled = true;
+        }
+
+        private async Task<string> TryImportDroppedDocumentAsync(string path)
+        {
+            if (WordDocumentImport.IsPdfPath(path))
+                return path;
+            if (!WordDocumentImport.IsWordPath(path))
+                return null;
+
+            ShowToast(LocalizationService.Get("Home.ConvertingWord"), "\uE8B7");
+            var previousCursor = Mouse.OverrideCursor;
+            Mouse.OverrideCursor = Cursors.Wait;
+            try
+            {
+                return await WordToPdfConverter.Default.ImportAsync(path);
+            }
+            catch (WordConverterNotFoundException)
+            {
+                await DialogService.ShowErrorAsync(
+                    this,
+                    LocalizationService.Get("Common.Error"),
+                    LocalizationService.Get("Home.WordConverterMissing"));
+                return null;
+            }
+            catch (Exception ex)
+            {
+                await DialogService.ShowErrorAsync(
+                    this,
+                    LocalizationService.Get("Common.Error"),
+                    LocalizationService.Format("Home.WordConvertFailed", Path.GetFileName(path), ex.Message));
+                return null;
+            }
+            finally
+            {
+                Mouse.OverrideCursor = previousCursor;
+            }
         }
 
         private bool IsTabDragOverTabStrip(DragEventArgs e)

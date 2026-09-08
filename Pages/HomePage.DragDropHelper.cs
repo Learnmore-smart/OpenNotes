@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Windows;
+using Caelum.Services;
 
 namespace Caelum.Pages
 {
@@ -30,7 +31,7 @@ namespace Caelum.Pages
             return Array.Empty<string>();
         }
 
-        internal static string[] GetDroppedPdfPaths(IDataObject data)
+        internal static string[] GetDroppedImportablePaths(IDataObject data)
         {
             if (data == null ||
                 !data.GetDataPresent(DataFormats.FileDrop) ||
@@ -39,13 +40,13 @@ namespace Caelum.Pages
                 return Array.Empty<string>();
             }
 
-            return NormalizePaths(files.Where(IsPdfFile));
+            return NormalizePaths(files.Where(WordDocumentImport.IsImportablePath));
         }
 
         internal static bool HasSupportedFolderDropPayload(IDataObject data)
         {
             return GetLibraryTilePaths(data).Length > 0 ||
-                   GetDroppedPdfPaths(data).Length > 0;
+                   GetDroppedImportablePaths(data).Length > 0;
         }
 
         private static string[] NormalizePaths(System.Collections.Generic.IEnumerable<string> paths)
@@ -54,12 +55,6 @@ namespace Caelum.Pages
                 .Where(path => !string.IsNullOrWhiteSpace(path))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToArray();
-        }
-
-        private static bool IsPdfFile(string path)
-        {
-            return !string.IsNullOrWhiteSpace(path) &&
-                   string.Equals(Path.GetExtension(path), ".pdf", StringComparison.OrdinalIgnoreCase);
         }
     }
 }

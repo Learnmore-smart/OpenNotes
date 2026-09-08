@@ -43,6 +43,11 @@ Owns the single-window Frame/tab shell, application chrome, startup theme and gl
 
 - **2026-09-05 Win11 chrome:** Tab `Icon` values are Lucide names `Home` / `FileText`. `EnableAcrylicBlur` still sets DWM attribute 38 to `DWMSBT_NONE`, and additionally sets attribute 33 to `DWMWCP_ROUND`. Close-tab PreviewMouseLeftButtonDown and follow-the-cursor tab drag remain unchanged.
 
+## Open Threads / Resume Context
+
+- **Status:** complete
+- Window FileDrop accepts Word; convert to sibling PDF before `NavigateActiveTabToFile` / `OpenFileInNewTab`.
+
 ## Constraints
 
 - Preserve the single MainWindow + Frame-tab architecture.

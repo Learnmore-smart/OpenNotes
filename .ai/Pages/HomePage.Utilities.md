@@ -16,7 +16,7 @@ Utility and context-menu workflows for the HomePage, including user PDF export.
 
 - `HomePagePdfExportUsesAtomicTargetWriteContract` verifies the production export path calls `PdfAtomicFile.CopyFile`; the helper's same-directory temp/flush/atomic-move and failure cleanup are covered by `PdfSaveCoordinatorTests.AtomicReplacementFailureLeavesOriginalAndCleansTemp`.
 
-- **2026-09-05:** Move selection no longer opens a `PlacementMode.Top` menu. Multi-select Delete confirms, sends files to the Recycle Bin, then removes library entries.
+- **2026-09-08:** Drop overlay uses `Home.OpenDocumentTitle` so Word files are included.
 
 ## Constraints
 

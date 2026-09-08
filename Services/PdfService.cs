@@ -2837,15 +2837,16 @@ namespace Caelum.Services
                 var brush = new XSolidBrush(XColor.FromArgb(textItem.R, textItem.G, textItem.B));
                 // Match the baselines of the legacy latin appearance stream: center the first line
                 // inside its 1.4em slot, then advance line by lineHeight.
-                double ascent = font.GetHeight() * font.CellAscent / font.CellSpace;
-                double firstLineTop = lineHeight - (lineHeight - pdfFontSize) / 2 - ascent;
+                // The point overload of DrawString uses a baseline, not a top edge.
+                // Subtracting ascent here shifts glyphs above the form's clipping bounds.
+                double firstLineBaseline = lineHeight - (lineHeight - pdfFontSize) / 2;
                 for (int li = 0; li < wrappedLines.Length; li++)
                 {
                     if (wrappedLines[li].Length > 0)
                     {
                         double lineWidth = gfx.MeasureString(wrappedLines[li], font).Width;
                         double lineX = GetAlignedTextOffset(lineWidth, w, textItem.Alignment);
-                        gfx.DrawString(wrappedLines[li], font, brush, lineX, firstLineTop + li * lineHeight);
+                        gfx.DrawString(wrappedLines[li], font, brush, lineX, firstLineBaseline + li * lineHeight);
                     }
                 }
 

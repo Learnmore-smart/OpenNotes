@@ -839,20 +839,24 @@ namespace Caelum.Pages
         {
             var picker = new OpenFileDialog
             {
-                Filter = LocalizationService.Get("Home.PdfFilter"),
-                Title = LocalizationService.Get("Home.OpenPdfTitle")
+                Filter = LocalizationService.Get("Home.DocumentFilter"),
+                Title = LocalizationService.Get("Home.OpenDocumentTitle")
             };
 
             if (picker.ShowDialog() != true)
                 return;
 
             var folderId = IsInsideFolder ? _currentFolderId : null;
-            await AddFileToLibraryAsync(picker.FileName, folderId, false);
+            var pdfPath = await TryImportAsLibraryPdfAsync(picker.FileName);
+            if (string.IsNullOrWhiteSpace(pdfPath))
+                return;
+
+            await AddFileToLibraryAsync(pdfPath, folderId, false);
 
             if (Window.GetWindow(this) is MainWindow mw)
-                mw.NavigateActiveTabToFile(picker.FileName);
+                mw.NavigateActiveTabToFile(pdfPath);
             else
-                NavigationService?.Navigate(new EditorPage(picker.FileName));
+                NavigationService?.Navigate(new EditorPage(pdfPath));
         }
 
         private async Task CreateFolderAsync()
@@ -1020,6 +1024,45 @@ namespace Caelum.Pages
                 MessageBox.Show(content, title, MessageBoxButton.OK, MessageBoxImage.Information);
         }
 
+        private async Task<string> TryImportAsLibraryPdfAsync(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+                return null;
+
+            if (WordDocumentImport.IsPdfPath(path))
+                return path;
+
+            if (!WordDocumentImport.IsWordPath(path))
+            {
+                await ShowDialogAsync(LocalizationService.Get("Common.Error"), LocalizationService.Get("Home.ErrorUnsupportedType"));
+                return null;
+            }
+
+            GetMainWindow()?.ShowToast(LocalizationService.Get("Home.ConvertingWord"), "\uE8B7");
+            var previousCursor = Mouse.OverrideCursor;
+            Mouse.OverrideCursor = Cursors.Wait;
+            try
+            {
+                return await WordToPdfConverter.Default.ImportAsync(path);
+            }
+            catch (WordConverterNotFoundException)
+            {
+                await ShowDialogAsync(LocalizationService.Get("Common.Error"), LocalizationService.Get("Home.WordConverterMissing"));
+                return null;
+            }
+            catch (Exception ex)
+            {
+                await ShowDialogAsync(
+                    LocalizationService.Get("Common.Error"),
+                    LocalizationService.Format("Home.WordConvertFailed", Path.GetFileName(path), ex.Message));
+                return null;
+            }
+            finally
+            {
+                Mouse.OverrideCursor = previousCursor;
+            }
+        }
+
         private void NavigateUpButton_Click(object sender, RoutedEventArgs e)
         {
             if (!IsInsideFolder)
@@ -1126,12 +1169,16 @@ namespace Caelum.Pages
             }
             else
             {
-                foreach (var file in HomePageDragDropHelper.GetDroppedPdfPaths(e.Data))
+                foreach (var file in HomePageDragDropHelper.GetDroppedImportablePaths(e.Data))
                 {
+                    var pdfPath = await TryImportAsLibraryPdfAsync(file);
+                    if (string.IsNullOrWhiteSpace(pdfPath))
+                        continue;
+
                     RecentFilesService.AddOrPromote(
-                        file,
+                        pdfPath,
                         null,
-                        File.Exists(file) ? File.GetLastWriteTimeUtc(file) : null,
+                        File.Exists(pdfPath) ? File.GetLastWriteTimeUtc(pdfPath) : null,
                         tile.Id,
                         false);
                     movedAny = true;
@@ -1152,7 +1199,7 @@ namespace Caelum.Pages
             if (sender is not FrameworkElement element || element.Tag is not HomeTile tile || !tile.IsFolder)
                 return;
 
-            var pdfPaths = HomePageDragDropHelper.GetDroppedPdfPaths(e.Data);
+            var pdfPaths = HomePageDragDropHelper.GetDroppedImportablePaths(e.Data);
             var libraryPaths = HomePageDragDropHelper.GetLibraryTilePaths(e.Data);
             var canAcceptDrop = pdfPaths.Length > 0 || libraryPaths.Length > 0;
 
@@ -1194,7 +1241,7 @@ namespace Caelum.Pages
                 return;
             }
 
-            var pdfPaths = HomePageDragDropHelper.GetDroppedPdfPaths(e.Data);
+            var pdfPaths = HomePageDragDropHelper.GetDroppedImportablePaths(e.Data);
             var libraryPaths = HomePageDragDropHelper.GetLibraryTilePaths(e.Data);
             if (pdfPaths.Length > 0 || libraryPaths.Length > 0)
             {
@@ -1221,7 +1268,7 @@ namespace Caelum.Pages
                 return;
 
             var libraryPaths = HomePageDragDropHelper.GetLibraryTilePaths(e.Data);
-            var pdfPaths = HomePageDragDropHelper.GetDroppedPdfPaths(e.Data);
+            var pdfPaths = HomePageDragDropHelper.GetDroppedImportablePaths(e.Data);
             bool movedAny = false;
 
             if (libraryPaths.Length > 0 && IsInsideFolder)
@@ -1233,10 +1280,14 @@ namespace Caelum.Pages
             {
                 foreach (var file in pdfPaths)
                 {
+                    var pdfPath = await TryImportAsLibraryPdfAsync(file);
+                    if (string.IsNullOrWhiteSpace(pdfPath))
+                        continue;
+
                     RecentFilesService.AddOrPromote(
-                        file,
+                        pdfPath,
                         null,
-                        File.Exists(file) ? File.GetLastWriteTimeUtc(file) : null,
+                        File.Exists(pdfPath) ? File.GetLastWriteTimeUtc(pdfPath) : null,
                         IsInsideFolder ? _currentFolderId : null,
                         false);
                     movedAny = true;

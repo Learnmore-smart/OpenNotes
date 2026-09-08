@@ -5791,25 +5791,11 @@ namespace Caelum.Pages
         {
             try
             {
-                if (!Clipboard.ContainsImage())
-                    return false;
+                IDataObject data;
+                try { data = Clipboard.GetDataObject(); }
+                catch { return false; }
 
-                BitmapSource source = null;
-                try { source = Clipboard.GetImage(); }
-                catch { /* some producers put a PNG stream instead of CF_BITMAP */ }
-
-                if (source == null && Clipboard.GetData("PNG") is MemoryStream pngStream)
-                {
-                    // Browsers expose copied images as a "PNG" format that WPF's
-                    // GetImage() does not decode.
-                    pngStream.Position = 0;
-                    source = BitmapFrame.Create(pngStream, BitmapCreateOptions.None, BitmapCacheOption.OnLoad);
-                }
-
-                if (source == null)
-                    return false;
-
-                var pngBytes = EncodeBitmapSourceToPng(source);
+                var pngBytes = ClipboardImageDecoder.TryGetPngBytes(data, includeWin32Clipboard: true);
                 if (pngBytes == null || pngBytes.Length == 0)
                     return false;
 
@@ -9285,7 +9271,10 @@ namespace Caelum.Pages
         {
             try
             {
-                return Clipboard.ContainsText() || Clipboard.ContainsImage();
+                IDataObject data = Clipboard.GetDataObject();
+                return Clipboard.ContainsText()
+                    || ClipboardImageDecoder.ContainsImage(data)
+                    || ClipboardImageDecoder.HasWin32EnhMetafile();
             }
             catch
             {
@@ -9337,7 +9326,8 @@ namespace Caelum.Pages
 
         private void SelectionActionBar_Paste(object sender, RoutedEventArgs e)
         {
-            PasteSelection();
+            if (!PasteClipboardImage())
+                PasteSelection();
             UpdateSelectionActionBar();
         }
 

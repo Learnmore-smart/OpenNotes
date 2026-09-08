@@ -19,6 +19,7 @@ public sealed class EditorSelectionChromeSourceTests
             Assert.That(editor, Does.Contain("Editor.Action.Paste"));
             Assert.That(editor, Does.Contain("Editor.Action.Delete"));
             Assert.That(editor, Does.Contain("HasPasteableClipboard"));
+            Assert.That(editor, Does.Contain("ClipboardImageDecoder"));
             Assert.That(editor, Does.Contain("TryCopySelectedPdfTextToClipboard"));
             Assert.That(editor, Does.Contain("CopySelection();"));
             Assert.That(editor, Does.Contain("PasteSelection();"));

@@ -125,7 +125,7 @@ namespace Caelum.Pages
         public void ApplyLocalization()
         {
             if (DragDropOverlayText != null)
-                DragDropOverlayText.Text = LocalizationService.Get("Home.OpenPdfTitle");
+                DragDropOverlayText.Text = LocalizationService.Get("Home.OpenDocumentTitle");
 
             foreach (var tile in HomeTiles)
                 tile.RefreshDisplay();

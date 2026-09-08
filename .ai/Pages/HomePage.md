@@ -27,6 +27,11 @@ Displays the document/folder home surface inside the MainWindow tab shell.
 - Preserve existing HomeTile bindings and file/folder navigation.
 - Keep the page safe inside the single-window Frame-tab architecture.
 
+## Open Threads / Resume Context
+
+- **Status:** complete
+- Open/drag Word converts beside the original; library tiles stay PDF-only. Picker uses `Home.DocumentFilter`.
+
 ## Open Threads
 
 - **Status:** complete (2026-08-24 startup crash hotfix)
