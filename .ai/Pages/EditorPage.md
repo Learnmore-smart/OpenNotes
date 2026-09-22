@@ -2,8 +2,15 @@
 
 ## Open Threads / Resume Context
 
-- **Status:** complete
+- **Status:** complete (5.2.15 sidebar content-offset fix)
 - **Intent:** `CancelInteraction` also drops PdfScrollViewer and global mouse/stylus capture so a finished ink/pen-scroll gesture cannot steal the next chrome tap.
+
+## Sidebar overlay covers page stack (2026-09-22) — GREEN
+
+- **Root cause:** `DocumentSidebar` is a left overlay (`Margin="12,70,0,12"`, `Panel.ZIndex=20`) while `PagesContainer` centers in the full scroll viewport, so the expanded 184-DIP rail covered the page stack's left edge.
+- **Fix:** `UpdatePagesContainerMarginForSidebar` applies `PagesContainerSidebarMargin` (left = 32 + 12 + `SidebarExpandedWidth` = 228) when expanded — exactly the rail footprint plus the normal margin, which centers the stack in the free area right of the rail — and `PagesContainerDefaultMargin` (32,20,32,32) when collapsed. Called from `SetSidebarCollapsed` (covers collapse button + `AutoCollapseSidebarForNarrowLayout`) and the ctor (rail starts expanded).
+- **Immersive:** `ToggleImmersiveMode` re-centers the margin while the rail is opacity-hidden and reapplies the sidebar margin on exit.
+- **Evidence:** `ExpandedSidebarOffsetsPagesContainerSoContentStaysClear` was RED (margin pinned at 32) and is GREEN; covers default-expanded, collapse, re-expand, and immersive enter/exit.
 
 ## Selection chrome, rotation, ruler length (2026-09-05)
 

@@ -282,6 +282,43 @@ public sealed class EditorNavigationSourceTests
 
     [Test]
     [Apartment(ApartmentState.STA)]
+    public void ExpandedSidebarOffsetsPagesContainerSoContentStaysClear()
+    {
+        EnsureWpfEnvironment();
+        var application = Application.Current ?? new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
+        AddRequiredResource(application, "ToolbarFocusVisualStyle", new Style(typeof(Control)));
+        AddRequiredResource(application, "SleekScrollViewer", new Style(typeof(ScrollViewer)));
+        AddRequiredResource(application, "CompactComboBox", new Style(typeof(ComboBox)));
+        AddThemeResources(application);
+
+        var editor = new EditorPage();
+        var pages = (FrameworkElement)editor.FindName("PagesContainer")!;
+        var centered = new Thickness(32, 20, 32, 32);
+        // Left inset = normal margin (32) + rail footprint (12 + 184), so the
+        // centered page stack sits in the free area right of the overlay rail.
+        const double expandedLeft = 32 + 12 + 184;
+
+        Assert.That(pages.Margin.Left, Is.EqualTo(expandedLeft),
+            "The sidebar starts expanded, so the initial page stack must be offset past the rail.");
+
+        InvokePrivate(editor, "SetSidebarCollapsed", true);
+        Assert.That(pages.Margin, Is.EqualTo(centered),
+            "Collapsing the rail must restore the centered page margin.");
+
+        InvokePrivate(editor, "SetSidebarCollapsed", false);
+        Assert.That(pages.Margin.Left, Is.EqualTo(expandedLeft),
+            "Re-expanding the rail must offset the page stack again.");
+
+        InvokePrivate(editor, "ToggleImmersiveMode");
+        Assert.That(pages.Margin.Left, Is.EqualTo(32d),
+            "Immersive mode hides the rail visually, so the page stack must re-center.");
+        InvokePrivate(editor, "ToggleImmersiveMode");
+        Assert.That(pages.Margin.Left, Is.EqualTo(expandedLeft),
+            "Leaving immersive mode must restore the expanded-rail offset.");
+    }
+
+    [Test]
+    [Apartment(ApartmentState.STA)]
     public void RecycledSidebarMenusRebindToCurrentPageAndBookmarkModels()
     {
         EnsureWpfEnvironment();

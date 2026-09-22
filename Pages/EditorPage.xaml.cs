@@ -1970,6 +1970,13 @@ namespace Caelum.Pages
         private bool _sidebarCollapsed;
         private const double SidebarExpandedWidth = 184.0;
         private const double SidebarCollapsedWidth = 38.0;
+        // PagesContainer is centered inside PdfScrollViewer, so the expanded
+        // overlay rail (12 DIP left margin + 184 DIP width) would cover the
+        // page stack's left edge. Reserving the rail's footprint on top of the
+        // normal 32 DIP margin centers the stack in the free area right of
+        // the rail instead of underneath it.
+        private static readonly Thickness PagesContainerDefaultMargin = new(32, 20, 32, 32);
+        private static readonly Thickness PagesContainerSidebarMargin = new(32 + 12 + SidebarExpandedWidth, 20, 32, 32);
         private readonly ObservableCollection<SidebarPageItem> _sidebarPageItems = new();
         private readonly ObservableCollection<SidebarBookmarkItem> _sidebarBookmarkItems = new();
         private readonly ObservableCollection<SidebarOutlineItem> _sidebarOutlineItems = new();
@@ -2059,6 +2066,7 @@ namespace Caelum.Pages
             ApplySettings(AppSettingsService.Load());
             ApplyLocalization();
             SetSidebarTab(SidebarTab.Pages);
+            UpdatePagesContainerMarginForSidebar();
 
             _pdfService = new PdfService();
             // Keep the empty editor's initial session usable for in-memory
@@ -8499,6 +8507,8 @@ namespace Caelum.Pages
                     : SidebarExpandedWidth;
             }
 
+            UpdatePagesContainerMarginForSidebar();
+
             if (SidebarCollapseIcon != null)
             {
                 SidebarCollapseIcon.Kind = _sidebarCollapsed ? "PanelLeftOpen" : "PanelLeftClose";
@@ -8508,6 +8518,15 @@ namespace Caelum.Pages
             // Editor.SidebarCollapse after every state transition.
             ApplyStateAwareSidebarMetadata();
             SetSidebarTab(_sidebarTab);
+        }
+
+        private void UpdatePagesContainerMarginForSidebar()
+        {
+            if (PagesContainer == null)
+                return;
+            PagesContainer.Margin = _sidebarCollapsed
+                ? PagesContainerDefaultMargin
+                : PagesContainerSidebarMargin;
         }
 
         private void EditorPage_SizeChanged(object sender, SizeChangedEventArgs e)
@@ -10109,6 +10128,8 @@ namespace Caelum.Pages
                 DocumentSidebar.IsHitTestVisible = false;
                 PdfSearchPanel.Opacity = 0;
                 PdfSearchPanel.IsHitTestVisible = false;
+                if (PagesContainer != null)
+                    PagesContainer.Margin = PagesContainerDefaultMargin;
             }
             else
             {
@@ -10118,6 +10139,7 @@ namespace Caelum.Pages
                 DocumentSidebar.IsHitTestVisible = _preImmersiveSidebarHitTestVisible;
                 PdfSearchPanel.Opacity = _preImmersiveSearchOpacity;
                 PdfSearchPanel.IsHitTestVisible = _preImmersiveSearchHitTestVisible;
+                UpdatePagesContainerMarginForSidebar();
             }
         }
 

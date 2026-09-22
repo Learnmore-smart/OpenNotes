@@ -12,6 +12,7 @@
 Wave4 source and WPF contract tests for the compact page jump and custom document navigation rail.
 
 ## Open Threads / Resume Context
+- **Status:** complete (5.2.15) — `ExpandedSidebarOffsetsPagesContainerSoContentStaysClear` locks the page-stack margin contract: 228-DIP left inset while the rail is expanded (default), centered 32,20,32,32 when collapsed, and re-centered while immersive mode hides the rail. RED before the fix (margin stayed 32), GREEN after.
 - **Status:** ready_for_next — Task 4 source/STA navigation contracts are green for the compact three-column symmetric group, no duplicate layout label, runtime center at normal/narrow widths, and preserved one-based editable field, handlers and AutomationIds. The focused class passes 17/17.
 
 - **Status:** complete — synthetic fallback `HwndSource` ownership is scoped to the synthetic key-event test and disposed before the STA fixture exits. Navigation passes 17/17 and the full suite passes 303/303.
@@ -42,3 +43,4 @@ Wave4 source and WPF contract tests for the compact page jump and custom documen
 | 2026-08-24 | Added and passed the recycled Pages/Bookmarks menu regression: one container page1/bookmarkA → page2/bookmarkB, old commands no-op after cleanup, current model identity rebinds; 15/15 navigation and 204/204 full suite passed. | Codex |
 | 2026-08-26 | Reproduced the integrated HwndSubclass host crash after four tests; root cause is undisposed fallback `HwndSource` instances created for synthetic key events. | Codex |
 | 2026-08-26 | Added disposable synthetic key-event source ownership; isolated navigation passes 17/17 and the complete suite passes 303/303 without the host crash. | Codex |
+| 2026-09-22 | Added the sidebar-offset margin contract covering expanded default, collapse, re-expand, and immersive enter/exit centering. | Devin |

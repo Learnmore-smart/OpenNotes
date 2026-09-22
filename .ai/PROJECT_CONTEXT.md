@@ -1,5 +1,5 @@
 # PROJECT_CONTEXT — OpenNotes（Caelum legacy compatibility）
-> Last updated: 2026-09-08（5.2.14 tab-close-after-inking hotfix） | Protection: STANDARD | 本文件为 File Guardian 记忆镜像的根文档，所有 Agent 在动代码前必读。
+> Last updated: 2026-09-22（5.2.15 sidebar content-offset fix） | Protection: STANDARD | 本文件为 File Guardian 记忆镜像的根文档，所有 Agent 在动代码前必读。
 
 ## 项目概览
 
@@ -51,6 +51,8 @@ WPF (.NET 8) PDF 笔记应用，正式产品和工作区名称为 **OpenNotes**�
 5. **单窗口 Frame 标签架构**（MainWindow `List<AppTab> _tabs` + Frame.Navigate）。
 
 ## Current Work
+- 2026-09-22: OpenNotes 5.2.15 sidebar content-offset fix. The expanded `DocumentSidebar` overlay rail (12+184 DIP) covered the centered page stack's left edge; `UpdatePagesContainerMarginForSidebar` now reserves the rail footprint in `PagesContainer.Margin` when expanded (228 left) and restores centered 32,20,32,32 when collapsed, with immersive mode re-centering while the rail is hidden. STA regression `ExpandedSidebarOffsetsPagesContainerSoContentStaysClear` covers all states. Visible version is 5.2.15/5.2.15.0; Caelum namespace/data, WindowsNotesApp identity, and installer AppId remain compatible. Tag `v5.2.15` is the release trigger. Environment note: the full `dotnet test` run aborts around test ~50 with a pre-existing `HwndSubclass`/`Thread.CurrentThread` testhost crash that also reproduces on clean `main`; run the suite in per-fixture batches (all 457 tests pass, 0 failures).
+- 2026-09-22: V6 WinUI 3 revamp kicked off after 5.2.15 — keep all features; plan lives in `docs/superpowers/plans/2026-09-22-winui3-revamp.md`; prior scaffolding sits on `wip/winui-cutover` (csproj spike + OpenNotes.Core stub only).
 - 2026-09-08: OpenNotes 5.2.14 tab-close-after-inking hotfix. After writing, leftover InkCanvas capture and mouse-only chrome handlers could leave the tab X / window close dead. Close now releases pointer captures, handles stylus on close chrome, and bounds PrepareForClose with WaitAsync. Visible version is 5.2.14/5.2.14.0; Caelum namespace/data, WindowsNotesApp identity, and installer AppId remain compatible. Tag `v5.2.14` is the release trigger.
 - 2026-09-08: Word import plus Excel-chart paste for 5.2.13. Word `.doc`/`.docx`/`.docm` convert to a sibling PDF and stay untouched; library/editor stay PDF-only. Ctrl+V must rasterize Excel chart EMF/DIB/PNG onto the existing image-annotation path because WPF `Clipboard.ContainsImage()` is often false for charts. Unicode FreeText baseline appearance fix ships in the same release.
 - 2026-09-06: OpenNotes 5.2.12 is a WPF hotfix for the 5.2.11 library wipe. `RecentFilesService` no longer persist-prunes missing PDFs, restores from `recent_files.json.bak` / bookmark paths, and library tile drags use FileDrop Copy. Visible version is 5.2.12/5.2.12.0; Caelum namespace/data, WindowsNotesApp identity, and installer AppId remain compatible. Tag `v5.2.12` is the release trigger.
