@@ -97,9 +97,11 @@ public enum InkShapeKind
 /// port of the math that used to live inside the WPF page control on
 /// <c>System.Windows.*</c> types — behaviour is identical by construction.
 /// The only deliberate approximation is <see cref="SplitStrokeAtEraser"/>,
-/// which models the eraser as capsules along its path; the WPF layer still
-/// uses the exact rendered-geometry clip (<c>Stroke.GetEraseResult</c>) at
-/// runtime, so this pure split exists for the UI-free host and tests.
+/// which models the eraser as a swept square stamp along its path
+/// (<c>RectangleStylusShape</c> parity — a stamp per path point plus the
+/// convex hull of each consecutive pair); the WPF layer still uses the
+/// exact rendered-geometry clip (<c>Stroke.GetEraseResult</c>) at runtime,
+/// so this pure split exists for the UI-free host and tests.
 /// </summary>
 public static class StrokeGeometry
 {

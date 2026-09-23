@@ -460,4 +460,159 @@ public sealed class CoreInkEngineTests
         await action.RedoAsync();
         Assert.That(store.Count, Is.EqualTo(0), "erased token → replacement is a safe no-op");
     }
+
+    // ------------------------------------------------------------------
+    // Scribble shape recognition (the CompleteStroke pipeline gates)
+    // ------------------------------------------------------------------
+
+    /// <summary>Hand-drawn-ish axis-aligned rectangle — 41 points, closed.</summary>
+    private static List<InkPointData> RectangleScribble()
+    {
+        var points = new List<InkPointData>();
+        for (int i = 0; i <= 10; i++) points.Add(new InkPointData(10 + i * 8, 10 + (i % 2)));
+        for (int i = 1; i <= 10; i++) points.Add(new InkPointData(90 + (i % 2), 10 + i * 8));
+        for (int i = 1; i <= 10; i++) points.Add(new InkPointData(90 - i * 8, 90 + (i % 2)));
+        for (int i = 1; i <= 10; i++) points.Add(new InkPointData(10 + (i % 2), 90 - i * 8));
+        return points;
+    }
+
+    /// <summary>
+    /// The InkSurface.CompleteStroke commit decision: recognition-enabled +
+    /// a non-highlighter stroke over the point gate runs the replace; every
+    /// other case falls through to the quiet add (what StrokeCollected
+    /// covers).
+    /// </summary>
+    private static bool CommitStrokeLikeSurface(
+        InkStrokeStore store,
+        InkStrokeData stroke,
+        bool shapeRecognitionEnabled,
+        out RecognizedStrokeReplacement replacement)
+    {
+        replacement = null!; // Core signature is nullable-oblivious; null = "no replacement"
+        if (shapeRecognitionEnabled && !stroke.IsHighlighter
+            && stroke.Points.Count >= StrokeGeometry.MinRecognizedShapePoints
+            && ScribbleShapeRecognition.TryReplaceWithRecognizedStroke(
+                store, stroke, out replacement))
+        {
+            return true;
+        }
+
+        store.AddStrokeQuiet(stroke);
+        return false;
+    }
+
+    [Test]
+    public async Task Recognize_Enabled_ReplacesStroke_UndoRestoresOriginal()
+    {
+        var store = new InkStrokeStore();
+        var rawPoints = RectangleScribble();
+        var stroke = new InkStrokeData
+        {
+            Points = new List<InkPointData>(rawPoints),
+            R = 10, G = 20, B = 30, A = 255,
+            Size = 3.0,
+            FitToCurve = true,
+        };
+
+        Assert.That(
+            CommitStrokeLikeSurface(store, stroke, true, out var replacement),
+            Is.True, "recognizable scribble + enabled → replaced");
+        Assert.Multiple(() =>
+        {
+            Assert.That(store.Count, Is.EqualTo(1), "the replace is in place — never appended");
+            Assert.That(replacement.OriginalIndex, Is.EqualTo(0));
+            Assert.That(store.Strokes[0], Is.Not.SameAs(stroke),
+                "the store holds the snapshot-built ideal, not the raw instance");
+            Assert.That(store.Strokes[0].Points, Has.Count.EqualTo(5),
+                "a rectangle outline is a 4-corner closed polygon");
+            Assert.That(store.Strokes[0].FitToCurve, Is.False);
+            Assert.That(store.Strokes[0].IgnorePressure, Is.True);
+            Assert.That(store.GetStrokeSide(replacement.Token),
+                Is.EqualTo(StrokeReplacementSide.Ideal));
+            // The ideal inherits the original colour/size payload.
+            Assert.That(store.Strokes[0].R, Is.EqualTo(10));
+            Assert.That(store.Strokes[0].Size, Is.EqualTo(3.0));
+        });
+
+        // The editor pushes InkStrokeReplacedAction: undo restores the raw
+        // scribble, redo restores the ideal outline.
+        var action = new InkStrokeReplacedAction(
+            store,
+            replacement.Token,
+            replacement.OriginalIndex,
+            replacement.OriginalSnapshot,
+            replacement.IdealSnapshot);
+
+        await action.UndoAsync();
+        Assert.Multiple(() =>
+        {
+            Assert.That(store.Strokes[0].Points, Has.Count.EqualTo(rawPoints.Count),
+                "undo restores the user's raw stroke");
+            Assert.That(store.Strokes[0].Points[0].X, Is.EqualTo(rawPoints[0].X));
+            Assert.That(store.GetStrokeSide(replacement.Token),
+                Is.EqualTo(StrokeReplacementSide.Original));
+        });
+
+        await action.RedoAsync();
+        Assert.Multiple(() =>
+        {
+            Assert.That(store.Strokes[0].Points, Has.Count.EqualTo(5),
+                "redo restores the ideal shape");
+            Assert.That(store.GetStrokeSide(replacement.Token),
+                Is.EqualTo(StrokeReplacementSide.Ideal));
+        });
+    }
+
+    [Test]
+    public void Recognize_Disabled_KeepsRawStroke()
+    {
+        var store = new InkStrokeStore();
+        var stroke = new InkStrokeData { Points = RectangleScribble() };
+
+        Assert.That(
+            CommitStrokeLikeSurface(store, stroke, false, out var replacement),
+            Is.False);
+        Assert.Multiple(() =>
+        {
+            Assert.That(replacement, Is.Null);
+            Assert.That(store.Count, Is.EqualTo(1));
+            Assert.That(store.Strokes[0], Is.SameAs(stroke), "the raw stroke stays");
+            Assert.That(store.Strokes[0].Points, Has.Count.EqualTo(41));
+            Assert.That(store.GetStrokeSide(store.EnsureStrokeToken(stroke)),
+                Is.EqualTo(StrokeReplacementSide.Original));
+        });
+    }
+
+    [Test]
+    public void Recognize_Gates_SkipHighlighterShortAndUnrecognizable()
+    {
+        var store = new InkStrokeStore();
+        var highlighter = new InkStrokeData
+        {
+            Points = RectangleScribble(),
+            IsHighlighter = true,
+        };
+        var shortStroke = new InkStrokeData { Points = Spine((0, 0), (50, 0), (100, 0)) };
+        var zigzag = new InkStrokeData
+        {
+            Points = Enumerable.Range(0, 13)
+                .Select(i => new InkPointData(i * 10, (i % 2) * 60))
+                .ToList(),
+        };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                ScribbleShapeRecognition.TryReplaceWithRecognizedStroke(store, highlighter, out _),
+                Is.False, "highlighters are never recognized (WPF gate)");
+            Assert.That(
+                ScribbleShapeRecognition.TryReplaceWithRecognizedStroke(store, shortStroke, out _),
+                Is.False, "below MinRecognizedShapePoints");
+            Assert.That(
+                ScribbleShapeRecognition.TryReplaceWithRecognizedStroke(store, zigzag, out _),
+                Is.False, "no shape matches a zigzag");
+            Assert.That(store.Count, Is.EqualTo(0),
+                "a failed recognition leaves the store untouched");
+        });
+    }
 }

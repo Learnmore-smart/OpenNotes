@@ -36,6 +36,8 @@ namespace Caelum.Controls
 
             InkSurface.StrokeCollected += (s, stroke) =>
                 StrokeCollected?.Invoke(this, stroke);
+            InkSurface.StrokeRecognized += (s, e) =>
+                StrokeRecognized?.Invoke(this, e);
             InkSurface.StrokesErased += (s, e) =>
                 StrokesErased?.Invoke(this, e);
             InkSurface.InkMutated += (s, e) =>
@@ -56,6 +58,13 @@ namespace Caelum.Controls
         /// undo action. Never raised for quiet loads.
         /// </summary>
         public event EventHandler<InkStrokeData> StrokeCollected;
+
+        /// <summary>
+        /// A collected stroke was recognized as a shape and replaced by its
+        /// ideal outline in the store — the editor pushes the
+        /// <see cref="Caelum.Ink.InkStrokeReplacedAction"/> undo action.
+        /// </summary>
+        public event EventHandler<InkStrokeRecognizedEventArgs> StrokeRecognized;
 
         /// <summary>One erase gesture finished (net placements payload).</summary>
         public event EventHandler<InkStrokesErasedEventArgs> StrokesErased;

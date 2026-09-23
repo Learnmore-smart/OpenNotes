@@ -195,15 +195,17 @@ namespace Caelum.Pages
                 Key = VirtualKey.Z,
                 Modifiers = VirtualKeyModifiers.Control,
             });
-            UndoButton.KeyboardAccelerators.Add(new KeyboardAccelerator
-            {
-                Key = VirtualKey.Z,
-                Modifiers = VirtualKeyModifiers.Control | VirtualKeyModifiers.Shift,
-            });
             RedoButton.KeyboardAccelerators.Add(new KeyboardAccelerator
             {
                 Key = VirtualKey.Y,
                 Modifiers = VirtualKeyModifiers.Control,
+            });
+            // WPF parity: Ctrl+Shift+Z is the second REDO chord, not undo
+            // (EditorPage_KeyDown → PerformRedoAsync).
+            RedoButton.KeyboardAccelerators.Add(new KeyboardAccelerator
+            {
+                Key = VirtualKey.Z,
+                Modifiers = VirtualKeyModifiers.Control | VirtualKeyModifiers.Shift,
             });
 
             _zoomRenderDebounceTimer = DispatcherQueue.CreateTimer();
@@ -627,6 +629,7 @@ namespace Caelum.Pages
             AutomationProperties.SetName(pageControl, LocalizationService.Format("Editor.PageNumber", index + 1));
 
             pageControl.StrokeCollected += PageControl_StrokeCollected;
+            pageControl.StrokeRecognized += PageControl_StrokeRecognized;
             pageControl.StrokesErased += PageControl_StrokesErased;
             pageControl.InkMutated += PageControl_InkMutated;
 
@@ -1513,6 +1516,7 @@ namespace Caelum.Pages
                     ink.EnablePressure = settings.EnablePressure;
                     ink.WholeStrokeEraser = settings.WholeStrokeEraser;
                     ink.InkSimulationEnabled = settings.InkSimulation;
+                    ink.ShapeRecognitionEnabled = settings.ShapeRecognition;
                     ink.StrokeSmoothingLevel = settings.StrokeSmoothing;
                 }
                 page.CancelInteraction();
@@ -1606,6 +1610,25 @@ namespace Caelum.Pages
             if (_isLoadingAnnotations || sender is not PdfPageControl page)
                 return;
             PushUndoAction(new InkStrokeAddedAction(page.Ink.Store, stroke));
+        }
+
+        /// <summary>
+        /// Shape recognition swapped the collected stroke for its ideal
+        /// outline in place. WPF pushed a StrokeAddedAction on the ideal
+        /// placement (undo dropped the whole gesture); the WinUI editor
+        /// instead pushes <see cref="InkStrokeReplacedAction"/> so undo
+        /// restores the user's raw scribble — a deliberate spec change.
+        /// </summary>
+        private void PageControl_StrokeRecognized(object sender, InkStrokeRecognizedEventArgs e)
+        {
+            if (_isLoadingAnnotations || sender is not PdfPageControl page)
+                return;
+            PushUndoAction(new InkStrokeReplacedAction(
+                page.Ink.Store,
+                e.Token,
+                e.OriginalIndex,
+                e.OriginalSnapshot,
+                e.IdealSnapshot));
         }
 
         private void PageControl_StrokesErased(object sender, InkStrokesErasedEventArgs e)

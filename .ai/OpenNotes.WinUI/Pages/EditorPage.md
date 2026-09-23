@@ -98,20 +98,31 @@ text/sticky/image overlays and Phase-B ink tools remain deferred to T7B–T9.
   `current-page=N` (the WinUI TextBox UIA Value can stay pinned after a
   SetValue+programmatic rewrite).
 - **Ink engine (Task 7 Phase A):** each `PdfPageControl` hosts an
-  `InkSurface`; the page owns tool state (`_activeTool`, `_strokeColor`,
-  `_strokeSize`, `_highlighterColor`, `_eraserSize`, `_pressureEnabled`,
-  `_penOnlyMode`, `_wholeStrokeErase`, `_barrelErase`) and broadcasts it via
-  `ApplyToolToAllPages()`. `StrokeCollected` → `InkStrokeAddedAction` onto
-  `_undoStack`; `EraserGestureEnded` → `InkStrokesErasedAction`;
-  `Store.Mutated` → thumbnail invalidation (`_dirtyPages`/`MarkThumbnailDirty`).
-  Undo/Redo toolbar buttons + Ctrl+Z/Y consume `_undoStack`/`_redoStack` of
-  `Caelum.Ink.IUndoAction` (`UndoAsync`/`RedoAsync` awaited; button
-  `IsEnabled` refreshed after every mutation). `CancelInteraction` is called
-  on every page before viewport re-renders/tab teardown so a stroke in
-  progress can't strand pointer capture. Pen service: `PenService.Current`
-  is initialized for the window on first editor load and its
-  `PenHotKeyPressed` toggles pen-only/`PressureEnabled` per settings; each
-  `InkSurface`'s `ProbePointerProperties` feed accumulates capabilities.
+  `InkSurface` (exposed as `page.Ink`); the page owns tool state
+  (`_currentTool`/`_previousTool` `ToolType`, `_penColor`, `_penSize`,
+  `_highlighterColor`, `_highlighterSize`, `_eraserSize`,
+  `FreehandHighlighterOpacity`=140) and broadcasts tool + `AppSettings`
+  (`PenOnlyMode`, `EnablePressure`, `WholeStrokeEraser`, `InkSimulation`,
+  `ShapeRecognition`, `StrokeSmoothing`) via `ApplyToolToAllPages()`.
+  `StrokeCollected` → `InkStrokeAddedAction` onto `_undoStack`;
+  `StrokeRecognized` → `InkStrokeReplacedAction` (undo restores the raw
+  scribble — deliberate spec change from WPF's StrokeAdded-on-fresh-stroke);
+  `StrokesErased` → `InkStrokesErasedAction`; `InkMutated` →
+  `InvalidateThumbnail(pageIndex)` (cache eviction — ink is not composited
+  into thumbs yet). Undo/Redo toolbar buttons carry the accelerators —
+  Ctrl+Z undo, Ctrl+Y and Ctrl+Shift+Z redo (WPF `EditorPage_KeyDown`
+  parity) — and consume `_undoStack`/`_redoStack` of
+  `Caelum.Ink.IUndoAction` (`UndoAsync`/`RedoAsync` awaited;
+  `InkStrokesErasedAction.LastOperationSucceeded` guards the stack pop;
+  `UpdateUndoRedoButtons` refreshes `IsEnabled` after every mutation).
+  `CancelInteraction` runs on every page before viewport re-renders/tab
+  teardown so a stroke in progress can't strand pointer capture. Pen
+  service: `_penService` is one `Caelum.Services.PenService` PER editor
+  page — `InitializePenService` (on `Loaded`) subclasses the window HWND
+  for Win+F19/F20, `ToolToggleRequested` → `ToggleEraserMode` (eraser ↔
+  `_previousTool`), and `PushPenServiceToPages` feeds each surface's
+  `SetPenService`; the surfaces' `ProbePointer` calls accumulate
+  `Capabilities` → `PenDeviceDetected` toast.
 - **Localization:** `ApplyLocalization()` refreshes chrome/tooltips/context
   menu labels; validation message strings `Editor.PageJump*`. The page
   self-subscribes `LocalizationService.LanguageChanged` in `Loaded`
@@ -139,9 +150,11 @@ text/sticky/image overlays and Phase-B ink tools remain deferred to T7B–T9.
 
 ## Open Threads / Resume Context
 - **Status:** GREEN — `tools/winui-editor-smoke.ps1` 60/60; Task 7 Phase A
-  ink engine live (82/82 headless ink tests).
+  ink engine live (85/85 headless ink tests).
 - **Deferred (stubbed, by design):** selection lasso/move/rotate/scale,
-  shape tools + recognition UI, hidden ink, laser, ruler (Task 7 Phase B);
+  shape tools + the recognition settings toggle (the scribble recognizer
+  itself IS wired — `AppSettings.ShapeRecognition` flows through
+  `ApplyToolToAllPages`), hidden ink, laser, ruler (Task 7 Phase B);
   text/sticky/image overlays + persistent PDF text selection visuals (T8);
   save/autosave/dirty-close + version history + settings + remaining
   flyout actions (T9). `Select`/`None` tools exist as enum values but have

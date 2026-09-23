@@ -3,22 +3,22 @@
 
 ## Purpose
 
-Converts `InkStrokeData` into WinUI `Path` elements (`Caelum.Rendering`, Task 7 Phase A) — the visual half of the custom ink engine; geometry comes from `StrokeOutline`/`StrokeGeometry`, so the only rendering decisions here are fill colour and pressure width.
+Converts `InkStrokeData` into WinUI `Path` fill geometry (`Caelum.Rendering`, Task 7 Phase A) — the visual half of the custom ink engine. The outline itself comes from `StrokeOutline.BuildFillOutline` (the same silhouette WPF's `System.Windows.Ink` renderer produces for the equivalent DrawingAttributes); the only decisions here are fill colour and figure assembly.
 
 ## API
 
-- `CreateStrokeElement(stroke, liveIndex?)` → `Path` (`Fill`, `IsHitTestVisible=false`, `Opacity=1`, tag = stroke ref).
-- `CreateLiveStrokeElement(spine, color, size, isHighlighter, fitToCurve, ignorePressure)` — same pipeline for the in-progress stroke (swapped for the completed element at `StrokeCollected`).
-- `BuildStrokeOutline` → `StrokeOutline.BuildFillOutline`.
-- `GetStrokeColor(stroke)` — `Windows.UI.Color` from RGBA channels.
+- `CreateStrokePath(InkStrokeData)` → `Path` — `Fill = SolidColorBrush(ToColor(stroke))`, `Data = BuildGeometry(stroke)`, `IsHitTestVisible = false` (hit-testing lives in `StrokeGeometry` math, not XAML). The path is NOT parented — the caller adds it to the surface's `Children`.
+- `UpdateStrokePath(Path, InkStrokeData)` — rebuilds `path.Data` in place; the live-stroke fast path (one `Path` per in-flight pointer, updated per move event).
+- `BuildGeometry(InkStrokeData)` → `PathGeometry` — a single closed `PathFigure` (`IsClosed=true`, `IsFilled=true`) holding one `PolyLineSegment` over the outline polygon; empty/degenerate strokes produce an empty geometry.
+- `ToColor(InkStrokeData)` → `Windows.UI.Color` straight from the stroke's RGBA channels.
 
 ## Behaviour notes
 
-- Geometry: `PathGeometry` + `PathFigure` + `PolyLineSegment` (a single closed figure; `IsClosed=true`, `IsFilled=true`).
-- Colour: `SolidColorBrush` straight from RGBA — highlighter alpha lives in `A` (WPF parity: `HighlighterAlpha=140` is baked into the stroke, NOT a separate opacity knob).
 - Coordinates are already page DIP — no zoom/raster scaling here (the layer scales with the page control).
+- Highlighter alpha lives in the stroke's `A` channel (WPF parity: the 140-alpha translucency is baked into the colour, NOT a separate opacity knob).
+- Dashed shape strokes render solid here — a Phase-B concern.
 
 ## Constraints
 
-- Pure projection: no state, no events. Stroke identity lives on the `InkSurface` visual dictionary (`Tag` keeps the data ref for hit tests).
-- Do NOT add selection adorners/shape previews here — Phase B adds a separate overlay.
+- Pure projection: no state, no events. Stroke→Path identity lives in `InkSurface._strokeVisuals` (reference-keyed dictionary).
+- Do NOT add selection adorners/shape previews here — Phase B adds separate overlays.

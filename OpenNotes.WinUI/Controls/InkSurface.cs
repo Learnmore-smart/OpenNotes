@@ -49,6 +49,33 @@ public sealed class InkStrokesErasedEventArgs : EventArgs
 }
 
 /// <summary>
+/// Payload of <see cref="InkSurface.StrokeRecognized"/>: the shared stroke
+/// token, the index the raw stroke occupied, and the Original/Ideal
+/// snapshots — everything an <see cref="InkStrokeReplacedAction"/> needs.
+/// Mirrors the WPF <c>StrokeRecognizedEventArgs</c> minus the fresh-stroke
+/// flag (every surface raise IS a fresh stroke).
+/// </summary>
+public sealed class InkStrokeRecognizedEventArgs : EventArgs
+{
+    public InkStrokeRecognizedEventArgs(
+        Guid token,
+        int originalIndex,
+        StrokeReplacementSnapshot originalSnapshot,
+        StrokeReplacementSnapshot idealSnapshot)
+    {
+        Token = token;
+        OriginalIndex = originalIndex;
+        OriginalSnapshot = originalSnapshot;
+        IdealSnapshot = idealSnapshot;
+    }
+
+    public Guid Token { get; }
+    public int OriginalIndex { get; }
+    public StrokeReplacementSnapshot OriginalSnapshot { get; }
+    public StrokeReplacementSnapshot IdealSnapshot { get; }
+}
+
+/// <summary>
 /// The WinUI custom ink surface — the Task-7 replacement for WPF's
 /// InkCanvas input path. It is a <see cref="Canvas"/> subclass: persisted
 /// strokes live as <see cref="Path"/> children in draw order (child i =
@@ -66,10 +93,12 @@ public sealed class InkStrokesErasedEventArgs : EventArgs
 ///   erasing — same as the WPF IsInkCreationModeActive gate).
 /// - Touch is never ink input in Phase A (it pans the ScrollViewer).
 /// - An inverted pen (<see cref="PointerPointProperties.IsEraser"/>) or a
-///   held barrel button erases regardless of the active tool; releasing
-///   restores it. The WPF double-barrel press-to-toggle is not ported.
-/// - <see cref="IsEraser"/> transitions mid-gesture are honoured: inking
-///   with the barrel pressed flips the gesture to erasing.
+///   held barrel button erases regardless of the active tool. The
+///   draw-vs-erase decision is sampled once at pointer-down and held for
+///   the whole gesture — a mid-gesture barrel/inversion change takes
+///   effect on the NEXT stroke (WPF arbitrates the same way at
+///   stroke-collect boundaries). The WPF double-barrel press-to-toggle
+///   is not ported.
 /// </summary>
 public sealed partial class InkSurface : Canvas
 {
@@ -100,6 +129,15 @@ public sealed partial class InkSurface : Canvas
     /// <summary>AppSettings.InkSimulation — velocity-based pressure synthesis.</summary>
     public bool InkSimulationEnabled { get; set; }
 
+    /// <summary>
+    /// AppSettings.ShapeRecognition — a completed non-highlighter scribble
+    /// that classifies as a line/rectangle/ellipse is replaced by its ideal
+    /// outline stroke in the store (same token, Ideal side) and reported
+    /// through <see cref="StrokeRecognized"/> instead of
+    /// <see cref="StrokeCollected"/>.
+    /// </summary>
+    public bool ShapeRecognitionEnabled { get; set; }
+
     /// <summary>AppSettings.StrokeSmoothing — 0=Off(raw), 1-3 moving average.</summary>
     public int StrokeSmoothingLevel { get; set; } = 2;
 
@@ -126,7 +164,6 @@ public sealed partial class InkSurface : Canvas
     private uint? _activePointerId;
     private bool _isDrawing;
     private bool _isErasing;
-    private bool _shiftHeldAtDown;
     private PointD? _lastErasePoint;
 
     private List<InkStrokePlacement> _eraseRemovedPlacements;
@@ -138,6 +175,14 @@ public sealed partial class InkSurface : Canvas
 
     /// <summary>A completed pen/highlighter stroke entered the store.</summary>
     public event EventHandler<InkStrokeData> StrokeCollected;
+
+    /// <summary>
+    /// A collected pen stroke was recognized as a shape and replaced by its
+    /// ideal outline inside the store — the editor pushes the
+    /// <see cref="InkStrokeReplacedAction"/> undo action (undo restores the
+    /// user's raw stroke). Raised instead of <see cref="StrokeCollected"/>.
+    /// </summary>
+    public event EventHandler<InkStrokeRecognizedEventArgs> StrokeRecognized;
 
     /// <summary>An erase gesture completed with net removals/additions.</summary>
     public event EventHandler<InkStrokesErasedEventArgs> StrokesErased;
@@ -263,7 +308,6 @@ public sealed partial class InkSurface : Canvas
 
         _activePointerId = e.Pointer.PointerId;
         CapturePointer(e.Pointer);
-        _shiftHeldAtDown = (e.KeyModifiers & Windows.System.VirtualKeyModifiers.Shift) != 0;
 
         if (wantsErase)
         {
@@ -357,7 +401,11 @@ public sealed partial class InkSurface : Canvas
         }
         else if (_isDrawing)
         {
-            CompleteStroke(point);
+            // WPF parity: Shift is sampled at stylus-up (the collect
+            // boundary), not at pointer-down — mid-stroke presses count.
+            CompleteStroke(
+                point,
+                (e.KeyModifiers & Windows.System.VirtualKeyModifiers.Shift) != 0);
             ReleaseActivePointer();
         }
         e.Handled = true;
@@ -430,13 +478,17 @@ public sealed partial class InkSurface : Canvas
     }
 
     /// <summary>
-    /// Commits the live stroke through the WPF post-collection pipeline
-    /// (smoothing → ink simulation → optional Shift straighten), adds it to
-    /// the store quietly and raises <see cref="StrokeCollected"/> — the
-    /// editor pushes the undo action. The store mutation already rendered
-    /// the stroke; the transient live path is removed.
+    /// Commits the live stroke through the WPF post-collection pipeline —
+    /// in WPF <c>InkCanvas_StrokeCollected</c> order: the release packet is
+    /// appended, Shift-at-release straightens, smoothing runs, then shape
+    /// recognition (a hit replaces the stroke in the store and raises
+    /// <see cref="StrokeRecognized"/>), then ink simulation, and the
+    /// survivor is added to the store quietly before
+    /// <see cref="StrokeCollected"/> fires — the editor pushes the undo
+    /// action. The store mutation already rendered the stroke; the
+    /// transient live path is removed.
     /// </summary>
-    private void CompleteStroke(PointerPoint point)
+    private void CompleteStroke(PointerPoint point, bool shiftHeld)
     {
         var stroke = _liveStroke;
         var path = _livePath;
@@ -450,13 +502,24 @@ public sealed partial class InkSurface : Canvas
         if (stroke == null || stroke.Points.Count == 0)
             return;
 
+        // The release packet is part of the stroke — WPF InkCanvas includes
+        // the stylus-up point in StylusPoints. Append it past the same
+        // dedup threshold the move handler applies.
+        var tail = stroke.Points[^1];
+        if (Math.Abs(tail.X - point.Position.X) > 0.0001
+            || Math.Abs(tail.Y - point.Position.Y) > 0.0001)
+        {
+            stroke.Points.Add(new InkPointData(
+                point.Position.X, point.Position.Y, EffectivePacketPressure(point)));
+        }
+
         // WPF PreserveTapStroke expands a single-point tap so the stroke
         // renders; our outline already draws a 1-point disc, so the point
         // list stays truthful instead.
 
-        // Task 21 parity: Shift held at pointer-down straightens to a
+        // Task 21 parity: Shift sampled at stylus-up straightens to a
         // first→last segment (FitToCurve off — a line needs no curve fit).
-        if (_shiftHeldAtDown && stroke.Points.Count >= 2
+        if (shiftHeld && stroke.Points.Count >= 2
             && StrokeGeometry.TryGetStraightEndpoints(stroke.Points, out var first, out var last))
         {
             stroke.Points = new List<InkPointData> { first, last };
@@ -477,6 +540,27 @@ public sealed partial class InkSurface : Canvas
         else if (StrokeSmoothingLevel <= 0)
         {
             stroke.FitToCurve = false;
+        }
+
+        // Shape recognition runs before ink simulation (WPF ordering): a
+        // recognized stroke is replaced wholesale by its ideal outline —
+        // uniform width — so simulating pressure on the raw stroke would be
+        // wasted. The helper adds the stroke to the store and swaps it in
+        // place; a hit raises StrokeRecognized (the editor pushes
+        // InkStrokeReplacedAction so undo restores the raw scribble) and
+        // skips StrokeCollected entirely.
+        if (ShapeRecognitionEnabled && !stroke.IsHighlighter
+            && stroke.Points.Count >= StrokeGeometry.MinRecognizedShapePoints
+            && ScribbleShapeRecognition.TryReplaceWithRecognizedStroke(
+                Store, stroke, out var replacement))
+        {
+            StrokeRecognized?.Invoke(this, new InkStrokeRecognizedEventArgs(
+                replacement.Token,
+                replacement.OriginalIndex,
+                replacement.OriginalSnapshot,
+                replacement.IdealSnapshot));
+            InkMutated?.Invoke(this, EventArgs.Empty);
+            return;
         }
 
         // Ink simulation synthesizes pressure from spacing; pen strokes only.
