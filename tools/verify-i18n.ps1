@@ -403,7 +403,7 @@ if (-not (Test-Path -LiteralPath $script:Root -PathType Container)) {
     Add-Issue "Repository root does not exist: $script:Root"
 }
 
-$catalogPath = Join-Path $script:Root 'Services\LocalizationService.cs'
+$catalogPath = Join-Path $script:Root 'OpenNotes.Core\Services\LocalizationService.cs'
 $catalog = @{}
 $catalogSource = $null
 

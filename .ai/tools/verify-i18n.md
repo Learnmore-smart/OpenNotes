@@ -1,5 +1,5 @@
 # tools/verify-i18n.ps1
-> Last updated: 2026-08-23（Wave 3 P2 dynamic ItemsSource audit complete） | Protection: STANDARD
+> Last updated: 2026-09-22（catalog path moved to OpenNotes.Core for V6 extraction; gate GREEN 337/541/0） | Protection: STANDARD
 
 ## Purpose
 
@@ -20,4 +20,5 @@ Fail-closed static verification for application catalog completeness, localizati
 
 | Date | Change | Author |
 |---|---|---|
+| 2026-09-22 | V6 WinUI 3 migration (`v6/winui3`): `$catalogPath` now reads `OpenNotes.Core\Services\LocalizationService.cs` after the Task 1 Core extraction; `OpenNotes.Core` is not in the excluded directory list so moved sources stay scanned. Gate verified GREEN: 337 catalog entries, 541 localization calls, 0 hard-coded visible strings. | Devin |
 | 2026-08-20 | Documented the i18n verification contract. | Codex |
