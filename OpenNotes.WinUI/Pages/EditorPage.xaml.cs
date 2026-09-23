@@ -118,6 +118,8 @@ namespace Caelum.Pages
         private readonly List<PdfSearchResult> _pdfSearchResults = new();
         private CancellationTokenSource _pdfSearchCts;
 
+        private bool _languageChangedSubscribed;
+
         // ── Page jump ───────────────────────────────────────────────────────
         private bool _isPageJumpInitializing = true;
         private bool _isPageJumpEditing;
@@ -205,12 +207,26 @@ namespace Caelum.Pages
 
         private void EditorPage_Loaded(object sender, RoutedEventArgs e)
         {
+            if (!_languageChangedSubscribed)
+            {
+                LocalizationService.LanguageChanged += EditorPage_LanguageChanged;
+                _languageChangedSubscribed = true;
+            }
+
             AutoCollapseSidebarForNarrowLayout();
             if (_completedLoadSessionId != 0 && _pageControls.Count > 0)
                 KickViewportRender();
         }
 
         private void EditorPage_Unloaded(object sender, RoutedEventArgs e) => ReleaseResources();
+
+        private void EditorPage_LanguageChanged(object sender, EventArgs e)
+        {
+            // LanguageChanged is raised on the UI thread by ApplyLanguage;
+            // re-localize sidebar labels, empty states, toolbar metadata and
+            // the context menu in place (WPF EditorPage parity).
+            ApplyLocalization();
+        }
 
         /// <summary>
         /// Task 5 stub UIA contract kept for winui-home-smoke: the probes are
@@ -816,9 +832,12 @@ namespace Caelum.Pages
 
         private void ZoomLabel_Tapped(object sender, TappedRoutedEventArgs e)
         {
-            if (ZoomTextBox == null)
+            if (ZoomTextBox == null || ZoomLabel == null)
                 return;
             ZoomTextBox.Text = $"{(int)Math.Round(_zoomLevel * 100)}";
+            // WPF parity: the label hides while the inline editor is open
+            // (they share one grid cell — the textbox overlays it).
+            ZoomLabel.Visibility = Visibility.Collapsed;
             ZoomTextBox.Visibility = Visibility.Visible;
             ZoomTextBox.Focus(FocusState.Programmatic);
             ZoomTextBox.SelectAll();
@@ -828,24 +847,42 @@ namespace Caelum.Pages
         {
             if (e.Key == VirtualKey.Enter)
             {
-                if (int.TryParse(ZoomTextBox.Text, out int percentage))
-                    SetZoom(Math.Max(ZoomMin, Math.Min(ZoomMax, percentage / 100.0)));
-                HideZoomTextBox();
+                ApplyZoomFromTextBox();
                 e.Handled = true;
             }
             else if (e.Key == VirtualKey.Escape)
             {
+                // Discard: the label keeps the pre-edit value and reappears.
                 HideZoomTextBox();
                 e.Handled = true;
             }
         }
 
-        private void ZoomTextBox_LostFocus(object sender, RoutedEventArgs e) => HideZoomTextBox();
+        private void ZoomTextBox_LostFocus(object sender, RoutedEventArgs e)
+        {
+            // WPF parity: losing focus commits, same as Enter.
+            ApplyZoomFromTextBox();
+        }
+
+        private void ApplyZoomFromTextBox()
+        {
+            if (ZoomTextBox == null)
+                return;
+            var text = ZoomTextBox.Text.Trim().TrimEnd('%');
+            if (int.TryParse(text, out int pct) &&
+                pct >= (int)(ZoomMin * 100) && pct <= (int)(ZoomMax * 100))
+            {
+                ZoomAroundPoint(pct / 100.0, GetViewportCenter());
+            }
+            HideZoomTextBox();
+        }
 
         private void HideZoomTextBox()
         {
             if (ZoomTextBox != null)
                 ZoomTextBox.Visibility = Visibility.Collapsed;
+            if (ZoomLabel != null)
+                ZoomLabel.Visibility = Visibility.Visible;
         }
 
         private void ZoomOutButton_Click(object sender, RoutedEventArgs e) => AdjustZoom(-ZoomStep);
@@ -2702,6 +2739,12 @@ namespace Caelum.Pages
                 return;
             _resourcesReleased = true;
             _isHostActive = false;
+
+            if (_languageChangedSubscribed)
+            {
+                LocalizationService.LanguageChanged -= EditorPage_LanguageChanged;
+                _languageChangedSubscribed = false;
+            }
 
             _loadCts?.Cancel();
             _reRenderCts?.Cancel();

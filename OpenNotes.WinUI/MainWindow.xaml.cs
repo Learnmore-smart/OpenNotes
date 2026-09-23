@@ -835,7 +835,8 @@ namespace Caelum
         /// <summary>
         /// Opens <paramref name="filePath"/> in the active tab — WPF parity:
         /// promote in recents, retitle the tab, then navigate its Frame to
-        /// the editor. The Task 5 EditorPage is a stub that displays the path.
+        /// the editor. Task 6 replaced the stub with the real EditorPage
+        /// shell (rasterized pages, zoom, sidebar, search, context menu).
         /// </summary>
         public void NavigateActiveTabToFile(string filePath)
         {
@@ -851,7 +852,7 @@ namespace Caelum
 
         /// <summary>
         /// Library-rename flow: retitle/repath every tab whose file moved so
-        /// the tab strip and the stub editor track the new path (WPF
+        /// the tab strip and the open editor track the new path (WPF
         /// <c>HandleFilePathChanged</c> parity).
         /// </summary>
         public void HandleFilePathChanged(string oldPath, string newPath)

@@ -5,6 +5,8 @@
 Real-mouse-input smoke for a running `OpenNotes.WinUI.exe` window. Reads UIA `BoundingRectangle`s, sends real left/middle clicks at element centers (`SetCursorPos`+`mouse_event`) and drag gestures (`SendInput` with `ABSOLUTE|VIRTUALDESK` normalized coords). Verifies: window `SetFocus()` first (the first real click on an unfocused window is eaten by focus-activation), new-tab real click, first-tab click selects it (`SelectionPattern`, tolerance `<2` for fractional-DPI rounding), a REAL drag of the first tab pill onto the last (reorder), middle-click closes a tab, `MinimizeButton`/`MaximizeButton` real clicks drive `WindowVisualState` Minimized→Maximized→Normal (proves caption-rect passthrough for real input), `NavHomeButton` inside the `SetTitleBar` element, and a final real `CloseButton` click closing window AND process.
 
 ## Important Notes
+
+- **Window matching (Task 6 review fix):** `Get-Window` requires `NativeWindowHandle == (Get-Process OpenNotes.WinUI).MainWindowHandle` — the installed WPF `OpenNotes.exe` shares the "OpenNotes" window title and would otherwise shadow the target (0 `AppTab`s found). Same hardening `winui-home-smoke.ps1` already carried.
 - Inlines a `MouseInput` C# type (`SetCursorPos`/`mouse_event` + `SendInput`/`INPUT`) — moves the physical mouse cursor; do not run while the user's hands are on the input devices.
 - **`SetProcessDpiAwarenessContext(PER_MONITOR_AWARE_V2)` is mandatory before `SendInput` absolute moves**: without it `GetSystemMetrics` reports the DPI-scaled logical desktop (1440×960 here) while UIA/`SetCursorPos` use physical pixels (2880×1920) — normalization lands off-target and can grab the wrong window.
 - Depends on the same AutomationIds as `winui-uia-smoke.ps1` plus `TabStrip` `SelectionPattern`.

@@ -1,5 +1,5 @@
 # OpenNotes.WinUI/Pages/EditorPage.xaml(.cs)
-> Last updated: 2026-09-23 (V6 Task 6 — editor shell port) | Protection: STANDARD
+> Last updated: 2026-09-23 (V6 Task 6 review — zoom-commit + LanguageChanged parity) | Protection: STANDARD
 
 ## Purpose
 `Caelum.Pages.EditorPage : Page` — the WinUI editor shell port of the WPF
@@ -24,6 +24,12 @@ deferred — toolbar annotation buttons are visual/inert until T7–T9.
   content coordinates — the WinUI equivalent of WPF's UpdateLayout+ScrollTo
   pair). `ZoomLabel` text AND accessible name = `NN%` (UIA parity — name is
   asserted by the smoke); `ZoomTextBox` inline edit on label tap; Ctrl+wheel.
+  ZoomTextBox commit parity (WPF `ApplyZoomFromTextBox`): **both Enter AND
+  LostFocus commit** — `Trim().TrimEnd('%')` → `int.TryParse` → range-check
+  `[ZoomMin*100, ZoomMax*100]` → `ZoomAroundPoint(pct/100, viewportCenter)`
+  (NOT bare `SetZoom` — keeps the anchor); Escape discards. `ZoomLabel`
+  collapses while the textbox shows and is restored by `HideZoomTextBox`
+  (WPF visibility parity — they share one grid cell).
 - **Sidebar geometry (NEVER-change contract):** expanded margin-left
   **228 DIP** (184 rail + 44 collapsed-rail gutter math preserved), collapsed
   **32 DIP**, auto-collapse at window width **≤375 DIP**
@@ -61,7 +67,14 @@ deferred — toolbar annotation buttons are visual/inert until T7–T9.
   `current-page=N` (the WinUI TextBox UIA Value can stay pinned after a
   SetValue+programmatic rewrite).
 - **Localization:** `ApplyLocalization()` refreshes chrome/tooltips/context
-  menu labels; validation message strings `Editor.PageJump*`.
+  menu labels; validation message strings `Editor.PageJump*`. The page
+  self-subscribes `LocalizationService.LanguageChanged` in `Loaded`
+  (guarded by `_languageChangedSubscribed`) and unsubscribes inside
+  `ReleaseResources` (covers Unloaded + `ShutdownEditor` + `OnNavigatedFrom`
+  — a collapsed Frame's page may never raise `Unloaded`); handler →
+  `ApplyLocalization()` on the UI thread. Without this, open editor tabs
+  keep stale strings when the language changes — MainWindow's handler only
+  reaches itself and HomePage.
 
 ## Important Notes / NEVER Change
 - **228/32 DIP margin contract + ≤375 auto-collapse** is a pinned WPF

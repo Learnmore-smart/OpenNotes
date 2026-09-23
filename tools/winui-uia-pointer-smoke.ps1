@@ -69,12 +69,19 @@ public static class MouseInput {
 [MouseInput]::SetProcessDpiAwarenessContext((New-Object IntPtr(-4))) | Out-Null  # PER_MONITOR_AWARE_V2
 
 function Get-Window {
+    # Match the WinUI process's main window specifically — the installed WPF
+    # OpenNotes.exe can share the "OpenNotes" title and would shadow it.
     $root = [System.Windows.Automation.AutomationElement]::RootElement
     $cond = New-Object System.Windows.Automation.PropertyCondition(
         [System.Windows.Automation.AutomationElement]::NameProperty, "OpenNotes")
     for ($i = 0; $i -lt 20; $i++) {
-        $w = $root.FindFirst([System.Windows.Automation.TreeScope]::Children, $cond)
-        if ($w -ne $null) { return $w }
+        $proc = Get-Process OpenNotes.WinUI -ErrorAction SilentlyContinue | Select-Object -First 1
+        $wins = $root.FindAll([System.Windows.Automation.TreeScope]::Children, $cond)
+        foreach ($w in $wins) {
+            if ($proc -eq $null) { return $w }
+            $proc.Refresh()
+            if ($w.Current.NativeWindowHandle -eq $proc.MainWindowHandle) { return $w }
+        }
         Start-Sleep -Milliseconds 500
     }
     return $null

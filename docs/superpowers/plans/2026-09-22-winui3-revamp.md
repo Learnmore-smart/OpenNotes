@@ -124,6 +124,7 @@
 - Search: `GetPageTextInfoAsync` per page → results list → jump + `SetPdfTextSelectionRects` highlight. Context menu: rotate (`RotatePageAsync`+reload), export current-page PNG incl. 1×, insert/delete/duplicate/reorder/print entries.
 - **Deferred (inert/visual-only until T7–T9):** ink canvas + pen/eraser/shape/laser/ruler/select/text tools (T7); text/sticky/image overlays + persistent PDF text selection (T8); save/autosave/dirty-close/version-history/settings (T9); Undo/Redo buttons inert.
 - Verification: `tools/winui-editor-smoke.ps1` (new) 60/60 — ids, margins 228/32/narrow, nav, zoom 110%, search BRAVO, context items, tab-close survival.
+- **Review adjudications (2026-09-23):** the spec's named `PagesZoomTransform` element was substituted by `ScrollViewer ZoomMode` + code-side `_zoomLevel` — functionally equivalent anchored zoom (ChangeView commits zoom+offsets atomically). `LoadingOverlay` during zoom re-render matches WPF behavior rather than the spec letter — adjudicated WPF-parity. `ZoomTextBox` commits on Enter AND LostFocus via `ApplyZoomFromTextBox` (`%`-strip, `[ZoomMin*100,ZoomMax*100]` range-check, `ZoomAroundPoint` — review fix; was Enter-only bare `SetZoom`). `EditorPage` self-subscribes `LocalizationService.LanguageChanged` in `Loaded`, unsubscribes in `ReleaseResources` (review fix — MainWindow's handler doesn't reach open editor tabs).
 
 ## Task 7: Custom ink engine (replaces WPF InkCanvas)
 
