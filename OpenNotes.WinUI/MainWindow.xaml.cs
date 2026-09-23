@@ -35,6 +35,13 @@ namespace Caelum
 
         private AppWindow _appWindow;
         private OverlappedPresenter _presenter;
+        private double _appliedScale = 1.0;
+
+        // DIP intents — converted to physical px by the rasterization scale.
+        private const int StartupWidthDips = 1280;
+        private const int StartupHeightDips = 720;
+        private const int MinWidthDips = 560;
+        private const int MinHeightDips = 360;
 
         public MainWindow()
         {
@@ -63,21 +70,15 @@ namespace Caelum
             _presenter = _appWindow?.Presenter as OverlappedPresenter;
             ApplyCustomChrome(_presenter);
 
-            // Floor under the shell so nav/brand can never slide under the
-            // caption buttons on very narrow windows (the XAML title row also
-            // reserves the right 138px for the caption cluster).
-            if (_presenter != null)
-            {
-                _presenter.PreferredMinimumWidth = 560;
-                _presenter.PreferredMinimumHeight = 360;
-            }
-
-            // WPF: 1280x720, WindowStartupLocation=CenterScreen. MoveAndResize
-            // takes PHYSICAL pixels under PerMonitorV2 while the WPF sizes
-            // were DIPs — the immediate pass uses scale 1.0 only as a
-            // fallback, and RootGrid_Loaded re-sizes through
-            // XamlRoot.RasterizationScale once the visual tree exists.
-            SizeAndCenter(1.0);
+            // WPF: 1280x720, WindowStartupLocation=CenterScreen.
+            // MoveAndResize AND PreferredMinimum* take PHYSICAL pixels under
+            // PerMonitorV2 while the WPF sizes were DIPs. GetDpiForWindow
+            // reads the monitor's real scale BEFORE the visual tree exists,
+            // so the first paint lands at the right size — no
+            // scale-1.0-then-rescale flicker. RootGrid_Loaded stays as the
+            // safety net and only re-sizes if the real XamlRoot scale
+            // differs (first-rasterization race).
+            SizeAndCenter(GetWindowRasterizationScale(hWnd));
             RootGrid.Loaded += RootGrid_Loaded;
 
             if (_appWindow != null)
@@ -92,27 +93,89 @@ namespace Caelum
         private void RootGrid_Loaded(object sender, RoutedEventArgs e)
         {
             RootGrid.Loaded -= RootGrid_Loaded;
-            SizeAndCenter(RootGrid.XamlRoot?.RasterizationScale ?? 1.0);
+            var xamlRoot = RootGrid.XamlRoot;
+            if (xamlRoot == null)
+                return;
+
+            // Cross-monitor DPI moves fire XamlRoot.Changed: the platform
+            // rescales the window itself but does NOT rescale
+            // PreferredMinimum* — re-apply the minimum there. NEVER
+            // re-size or re-center after first layout: the user's window
+            // size stays theirs.
+            xamlRoot.Changed += XamlRoot_Changed;
+
+            // GetDpiForWindow normally made this a no-op; re-run only when
+            // the real rasterization scale differs (first-paint race).
+            if (Math.Abs(xamlRoot.RasterizationScale - _appliedScale) > 0.001)
+                SizeAndCenter(xamlRoot.RasterizationScale);
+        }
+
+        private void XamlRoot_Changed(XamlRoot sender, XamlRootChangedEventArgs args)
+        {
+            // Fires on size/visibility changes too — ApplyMinimumSize is
+            // idempotent, so only the minimum floor is re-asserted here.
+            ApplyMinimumSize(sender.RasterizationScale);
         }
 
         private void SizeAndCenter(double rasterizationScale)
         {
             if (_appWindow == null)
                 return;
-            if (rasterizationScale <= 0)
-                rasterizationScale = 1.0;
+            ApplyMinimumSize(rasterizationScale);
+            double scale = _appliedScale;
 
             var displayArea = DisplayArea.GetFromWindowId(_appWindow.Id, DisplayAreaFallback.Nearest);
             if (displayArea == null)
                 return;
 
             var workArea = displayArea.WorkArea;
-            int width = (int)Math.Round(1280 * rasterizationScale);
-            int height = (int)Math.Round(720 * rasterizationScale);
+            int width = (int)Math.Round(StartupWidthDips * scale);
+            int height = (int)Math.Round(StartupHeightDips * scale);
             int x = workArea.X + Math.Max(0, (workArea.Width - width) / 2);
             int y = workArea.Y + Math.Max(0, (workArea.Height - height) / 2);
             _appWindow.MoveAndResize(new RectInt32(x, y, width, height));
         }
+
+        /// <summary>
+        /// <see cref="OverlappedPresenter.PreferredMinimumWidth"/>/Height are
+        /// PHYSICAL pixels — an unscaled 560x360 would only enforce a
+        /// 280x180 DIP floor at 200% DPI. Re-applied on XamlRoot.Changed
+        /// (cross-monitor DPI moves) and on presenter swaps; idempotent.
+        /// </summary>
+        private void ApplyMinimumSize(double rasterizationScale)
+        {
+            double scale = NormalizeScale(rasterizationScale);
+            _appliedScale = scale;
+            if (_presenter == null)
+                return;
+
+            int minWidth = (int)Math.Round(MinWidthDips * scale);
+            int minHeight = (int)Math.Round(MinHeightDips * scale);
+            if (_presenter.PreferredMinimumWidth != minWidth)
+                _presenter.PreferredMinimumWidth = minWidth;
+            if (_presenter.PreferredMinimumHeight != minHeight)
+                _presenter.PreferredMinimumHeight = minHeight;
+        }
+
+        private static double NormalizeScale(double rasterizationScale)
+            => rasterizationScale > 0 ? rasterizationScale : 1.0;
+
+        /// <summary>
+        /// True monitor scale before the visual tree exists —
+        /// <c>GetDpiForWindow</c>/96 (Win10 1607+; our floor is 17763).
+        /// A non-DPI-aware process gets 96 → scale 1.0, which is also
+        /// correct for its virtualized coordinates.
+        /// </summary>
+        private static double GetWindowRasterizationScale(IntPtr hWnd)
+        {
+            if (hWnd == IntPtr.Zero)
+                return 1.0;
+            uint dpi = GetDpiForWindow(hWnd);
+            return dpi > 0 ? dpi / 96.0 : 1.0;
+        }
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern uint GetDpiForWindow(IntPtr hWnd);
 
         /// <summary>
         /// NEVER-remove chrome rule: <c>ExtendsContentIntoTitleBar</c> alone
@@ -136,6 +199,8 @@ namespace Caelum
                 // custom chrome.
                 _presenter = sender.Presenter as OverlappedPresenter;
                 ApplyCustomChrome(_presenter);
+                // A presenter swap also resets PreferredMinimum* to defaults.
+                ApplyMinimumSize(_appliedScale);
             }
             UpdateMaximizeGlyph();
         }
@@ -192,6 +257,9 @@ namespace Caelum
             WinUiThemeService.ThemeApplied -= WinUiThemeService_ThemeApplied;
             if (_appWindow != null)
                 _appWindow.Changed -= AppWindow_Changed;
+            var xamlRoot = RootGrid?.XamlRoot;
+            if (xamlRoot != null)
+                xamlRoot.Changed -= XamlRoot_Changed;
             // RegisterWindow removes this window itself via its Closed hook.
         }
 

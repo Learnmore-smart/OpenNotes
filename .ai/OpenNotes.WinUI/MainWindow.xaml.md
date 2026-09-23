@@ -16,7 +16,7 @@ WinUI 3 `Microsoft.UI.Xaml.Window` markup (NOT WPF `System.Windows.Window`) — 
 - `{ThemeResource}` is used everywhere (not `StaticResource`) so `WinUiThemeService` resource replacement re-renders chrome live.
 - Lucide vectors are NOT ported yet: `FontIcon` glyphs stand in (E72B/E72A back/fwd, E80F home, E921/E922/E923 min/max/restore, E8BB close, E710 plus, E711 tab-close, E8A5 doc) — swap when the icon port lands.
 - The only WPF `AutomationProperties.AutomationId` on MainWindow was `MoreButton` (deferred to Task 5); stable IDs were added to all new chrome for the UIA smoke scripts — keep them.
-- The nav/brand `StackPanel` inside `AppTitleBar` carries `Margin="0,0,138,0"` (≥3×46px caption cluster) and the presenter sets `PreferredMinimumWidth/Height` (560×360) — without both, narrow windows slide nav/brand under the caption buttons.
+- The nav/brand `StackPanel` inside `AppTitleBar` carries `Margin="0,0,138,0"` (≥3×46px caption cluster) and the presenter sets `PreferredMinimumWidth/Height` — PHYSICAL px, so the code scales the 560×360 DIP intent by the rasterization scale (an unscaled value would floor at 280×180 DIP @200%) — without both, narrow windows slide nav/brand under the caption buttons.
 - `x:Bind` is `OneWay` — it keeps no `BindingExpression`, so `PointerExited` must `SetValue` the computed `TabBackground` (NOT `ClearValue`, which would null the pill and strip the active tab's surface brush — regression fixed).
 - No app icon `Image` in the title bar yet: `Assets/app-icon.ico` is ICO (WinUI `Image` can't decode it); the icon port should add a PNG.
 
