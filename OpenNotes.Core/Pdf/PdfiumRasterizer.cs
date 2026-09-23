@@ -794,7 +794,7 @@ namespace Caelum.Pdf
         [UnmanagedFunctionPointer(CallingConvention.StdCall)]
         private delegate void FfiKillTimerDelegate(IntPtr pThis, int timerId);
 
-        // FPDF_SYSTEMTIME FFI_GetLocalTime(void* pThis) returns an 18-byte
+        // FPDF_SYSTEMTIME FFI_GetLocalTime(void* pThis) returns a 16-byte
         // struct BY VALUE. On the Win64 ABI a by-value aggregate >8 bytes
         // lowers to a hidden first parameter: caller allocates the return
         // storage, passes its pointer in RCX, and pThis shifts to RDX; the
@@ -860,9 +860,9 @@ namespace Caelum.Pdf
         /// <summary>
         /// FPDF_SYSTEMTIME = 8 ushorts (wYear since 1900, wMonth 0-11,
         /// wDayOfWeek 0-6, wDay 1-31, wHour, wMinute, wSecond, wMilliseconds)
-        /// + tzHourDiff + tzMinuteDiff bytes = 18 bytes, written into the
         /// caller-owned buffer (see the hidden-out-param note on the
-        /// delegate). Returns the buffer pointer as the ABI requires.
+        /// delegate). Writing past byte 15 overflows pdfium's 16-byte
+        /// stack buffer. Returns the buffer pointer as the ABI requires.
         /// </summary>
         private static IntPtr FfiGetLocalTime(IntPtr outSystemTime, IntPtr pThis)
         {
@@ -875,9 +875,6 @@ namespace Caelum.Pdf
             Marshal.WriteInt16(outSystemTime, 10, (short)now.Minute);
             Marshal.WriteInt16(outSystemTime, 12, (short)now.Second);
             Marshal.WriteInt16(outSystemTime, 14, (short)now.Millisecond);
-            var utcOffset = TimeZoneInfo.Local.GetUtcOffset(now);
-            Marshal.WriteByte(outSystemTime, 16, (byte)(sbyte)utcOffset.Hours);
-            Marshal.WriteByte(outSystemTime, 17, (byte)(sbyte)utcOffset.Minutes);
             return outSystemTime;
         }
 

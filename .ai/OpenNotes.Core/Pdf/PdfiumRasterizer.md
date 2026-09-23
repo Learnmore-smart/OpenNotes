@@ -26,7 +26,7 @@ future WinUI host share one UI-free raster backend.
   order. `CreateFormFillInfo()` populates the 15 v1 slots with real
   stateless/no-op `StdCall` delegates (shared static array so they never get
   collected; `m_pJsPlatform` stays null). `FFI_GetLocalTime` implements the
-  Win64 hidden-out-param ABI — the 18-byte `FPDF_SYSTEMTIME` is returned by
+  Win64 hidden-out-param ABI — the 16-byte `FPDF_SYSTEMTIME` (8 ushorts) is returned by
   value, so the delegate signature is `(IntPtr outSystemTime, IntPtr pThis)`;
   it writes real local time into the caller buffer and returns the pointer.
   Never hand pdfium a null function pointer — documents with page/document
@@ -83,7 +83,7 @@ future WinUI host share one UI-free raster backend.
   longer references `PdfiumViewer`; only the parity test does, deliberately).
 - 2026-09-22: Spec-review fixes — `FFI_GetLocalTime` corrected to the Win64
   hidden-out-param ABI (`(IntPtr outSystemTime, IntPtr pThis)` writing real
-  local time into the 18-byte `FPDF_SYSTEMTIME`; the previous
+  local time into the 16-byte `FPDF_SYSTEMTIME` (no tz fields — writing past byte 15 overflows the caller buffer); the previous
   `(IntPtr pThis)->IntPtr` signature left the caller buffer unwritten = latent
   UMR reachable via `FORM_DoDocumentJSAction` on every open). All imports +
   callbacks now `StdCall` per `FPDF_CALLCONV`; x86 probe removed (x64-only);
