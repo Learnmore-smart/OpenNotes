@@ -2,7 +2,7 @@
 > Last updated: 2026-09-22 (V6 Task 4 Step 1 — empty window builds and launches) | Protection: STANDARD
 
 ## Purpose
-The V6 WinUI 3 (Windows App SDK) shell project. Unpackaged (`WindowsPackageType=None`), Windows App SDK self-contained (`WindowsAppSDKSelfContained=true`) — ships as a single .exe folder like the WPF app, no MSIX install, no `Bootstrap.Initialize` call needed (the self-contained runtime DLLs sit next to the exe).
+The V6 WinUI 3 (Windows App SDK) shell project. Unpackaged (`WindowsPackageType=None`), Windows App SDK self-contained (`WindowsAppSDKSelfContained=true`) — no MSIX install, no `Bootstrap.Initialize` call needed (the self-contained WASDK runtime DLLs sit next to the exe). NOTE: `WindowsAppSDKSelfContained` covers only the WASDK runtime — the .NET 8 runtime stays **framework-dependent** until publish adds `--self-contained true` (same pattern as `release.yml` uses for the WPF app).
 
 ## What It Does
 - `net8.0-windows10.0.19041.0` + `TargetPlatformMinVersion 10.0.17763.0`, `UseWinUI=true`.
@@ -16,6 +16,8 @@ The V6 WinUI 3 (Windows App SDK) shell project. Unpackaged (`WindowsPackageType=
 ## Important Notes / NEVER Change
 - Keep `RootNamespace=Caelum` until the separately planned namespace migration.
 - Keep `WindowsPackageType=None` + `WindowsAppSDKSelfContained=true`; the app must stay a portable unpackaged folder.
+- No project may reference BOTH `OpenNotes` (WPF) and `OpenNotes.WinUI` — same-namespace same-name types (`Caelum.App`, `Caelum.MainWindow`, future ported `Caelum.*` types) cause CS0433 ambiguity. `OpenNotes.WinUI.Tests` (when created) must reference WinUI+Core only.
+- `build.ps1` hard-codes `.\OpenNotes.csproj` and cannot build this project — invoke `dotnet build OpenNotes.WinUI\OpenNotes.WinUI.csproj` directly.
 
 ## Open Threads / Resume Context
 - **Status:** GREEN — `dotnet build` 0 errors; `OpenNotes.WinUI.exe` launch-smoke stayed alive 8s+ and was killed manually.

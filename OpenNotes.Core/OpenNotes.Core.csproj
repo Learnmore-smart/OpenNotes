@@ -17,6 +17,7 @@
          test suite (e.g. PdfAtomicFile, RecycleBinService, WindowsEnvironment). -->
     <InternalsVisibleTo Include="OpenNotes" />
     <InternalsVisibleTo Include="OpenNotes.Tests" />
+    <InternalsVisibleTo Include="OpenNotes.WinUI" />
   </ItemGroup>
 
 </Project>

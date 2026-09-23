@@ -10,7 +10,7 @@ Build definition for the `OpenNotes.Core` class library: the UI-free services/mo
 - `TargetFramework` = `net8.0`（**not** `net8.0-windows`）：no WPF/WinForms/Windows Desktop references allowed in this project.
 - `Nullable` = `disable`，`ImplicitUsings` = `disable`：matches the main project; moved files compile identically.
 - `AssemblyName` = `OpenNotes.Core`；package：`PdfSharpCore 1.3.67`（needed by `Services/PdfAtomicFile.cs`）。
-- `InternalsVisibleTo` → `OpenNotes` + `OpenNotes.Tests`：moved files expose internal members consumed by the WPF app (`PdfAtomicFile`, `RecycleBinService`, `WindowsEnvironment`, `UpdateCheckService.IsTrustedReleaseUri`, `PdfSaveCoordinator` counters) and by the test suite.
+- `InternalsVisibleTo` → `OpenNotes` + `OpenNotes.Tests` + `OpenNotes.WinUI`：moved files expose internal members consumed by the WPF app (`PdfAtomicFile`, `RecycleBinService`, `WindowsEnvironment`, `UpdateCheckService.IsTrustedReleaseUri`, `PdfSaveCoordinator` counters), by the test suite, and by the V6 WinUI host (`RecycleBinService`/`PdfAtomicFile` are `internal` — without IVT Task 5 HomePage hits CS0122).
 
 ## Important Notes / NEVER Change
 
@@ -22,3 +22,4 @@ Build definition for the `OpenNotes.Core` class library: the UI-free services/mo
 | Date | Change | Author |
 |---|---|---|
 | 2026-09-22 | Created for Task 1 of the V6 WinUI 3 migration: 19 Services + 7 Models files moved from the app project unchanged. | Devin |
+| 2026-09-22 | Added `InternalsVisibleTo` → `OpenNotes.WinUI` so the V6 host can consume internal services (review follow-up). | Devin |
