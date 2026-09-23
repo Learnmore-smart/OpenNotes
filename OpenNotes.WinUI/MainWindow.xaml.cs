@@ -61,6 +61,7 @@ namespace Caelum
             WindowId windowId = Microsoft.UI.Win32Interop.GetWindowIdFromWindow(hWnd);
             _appWindow = AppWindow.GetFromWindowId(windowId);
             _presenter = _appWindow?.Presenter as OverlappedPresenter;
+            ApplyCustomChrome(_presenter);
 
             // WPF: 1280x720, WindowStartupLocation=CenterScreen.
             const int startupWidth = 1280;
@@ -84,8 +85,29 @@ namespace Caelum
             Title = ProductInfo.DisplayName;
         }
 
+        /// <summary>
+        /// NEVER-remove chrome rule: <c>ExtendsContentIntoTitleBar</c> alone
+        /// only extends our content under the title bar — the system
+        /// Min/Max/Close buttons still render topmost over the right edge and
+        /// occlude the custom caption buttons (verified by UIA: both button
+        /// sets coexisted at the same rects). Keeping the border but dropping
+        /// the system title bar makes our XAML buttons the only caption UI.
+        /// </summary>
+        private static void ApplyCustomChrome(OverlappedPresenter presenter)
+        {
+            presenter?.SetBorderAndTitleBar(hasBorder: true, hasTitleBar: false);
+        }
+
         private void AppWindow_Changed(AppWindow sender, AppWindowChangedEventArgs args)
         {
+            if (args.DidPresenterChange)
+            {
+                // A presenter swap drops the SetBorderAndTitleBar config —
+                // re-apply or the system caption buttons come back over the
+                // custom chrome.
+                _presenter = sender.Presenter as OverlappedPresenter;
+                ApplyCustomChrome(_presenter);
+            }
             UpdateMaximizeGlyph();
         }
 

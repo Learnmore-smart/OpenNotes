@@ -12,7 +12,11 @@
         caption rect); interactive controls placed over it get input through the
         framework's automatic passthrough regions. Caption buttons are custom
         buttons driven by AppWindow/OverlappedPresenter, mirroring the WPF
-        WindowStyle=None custom chrome.
+        WindowStyle=None custom chrome. ExtendsContentIntoTitleBar alone leaves
+        the SYSTEM caption buttons rendered topmost over the right edge -
+        code-behind ApplyCustomChrome() calls
+        OverlappedPresenter.SetBorderAndTitleBar(hasBorder: true,
+        hasTitleBar: false) so these XAML buttons are the only caption UI.
     -->
 
     <Grid x:Name="RootGrid" Background="{ThemeResource ThemeWindowBrush}" PreviewKeyDown="RootGrid_PreviewKeyDown">

@@ -4,7 +4,7 @@ using System.Runtime.CompilerServices;
 using Caelum.Services;
 using Microsoft.UI;
 using Microsoft.UI.Text;
-using Windows.UI.Text;
+using Windows.UI.Text; // FontWeight struct; FontWeights static class is Microsoft.UI.Text.
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;

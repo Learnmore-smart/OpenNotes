@@ -18,13 +18,17 @@
             <SolidColorBrush x:Key="AppGlassSubtleBorderBrush" Color="White" Opacity="0.10"/>
 
             <!-- Runtime-swappable application chrome palette (WPF Task 39).
-                 Root-level entries are the Light defaults — the same baseline
-                 the WPF App.xaml carries — and WinUiThemeService.Apply replaces
-                 them in place whenever the effective theme changes. The
-                 ThemeDictionaries below mirror the three palettes so a bare
-                 RequestedTheme switch already resolves sensible colors before
-                 the service writes its overrides. Key NAMES are identical to
-                 WPF so ported XAML keeps binding via {ThemeResource}. -->
+                 Root-level entries hold the ThemeService LightPalette values
+                 (pure-white #FFFFFF window/surface — deliberately NOT the
+                 #F3F4F6/#E5E7EB baseline the WPF App.xaml root carries, which
+                 is only its pre-theme placeholder; at runtime WPF replaces
+                 those placeholders with the same LightPalette values used
+                 here). WinUiThemeService.Apply replaces them in place whenever
+                 the effective theme changes. The ThemeDictionaries below
+                 mirror the three palettes so a bare RequestedTheme switch
+                 already resolves sensible colors before the service writes
+                 its overrides. Key NAMES are identical to WPF so ported XAML
+                 keeps binding via {ThemeResource}. -->
             <SolidColorBrush x:Key="ThemeWindowBackgroundBrush" Color="#FFFFFF"/>
             <SolidColorBrush x:Key="ThemeSurfaceBrush" Color="#FFFFFF"/>
             <SolidColorBrush x:Key="ThemeSurfaceAltBrush" Color="#F8F9FA"/>
