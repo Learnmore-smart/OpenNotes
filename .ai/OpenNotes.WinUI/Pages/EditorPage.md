@@ -1,5 +1,5 @@
 # OpenNotes.WinUI/Pages/EditorPage.xaml(.cs)
-> Last updated: 2026-09-23 (V6 Task 6 review — zoom-commit + LanguageChanged parity) | Protection: STANDARD
+> Last updated: 2026-09-23 (V6 Task 6 hardening — rename/DPI/bookmark-cache/CTS edges) | Protection: STANDARD
 
 ## Purpose
 `Caelum.Pages.EditorPage : Page` — the WinUI editor shell port of the WPF
@@ -17,7 +17,21 @@ deferred — toolbar annotation buttons are visual/inert until T7–T9.
   stacks `PdfPageControl`s; `RenderPageBgraAsync` → `SoftwareBitmapSource`
   assigned into `PageSource`. Debounced re-render on zoom/scroll via
   `DispatcherQueueTimer`s + `PdfRenderPolicy` scale/retention; working-set
-  trim assigns `PageSource = null` off-screen.
+  trim assigns `PageSource = null` off-screen. The baseline render
+  (`RenderPageInitialAsync`) multiplies `_zoomLevel` by
+  `XamlRoot.RasterizationScale` (fallback 1.0) so a >100% DPI monitor gets a
+  sharp first paint instead of a soft 1.0 raster until first zoom.
+- **Rename/rebase (`UpdateCurrentPdfPath`):** `DocumentOperationSession.Begin`
+  re-leases the renamed path but cancels every prior session lease — so
+  `RestartPendingDocumentPipelines()` immediately re-kicks thumbnail loads
+  (`_thumbnailPagesLoading.Clear()` + `TryLoadThumbnail` for null thumbs),
+  `KickViewportRender`, `InvalidateBookmarkCache` + `RefreshBookmarks`,
+  `RefreshOutlineCoreAsync` (fresh lease), and re-runs the visible
+  `PdfSearchTextBox` query. When the rename lands mid-load (`_pageControls`
+  empty but a load pending, `_completedLoadSessionId != _loadSessionId`) it
+  re-kicks `LoadPdfAsync(_currentPdfPath)` instead — otherwise the dead
+  lease would exit the load early and leave `LoadingOverlay` up forever.
+  No-op when released/inactive or nothing was ever loaded.
 - **Zoom:** `_zoomLevel` clamped `[0.25, 8]`, ±`0.1` step;
   `ZoomAroundPoint` keeps the viewport anchor stationary via one
   `ScrollViewer.ChangeView(offsets, zoomFactor)` (offsets are in scaled
@@ -40,14 +54,24 @@ deferred — toolbar annotation buttons are visual/inert until T7–T9.
   `Outline` (`TreeView` — binds `TreeViewNode.Content`, NOT the item itself;
   ItemInvoked/invoke-button jump guarded by `IsSidebarOutlineItemCurrent`),
   `Bookmarks` (`PageBookmarkService` toggle/list, BookmarkToggle in rail).
+  `UpdateBookmarkButton` runs on every `ViewChanged` — it reads the memoized
+  `_bookmarkPageIndexes` HashSet (`GetBookmarkPageIndexes`, keyed by
+  `_bookmarksCachePath`), never `PageBookmarkService.Load` per scroll tick;
+  `RefreshBookmarks` re-warms the cache, `InvalidateBookmarkCache` clears it
+  on load/rename.
 - **Navigation:** prev/next buttons, editable one-based `Editor.PageJump`
   TextBox (`ApplyPageJumpFromTextBox` — parse/clamp/validation message/
-  `JumpToPage`/`HidePageNumberTextBox`), PageUp/Down/Home/End/arrows,
+  `JumpToPage`/`EndPageJumpEdit` — renamed from the misleading
+  `HidePageNumberTextBox`; nothing hides, the box stays visible and re-syncs
+  to the live page), PageUp/Down/Home/End/arrows,
   thumbnail/outline/bookmark/search-result jumps all funnel to `JumpToPage`.
 - **Search:** Ctrl+F (page `PreviewKeyDown` + `MainWindow` window-level
   forward via `OpenSearchPanel`) opens `PdfSearchPanel`; `TextChanged`
   debounce → `GetPageTextInfoAsync` per page → `PdfSearchResult`s; select a
   result → `JumpToPage` + `SetPdfTextSelectionRects` highlight; status text.
+  Enter/F3 steps via `MovePdfSearchSelection` (sync — `SelectedIndex=`
+  synchronously raises `SelectionChanged`, which performs the jump; the old
+  `MovePdfSearchSelectionAsync` jumped twice).
 - **Context menu:** code-built `MenuFlyout` on `PdfScrollViewer.ContextFlyout`
   — Rotate current page (`RotatePageAsync` + reload + re-jump), Export current
   page PNG incl. 1× (`RenderPageBgraAsync` → PNG encode → save picker),
@@ -57,7 +81,14 @@ deferred — toolbar annotation buttons are visual/inert until T7–T9.
   `IsSidebarLoadCurrent`, `_loadSessionId`); `ShutdownEditor()` →
   `ReleaseResources` — cancels CTSs, stops timers, releases thumbs/pages,
   disposes `PdfService`. `MainWindow.CloseTab` calls it synchronously because
-  a collapsed Frame's page may never raise `Unloaded`.
+  a collapsed Frame's page may never raise `Unloaded`. CTS rotation is
+  **cancel-only** — a cancelled-but-unreferenced CTS is GC-collectible,
+  while `Cancel()`+immediate `Dispose()` races continuations that still
+  `token.Register` (ObjectDisposedException). `PdfService.DisposeAsync()` is
+  fire-and-forget but observed via `ContinueWith(OnlyOnFaulted)` so a fault
+  can't go unobserved to the GC. `RefreshLocalizedDocumentSidebar` and
+  `ApplyLocalizedSidebarLabels` share `ApplyLocalizedSidebarLabelText` (the
+  common 7-assignment block).
 - **UIA seams (DEBUG only):** `Editor.DebugSidebarNarrow` (forced narrow
   layout), `Editor.DebugCommitJump` (runs `ApplyPageJumpFromTextBox`),
   `Editor.DebugOpenSearch` (`OpenPdfSearch`), `Editor.DebugOpenContextMenu`

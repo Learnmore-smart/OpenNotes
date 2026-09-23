@@ -121,7 +121,8 @@ namespace Caelum.Pages
         private bool _languageChangedSubscribed;
 
         // ── Page jump ───────────────────────────────────────────────────────
-        private bool _isPageJumpInitializing = true;
+        private string _bookmarksCachePath;
+        private HashSet<int> _bookmarkPageIndexes = new();
         private bool _isPageJumpEditing;
         private bool _suppressPageJumpTextChanged;
         private string _pageJumpOpeningValue = "1";
@@ -140,12 +141,7 @@ namespace Caelum.Pages
 
         public EditorPage()
         {
-            try { InitializeComponent(); }
-            catch (Exception ex)
-            {
-                try { System.IO.File.WriteAllText(System.IO.Path.Combine(System.IO.Path.GetTempPath(), "editorpage_ctor_error.txt"), ex.ToString()); } catch { }
-                throw;
-            }
+            InitializeComponent();
             _pdfService = new PdfService(PdfiumRasterizerFactory.Shared);
             _applicationSettings = AppSettingsService.Load();
 
@@ -202,7 +198,58 @@ namespace Caelum.Pages
                 return;
             _currentPdfPath = newPath;
             SetCompatProbeText(newPath);
+            // Begin rebases every future lease to the renamed path but also
+            // cancels the previous session token — thumbnails, the outline
+            // refresh and an in-flight search die silently mid-flight. The
+            // document bytes are identical, so restart the pending pipelines
+            // against the new path.
             _documentOperationSession.Begin(_loadSessionId, newPath, _pdfService);
+            RestartPendingDocumentPipelines();
+        }
+
+        /// <summary>
+        /// Re-kicks every pipeline whose session lease was cancelled by a
+        /// path rebase (rename/move of the open document).
+        /// </summary>
+        private void RestartPendingDocumentPipelines()
+        {
+            if (!_isHostActive || _resourcesReleased)
+                return;
+
+            if (_pageControls.Count == 0)
+            {
+                // The rename raced the initial load: the in-flight load's
+                // lease is dead, so its post-await validation exits early
+                // and LoadingOverlay would stay up forever. Re-kick the
+                // load against the renamed path — LoadPdfAsync increments
+                // the session (retiring the stale load) and PdfService
+                // serializes document swaps on _lifetimeGate.
+                if (_completedLoadSessionId != _loadSessionId &&
+                    !string.IsNullOrWhiteSpace(_currentPdfPath))
+                {
+                    _ = LoadPdfAsync(_currentPdfPath);
+                }
+                return;
+            }
+
+            // All thumbnail leases were cancelled — the tracking set entries
+            // are stale (dead continuations remove them again in finally,
+            // which only risks a benign duplicate load).
+            _thumbnailPagesLoading.Clear();
+            foreach (var item in SidebarPageItems)
+                if (item.Thumbnail == null)
+                    TryLoadThumbnail(item);
+
+            KickViewportRender();
+            InvalidateBookmarkCache();
+            RefreshBookmarks();
+            _ = RefreshOutlineCoreAsync(CancellationToken.None, _loadSessionId, _currentPdfPath);
+
+            if (PdfSearchPanel?.Visibility == Visibility.Visible &&
+                !string.IsNullOrWhiteSpace(PdfSearchTextBox?.Text))
+            {
+                PdfSearchTextBox_TextChanged(PdfSearchTextBox, null);
+            }
         }
 
         private void EditorPage_Loaded(object sender, RoutedEventArgs e)
@@ -318,8 +365,10 @@ namespace Caelum.Pages
             var sessionId = Interlocked.Increment(ref _loadSessionId);
             _documentOperationSession.Begin(sessionId, filePath, _pdfService);
             using var operationLease = _documentOperationSession.Capture(sessionId, filePath, _pdfService);
+            // Cancel only — a cancelled-but-unreferenced CTS is collectible,
+            // while disposing it races in-flight continuations that still
+            // read or register on the token (ObjectDisposedException).
             _loadCts?.Cancel();
-            _loadCts?.Dispose();
             _loadCts = new CancellationTokenSource();
             var token = _loadCts.Token;
 
@@ -327,13 +376,12 @@ namespace Caelum.Pages
             _reRenderCts?.Cancel();
             _scrollReRenderCts?.Cancel();
             _thumbnailLoadCts?.Cancel();
-            _thumbnailLoadCts?.Dispose();
             _thumbnailLoadCts = new CancellationTokenSource();
             _pdfSearchCts?.Cancel();
             _lastRenderedDpiScale = 1.0;
             _pagesRenderedAtScale.Clear();
             _isPageJumpEditing = false;
-            _isPageJumpInitializing = true;
+            InvalidateBookmarkCache();
 
             try
             {
@@ -462,11 +510,15 @@ namespace Caelum.Pages
 
             try
             {
+                // DPI-aware baseline: match the zoom re-render path
+                // (ZoomRenderDebounceTimer_Tick) so a >100% monitor does not
+                // get a soft 1.0 raster until the first zoom.
+                double rasterScale = Math.Max(XamlRoot?.RasterizationScale ?? 1.0, 1.0);
                 double renderScale = PdfRenderPolicy.CalculateRenderScale(
                     CurrentPerformanceMode,
                     page.Width,
                     page.Height,
-                    1.0);
+                    Math.Max(_zoomLevel * rasterScale, 1.0));
                 var source = await RenderPageImageSourceAsync(page.PageIndex, renderScale, token);
                 if (source != null)
                 {
@@ -700,7 +752,6 @@ namespace Caelum.Pages
         {
             _scrollRenderDebounceTimer.Stop();
             _scrollReRenderCts?.Cancel();
-            _scrollReRenderCts?.Dispose();
             _scrollReRenderCts = new CancellationTokenSource();
             var token = _scrollReRenderCts.Token;
 
@@ -791,7 +842,6 @@ namespace Caelum.Pages
         {
             _zoomRenderDebounceTimer.Stop();
             _reRenderCts?.Cancel();
-            _reRenderCts?.Dispose();
             _reRenderCts = new CancellationTokenSource();
             var token = _reRenderCts.Token;
 
@@ -1013,7 +1063,7 @@ namespace Caelum.Pages
 
         private void PageNumberTextBox_TextChanged(object sender, TextChangedEventArgs e)
         {
-            if (!_isPageJumpInitializing && !_suppressPageJumpTextChanged)
+            if (!_suppressPageJumpTextChanged)
                 _isPageJumpEditing = true;
         }
 
@@ -1029,7 +1079,7 @@ namespace Caelum.Pages
                 if (PageNumberTextBox != null && !string.IsNullOrWhiteSpace(_pageJumpOpeningValue))
                     SetPageJumpText(_pageJumpOpeningValue);
                 ClearPageJumpValidationMessage();
-                HidePageNumberTextBox();
+                EndPageJumpEdit();
                 e.Handled = true;
             }
         }
@@ -1044,7 +1094,7 @@ namespace Caelum.Pages
         {
             if (_pageControls.Count == 0)
             {
-                HidePageNumberTextBox();
+                EndPageJumpEdit();
                 return;
             }
 
@@ -1070,10 +1120,15 @@ namespace Caelum.Pages
             }
 
             JumpToPage(requestedPage - 1);
-            HidePageNumberTextBox();
+            EndPageJumpEdit();
         }
 
-        private void HidePageNumberTextBox()
+        /// <summary>
+        /// Ends an in-progress page-jump edit and re-syncs the jump textbox
+        /// (and compat label) to the live current page. Historical name was
+        /// HidePageNumberTextBox — nothing is hidden; the box stays visible.
+        /// </summary>
+        private void EndPageJumpEdit()
         {
             _isPageJumpEditing = false;
             if (PageNumberTextBox != null && _pageControls.Count > 0)
@@ -1669,7 +1724,12 @@ namespace Caelum.Pages
                 return;
 
             SidebarBookmarkItems.Clear();
-            foreach (var bookmark in PageBookmarkService.Load(filePath ?? string.Empty))
+            var bookmarks = PageBookmarkService.Load(filePath ?? string.Empty);
+            // Warm the scroll-path cache — UpdateBookmarkButton reads it on
+            // every ViewChanged, so it must never hit the disk there.
+            _bookmarksCachePath = filePath ?? string.Empty;
+            _bookmarkPageIndexes = bookmarks.Select(b => b.PageIndex).ToHashSet();
+            foreach (var bookmark in bookmarks)
             {
                 SidebarBookmarkItems.Add(new SidebarBookmarkItem(
                     bookmark.PageIndex,
@@ -1681,13 +1741,35 @@ namespace Caelum.Pages
             UpdateBookmarkButton();
         }
 
+        /// <summary>
+        /// Memoized bookmark page-index set for the current document path.
+        /// ViewChanged calls this on every scroll frame — the underlying
+        /// PageBookmarkService.Load is synchronous file I/O, so it must not
+        /// run per scroll tick. RefreshBookmarks (toggle, insert, language
+        /// change) and InvalidateBookmarkCache (load/rename) keep it fresh.
+        /// </summary>
+        private HashSet<int> GetBookmarkPageIndexes()
+        {
+            string path = _currentPdfPath ?? string.Empty;
+            if (_bookmarksCachePath == null ||
+                !string.Equals(_bookmarksCachePath, path, StringComparison.OrdinalIgnoreCase))
+            {
+                _bookmarksCachePath = path;
+                _bookmarkPageIndexes = PageBookmarkService.Load(path)
+                    .Select(b => b.PageIndex).ToHashSet();
+            }
+            return _bookmarkPageIndexes;
+        }
+
+        private void InvalidateBookmarkCache() => _bookmarksCachePath = null;
+
         private void UpdateBookmarkButton()
         {
             if (BookmarkToggleButton == null)
                 return;
             int current = GetCurrentPageIndex();
-            bool bookmarked = PageBookmarkService.Load(_currentPdfPath)
-                .Any(bookmark => bookmark.PageIndex == current);
+            bool bookmarked = !string.IsNullOrWhiteSpace(_currentPdfPath) &&
+                GetBookmarkPageIndexes().Contains(current);
             BookmarkToggleButton.IsChecked = bookmarked;
             SetBookmarkButtonContent(bookmarked);
             ApplyStateAwareSidebarMetadata();
@@ -1945,7 +2027,11 @@ namespace Caelum.Pages
             PdfService.PdfPageTextInfo info, int startOffset, int endOffset)
             => Array.Empty<Rect>();
 
-        private async Task MovePdfSearchSelectionAsync(bool backwards)
+        /// <summary>
+        /// SelectionChanged fires synchronously on SelectedIndex and performs
+        /// the jump itself — an explicit second jump here navigated twice.
+        /// </summary>
+        private void MovePdfSearchSelection(bool backwards)
         {
             using var operationLease = CaptureDocumentOperationLease();
             if (!ValidateDocumentOperationLease(operationLease))
@@ -1955,19 +2041,16 @@ namespace Caelum.Pages
             int current = PdfSearchResultsListBox.SelectedIndex;
             int next = (current + (backwards ? -1 : 1) + _pdfSearchResults.Count) % _pdfSearchResults.Count;
             PdfSearchResultsListBox.SelectedIndex = next;
-            if (!ValidateDocumentOperationLease(operationLease))
-                return;
-            await JumpToPdfSearchResultAsync(_pdfSearchResults[next], operationLease);
         }
 
-        private async void PdfSearchTextBox_KeyDown(object sender, KeyRoutedEventArgs e)
+        private void PdfSearchTextBox_KeyDown(object sender, KeyRoutedEventArgs e)
         {
             if (e.Key == VirtualKey.Enter)
             {
                 e.Handled = true;
                 bool shift = InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Shift)
                     .HasFlag(Microsoft.UI.Input.VirtualKeyStates.Down);
-                await MovePdfSearchSelectionAsync(shift);
+                MovePdfSearchSelection(shift);
             }
             else if (e.Key == VirtualKey.Escape)
             {
@@ -2431,7 +2514,7 @@ namespace Caelum.Pages
                     e.Handled = true;
                     break;
                 case VirtualKey.F3:
-                    _ = MovePdfSearchSelectionAsync(backwards: shift);
+                    MovePdfSearchSelection(backwards: shift);
                     e.Handled = true;
                     break;
                 case VirtualKey.Escape:
@@ -2569,7 +2652,11 @@ namespace Caelum.Pages
             ApplyStateAwareSidebarMetadata();
         }
 
-        private void ApplyLocalizedSidebarLabels()
+        /// <summary>
+        /// Shared sidebar label block — both ApplyLocalizedSidebarLabels and
+        /// RefreshLocalizedDocumentSidebar need the same 7 assignments.
+        /// </summary>
+        private void ApplyLocalizedSidebarLabelText()
         {
             string pages = LocalizationService.Get("Editor.PagesTab");
             if (SidebarPagesLabel != null)
@@ -2586,6 +2673,11 @@ namespace Caelum.Pages
                 OutlineEmptyState.Text = LocalizationService.Get("Editor.NoDocumentLoaded");
             if (BookmarksEmptyState != null)
                 BookmarksEmptyState.Text = LocalizationService.Get("Editor.SidebarNoBookmarks");
+        }
+
+        private void ApplyLocalizedSidebarLabels()
+        {
+            ApplyLocalizedSidebarLabelText();
             SetToolbarMetadata(ToolbarItemsScrollViewer, "Editor.ToolbarOverflow", LocalizationService.Get("Editor.ToolbarScroll"));
             SetSidebarTab(_sidebarTab);
             ApplyStateAwareSidebarMetadata();
@@ -2615,20 +2707,7 @@ namespace Caelum.Pages
 
         private void RefreshLocalizedDocumentSidebar()
         {
-            if (SidebarPagesLabel != null)
-                SidebarPagesLabel.Text = LocalizationService.Get("Editor.PagesTab");
-            if (SidebarOutlineLabel != null)
-                SidebarOutlineLabel.Text = LocalizationService.Get("Editor.OutlineTab");
-            if (SidebarBookmarksLabel != null)
-                SidebarBookmarksLabel.Text = LocalizationService.Get("Editor.BookmarksTab");
-            if (SidebarTitleLabel != null)
-                SidebarTitleLabel.Text = LocalizationService.Get("Editor.PagesTab");
-            if (PagesEmptyState != null)
-                PagesEmptyState.Text = LocalizationService.Get("Editor.NoDocumentLoaded");
-            if (OutlineEmptyState != null)
-                OutlineEmptyState.Text = LocalizationService.Get("Editor.NoDocumentLoaded");
-            if (BookmarksEmptyState != null)
-                BookmarksEmptyState.Text = LocalizationService.Get("Editor.SidebarNoBookmarks");
+            ApplyLocalizedSidebarLabelText();
 
             foreach (var page in SidebarPageItems)
                 page.PageLabel = LocalizationService.Format("Editor.PageNumber", page.PageIndex + 1);
@@ -2756,9 +2835,14 @@ namespace Caelum.Pages
             _documentOperationSession.Cancel();
 
             // PdfService owns the rasterizer/document; async-dispose is
-            // fire-and-forget on teardown (the tab is leaving the tree).
+            // fire-and-forget on teardown (the tab is leaving the tree) but
+            // failures must still be observed — an unobserved fault can take
+            // down the process on a GC pass.
             var service = _pdfService;
-            _ = service.DisposeAsync().AsTask();
+            _ = service.DisposeAsync().AsTask().ContinueWith(
+                t => System.Diagnostics.Debug.WriteLine(
+                    $"[EditorPage] PdfService.DisposeAsync faulted: {t.Exception}"),
+                TaskContinuationOptions.OnlyOnFaulted);
 
             ReleaseThumbnailCache();
             _pageControls.Clear();
