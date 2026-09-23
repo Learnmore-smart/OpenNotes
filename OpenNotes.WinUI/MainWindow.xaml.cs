@@ -381,8 +381,10 @@ namespace Caelum
         /// <summary>
         /// Closes a tab and drops its Frame. The WPF version runs the editor
         /// save/release workflow first; that protocol arrives with the editor
-        /// port (Task 9) — a tab close here can never strand a dirty document
-        /// because editor tabs do not exist yet.
+        /// port (Task 9). Task 6 already requires a deterministic shutdown:
+        /// the editor's document session, render queues and PdfService must
+        /// be cancelled/disposed here rather than waiting on Unloaded (a
+        /// collapsed Frame's page may never raise it).
         /// </summary>
         private void CloseTab(AppTab tab)
         {
@@ -391,6 +393,7 @@ namespace Caelum
 
             if (tab.Frame != null)
             {
+                (tab.Frame.Content as EditorPage)?.ShutdownEditor();
                 tab.Frame.Navigated -= Frame_Navigated;
                 TabContentArea.Children.Remove(tab.Frame);
                 // Release the page tree now — the WPF port keeps the Frame
@@ -1116,6 +1119,14 @@ namespace Caelum
             else if (e.Key == VirtualKey.W && _tabs.Count > 0)
             {
                 CloseTab(_activeTab);
+                e.Handled = true;
+            }
+            else if (e.Key == VirtualKey.F && ActiveFrame?.Content is EditorPage editor)
+            {
+                // Ctrl+F must reach the editor regardless of which chrome
+                // element currently holds focus (the WPF shell treats it as a
+                // window-level accelerator).
+                editor.OpenSearchPanel();
                 e.Handled = true;
             }
             else if (e.Key == VirtualKey.Tab && _tabs.Count > 1)

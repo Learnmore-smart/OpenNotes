@@ -109,10 +109,21 @@
 - Create: `OpenNotes.WinUI/Pages/EditorPage.xaml(.cs)` — port the layout: `PdfScrollViewer` + centered `PagesContainer`, floating toolbar, `DocumentSidebar` overlay (Pages/Outline/Bookmarks, collapse rail, **including the 5.2.15 content-offset fix**), page-jump navigator, `PdfSearchPanel`, loading overlay
 - Create: `OpenNotes.WinUI/Controls/PdfPageControl.xaml(.cs)` — page frame: `PdfImage` (+overlay), `ImageOverlayCanvas`, `TextOverlayCanvas`, `HighlightsCanvas`, `PdfTextSelectionCanvas`, `SelectionOverlayCanvas`, `HiddenInkCanvas`, `EraserCanvas`, `LaserInkCanvas`, `ShapePreviewCanvas` — minus WPF `InkCanvas` (replaced by Task 7 ink surface)
 
-- [ ] **Step 1:** Load PDF via Core `PdfService`+`IPdfRasterizer`; pages stack renders bitmaps at DIP scale; scroll/zoom transform parity.
-- [ ] **Step 2:** Sidebar rail + content offset (228-DIP rule), narrow auto-collapse (≤375), thumbnails from rasterizer.
-- [ ] **Step 3:** Toolbar buttons present with ported `LucideIcon` (WinUI `PathIcon`/geometry), AutomationIds preserved.
-- [ ] **Step 4: Commit.**
+- [x] **Step 1:** Load PDF via Core `PdfService`+`IPdfRasterizer`; pages stack renders bitmaps at DIP scale; scroll/zoom transform parity.
+- [x] **Step 2:** Sidebar rail + content offset (228-DIP rule), narrow auto-collapse (≤375), thumbnails from rasterizer.
+- [x] **Step 3:** Toolbar buttons present with ported `LucideIcon` (WinUI `PathIcon`/geometry), AutomationIds preserved.
+- [x] **Step 4: Commit.**
+
+**As implemented (2026-09-23):**
+- BGRA path: `PdfService.RenderPageBgraAsync` → `SoftwareBitmapSource` assigned to `PdfPageControl.PageSource` (no WinForms/BitmapSource host); debounced re-render on zoom/scroll via `DispatcherQueueTimer`s + `PdfRenderPolicy` scale/retention + working-set trim (`PageSource = null` reclaim). Zoom is `ZoomAroundPoint` → one `ScrollViewer.ChangeView(offsets, zoomFactor)` (offsets are in scaled content coords) — the WinUI equivalent of WPF's UpdateLayout+ScrollTo pair; `ZoomLabel` text AND accessible name = `NN%`.
+- Sidebar: expanded `PagesContainer.Margin.Left = 228` DIP, collapsed `32`, auto-collapse ≤375 DIP (`SidebarNarrowAutoCollapseWidth`); three tabs — Pages thumbnail `ListView` (+lazy thumbs, selection↔scroll sync), Outline `TreeView` (binds `TreeViewNode.Content` — direct item binding crashes `WinRT.IInspectable`), Bookmarks (`PageBookmarkService`).
+- Toolbar: all WPF AutomationIds preserved; `LucideIcon` subclasses `Path` with its own M/L/H/V/A/Z SVG-path parser — `XamlReader.Load` cannot re-enter during page XAML load, and `Geometry` instances are per-icon (sharing crashes).
+- UIA plumbing: WinUI `Grid`/`StackPanel`/`Border` create no AutomationPeer → `Controls/UiaPanels.cs` (`UiaStackPanel`/`UiaGrid`/`UiaContentControl`) hosts the container ids (`PagesContainer`, `DocumentSidebar`, `PdfSearchPanel`, `Editor.PageJumpGroup`). Sidebar lists are `ListView`, never `ListBox` (`ListViewItemPresenter` inside `ListBoxItem` stow-crashes).
+- DEBUG-only seams (`Editor.DebugSidebarNarrow`, `DebugCommitJump`, `DebugOpenSearch`, `DebugOpenContextMenu`) + `pages-margin-left`/`current-page` HelpText probes exist because the smoke session cannot deliver OS input; they call the identical handlers.
+- `MainWindow`: `CloseTab` → `EditorPage.ShutdownEditor()` (deterministic session/render/PdfService teardown — a collapsed Frame's page may never raise `Unloaded`); window-level Ctrl+F → `OpenSearchPanel`. csproj gains `PdfiumViewer.Native.x86_64.v8-xfa` for `x64\pdfium.dll`.
+- Search: `GetPageTextInfoAsync` per page → results list → jump + `SetPdfTextSelectionRects` highlight. Context menu: rotate (`RotatePageAsync`+reload), export current-page PNG incl. 1×, insert/delete/duplicate/reorder/print entries.
+- **Deferred (inert/visual-only until T7–T9):** ink canvas + pen/eraser/shape/laser/ruler/select/text tools (T7); text/sticky/image overlays + persistent PDF text selection (T8); save/autosave/dirty-close/version-history/settings (T9); Undo/Redo buttons inert.
+- Verification: `tools/winui-editor-smoke.ps1` (new) 60/60 — ids, margins 228/32/narrow, nav, zoom 110%, search BRAVO, context items, tab-close survival.
 
 ## Task 7: Custom ink engine (replaces WPF InkCanvas)
 

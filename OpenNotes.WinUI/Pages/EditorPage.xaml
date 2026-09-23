@@ -1,30 +1,927 @@
-<Page
-    x:Class="Caelum.Pages.EditorPage"
-    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+<Page x:Class="Caelum.Pages.EditorPage"
+      xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+      xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+      xmlns:controls="using:Caelum.Controls"
+      xmlns:pages="using:Caelum.Pages"
+      xmlns:primitives="using:Microsoft.UI.Xaml.Controls.Primitives"
+      Background="{ThemeResource ThemeWindowBrush}"
+      SizeChanged="EditorPage_SizeChanged"
+      PreviewKeyDown="EditorPage_PreviewKeyDown">
+
     <!--
-        Task 5 stub editor: proves the HomePage → EditorPage navigation path
-        end to end (WPF parity for NavigateActiveTabToFile). The real editor
-        surface lands with the Task 6 port.
+        V6 WinUI port of WPF Pages/EditorPage.xaml, Task 6 scope:
+        document layout, scroll/zoom, toolbar chrome, three-tab sidebar,
+        search panel and the loading overlay.
+
+        Deferred ports are marked T7 (ink/pen/ruler/eraser/shape/laser),
+        T8 (text/select/sticky annotations + search-bound highlights),
+        T9 (page ops: insert-gap affordances, delete buttons, thumbnail
+        drag-reorder, save/version pipeline).
+        The WPF SelectablePdfContainer / WindowsFormsHost surface is not
+        ported: WinForms cannot be hosted in WinUI.
     -->
-    <Grid Background="{ThemeResource ThemeWorkspaceBrush}">
-        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="560">
-            <FontIcon Glyph="&#xE8A5;" FontSize="32" Foreground="{ThemeResource ThemeAccentBrush}"
-                      HorizontalAlignment="Center" Margin="0,0,0,12"/>
-            <TextBlock x:Name="EditorTitleTextBlock"
-                       AutomationProperties.AutomationId="EditorPageTitle"
-                       FontSize="20" FontWeight="SemiBold"
+
+    <Page.Resources>
+        <!-- Toolbar button (WPF ToolbarButtonStyle). -->
+        <Style x:Key="ToolbarButtonStyle" TargetType="Button">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Foreground" Value="{ThemeResource ThemeTextBrush}"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding" Value="8,6"/>
+            <Setter Property="MinWidth" Value="32"/>
+            <Setter Property="MinHeight" Value="32"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Root" Background="{TemplateBinding Background}" CornerRadius="8" Padding="{TemplateBinding Padding}">
+                            <VisualStateManager.VisualStateGroups>
+                                <VisualStateGroup x:Name="CommonStates">
+                                    <VisualState x:Name="Normal"/>
+                                    <VisualState x:Name="PointerOver">
+                                        <VisualState.Setters>
+                                            <Setter Target="Root.Background" Value="{ThemeResource ThemeControlHoverBrush}"/>
+                                        </VisualState.Setters>
+                                    </VisualState>
+                                    <VisualState x:Name="Pressed">
+                                        <VisualState.Setters>
+                                            <Setter Target="Root.Background" Value="{ThemeResource ThemeControlPressedBrush}"/>
+                                        </VisualState.Setters>
+                                    </VisualState>
+                                    <VisualState x:Name="Disabled">
+                                        <VisualState.Setters>
+                                            <Setter Target="Root.Opacity" Value="0.55"/>
+                                        </VisualState.Setters>
+                                    </VisualState>
+                                </VisualStateGroup>
+                            </VisualStateManager.VisualStateGroups>
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Undo/redo: icon colour reflects enabled state (WPF UndoRedoButtonStyle). -->
+        <Style x:Key="UndoRedoButtonStyle" TargetType="Button" BasedOn="{StaticResource ToolbarButtonStyle}">
+            <Setter Property="Foreground" Value="{ThemeResource ThemeForegroundBrush}"/>
+        </Style>
+
+        <!-- Toolbar toggle button (WPF ToolbarToggleButtonStyle) with the
+             bottom accent bar on Checked. -->
+        <Style x:Key="ToolbarToggleButtonStyle" TargetType="ToggleButton">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Foreground" Value="{ThemeResource ThemeTextBrush}"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding" Value="8,6"/>
+            <Setter Property="MinWidth" Value="32"/>
+            <Setter Property="MinHeight" Value="32"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ToggleButton">
+                        <Grid>
+                            <Border x:Name="Root" Background="{TemplateBinding Background}" CornerRadius="8" Padding="{TemplateBinding Padding}">
+                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Border>
+                            <Border x:Name="ActiveBar" Background="{ThemeResource ThemeAccentBrush}" Height="3" VerticalAlignment="Bottom"
+                                    HorizontalAlignment="Stretch" CornerRadius="1.5"
+                                    Margin="6,0,6,2" Visibility="Collapsed"/>
+                            <VisualStateManager.VisualStateGroups>
+                                <VisualStateGroup x:Name="CommonStates">
+                                    <VisualState x:Name="Normal"/>
+                                    <VisualState x:Name="PointerOver">
+                                        <VisualState.Setters>
+                                            <Setter Target="Root.Background" Value="{ThemeResource ThemeControlHoverBrush}"/>
+                                        </VisualState.Setters>
+                                    </VisualState>
+                                    <VisualState x:Name="Pressed">
+                                        <VisualState.Setters>
+                                            <Setter Target="Root.Background" Value="{ThemeResource ThemeControlPressedBrush}"/>
+                                        </VisualState.Setters>
+                                    </VisualState>
+                                    <VisualState x:Name="Disabled">
+                                        <VisualState.Setters>
+                                            <Setter Target="Root.Opacity" Value="0.55"/>
+                                        </VisualState.Setters>
+                                    </VisualState>
+                                </VisualStateGroup>
+                                <VisualStateGroup x:Name="CheckStates">
+                                    <VisualState x:Name="Checked">
+                                        <VisualState.Setters>
+                                            <Setter Target="Root.Background" Value="{ThemeResource ThemeSelectionBrush}"/>
+                                            <Setter Target="ActiveBar.Visibility" Value="Visible"/>
+                                        </VisualState.Setters>
+                                    </VisualState>
+                                    <VisualState x:Name="Unchecked"/>
+                                    <VisualState x:Name="Indeterminate"/>
+                                </VisualStateGroup>
+                            </VisualStateManager.VisualStateGroups>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="ToolbarSeparatorStyle" TargetType="Border">
+            <Setter Property="Width" Value="1"/>
+            <Setter Property="Height" Value="20"/>
+            <Setter Property="Margin" Value="6,0"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Background" Value="{ThemeResource ThemeMenuSeparatorBrush}"/>
+        </Style>
+
+        <!-- Document rail nav button. Selection state is applied from
+             ApplySidebarButtonState (background/border/weight + the cue
+             inside the content), the WinUI replacement for WPF's Tag
+             trigger. -->
+        <Style x:Key="DocumentSidebarNavButtonStyle" TargetType="Button">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderBrush" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Foreground" Value="{ThemeResource ThemeForegroundBrush}"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Padding" Value="3"/>
+            <Setter Property="HorizontalContentAlignment" Value="Center"/>
+            <Setter Property="MinWidth" Value="32"/>
+            <Setter Property="MinHeight" Value="54"/>
+            <Setter Property="Margin" Value="1"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="NavRoot"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="8"
+                                Padding="{TemplateBinding Padding}">
+                            <VisualStateManager.VisualStateGroups>
+                                <VisualStateGroup x:Name="CommonStates">
+                                    <VisualState x:Name="Normal"/>
+                                    <VisualState x:Name="PointerOver">
+                                        <VisualState.Setters>
+                                            <Setter Target="NavRoot.Background" Value="{ThemeResource ThemeControlHoverBrush}"/>
+                                        </VisualState.Setters>
+                                    </VisualState>
+                                    <VisualState x:Name="Pressed">
+                                        <VisualState.Setters>
+                                            <Setter Target="NavRoot.Background" Value="{ThemeResource ThemeControlPressedBrush}"/>
+                                        </VisualState.Setters>
+                                    </VisualState>
+                                </VisualStateGroup>
+                            </VisualStateManager.VisualStateGroups>
+                            <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" VerticalAlignment="Center"/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Sidebar list items (thumbnails + bookmarks): ListViewItemPresenter
+             driven template so native selection/hover visuals stay themed. -->
+        <Style x:Key="DocumentSidebarListBoxItemStyle" TargetType="ListViewItem">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderBrush" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Foreground" Value="{ThemeResource ThemeForegroundBrush}"/>
+            <Setter Property="Padding" Value="4"/>
+            <Setter Property="Margin" Value="2"/>
+            <Setter Property="MinHeight" Value="32"/>
+            <Setter Property="CornerRadius" Value="8"/>
+            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ListViewItem">
+                        <ListViewItemPresenter
+                            ContentTransitions="{TemplateBinding ContentTransitions}"
+                            Control.IsTemplateFocusTarget="True"
+                            Foreground="{TemplateBinding Foreground}"
+                            Background="{TemplateBinding Background}"
+                            BorderBrush="{TemplateBinding BorderBrush}"
+                            BorderThickness="{TemplateBinding BorderThickness}"
+                            ContentMargin="{TemplateBinding Padding}"
+                            HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}"
+                            VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}"
+                            MinWidth="{TemplateBinding MinWidth}"
+                            MinHeight="{TemplateBinding MinHeight}"
+                            MaxWidth="{TemplateBinding MaxWidth}"
+                            MaxHeight="{TemplateBinding MaxHeight}"
+                            CornerRadius="{TemplateBinding CornerRadius}"
+                            CheckMode="Inline"
+                            SelectionCheckMarkVisualEnabled="False"
+                            PointerOverBackground="{ThemeResource ThemeControlHoverBrush}"
+                            PressedBackground="{ThemeResource ThemeControlPressedBrush}"
+                            SelectedBackground="{ThemeResource ThemeSelectionBrush}"
+                            SelectedForeground="{ThemeResource ThemeForegroundBrush}"
+                            SelectedPointerOverBackground="{ThemeResource ThemeSelectionBrush}"
+                            SelectedPressedBackground="{ThemeResource ThemeControlPressedBrush}"/>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="ModernTextBox" TargetType="TextBox">
+            <Setter Property="Background" Value="{ThemeResource ThemeControlBrush}"/>
+            <Setter Property="Foreground" Value="{ThemeResource ThemeTextBrush}"/>
+            <Setter Property="BorderBrush" Value="{ThemeResource ThemeBorderBrush}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="8,5"/>
+            <Setter Property="MinHeight" Value="28"/>
+            <Setter Property="FontSize" Value="13"/>
+        </Style>
+
+        <Style x:Key="ModernListBox" TargetType="ListView">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Foreground" Value="{ThemeResource ThemeTextBrush}"/>
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled"/>
+            <Setter Property="ItemContainerStyle" Value="{StaticResource DocumentSidebarListBoxItemStyle}"/>
+        </Style>
+
+        <DataTemplate x:Key="SidebarPageItemTemplate" x:DataType="pages:SidebarPageItem">
+            <StackPanel Margin="2"
+                        AutomationProperties.AutomationId="{x:Bind AutomationId, Mode=OneTime}"
+                        AutomationProperties.Name="{x:Bind PageLabel, Mode=OneTime}">
+                <Border CornerRadius="6" Background="{ThemeResource ThemeSurfaceBrush}" BorderBrush="{ThemeResource ThemeBorderBrush}" BorderThickness="1" Margin="2" Padding="2" HorizontalAlignment="Center">
+                    <Image Width="132"
+                           Height="170"
+                           Stretch="Uniform"
+                           Loaded="ThumbnailImage_Loaded"
+                           Source="{x:Bind Thumbnail, Mode=OneWay}"/>
+                </Border>
+                <TextBlock x:Name="PageLabelText"
+                           Text="{x:Bind PageLabel, Mode=OneWay}"
+                           HorizontalAlignment="Center"
+                           Margin="0,4,0,2"
+                           Foreground="{x:Bind LabelForeground, Mode=OneWay}"
+                           FontWeight="{x:Bind LabelFontWeight, Mode=OneWay}"
+                           FontSize="12"
+                           TextTrimming="CharacterEllipsis"/>
+            </StackPanel>
+        </DataTemplate>
+
+        <DataTemplate x:Key="SidebarBookmarkItemTemplate" x:DataType="pages:SidebarBookmarkItem">
+            <TextBlock Text="{x:Bind Label, Mode=OneTime}"
                        Foreground="{ThemeResource ThemeForegroundBrush}"
-                       HorizontalAlignment="Center" TextTrimming="CharacterEllipsis"/>
-            <TextBlock x:Name="EditorPathTextBlock"
+                       TextTrimming="CharacterEllipsis"
+                       VerticalAlignment="Center"/>
+        </DataTemplate>
+
+        <!-- WinUI TreeView applies ItemTemplate to each node's Content; the
+             hierarchy itself is built in code (TreeViewNode.Children). -->
+        <DataTemplate x:Key="SidebarOutlineItemTemplate">
+            <Grid MinHeight="32">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="{Binding Content.Title}"
+                           AutomationProperties.AutomationId="{Binding Content.AutomationId}"
+                           AutomationProperties.Name="{Binding Content.Title}"
+                           Foreground="{ThemeResource ThemeForegroundBrush}"
+                           TextTrimming="CharacterEllipsis"
+                           VerticalAlignment="Center"/>
+                <Button Grid.Column="1"
+                        Width="32"
+                        Height="32"
+                        MinWidth="32"
+                        MinHeight="32"
+                        Margin="4,0,0,0"
+                        Padding="6"
+                        Style="{StaticResource ToolbarButtonStyle}"
+                        IsTabStop="True"
+                        Tag="{Binding Content.PageIndex}"
+                        AutomationProperties.AutomationId="{Binding Content.InvokeAutomationId}"
+                        AutomationProperties.Name="{Binding Content.PageLabel}"
+                        Click="OutlineInvokeButton_Click">
+                    <Path Width="14"
+                          Height="14"
+                          Stretch="Uniform"
+                          Stroke="{ThemeResource ThemeForegroundBrush}"
+                          StrokeThickness="1.6"
+                          StrokeStartLineCap="Round"
+                          StrokeEndLineCap="Round"
+                          Data="M3,12 L12,3 M5,3 H12 V10"/>
+                </Button>
+            </Grid>
+        </DataTemplate>
+
+    </Page.Resources>
+
+    <Grid x:Name="EditorRootGrid">
+        <!-- PDF Pages Container (full area). ZoomMode=Enabled gives the WPF
+             LayoutTransform equivalent: the ScrollViewer scales its content
+             and exposes ChangeView(offsetX, offsetY, zoom) so zoom anchoring
+             math stays exact. Ctrl+wheel is intercepted in code-behind to
+             keep the 0.1 step contract; pinch uses the native zoom. -->
+        <ScrollViewer x:Name="PdfScrollViewer" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
+                      Background="{ThemeResource ThemeWorkspaceBackdropBrush}"
+                      ZoomMode="Enabled" MinZoomFactor="0.25" MaxZoomFactor="8"
+                      ViewChanged="PdfScrollViewer_ViewChanged">
+            <!-- PointerWheelChanged lives on the content, not the
+                 ScrollViewer: bubbling reaches the pages before the
+                 ScrollViewer element, so marking Ctrl+wheel handled here
+                 suppresses the native zoom step and keeps the 0.1 contract. -->
+            <controls:UiaStackPanel x:Name="PagesContainer" Margin="32,20,32,32" HorizontalAlignment="Center"
+                        Background="{ThemeResource ThemePaperBrush}"
+                        PointerWheelChanged="PagesContainer_PointerWheelChanged"
+                        AutomationProperties.AutomationId="PagesContainer"/>
+        </ScrollViewer>
+
+        <!-- T7: on-screen ruler overlay. Viewport-anchored (never moves with
+             the document) and spans across pages. -->
+        <Canvas x:Name="RulerOverlayCanvas"/>
+
+        <!-- Floating Toolbar -->
+        <Border x:Name="ToolbarBorder" HorizontalAlignment="Center" VerticalAlignment="Top"
+                Margin="0,12,0,0" Padding="8,4" CornerRadius="14"
+                Background="{ThemeResource ThemeToolbarBrush}"
+                BorderBrush="{ThemeResource ThemeBorderBrush}"
+                BorderThickness="1" Translation="0,0,16">
+            <Border.Shadow>
+                <ThemeShadow/>
+            </Border.Shadow>
+            <Grid x:Name="ToolbarOverlayGrid">
+                <ScrollViewer x:Name="ToolbarItemsScrollViewer"
+                              HorizontalScrollBarVisibility="Auto"
+                              VerticalScrollBarVisibility="Hidden"
+                              AutomationProperties.AutomationId="Editor.ToolbarOverflow">
+                    <StackPanel Orientation="Horizontal" Height="42">
+                        <!-- Undo (T7/T8: disabled until the undo pipeline lands) -->
+                        <Button x:Name="UndoButton" Click="UndoButton_Click"
+                                Style="{StaticResource UndoRedoButtonStyle}"
+                                Width="36" Height="36" Margin="1,0" IsEnabled="False"
+                                AutomationProperties.AutomationId="Editor.UndoButton">
+                            <controls:LucideIcon Kind="Undo2" Width="18" Height="18"
+                                                 Stroke="{ThemeResource ThemeForegroundBrush}"/>
+                        </Button>
+
+                        <!-- Redo -->
+                        <Button x:Name="RedoButton" Click="RedoButton_Click"
+                                Style="{StaticResource UndoRedoButtonStyle}"
+                                Width="36" Height="36" Margin="1,0" IsEnabled="False"
+                                AutomationProperties.AutomationId="Editor.RedoButton">
+                            <controls:LucideIcon Kind="Redo2" Width="18" Height="18"
+                                                 Stroke="{ThemeResource ThemeForegroundBrush}"/>
+                        </Button>
+
+                        <!-- Separator -->
+                        <Border Style="{StaticResource ToolbarSeparatorStyle}"/>
+
+                        <!-- Pen (T7: toggle-visual only) -->
+                        <ToggleButton x:Name="PenToolButton" Click="ToolButton_Click"
+                                      Style="{StaticResource ToolbarToggleButtonStyle}"
+                                      Width="36" Height="36" Margin="1,0"
+                                      AutomationProperties.AutomationId="Editor.PenToolButton">
+                            <Grid Width="22" Height="22">
+                                <controls:LucideIcon x:Name="PenIcon" Kind="PenLine" Width="18" Height="18"
+                                                     Stroke="{ThemeResource ThemeForegroundBrush}"/>
+                                <Border x:Name="PenColorIndicator"
+                                        Width="12" Height="2.5"
+                                        VerticalAlignment="Bottom"
+                                        CornerRadius="1.25"
+                                        Background="#000000"/>
+                            </Grid>
+                        </ToggleButton>
+
+                        <!-- Highlighter (T7) -->
+                        <ToggleButton x:Name="HighlighterToolButton" Click="ToolButton_Click"
+                                      Style="{StaticResource ToolbarToggleButtonStyle}"
+                                      Width="36" Height="36" Margin="1,0"
+                                      AutomationProperties.AutomationId="Editor.HighlighterToolButton">
+                            <Grid Width="22" Height="22">
+                                <controls:LucideIcon x:Name="HighlighterIcon" Kind="Highlighter" Width="18" Height="18"
+                                                     Stroke="{ThemeResource ThemeForegroundBrush}"/>
+                                <Border x:Name="HighlighterColorIndicator"
+                                        Width="12" Height="2.5"
+                                        VerticalAlignment="Bottom"
+                                        CornerRadius="1.25"
+                                        Background="#8CFFFF00"/>
+                            </Grid>
+                        </ToggleButton>
+
+                        <!-- Study mode: freehand opaque mask (T7). The
+                             "HiddenInkToolButton" AutomationId has no Editor.
+                             prefix in the pinned WPF contract — keep it. -->
+                        <ToggleButton x:Name="HiddenInkToolButton" Click="ToolButton_Click"
+                                      Style="{StaticResource ToolbarToggleButtonStyle}"
+                                      Width="36" Height="36" Margin="1,0"
+                                      AutomationProperties.AutomationId="HiddenInkToolButton">
+                            <controls:LucideIcon x:Name="HiddenInkIcon" Kind="HiddenInkReveal" Width="18" Height="18"
+                                                 Stroke="{ThemeResource ThemeForegroundBrush}"/>
+                        </ToggleButton>
+
+                        <!-- Sticky note (T8) -->
+                        <ToggleButton x:Name="StickyNoteToolButton" Click="ToolButton_Click"
+                                      Style="{StaticResource ToolbarToggleButtonStyle}"
+                                      Width="36" Height="36" Margin="1,0"
+                                      AutomationProperties.AutomationId="Editor.StickyNoteToolButton">
+                            <controls:LucideIcon Kind="StickyNote" Width="18" Height="18"
+                                                 Stroke="{ThemeResource ThemeForegroundBrush}"/>
+                        </ToggleButton>
+
+                        <!-- Eraser (T7) -->
+                        <ToggleButton x:Name="EraserToolButton" Click="ToolButton_Click"
+                                      Style="{StaticResource ToolbarToggleButtonStyle}"
+                                      Width="36" Height="36" Margin="1,0"
+                                      AutomationProperties.AutomationId="Editor.EraserToolButton">
+                            <controls:LucideIcon Kind="Eraser" x:Name="EraserIcon" Width="18" Height="18"
+                                                 Stroke="{ThemeResource ThemeForegroundBrush}"/>
+                        </ToggleButton>
+
+                        <!-- Shape (T7) -->
+                        <ToggleButton x:Name="ShapeToolButton" Click="ToolButton_Click"
+                                      Style="{StaticResource ToolbarToggleButtonStyle}"
+                                      Width="36" Height="36" Margin="1,0"
+                                      AutomationProperties.AutomationId="Editor.ShapeToolButton">
+                            <controls:LucideIcon x:Name="ShapeIcon" Kind="Shapes" Width="18" Height="18"
+                                                 Stroke="{ThemeResource ThemeForegroundBrush}"/>
+                        </ToggleButton>
+
+                        <!-- Laser pointer (T7) -->
+                        <ToggleButton x:Name="LaserToolButton" Click="ToolButton_Click"
+                                      Style="{StaticResource ToolbarToggleButtonStyle}"
+                                      Width="36" Height="36" Margin="1,0"
+                                      AutomationProperties.AutomationId="Editor.LaserToolButton">
+                            <controls:LucideIcon x:Name="LaserIcon" Kind="Laser" Width="18" Height="18"
+                                                 Stroke="{ThemeResource ThemeForegroundBrush}"/>
+                        </ToggleButton>
+
+                        <!-- On-screen ruler toggle (T7). -->
+                        <ToggleButton x:Name="RulerToolButton" Click="ToolButton_Click"
+                                      Style="{StaticResource ToolbarToggleButtonStyle}"
+                                      Width="36" Height="36" Margin="1,0"
+                                      AutomationProperties.AutomationId="Editor.RulerToolButton">
+                            <controls:LucideIcon x:Name="RulerIcon" Kind="Ruler" Width="18" Height="18"
+                                                 Stroke="{ThemeResource ThemeForegroundBrush}"/>
+                        </ToggleButton>
+
+                        <!-- Reserve the toolbar midpoint for the centered page navigator. -->
+                        <Border x:Name="PageJumpReservedSpace"
+                                Width="144"
+                                Height="36"
+                                Margin="1,0"
+                                Background="Transparent"
+                                IsHitTestVisible="False"/>
+
+                        <!-- Select (T8) -->
+                        <ToggleButton x:Name="SelectToolButton" Click="ToolButton_Click"
+                                      Style="{StaticResource ToolbarToggleButtonStyle}"
+                                      Width="36" Height="36" Margin="1,0"
+                                      AutomationProperties.AutomationId="Editor.SelectToolButton">
+                            <controls:LucideIcon x:Name="SelectIcon" Kind="MousePointer2" Width="18" Height="18"
+                                                 Stroke="{ThemeResource ThemeForegroundBrush}"/>
+                        </ToggleButton>
+
+                        <Border Style="{StaticResource ToolbarSeparatorStyle}"/>
+
+                        <!-- Text (T8) -->
+                        <ToggleButton x:Name="TextToolButton" Click="ToolButton_Click"
+                                      Style="{StaticResource ToolbarToggleButtonStyle}"
+                                      Width="36" Height="36" Margin="1,0"
+                                      AutomationProperties.AutomationId="Editor.TextToolButton">
+                            <controls:LucideIcon Kind="Type" Width="18" Height="18"
+                                                 Stroke="{ThemeResource ThemeForegroundBrush}"/>
+                        </ToggleButton>
+
+                        <!-- Save (T9: save pipeline not ported yet — disabled) -->
+                        <Button x:Name="SavePdfButton"
+                                Style="{StaticResource ToolbarButtonStyle}"
+                                Width="36" Height="36" Margin="1,0" IsEnabled="False"
+                                AutomationProperties.AutomationId="Editor.SavePdfButton">
+                            <controls:LucideIcon Kind="Save" Width="18" Height="18"
+                                                 Stroke="{ThemeResource ThemeForegroundBrush}"/>
+                        </Button>
+
+                        <!-- Version History (T9) -->
+                        <Button x:Name="VersionHistoryButton"
+                                Style="{StaticResource ToolbarButtonStyle}"
+                                Width="36" Height="36" Margin="1,0" IsEnabled="False"
+                                AutomationProperties.AutomationId="Editor.VersionHistoryButton">
+                            <controls:LucideIcon Kind="History" Width="18" Height="18"
+                                                 Stroke="{ThemeResource ThemeForegroundBrush}"/>
+                        </Button>
+
+                        <!-- Separator -->
+                        <Border Style="{StaticResource ToolbarSeparatorStyle}"/>
+
+                        <!-- Pen-only drawing / palm rejection (T7: visual toggle) -->
+                        <ToggleButton x:Name="PenOnlyButton" Click="PenOnlyButton_Click"
+                                      Style="{StaticResource ToolbarToggleButtonStyle}"
+                                      Width="36" Height="36" Margin="1,0"
+                                      AutomationProperties.AutomationId="Editor.PenOnlyButton">
+                            <controls:LucideIcon x:Name="PenOnlyIcon" Kind="PenLine" Width="18" Height="18"
+                                                 Stroke="{ThemeResource ThemeForegroundBrush}"/>
+                        </ToggleButton>
+
+                        <!-- Zoom Out -->
+                        <Button x:Name="ZoomOutButton" Click="ZoomOutButton_Click"
+                                Style="{StaticResource ToolbarButtonStyle}"
+                                Width="36" Height="36" Margin="1,0"
+                                AutomationProperties.AutomationId="Editor.ZoomOutButton">
+                            <controls:LucideIcon Kind="Minus" Width="18" Height="18"
+                                                 Stroke="{ThemeResource ThemeForegroundBrush}"/>
+                        </Button>
+
+                        <!-- Zoom Percentage (click to edit) -->
+                        <Grid Width="46" Height="36" Margin="0,0,0,0">
+                            <TextBlock x:Name="ZoomLabel" Text="100%" FontSize="12" Foreground="{ThemeResource ThemeForegroundBrush}"
+                                       VerticalAlignment="Center" HorizontalAlignment="Center" TextAlignment="Center"
+                                       Tapped="ZoomLabel_Tapped"
+                                       AutomationProperties.AutomationId="Editor.ZoomLabel"/>
+                            <TextBox x:Name="ZoomTextBox" FontSize="12" Foreground="{ThemeResource ThemeForegroundBrush}" Background="{ThemeResource ThemePaperAltBrush}"
+                                     VerticalAlignment="Center" HorizontalAlignment="Center"
+                                     Width="42" Height="22" TextAlignment="Center" Padding="2,1"
+                                     BorderThickness="1" BorderBrush="{ThemeResource ThemeFocusBrush}"
+                                     Visibility="Collapsed"
+                                     KeyDown="ZoomTextBox_KeyDown"
+                                     LostFocus="ZoomTextBox_LostFocus"
+                                     AutomationProperties.AutomationId="Editor.ZoomInput"/>
+                        </Grid>
+
+                        <!-- Zoom In -->
+                        <Button x:Name="ZoomInButton" Click="ZoomInButton_Click"
+                                Style="{StaticResource ToolbarButtonStyle}"
+                                Width="36" Height="36" Margin="1,0"
+                                AutomationProperties.AutomationId="Editor.ZoomInButton">
+                            <controls:LucideIcon Kind="Plus" Width="18" Height="18"
+                                                 Stroke="{ThemeResource ThemeForegroundBrush}"/>
+                        </Button>
+                        <Button x:Name="RotatePageButton" Click="RotateCurrentPage_Click"
+                                Style="{StaticResource ToolbarButtonStyle}"
+                                Width="36" Height="36" Margin="1,0"
+                                AutomationProperties.AutomationId="Editor.RotatePageButton">
+                            <controls:LucideIcon Kind="RotateCcw" Width="18" Height="18"
+                                                 Stroke="{ThemeResource ThemeForegroundBrush}"/>
+                        </Button>
+
+                    </StackPanel>
+                </ScrollViewer>
+
+                <!-- The editable, one-based page navigator stays centered even
+                     when toolbar actions are added, removed, or scrolled. -->
+                <Border x:Name="CenteredPageJumpHost"
+                        HorizontalAlignment="Center"
+                        VerticalAlignment="Center"
+                        MinHeight="34"
+                        Canvas.ZIndex="1"
+                        Background="{ThemeResource ThemeSurfaceAltBrush}"
+                        BorderBrush="{ThemeResource ThemeBorderBrush}"
+                        BorderThickness="1"
+                        CornerRadius="9">
+                    <Grid>
+                        <controls:UiaGrid x:Name="PageJumpGroup"
+                              Margin="2"
+                              HorizontalAlignment="Center"
+                              VerticalAlignment="Center"
+                              AutomationProperties.AutomationId="Editor.PageJumpGroup">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="30"/>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="30"/>
+                            </Grid.ColumnDefinitions>
+                            <Button x:Name="PreviousPageButton"
+                                    Grid.Column="0"
+                                    Width="30" Height="30" MinWidth="30" MinHeight="30"
+                                    Style="{StaticResource ToolbarButtonStyle}"
+                                    Click="PreviousPageButton_Click"
+                                    AutomationProperties.AutomationId="Editor.PreviousPageButton">
+                                <controls:LucideIcon Kind="ChevronLeft" Width="16" Height="16"
+                                                     Stroke="{ThemeResource ThemeForegroundBrush}"/>
+                            </Button>
+                            <StackPanel Grid.Column="1"
+                                        Orientation="Horizontal"
+                                        VerticalAlignment="Center">
+                                <TextBox x:Name="PageNumberTextBox"
+                                         FontSize="13"
+                                         FontWeight="SemiBold"
+                                         Foreground="{ThemeResource ThemeForegroundBrush}"
+                                         Background="Transparent"
+                                         BorderBrush="Transparent"
+                                         BorderThickness="0"
+                                         VerticalAlignment="Center"
+                                         Width="36"
+                                         Height="32"
+                                         MinHeight="32"
+                                         Text="1"
+                                         TextAlignment="Center"
+                                         Padding="2,0"
+                                         IsTabStop="True"
+                                         AutomationProperties.AutomationId="Editor.PageJump"
+                                         GotFocus="PageNumberTextBox_GotFocus"
+                                         TextChanged="PageNumberTextBox_TextChanged"
+                                         KeyDown="PageNumberTextBox_KeyDown"
+                                         LostFocus="PageNumberTextBox_LostFocus"/>
+                                <TextBlock x:Name="PageCountText"
+                                           Text="/ 0"
+                                           MinWidth="36"
+                                           Margin="2,0"
+                                           FontSize="13"
+                                           Foreground="{ThemeResource ThemeSubtleTextBrush}"
+                                           VerticalAlignment="Center"/>
+                            </StackPanel>
+                            <Button x:Name="NextPageButton"
+                                    Grid.Column="2"
+                                    Width="30" Height="30" MinWidth="30" MinHeight="30"
+                                    Style="{StaticResource ToolbarButtonStyle}"
+                                    Click="NextPageButton_Click"
+                                    AutomationProperties.AutomationId="Editor.NextPageButton">
+                                <controls:LucideIcon Kind="ChevronRight" Width="16" Height="16"
+                                                     Stroke="{ThemeResource ThemeForegroundBrush}"/>
+                            </Button>
+                        </controls:UiaGrid>
+                        <TextBlock x:Name="PageNumberLabel"
+                                   Text="0"
+                                   Visibility="Collapsed"
+                                   IsHitTestVisible="False"/>
+                    </Grid>
+                </Border>
+            </Grid>
+        </Border>
+
+        <!-- Custom document navigation rail. It remains an overlay so the PDF
+             canvas keeps its scroll/zoom geometry. The three command buttons
+             are ordinary invoke peers; content visibility is owned by
+             SetSidebarTab. -->
+        <controls:UiaContentControl x:Name="DocumentSidebar"
+                HorizontalAlignment="Left"
+                VerticalAlignment="Stretch"
+                Margin="12,70,0,12"
+                Width="184"
+                Canvas.ZIndex="20"
+                AutomationProperties.AutomationId="DocumentSidebar">
+            <Border HorizontalAlignment="Stretch"
+                    VerticalAlignment="Stretch"
+                    Background="{ThemeResource ThemeSidebarBrush}"
+                    BorderBrush="{ThemeResource ThemeBorderBrush}"
+                    BorderThickness="1,1,0,1"
+                    CornerRadius="12">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+
+                <Grid x:Name="SidebarHeaderGrid" Grid.Row="0" Margin="8,8,8,2">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock x:Name="SidebarTitleLabel"
+                               Grid.Column="0"
+                               Text=""
+                               Foreground="{ThemeResource ThemeSubtleForegroundBrush}"
+                               FontSize="11"
+                               FontWeight="SemiBold"
+                               VerticalAlignment="Center"
+                               TextTrimming="CharacterEllipsis"/>
+                    <Button x:Name="SidebarCollapseButton"
+                            Grid.Column="1"
+                            Width="32"
+                            Height="32"
+                            MinWidth="32"
+                            MinHeight="32"
+                            Style="{StaticResource ToolbarButtonStyle}"
+                            Click="SidebarCollapseButton_Click"
+                            AutomationProperties.AutomationId="Editor.Sidebar.Collapse">
+                        <controls:LucideIcon x:Name="SidebarCollapseIcon" Kind="PanelLeftClose"
+                                             Width="17" Height="17"
+                                             Stroke="{ThemeResource ThemeForegroundBrush}"/>
+                    </Button>
+                </Grid>
+
+                <!-- SidebarNavBar.Visibility is updated by SetSidebarCollapsed
+                     so collapsed mode leaves only the 32-DIP expand control. -->
+                <Grid x:Name="SidebarNavBar"
+                            Grid.Row="1"
+                            Margin="8,2,8,6">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <Button x:Name="SidebarPagesButton"
+                            Grid.Column="0"
+                            Style="{StaticResource DocumentSidebarNavButtonStyle}"
+                            Click="SidebarPagesButton_Click"
+                            AutomationProperties.AutomationId="Editor.Sidebar.Pages">
+                        <StackPanel HorizontalAlignment="Center">
+                            <controls:LucideIcon Kind="Files" Width="17" Height="17" Stroke="{ThemeResource ThemeForegroundBrush}"/>
+                            <TextBlock x:Name="SidebarPagesLabel" Margin="0,3,0,0" FontSize="10" HorizontalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+                            <Border x:Name="PagesNavSelectionCue" Height="3" Margin="7,3,7,0" CornerRadius="2"
+                                    Background="{ThemeResource ThemeAccentBrush}" Visibility="Collapsed"/>
+                        </StackPanel>
+                    </Button>
+                    <Button x:Name="SidebarOutlineButton"
+                            Grid.Column="1"
+                            Style="{StaticResource DocumentSidebarNavButtonStyle}"
+                            Click="SidebarOutlineButton_Click"
+                            AutomationProperties.AutomationId="Editor.Sidebar.Outline">
+                        <StackPanel HorizontalAlignment="Center">
+                            <controls:LucideIcon Kind="ListTree" Width="17" Height="17" Stroke="{ThemeResource ThemeForegroundBrush}"/>
+                            <TextBlock x:Name="SidebarOutlineLabel" Margin="0,3,0,0" FontSize="10" HorizontalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+                            <Border x:Name="OutlineNavSelectionCue" Height="3" Margin="7,3,7,0" CornerRadius="2"
+                                    Background="{ThemeResource ThemeAccentBrush}" Visibility="Collapsed"/>
+                        </StackPanel>
+                    </Button>
+                    <Button x:Name="SidebarBookmarksButton"
+                            Grid.Column="2"
+                            Style="{StaticResource DocumentSidebarNavButtonStyle}"
+                            Click="SidebarBookmarksButton_Click"
+                            AutomationProperties.AutomationId="Editor.Sidebar.Bookmarks">
+                        <StackPanel HorizontalAlignment="Center">
+                            <controls:LucideIcon Kind="Bookmark" Width="17" Height="17" Stroke="{ThemeResource ThemeForegroundBrush}"/>
+                            <TextBlock x:Name="SidebarBookmarksLabel" Margin="0,3,0,0" FontSize="10" HorizontalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+                            <Border x:Name="BookmarksNavSelectionCue" Height="3" Margin="7,3,7,0" CornerRadius="2"
+                                    Background="{ThemeResource ThemeAccentBrush}" Visibility="Collapsed"/>
+                        </StackPanel>
+                    </Button>
+                </Grid>
+
+                <Grid x:Name="SidebarContentHost" Grid.Row="2" Margin="6,0,6,6">
+                    <Grid x:Name="PagesSidebarContent">
+                        <ListView x:Name="ThumbnailListBox"
+                                 Margin="0"
+                                 BorderThickness="0"
+                                 Background="Transparent"
+                                 ItemContainerStyle="{StaticResource DocumentSidebarListBoxItemStyle}"
+                                 ItemTemplate="{StaticResource SidebarPageItemTemplate}"
+                                 ItemsSource="{x:Bind SidebarPageItems, Mode=OneWay}"
+                                 ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                 SelectionChanged="ThumbnailListBox_SelectionChanged"
+                                 AutomationProperties.AutomationId="Editor.Sidebar.Thumbnails"/>
+                        <!-- T9: thumbnail drag-reorder drop indicator. -->
+                        <Border x:Name="ThumbnailDropIndicator"
+                                Height="2"
+                                Margin="0"
+                                HorizontalAlignment="Stretch"
+                                VerticalAlignment="Top"
+                                Background="{ThemeResource ThemeAccentBrush}"
+                                CornerRadius="1"
+                                IsHitTestVisible="False"
+                                Canvas.ZIndex="10"
+                                Visibility="Collapsed"/>
+                        <TextBlock x:Name="PagesEmptyState"
+                                   Text=""
+                                   Foreground="{ThemeResource ThemeSubtleForegroundBrush}"
+                                   FontSize="12"
+                                   TextWrapping="Wrap"
+                                   TextAlignment="Center"
+                                   Margin="10"
+                                   VerticalAlignment="Center"
+                                   IsHitTestVisible="False"
+                                   Visibility="Visible"/>
+                    </Grid>
+
+                    <Grid x:Name="OutlineSidebarContent" Visibility="Collapsed">
+                        <!-- The internal TreeViewList surfaces as 'ListControl'
+                             in UIA and swallows the TreeView's AutomationId;
+                             the UiaGrid wrapper owns the stable probe id. -->
+                        <controls:UiaGrid AutomationProperties.AutomationId="Editor.Sidebar.Outline.Tree">
+                            <TreeView x:Name="OutlineTreeView"
+                                      Margin="0"
+                                      BorderThickness="0"
+                                      Background="Transparent"
+                                      ItemTemplate="{StaticResource SidebarOutlineItemTemplate}"
+                                      ItemInvoked="OutlineTreeView_ItemInvoked"
+                                      CanReorderItems="False"
+                                      CanDragItems="False"/>
+                        </controls:UiaGrid>
+                        <TextBlock x:Name="OutlineEmptyState"
+                                   Text=""
+                                   Foreground="{ThemeResource ThemeSubtleForegroundBrush}"
+                                   FontSize="12"
+                                   TextWrapping="Wrap"
+                                   TextAlignment="Center"
+                                   Margin="10"
+                                   VerticalAlignment="Center"
+                                   IsHitTestVisible="False"
+                                   Visibility="Visible"/>
+                    </Grid>
+
+                    <Grid x:Name="BookmarksSidebarContent" Visibility="Collapsed">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+                        <ToggleButton x:Name="BookmarkToggleButton"
+                                      Grid.Row="0"
+                                      Margin="2,2,2,6"
+                                      Height="34"
+                                      MinHeight="32"
+                                      Style="{StaticResource ToolbarToggleButtonStyle}"
+                                      IsTabStop="True"
+                                      AutomationProperties.AutomationId="Editor.Sidebar.BookmarkToggle"
+                                      Click="BookmarkToggleButton_Click"/>
+                        <Grid Grid.Row="1">
+                            <ListView x:Name="BookmarksListBox"
+                                     Margin="0"
+                                     BorderThickness="0"
+                                     Background="Transparent"
+                                     ItemContainerStyle="{StaticResource DocumentSidebarListBoxItemStyle}"
+                                     ItemTemplate="{StaticResource SidebarBookmarkItemTemplate}"
+                                     ItemsSource="{x:Bind SidebarBookmarkItems, Mode=OneWay}"
+                                     ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                     ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                     SelectionChanged="BookmarksListBox_SelectionChanged"
+                                     ContextRequested="BookmarksListBox_ContextRequested"
+                                     AutomationProperties.AutomationId="Editor.Sidebar.Bookmarks.List"/>
+                            <TextBlock x:Name="BookmarksEmptyState"
+                                       Text=""
+                                       Foreground="{ThemeResource ThemeSubtleForegroundBrush}"
+                                       FontSize="12"
+                                       TextWrapping="Wrap"
+                                       TextAlignment="Center"
+                                       Margin="10"
+                                       VerticalAlignment="Center"
+                                       IsHitTestVisible="False"
+                                       Visibility="Visible"/>
+                        </Grid>
+                    </Grid>
+                </Grid>
+            </Grid>
+            </Border>
+        </controls:UiaContentControl>
+
+        <!-- Asynchronous full-document search results. -->
+        <controls:UiaContentControl x:Name="PdfSearchPanel"
+                HorizontalAlignment="Right"
+                VerticalAlignment="Top"
+                Margin="12,70,12,0"
+                Width="390"
+                Height="330"
+                Visibility="Collapsed"
+                Canvas.ZIndex="25"
+                AutomationProperties.AutomationId="PdfSearchPanel">
+            <Border HorizontalAlignment="Stretch"
+                    VerticalAlignment="Stretch"
+                    Background="{ThemeResource ThemeSurfaceBrush}"
+                    BorderBrush="{ThemeResource ThemeBorderBrush}"
+                    BorderThickness="1"
+                    CornerRadius="14"
+                    Padding="10">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="34"/>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+                <Grid Grid.Row="0" Height="34">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBox x:Name="PdfSearchTextBox" Margin="0,0,8,0" Style="{StaticResource ModernTextBox}"
+                             KeyDown="PdfSearchTextBox_KeyDown" TextChanged="PdfSearchTextBox_TextChanged"
+                             AutomationProperties.AutomationId="PdfSearchTextBox"/>
+                    <Button Grid.Column="1" Width="32" Height="32" Click="ClosePdfSearchButton_Click"
+                            Style="{StaticResource ToolbarButtonStyle}" Padding="0" MinWidth="32"
+                            AutomationProperties.AutomationId="PdfSearchCloseButton">
+                        <controls:LucideIcon Kind="X" Width="14" Height="14" Stroke="{ThemeResource ThemeForegroundBrush}"/>
+                    </Button>
+                </Grid>
+                <ListView x:Name="PdfSearchResultsListBox" Grid.Row="1" Margin="0,8,0,0" Style="{StaticResource ModernListBox}"
+                         SelectionChanged="PdfSearchResultsListBox_SelectionChanged"
+                         AutomationProperties.AutomationId="PdfSearchResultsListBox"/>
+                <TextBlock x:Name="PdfSearchStatusTextBlock" Grid.Row="2" Margin="2,6,2,0"
+                           Foreground="{ThemeResource ThemeSubtleForegroundBrush}" FontSize="11"
+                           AutomationProperties.AutomationId="PdfSearchStatus"/>
+            </Grid>
+            </Border>
+        </controls:UiaContentControl>
+
+        <!-- T7: Eraser Size Preview Overlay -->
+        <Ellipse x:Name="EraserSizePreviewEllipse"
+                 HorizontalAlignment="Center" VerticalAlignment="Center"
+                 Stroke="{ThemeResource ThemeAccentBrush}" StrokeThickness="1.5" Fill="{ThemeResource ThemeSelectionBrush}"
+                 IsHitTestVisible="False" Visibility="Collapsed"
+                 Canvas.ZIndex="10"/>
+
+        <!-- UIA-compat probes (Task 5 stub contract): realized but invisible;
+             Text carries the document name/path for winui-home-smoke. -->
+        <StackPanel Opacity="0" IsHitTestVisible="False" Height="2"
+                    HorizontalAlignment="Left" VerticalAlignment="Bottom">
+            <TextBlock x:Name="EditorPageTitleCompat"
+                       AutomationProperties.AutomationId="EditorPageTitle"
+                       Height="1"/>
+            <TextBlock x:Name="EditorPagePathCompat"
                        AutomationProperties.AutomationId="EditorPagePath"
-                       FontSize="12" Foreground="{ThemeResource ThemeSubtleForegroundBrush}"
-                       HorizontalAlignment="Center" Margin="0,6,0,0"
-                       TextWrapping="Wrap" TextTrimming="CharacterEllipsis"/>
-            <TextBlock x:Name="EditorStubNoticeTextBlock"
-                       FontSize="12" Foreground="{ThemeResource ThemeSubtleForegroundBrush}"
-                       HorizontalAlignment="Center" Margin="0,14,0,0"
-                       AutomationProperties.AutomationId="EditorStubNotice"/>
+                       Height="1"/>
         </StackPanel>
+
+        <!-- Loading Overlay -->
+        <Grid x:Name="LoadingOverlay" Visibility="Collapsed" Canvas.ZIndex="40">
+            <Border Background="{ThemeResource ThemeWindowBrush}" Opacity="0.28" IsHitTestVisible="True"/>
+            <Border CornerRadius="14" Padding="28,20" HorizontalAlignment="Center" VerticalAlignment="Center"
+                    Background="{ThemeResource ThemeSurfaceBrush}"
+                    BorderBrush="{ThemeResource ThemeBorderBrush}"
+                    BorderThickness="1">
+                <StackPanel Orientation="Horizontal">
+                    <ProgressRing IsActive="True" Width="22" Height="22" Margin="0,0,12,0"/>
+                    <TextBlock x:Name="LoadingText" FontSize="15" VerticalAlignment="Center" Foreground="{ThemeResource ThemeForegroundBrush}"/>
+                </StackPanel>
+            </Border>
+        </Grid>
     </Grid>
 </Page>

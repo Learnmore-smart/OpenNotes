@@ -8,6 +8,7 @@ using Caelum.Models;
 using Caelum.Services;
 using Microsoft.UI.Input;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Input;
@@ -78,7 +79,40 @@ namespace Caelum.Pages
             ApplyLocalization();
             Loaded += HomePage_Loaded;
             Unloaded += HomePage_Unloaded;
+#if DEBUG
+            InstallDebugContextMenuSeam();
+#endif
         }
+
+#if DEBUG
+        private void InstallDebugContextMenuSeam()
+        {
+            // The smoke session cannot deliver OS-level input (a real
+            // right-click lands on the desktop site bridge, never the tile),
+            // so the file-tile context menu gets a hidden invoke seam that
+            // runs the same ShowFileContextMenu path ContextRequested uses.
+            var seam = new Button
+            {
+                Width = 2,
+                Height = 2,
+                Opacity = 0.01,
+                IsTabStop = false,
+                HorizontalAlignment = HorizontalAlignment.Right,
+                VerticalAlignment = VerticalAlignment.Bottom
+            };
+            AutomationProperties.SetAutomationId(seam, "Home.DebugOpenContextMenu");
+            AutomationProperties.SetName(seam, "DEBUG open file context menu");
+            seam.Click += (_, __) =>
+            {
+                var tile = VisibleTiles.FirstOrDefault(t => t.IsFile);
+                if (tile == null || TilesRepeater == null)
+                    return;
+                ShowFileContextMenu(tile, TilesRepeater,
+                    new Windows.Foundation.Point(40, 40));
+            };
+            (Content as Grid)?.Children.Add(seam);
+        }
+#endif
 
         // ── Hover scale animation (WPF TileScale_MouseEnter/Leave port) ─────
 

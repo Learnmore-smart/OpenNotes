@@ -238,7 +238,14 @@ try {
 
     # ── 4) Right-click context menu on a file tile ────────────────────────
     $menu = $null
-    if ($tileA -ne $null) {
+    # OS-level input does not reach the window in this session; the DEBUG
+    # seam runs the same ShowFileContextMenu path ContextRequested uses.
+    $ctxSeam = Find-ByAutomationId $win "Home.DebugOpenContextMenu"
+    if ($ctxSeam -ne $null) {
+        Invoke-Element $ctxSeam
+        $menu = Find-OpenMenu 6
+    }
+    if ($tileA -ne $null -and $menu -eq $null) {
         for ($attempt = 0; $attempt -lt 3 -and $menu -eq $null; $attempt++) {
             Focus-AppWindow $win
             $tileNow = Find-ByAutomationId $win "HomeTile_smoke-a.pdf"

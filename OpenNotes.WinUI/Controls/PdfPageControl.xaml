@@ -1,0 +1,88 @@
+<UserControl
+    x:Class="Caelum.Controls.PdfPageControl"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!--
+        V6 WinUI port of WPF Controls/PdfPageControl.xaml.
+        Differences by design:
+        - The WPF InkCanvas is intentionally absent: Task 7 provides the WinUI
+          ink surface. Every annotation/overlay layer keeps its WPF name and
+          stacking order so later tasks attach to the same slots.
+        - DropShadowEffect has no WinUI equivalent; the frame uses a
+          ThemeShadow caster instead.
+        - RenderOptions.BitmapScalingMode has no WinUI equivalent (WinUI
+          always samples with good quality), so the low/high-quality swap used
+          during scroll is a no-op here.
+        - Stylus.IsPressAndHoldEnabled / IsFlicksEnabled have no WinUI
+          attached-property equivalent; the ink surface owns that in Task 7.
+    -->
+
+    <Grid x:Name="RootGrid">
+        <!-- Shadow casting Border (separate from content; ThemeShadow replaces
+             the WPF DropShadowEffect). -->
+        <Border Background="White" Translation="0,0,8">
+            <Border.Shadow>
+                <ThemeShadow/>
+            </Border.Shadow>
+        </Border>
+
+        <Grid x:Name="PageGrid" Background="White">
+            <!-- PDF Background -->
+            <Image x:Name="PdfImage" Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Top"/>
+
+            <!-- Swap overlay — same layout slot as PdfImage, sits directly
+                 above it. Task 7+ may stage incoming bitmaps here so the main
+                 image can swap underneath without a blank flash. -->
+            <Image x:Name="PdfImageOverlay" Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Top"
+                   Opacity="0" IsHitTestVisible="False"/>
+
+            <!-- T8: Image annotation layer (pasted/dropped images). Sits below
+                 the ink layer so strokes draw over images. -->
+            <Canvas x:Name="ImageOverlayCanvas" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
+                    Background="{x:Null}" IsHitTestVisible="True"/>
+
+            <!-- T7: the WPF InkCanvas slot lives here. The WinUI ink surface
+                 arrives with the annotation tasks; overlay order is kept so
+                 it slots in without re-layering. -->
+
+            <!-- T7: Shape Drag Preview Layer (dashed outline while dragging a shape) -->
+            <Canvas x:Name="ShapePreviewCanvas" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
+                    Background="Transparent" IsHitTestVisible="False"/>
+
+            <!-- T8: Text/Widget Layer -->
+            <Canvas x:Name="TextOverlayCanvas" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"/>
+
+            <!-- T7: Persistent Text Highlights Layer -->
+            <Canvas x:Name="HighlightsCanvas" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Background="Transparent" IsHitTestVisible="False"/>
+
+            <!-- T8: PDF Text Selection Layer -->
+            <Canvas x:Name="PdfTextSelectionCanvas" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
+                    Background="Transparent" Visibility="Collapsed" IsHitTestVisible="False"/>
+
+            <!-- T8: Selection Transform Layer (for select/move/scale) -->
+            <Canvas x:Name="SelectionOverlayCanvas" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
+                    Background="Transparent" Visibility="Collapsed" IsHitTestVisible="True"/>
+
+            <!-- T7: study mode — opaque freehand masks. -->
+            <Canvas x:Name="HiddenInkCanvas" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
+                    Background="{x:Null}" IsHitTestVisible="True"/>
+
+            <!-- T7: Eraser Indicator (on its own Canvas so SetLeft/SetTop works) -->
+            <Canvas x:Name="EraserCanvas" IsHitTestVisible="False">
+                <Ellipse x:Name="EraserIndicator"
+                         Width="20"
+                         Height="20"
+                         Stroke="{ThemeResource ThemeAccentBrush}"
+                         StrokeThickness="1"
+                         Fill="{ThemeResource ThemeSelectionBrush}"
+                         Visibility="Collapsed"
+                         IsHitTestVisible="False"/>
+            </Canvas>
+
+            <!-- T7: laser pointer layer — topmost visual. -->
+            <Canvas x:Name="LaserInkCanvas" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
+                    Background="Transparent" IsHitTestVisible="False"/>
+        </Grid>
+    </Grid>
+</UserControl>

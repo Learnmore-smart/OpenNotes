@@ -32,6 +32,8 @@
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.8.260804001" />
     <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.26100.4654" />
     <PackageReference Include="Microsoft.Graphics.Win2D" Version="1.4.0" />
+    <!-- pdfium.dll -> x64\pdfium.dll in output (Core PdfiumRasterizer preloads it from BaseDirectory/x64). -->
+    <PackageReference Include="PdfiumViewer.Native.x86_64.v8-xfa" Version="2018.4.8.256" />
   </ItemGroup>
 
   <ItemGroup>
