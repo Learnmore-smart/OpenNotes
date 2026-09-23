@@ -1,4 +1,4 @@
-# Services/DocumentReleaseState.cs
+# OpenNotes.Core/Services/DocumentReleaseState.cs
 > Last updated: 2026-08-23（Wave 2 post-cleanup retry contract GREEN）| Protection: CRITICAL
 
 ## Purpose

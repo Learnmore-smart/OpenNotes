@@ -11,7 +11,7 @@ The test temporarily removes `WINDIR`, supplies the real Windows root, invokes t
 
 ## Dependencies
 
-- **Internal:** `Services/WindowsEnvironment.cs` — behavior under test.
+- **Internal:** `OpenNotes.Core/Services/WindowsEnvironment.cs` — behavior under test.
 - **Framework:** NUnit and `System.Environment`.
 
 ## Open Threads / Resume Context

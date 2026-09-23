@@ -1,4 +1,4 @@
-# Services/PdfAtomicFile.cs
+# OpenNotes.Core/Services/PdfAtomicFile.cs
 > Last updated: 2026-09-02（Edge page-box compatibility fix GREEN）| Protection: CRITICAL
 
 ## Purpose

@@ -1,4 +1,4 @@
-# Services/AppSettingsService.cs
+# OpenNotes.Core/Services/AppSettingsService.cs
 > Last updated: 2026-08-24（Wave5 WorkspaceBackdrop sanitize/clone GREEN）| Protection: STANDARD
 Wave 1 note: preserve legacy `PenPresets` JSON entries, deep-copy lists, and never fill UI defaults in `Sanitize`/`Clone`.
 

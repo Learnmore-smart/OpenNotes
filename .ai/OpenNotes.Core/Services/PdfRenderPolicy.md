@@ -1,4 +1,4 @@
-# Services/PdfRenderPolicy.cs
+# OpenNotes.Core/Services/PdfRenderPolicy.cs
 
 > Last updated: 2026-08-21 | Protection: STANDARD
 

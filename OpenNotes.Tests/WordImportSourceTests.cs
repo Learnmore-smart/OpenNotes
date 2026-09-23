@@ -12,7 +12,7 @@ public sealed class WordImportSourceTests
         string home = Read(root, "Pages", "HomePage.xaml.cs");
         string helper = Read(root, "Pages", "HomePage.DragDropHelper.cs");
         string window = Read(root, "MainWindow.xaml.cs");
-        string localization = Read(root, "Services", "LocalizationService.cs");
+        string localization = Read(root, "OpenNotes.Core", "Services", "LocalizationService.cs");
 
         Assert.Multiple(() =>
         {

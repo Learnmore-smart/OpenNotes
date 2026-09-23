@@ -1,4 +1,4 @@
-# RecentFilesService
+# OpenNotes.Core/Services/RecentFilesService.cs
 
 ## Purpose
 

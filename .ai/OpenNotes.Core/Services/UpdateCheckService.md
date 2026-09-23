@@ -1,4 +1,4 @@
-# Services/UpdateCheckService.cs
+# OpenNotes.Core/Services/UpdateCheckService.cs
 
 > Last updated: 2026-09-01 | Protection: STANDARD
 

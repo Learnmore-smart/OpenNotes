@@ -1,4 +1,4 @@
-# Services/DocumentOperationSession
+# OpenNotes.Core/Services/DocumentOperationSession.cs
 
 > Last updated: 2026-08-24 (Wave6 async stale-operation P2, audit continuation) | Protection: STANDARD
 

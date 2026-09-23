@@ -1,4 +1,4 @@
-# Services/PdfSaveCoordinator.cs
+# OpenNotes.Core/Services/PdfSaveCoordinator.cs
 > Last updated: 2026-08-23（Wave 2 automated scope complete）| Protection: CRITICAL
 
 ## Purpose

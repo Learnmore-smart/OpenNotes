@@ -1,4 +1,4 @@
-# WindowsEnvironment
+# OpenNotes.Core/Services/WindowsEnvironment.cs
 > Last updated: 2026-08-21 | Protection: STANDARD
 
 ## Purpose

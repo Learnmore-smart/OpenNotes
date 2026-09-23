@@ -1,4 +1,4 @@
-# Services/DocumentSaveCoordinator.cs
+# OpenNotes.Core/Services/DocumentSaveCoordinator.cs
 > Last updated: 2026-08-23（Wave 2 final review: close-safe save state machine）| Protection: CRITICAL
 
 ## Purpose

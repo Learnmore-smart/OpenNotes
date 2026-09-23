@@ -1,4 +1,4 @@
-# WordDocumentImport.cs
+# OpenNotes.Core/Services/WordDocumentImport.cs
 
 > Last updated: 2026-09-08 | Protection: STANDARD
 

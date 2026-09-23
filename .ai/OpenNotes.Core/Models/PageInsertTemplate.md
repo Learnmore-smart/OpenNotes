@@ -1,4 +1,4 @@
-# PageInsertTemplate
+# OpenNotes.Core/Models/PageInsertTemplate.cs
 
 ## Purpose
 

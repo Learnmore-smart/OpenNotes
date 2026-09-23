@@ -1,4 +1,4 @@
-# Models/HiddenInkRevealState.cs
+# OpenNotes.Core/Models/HiddenInkRevealState.cs
 > Last updated: 2026-08-20 | Protection: STANDARD
 
 ## Purpose

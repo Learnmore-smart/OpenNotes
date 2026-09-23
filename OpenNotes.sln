@@ -6,6 +6,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OpenNotes", "OpenNotes.cspr
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OpenNotes.Tests", "OpenNotes.Tests\OpenNotes.Tests.csproj", "{734EAC65-C6B0-C360-1E89-28EFAF5428F5}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OpenNotes.Core", "OpenNotes.Core\OpenNotes.Core.csproj", "{7AB74104-C1BE-4B46-95CE-FF8B427B0654}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -20,6 +22,10 @@ Global
 		{734EAC65-C6B0-C360-1E89-28EFAF5428F5}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{734EAC65-C6B0-C360-1E89-28EFAF5428F5}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{734EAC65-C6B0-C360-1E89-28EFAF5428F5}.Release|Any CPU.Build.0 = Release|Any CPU
+		{7AB74104-C1BE-4B46-95CE-FF8B427B0654}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{7AB74104-C1BE-4B46-95CE-FF8B427B0654}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{7AB74104-C1BE-4B46-95CE-FF8B427B0654}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{7AB74104-C1BE-4B46-95CE-FF8B427B0654}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

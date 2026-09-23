@@ -1,4 +1,4 @@
-# PageBookmarkService
+# OpenNotes.Core/Services/PageBookmarkService.cs
 
 ## Purpose
 

@@ -1,4 +1,4 @@
-# Models/AnnotationModels.cs
+# OpenNotes.Core/Models/AnnotationModels.cs
 
 ## Wave6 dual-review follow-up (2026-08-24) — plan before code
 

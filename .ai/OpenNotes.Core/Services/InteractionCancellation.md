@@ -1,4 +1,4 @@
-# Services/InteractionCancellation.cs
+# OpenNotes.Core/Services/InteractionCancellation.cs
 > Last updated: 2026-08-24 (Wave6 dual-review GREEN closure) | Protection: STANDARD
 
 ## Purpose

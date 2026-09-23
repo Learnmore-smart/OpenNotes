@@ -209,7 +209,7 @@ public sealed class ThemeSurfaceSourceTests
     {
         string root = FindProjectRoot();
         string settingsSource = File.ReadAllText(Path.Combine(root, "SettingsWindow.xaml.cs"));
-        string localization = File.ReadAllText(Path.Combine(root, "Services", "LocalizationService.cs"));
+        string localization = File.ReadAllText(Path.Combine(root, "OpenNotes.Core", "Services", "LocalizationService.cs"));
 
         foreach (string value in new[] { "Neutral", "Paper", "Mist", "Warm", "Slate", "Midnight" })
         {

@@ -1,4 +1,4 @@
-# Models/TextAnnotationGeometry.cs
+# OpenNotes.Core/Models/TextAnnotationGeometry.cs
 > Last updated: 2026-08-20 | Protection: STANDARD
 
 ## Purpose

@@ -1,4 +1,4 @@
-# Models/AppSettings.cs
+# OpenNotes.Core/Models/AppSettings.cs
 > Last updated: 2026-08-24（Wave5 WorkspaceBackdrop persistence/normalization GREEN）| Protection: STANDARD
 Wave 1 note: `PenPresets` JSON shape remains a compatibility boundary; empty/missing lists stay empty and `EditorPage` no longer writes UI defaults during initialization.
 

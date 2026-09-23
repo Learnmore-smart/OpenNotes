@@ -625,7 +625,7 @@ public sealed class EditorToolbarVisualSourceTests
         var root = FindProjectRoot();
         var source = File.ReadAllText(Path.Combine(root, "Pages", "EditorPage.xaml.cs"));
         var utilities = File.ReadAllText(Path.Combine(root, "Pages", "EditorPage.Utilities.cs"));
-        var localization = File.ReadAllText(Path.Combine(root, "Services", "LocalizationService.cs"));
+        var localization = File.ReadAllText(Path.Combine(root, "OpenNotes.Core", "Services", "LocalizationService.cs"));
         var verifier = File.ReadAllText(Path.Combine(root, "tools", "verify-i18n.ps1"));
 
         Assert.Multiple(() =>

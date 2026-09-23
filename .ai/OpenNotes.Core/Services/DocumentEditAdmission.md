@@ -1,4 +1,4 @@
-# Services/DocumentEditAdmission.cs
+# OpenNotes.Core/Services/DocumentEditAdmission.cs
 > Last updated: 2026-08-23（Wave 2 close/navigation admission）| Protection: CRITICAL
 
 ## Purpose

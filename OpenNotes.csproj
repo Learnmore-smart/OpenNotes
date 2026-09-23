@@ -47,6 +47,13 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Compile Remove="OpenNotes.Core\**" />
+    <EmbeddedResource Remove="OpenNotes.Core\**" />
+    <None Remove="OpenNotes.Core\**" />
+    <Page Remove="OpenNotes.Core\**" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Compile Remove="Tests\**" />
     <EmbeddedResource Remove="Tests\**" />
     <None Remove="Tests\**" />
@@ -63,6 +70,10 @@
   <ItemGroup>
     <Compile Remove="test_annotation_save.cs" />
     <Compile Remove="test_fix.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="OpenNotes.Core\OpenNotes.Core.csproj" />
   </ItemGroup>
 
   <ItemGroup>

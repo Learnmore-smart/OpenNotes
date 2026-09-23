@@ -158,7 +158,7 @@ public sealed class TransientUiSourceTests
     [Test]
     public void AsyncDocumentOperationsShareOneSessionLeaseBoundary()
     {
-        var session = ReadProjectFile("Services", "DocumentOperationSession.cs");
+        var session = ReadProjectFile("OpenNotes.Core", "Services", "DocumentOperationSession.cs");
         var editor = ReadProjectFile("Pages", "EditorPage.xaml.cs");
 
         Assert.Multiple(() =>

@@ -1,4 +1,4 @@
-# ThumbnailDropPlacement
+# OpenNotes.Core/Models/ThumbnailDropPlacement.cs
 
 ## Sidebar page reorder (2026-08-30) — GREEN for focused scope
 

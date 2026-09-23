@@ -15,30 +15,30 @@ WPF (.NET 8) PDF 笔记应用，正式产品和工作区名称为 **OpenNotes**�
 | `Controls/PdfPageControl.xaml(.cs)` | InkCanvas/橡皮/选区/文本层/HiddenInkCanvas（详见 `.ai/Controls/PdfPageControl.md`） |
 | `Controls/TextResizeHandleBorder.cs` | 保留 Border 视觉和输入事件，同时提供 Thumb UI Automation peer，使八个代码创建的文本缩放句柄可被 UIA 发现 |
 | `Controls/TextAnnotationDragHandleBorder.cs` | 保留文本框移动手柄的 Border 视觉和输入事件，同时提供稳定 Thumb UI Automation peer，支持跨页 desktop smoke |
-| `Models/AnnotationModels.cs` | AnnotationData/PageAnnotation/Stroke/Text/Highlight/Sticky/HiddenInk 数据模型（文本/图片/便签可选 `RotationDegrees`） |
+| `OpenNotes.Core/Models/AnnotationModels.cs` | AnnotationData/PageAnnotation/Stroke/Text/Highlight/Sticky/HiddenInk 数据模型（文本/图片/便签可选 `RotationDegrees`） |
 | `Models/AnnotationTransform.cs` | 选区旋转点变换与角度归一化 |
-| `Services/RecycleBinService.cs` | `SHFileOperation` 将库文件移入回收站 |
+| `OpenNotes.Core/Services/RecycleBinService.cs` | `SHFileOperation` 将库文件移入回收站 |
 | `Models/StrokeReplacementSnapshot.cs` | Wave 1 immutable token/side/pressure snapshot and production replacement-state ledger |
-| `Models/TextAnnotationGeometry.cs` | 文本框默认/最小尺寸、八方向缩放和页面边界约束 |
-| `Models/HiddenInkRevealState.cs` | Hidden Ink reveal 截止时间的纯函数规则 |
-| `Models/AppSettings.cs` | 完整设置快照：语言、压感/平滑/预设、自动保存、默认笔参数、主题 |
+| `OpenNotes.Core/Models/TextAnnotationGeometry.cs` | 文本框默认/最小尺寸、八方向缩放和页面边界约束 |
+| `OpenNotes.Core/Models/HiddenInkRevealState.cs` | Hidden Ink reveal 截止时间的纯函数规则 |
+| `OpenNotes.Core/Models/AppSettings.cs` | 完整设置快照：语言、压感/平滑/预设、自动保存、默认笔参数、主题 |
 | `Services/PdfService.cs` | PdfiumViewer 加载/渲染 + PdfSharpCore 注释剥离与写回（含 `wna_hidden_` Hidden Ink `/Ink`） |
-| `Services/PdfSaveCoordinator.cs` | 进程内规范化 PDF 路径锁：同一路径串行、不同路径并行、异常/取消后安全清理 |
-| `Services/PdfAtomicFile.cs` | 所有 PDF 物理写入的同目录 temp + Flush(true) + atomic Move helper |
-| `Services/DocumentReleaseState.cs` | release timeout/partial-failure 状态：后台任务 settle 前禁止 editor resume/re-entry |
+| `OpenNotes.Core/Services/PdfSaveCoordinator.cs` | 进程内规范化 PDF 路径锁：同一路径串行、不同路径并行、异常/取消后安全清理 |
+| `OpenNotes.Core/Services/PdfAtomicFile.cs` | 所有 PDF 物理写入的同目录 temp + Flush(true) + atomic Move helper |
+| `OpenNotes.Core/Services/DocumentReleaseState.cs` | release timeout/partial-failure 状态：后台任务 settle 前禁止 editor resume/re-entry |
 | `Services/NavigationCloseCoordinator.cs` | Prepare 成功后的 stale journal barrier，CanGoBack 失效时回滚 close admission |
-| `Services/DocumentSaveCoordinator.cs` | EditorPage 手动/自动/关闭的 generation-aware coalescing 与 latest-snapshot 协议 |
-| `Services/DocumentEditAdmission.cs` | Editor 输入/undo/结构命令的 close/navigation admission、quiescence 与可重试 reopen |
-| `Services/AppSettingsService.cs` | %LOCALAPPDATA%\Caelum\settings.json 读写（完整字段 Sanitize/Clone） |
+| `OpenNotes.Core/Services/DocumentSaveCoordinator.cs` | EditorPage 手动/自动/关闭的 generation-aware coalescing 与 latest-snapshot 协议 |
+| `OpenNotes.Core/Services/DocumentEditAdmission.cs` | Editor 输入/undo/结构命令的 close/navigation admission、quiescence 与可重试 reopen |
+| `OpenNotes.Core/Services/AppSettingsService.cs` | %LOCALAPPDATA%\Caelum\settings.json 读写（完整字段 Sanitize/Clone） |
 | `Services/ThemeService.cs` | 应用 chrome 的 Light/Dark/System/HighContrast 资源切换（不染色 PDF 页面） |
-| `Services/PageBookmarkService.cs` | 文件路径键控的页书签 JSON 存储 |
-| `Models/PageInsertTemplate.cs` | Blank/Notebook/Lined/Quadrille/Dotted/Music/Cornell 模板枚举 |
-| `Services/VersionControlService.cs` | JSON 快照历史 %LOCALAPPDATA%\Caelum\VersionHistory |
+| `OpenNotes.Core/Services/PageBookmarkService.cs` | 文件路径键控的页书签 JSON 存储 |
+| `OpenNotes.Core/Models/PageInsertTemplate.cs` | Blank/Notebook/Lined/Quadrille/Dotted/Music/Cornell 模板枚举 |
+| `OpenNotes.Core/Services/VersionControlService.cs` | JSON 快照历史 %LOCALAPPDATA%\Caelum\VersionHistory |
 | `Services/WindowsPenService.cs` | 触控笔设备探测/品牌识别/Win+F19 F20 热键 |
 | `Services/ThemeService.cs` | Light/Dark/HighContrast/System chrome 资源、焦点、减少动画/透明度 token |
 | `Services/PopupZOrderHelper.cs` | Popup、ContextMenu、ComboBox dropdown 的 Win32 z-order/focus 修复 |
-| `Services/ProductInfo.cs` | OpenNotes 可见品牌与 Caelum 兼容标识 |
-| `Services/WindowsEnvironment.cs` | WPF 启动前恢复缺失的进程级 `WINDIR` 别名 |
+| `OpenNotes.Core/Services/ProductInfo.cs` | OpenNotes 可见品牌与 Caelum 兼容标识 |
+| `OpenNotes.Core/Services/WindowsEnvironment.cs` | WPF 启动前恢复缺失的进程级 `WINDIR` 别名 |
 | `App.xaml` | 全局样式（SleekScrollViewer/ModernComboBox/ContextMenu 等） |
 
 镜像文档目录：`.ai/`（一源文件一 md，路径保持）。**修改源文件后必须同步更新对应镜像。**
@@ -51,6 +51,7 @@ WPF (.NET 8) PDF 笔记应用，正式产品和工作区名称为 **OpenNotes**�
 5. **单窗口 Frame 标签架构**（MainWindow `List<AppTab> _tabs` + Frame.Navigate）。
 
 ## Current Work
+- 2026-09-22: V6 WinUI 3 migration Task 1 on branch `v6/winui3` — UI-free code extracted into new `OpenNotes.Core` class library (`net8.0`, no WPF/WinForms, `RootNamespace=Caelum`, `PdfSharpCore` only). 19 Services + 7 Models files moved unchanged into `OpenNotes.Core/Services/` and `OpenNotes.Core/Models/`; namespaces stay `Caelum.Services`/`Caelum.Models`. `OpenNotes.csproj` excludes `OpenNotes.Core\**` from default globs and references the new project; `InternalsVisibleTo` in OpenNotes.Core exposes moved internals to `OpenNotes` and `OpenNotes.Tests`. Mirrors live under `.ai/OpenNotes.Core/`.
 - 2026-09-22: OpenNotes 5.2.15 sidebar content-offset fix. The expanded `DocumentSidebar` overlay rail (12+184 DIP) covered the centered page stack's left edge; `UpdatePagesContainerMarginForSidebar` now reserves the rail footprint in `PagesContainer.Margin` when expanded (228 left) and restores centered 32,20,32,32 when collapsed, with immersive mode re-centering while the rail is hidden. STA regression `ExpandedSidebarOffsetsPagesContainerSoContentStaysClear` covers all states. Visible version is 5.2.15/5.2.15.0; Caelum namespace/data, WindowsNotesApp identity, and installer AppId remain compatible. Tag `v5.2.15` is the release trigger. Environment note: the full `dotnet test` run aborts around test ~50 with a pre-existing `HwndSubclass`/`Thread.CurrentThread` testhost crash that also reproduces on clean `main`; run the suite in per-fixture batches (all 457 tests pass, 0 failures).
 - 2026-09-22: V6 WinUI 3 revamp kicked off after 5.2.15 — keep all features; plan lives in `docs/superpowers/plans/2026-09-22-winui3-revamp.md`; prior scaffolding sits on `wip/winui-cutover` (csproj spike + OpenNotes.Core stub only).
 - 2026-09-08: OpenNotes 5.2.14 tab-close-after-inking hotfix. After writing, leftover InkCanvas capture and mouse-only chrome handlers could leave the tab X / window close dead. Close now releases pointer captures, handles stylus on close chrome, and bounds PrepareForClose with WaitAsync. Visible version is 5.2.14/5.2.14.0; Caelum namespace/data, WindowsNotesApp identity, and installer AppId remain compatible. Tag `v5.2.14` is the release trigger.

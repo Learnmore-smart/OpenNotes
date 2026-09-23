@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <RootNamespace>Caelum</RootNamespace>
+    <AssemblyName>OpenNotes.Core</AssemblyName>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="PdfSharpCore" Version="1.3.67" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Moved services/models expose internal members to the WPF app and the
+         test suite (e.g. PdfAtomicFile, RecycleBinService, WindowsEnvironment). -->
+    <InternalsVisibleTo Include="OpenNotes" />
+    <InternalsVisibleTo Include="OpenNotes.Tests" />
+  </ItemGroup>
+
+</Project>

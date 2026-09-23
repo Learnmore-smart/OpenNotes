@@ -1,4 +1,4 @@
-# Services/RecycleBinService.cs
+# OpenNotes.Core/Services/RecycleBinService.cs
 
 > Last updated: 2026-09-05 | Protection: STANDARD
 

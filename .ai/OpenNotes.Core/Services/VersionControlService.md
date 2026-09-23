@@ -1,4 +1,4 @@
-# Services/VersionControlService.cs
+# OpenNotes.Core/Services/VersionControlService.cs
 > Last updated: 2026-08-21（test data-root override implemented）| Protection: STANDARD
 
 ## Purpose（一句话）

@@ -1,4 +1,4 @@
-# WordToPdfConverter.cs
+# OpenNotes.Core/Services/WordToPdfConverter.cs
 
 > Last updated: 2026-09-08 | Protection: STANDARD
 
