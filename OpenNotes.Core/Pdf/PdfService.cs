@@ -46,7 +46,15 @@ namespace Caelum.Pdf
         private readonly SemaphoreSlim _lifetimeGate = new SemaphoreSlim(1, 1);
         private const double PdfPointToDipScale = 96.0 / 72.0;
         private IPdfRasterizer _pdfDocument;
-        private Stream _pdfBackingStream;
+        /// <summary>
+        /// Whether the current rasterizer was loaded from the stripped
+        /// in-memory stream (vs. the direct file fallback). The stream itself
+        /// is owned and disposed by the rasterizer — the service never
+        /// touches it. Stream-backed means the rasterizer holds no file
+        /// handle, so SaveAnnotationsCore may replace the file in place;
+        /// file-backed requires a dispose/reload around the atomic replace.
+        /// </summary>
+        private bool _hasBackingStream;
         private string _sourceFilePath;
         private readonly Dictionary<int, PdfPageTextInfo> _pageTextInfoCache = new Dictionary<int, PdfPageTextInfo>();
         private const int DisposeActive = 0;
@@ -382,7 +390,7 @@ namespace Caelum.Pdf
 
                     var loaded = await Task.Run(() => LoadPdfDocument(filePath, cancellationToken), cancellationToken).ConfigureAwait(false);
                     _pdfDocument = loaded.Document;
-                    _pdfBackingStream = loaded.BackingStream;
+                    _hasBackingStream = loaded.BackingStream != null;
                     ExtractedAnnotations = loaded.ExtractedAnnotations;
                 }
                 finally
@@ -463,22 +471,13 @@ namespace Caelum.Pdf
                 }
             }
 
-            var backingStream = _pdfBackingStream;
-            if (backingStream != null)
-            {
-                try
-                {
-                    backingStream.Dispose();
-                    _pdfBackingStream = null;
-                }
-                catch (Exception ex)
-                {
-                    // Preserve a failed stream owner for the same retryable
-                    // disposal contract, while still attempting every other
-                    // resource above.
-                    firstFailure ??= ex;
-                }
-            }
+            // The backing stream is owned by the rasterizer (factory
+            // contract) and was already released inside document.Dispose()
+            // above — never dispose it a second time here. The marker is only
+            // cleared on success so a failed dispose keeps the true state
+            // for a retry.
+            if (_pdfDocument == null)
+                _hasBackingStream = false;
 
             if (firstFailure != null)
                 ExceptionDispatchInfo.Capture(firstFailure).Throw();
@@ -496,7 +495,7 @@ namespace Caelum.Pdf
                 loaded = await Task.Run(() => LoadPdfDocument(filePath, CancellationToken.None), CancellationToken.None).ConfigureAwait(false);
                 ThrowIfDisposed();
                 _pdfDocument = loaded.Document;
-                _pdfBackingStream = loaded.BackingStream;
+                _hasBackingStream = loaded.BackingStream != null;
                 ExtractedAnnotations = loaded.ExtractedAnnotations;
                 loaded = null;
             }
@@ -521,14 +520,9 @@ namespace Caelum.Pdf
                 firstFailure = ex;
             }
 
-            try
-            {
-                loaded.BackingStream?.Dispose();
-            }
-            catch (Exception ex)
-            {
-                firstFailure ??= ex;
-            }
+            // loaded.BackingStream is intentionally NOT disposed here: the
+            // IPdfRasterizer factory contract transfers stream ownership to
+            // the rasterizer, which releases it inside Document.Dispose().
 
             if (firstFailure != null)
                 ExceptionDispatchInfo.Capture(firstFailure).Throw();
@@ -1559,7 +1553,7 @@ namespace Caelum.Pdf
             await RunDocumentWriteUnderLifetimeAsync(async () =>
             {
                 ThrowIfDisposed();
-                bool requiresReload = _pdfBackingStream == null;
+                bool requiresReload = !_hasBackingStream;
                 if (requiresReload)
                     DisposeCurrentDocument();
 

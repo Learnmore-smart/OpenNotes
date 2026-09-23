@@ -21,7 +21,10 @@ render/text/outline types.
   `PdfAtomicFile`, `_lifetimeGate` → `_documentLock` ordering, retryable
   disposal). None of that changed in the move.
 - `_pdfDocument` (`PdfiumViewer.PdfDocument`) became `_rasterizer`
-  (`IPdfRasterizer`) + `_pdfBackingStream` (the stripped stream it owns).
+  (`IPdfRasterizer`) + `_hasBackingStream` marker (spec-review fix: the
+  stripped stream is owned and disposed solely by the rasterizer per the
+  factory contract — the service tracks only stream- vs file-backed state
+  for the save `requiresReload` decision and never disposes it).
   `PdfiumPdfDocument.Load` calls became `IPdfRasterizerFactory.LoadFromStream`
   / `LoadFromFile`; default factory is `PdfiumRasterizerFactory.Shared`
   (internal ctor takes a factory for test seams).

@@ -137,7 +137,7 @@ namespace Caelum.Pdf
         {
             PdfiumNative.FPDF_GetDocPermissions(_document);
 
-            // FPDF_FORMFILLINFO pinned for the form env's lifetime. All 16 v1
+            // FPDF_FORMFILLINFO pinned for the form env's lifetime. All 15 v1
             // callback slots carry real (mostly no-op) delegates — mirroring
             // PdfiumViewer, which never hands pdfium a null function pointer.
             // pdfium may call e.g. FFI_GetRotation/FFI_GetPage while running
@@ -496,7 +496,7 @@ namespace Caelum.Pdf
                 return Imports.FPDF_LoadCustomDocument(in access, null);
         }
 
-        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
         private delegate int FpdfGetBlockDelegate(IntPtr param, uint position, IntPtr buffer, uint size);
 
         private static readonly FpdfGetBlockDelegate GetBlockDelegate = FpdfGetBlock;
@@ -670,10 +670,10 @@ namespace Caelum.Pdf
                 Imports.FPDFBitmap_FillRect(bitmapHandle, left, top, width, height, color);
         }
 
-        internal static IntPtr FPDFBitmap_Destroy(IntPtr bitmapHandle)
+        internal static void FPDFBitmap_Destroy(IntPtr bitmapHandle)
         {
             lock (SyncRoot)
-                return Imports.FPDFBitmap_Destroy(bitmapHandle);
+                Imports.FPDFBitmap_Destroy(bitmapHandle);
         }
 
         internal static void FPDF_FFLDraw(IntPtr form, IntPtr bitmap, IntPtr page, int startX, int startY, int sizeX, int sizeY, int rotate, int flags)
@@ -776,74 +776,76 @@ namespace Caelum.Pdf
 
         #region FPDF_FORMFILLINFO callbacks (fpdf_formfill.h signatures)
 
-        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-        private delegate int FfiReleaseDelegate(IntPtr pThis);
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        private delegate void FfiReleaseDelegate(IntPtr pThis);
 
-        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
         private delegate void FfiInvalidateDelegate(IntPtr pThis, IntPtr page, double left, double top, double right, double bottom);
 
-        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
         private delegate void FfiOutputSelectedRectDelegate(IntPtr pThis, IntPtr page, IntPtr left, IntPtr top, IntPtr right, IntPtr bottom);
 
-        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
         private delegate void FfiSetCursorDelegate(IntPtr pThis, int cursorType);
 
-        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
         private delegate int FfiSetTimerDelegate(IntPtr pThis, int elapse, IntPtr timerFunc);
 
-        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
         private delegate void FfiKillTimerDelegate(IntPtr pThis, int timerId);
 
-        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-        private delegate IntPtr FfiGetLocalTimeDelegate(IntPtr pThis);
+        // FPDF_SYSTEMTIME FFI_GetLocalTime(void* pThis) returns an 18-byte
+        // struct BY VALUE. On the Win64 ABI a by-value aggregate >8 bytes
+        // lowers to a hidden first parameter: caller allocates the return
+        // storage, passes its pointer in RCX, and pThis shifts to RDX; the
+        // callee writes the struct and returns that same pointer in RAX.
+        // The previous (IntPtr pThis)->IntPtr signature left the caller's
+        // buffer unwritten, so pdfium read uninitialized stack whenever it
+        // queried local time (AcroForm date fields, doc-JS util.printd —
+        // FORM_DoDocumentJSAction runs on every open). Latent UMR.
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        private delegate IntPtr FfiGetLocalTimeDelegate(IntPtr outSystemTime, IntPtr pThis);
 
-        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
         private delegate void FfiOnChangeDelegate(IntPtr pThis);
 
-        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
         private delegate IntPtr FfiGetPageDelegate(IntPtr pThis, IntPtr document, int pageIndex);
 
-        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
         private delegate IntPtr FfiGetCurrentPageDelegate(IntPtr pThis, IntPtr document);
 
-        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
         private delegate int FfiGetRotationDelegate(IntPtr pThis, IntPtr page);
 
-        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
         private delegate void FfiExecuteNamedActionDelegate(IntPtr pThis, IntPtr namedAction);
 
-        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
         private delegate void FfiSetTextFieldFocusDelegate(IntPtr pThis, IntPtr value, uint valueLen, int isFocus);
 
-        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
         private delegate void FfiDoUriActionDelegate(IntPtr pThis, IntPtr uri);
 
-        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
         private delegate void FfiDoGoToActionDelegate(IntPtr pThis, int pageIndex, int zoomMode, IntPtr posArray, int arraySize);
 
-        // Keep the delegates and the pinned FPDF_SYSTEMTIME alive for the
-        // process lifetime; form envs are process-wide in practice and the
-        // callbacks are stateless no-ops, so sharing is safe.
+        // Keep the delegates alive for the process lifetime; form envs are
+        // process-wide in practice and the callbacks are stateless, so
+        // sharing is safe.
         private static readonly object[] FormFillCallbacks;
-        private static readonly IntPtr StaticSystemTime;
 
         static PdfiumNative()
         {
-            // FPDF_SYSTEMTIME (8x ushort) zero-initialized: pdfium only reads
-            // it for date/time fields, which the rasterizer never produces.
-            StaticSystemTime = Marshal.AllocHGlobal(16);
-            for (int i = 0; i < 16; i++)
-                Marshal.WriteByte(StaticSystemTime, i, 0);
-
             FormFillCallbacks = new object[]
             {
-                new FfiReleaseDelegate(_ => 0),
+                new FfiReleaseDelegate(_ => { }),
                 new FfiInvalidateDelegate((p, page, l, t, r, b) => { }),
                 new FfiOutputSelectedRectDelegate((p, page, l, t, r, b) => { }),
                 new FfiSetCursorDelegate((p, cursorType) => { }),
                 new FfiSetTimerDelegate((p, elapse, func) => 0),
                 new FfiKillTimerDelegate((p, timerId) => { }),
-                new FfiGetLocalTimeDelegate(_ => StaticSystemTime),
+                new FfiGetLocalTimeDelegate(FfiGetLocalTime),
                 new FfiOnChangeDelegate(_ => { }),
                 new FfiGetPageDelegate((p, doc, pageIndex) => IntPtr.Zero),
                 new FfiGetCurrentPageDelegate((p, doc) => IntPtr.Zero),
@@ -856,8 +858,33 @@ namespace Caelum.Pdf
         }
 
         /// <summary>
-        /// Builds an FPDF_FORMFILLINFO whose v1 callback slots point at the
-        /// shared stateless delegates above (Release + 15 FFI_* slots).
+        /// FPDF_SYSTEMTIME = 8 ushorts (wYear since 1900, wMonth 0-11,
+        /// wDayOfWeek 0-6, wDay 1-31, wHour, wMinute, wSecond, wMilliseconds)
+        /// + tzHourDiff + tzMinuteDiff bytes = 18 bytes, written into the
+        /// caller-owned buffer (see the hidden-out-param note on the
+        /// delegate). Returns the buffer pointer as the ABI requires.
+        /// </summary>
+        private static IntPtr FfiGetLocalTime(IntPtr outSystemTime, IntPtr pThis)
+        {
+            DateTime now = DateTime.Now;
+            Marshal.WriteInt16(outSystemTime, 0, (short)(now.Year - 1900));
+            Marshal.WriteInt16(outSystemTime, 2, (short)(now.Month - 1));
+            Marshal.WriteInt16(outSystemTime, 4, (short)now.DayOfWeek);
+            Marshal.WriteInt16(outSystemTime, 6, (short)now.Day);
+            Marshal.WriteInt16(outSystemTime, 8, (short)now.Hour);
+            Marshal.WriteInt16(outSystemTime, 10, (short)now.Minute);
+            Marshal.WriteInt16(outSystemTime, 12, (short)now.Second);
+            Marshal.WriteInt16(outSystemTime, 14, (short)now.Millisecond);
+            var utcOffset = TimeZoneInfo.Local.GetUtcOffset(now);
+            Marshal.WriteByte(outSystemTime, 16, (byte)(sbyte)utcOffset.Hours);
+            Marshal.WriteByte(outSystemTime, 17, (byte)(sbyte)utcOffset.Minutes);
+            return outSystemTime;
+        }
+
+        /// <summary>
+        /// Builds an FPDF_FORMFILLINFO whose 15 v1 callback slots point at the
+        /// shared stateless delegates above (m_pJsPlatform stays null — no JS
+        /// platform, same as PdfiumViewer).
         /// </summary>
         internal static FpdfFormFillInfo CreateFormFillInfo()
         {
@@ -886,9 +913,10 @@ namespace Caelum.Pdf
 
         private static class Imports
         {
-            // pdfium exports use the C calling convention; declared explicitly
-            // (the previous backend relied on x64 collapsing conventions).
-            private const CallingConvention Convention = CallingConvention.Cdecl;
+            // pdfium headers declare FPDF_CALLCONV = __stdcall on Windows
+            // (x64 collapses cdecl/stdcall into one convention, but StdCall
+            // matches the spec and is the only correct form on x86).
+            private const CallingConvention Convention = CallingConvention.StdCall;
 
             [DllImport(PdfiumDll, CallingConvention = Convention)]
             public static extern void FPDF_AddRef();
@@ -969,7 +997,7 @@ namespace Caelum.Pdf
             public static extern void FPDFBitmap_FillRect(IntPtr bitmapHandle, int left, int top, int width, int height, uint color);
 
             [DllImport(PdfiumDll, CallingConvention = Convention)]
-            public static extern IntPtr FPDFBitmap_Destroy(IntPtr bitmapHandle);
+            public static extern void FPDFBitmap_Destroy(IntPtr bitmapHandle);
 
             [DllImport(PdfiumDll, CallingConvention = Convention)]
             public static extern void FPDF_FFLDraw(IntPtr form, IntPtr bitmap, IntPtr page, int startX, int startY, int sizeX, int sizeY, int rotate, int flags);

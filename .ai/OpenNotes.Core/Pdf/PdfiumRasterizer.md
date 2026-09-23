@@ -14,7 +14,7 @@ future WinUI host share one UI-free raster backend.
   opens a `FileStream` and feeds the stream loader (mirrors
   `PdfDocument.Load(path)`).
 - `PdfiumRasterizer(Stream)` — pins a `GCHandle` for the stream, loads via
-  `FPDF_LoadCustomDocument` with an `FPDF_FILEACCESS` struct (cdecl
+  `FPDF_LoadCustomDocument` with an `FPDF_FILEACCESS` struct (StdCall
   `m_GetBlock` delegate reads from the managed stream; static delegate field
   prevents GC). Source stream stays open for the document lifetime and is
   disposed in `Dispose`.
@@ -23,11 +23,14 @@ future WinUI host share one UI-free raster backend.
   color/alpha (`0xFFE4DD`, 100), then `FORM_DoDocumentJSAction` +
   `FORM_DoDocumentOpenAction`.
 - `FpdfFormFillInfo` — `int Version` + 31 `IntPtr` slots in fpdf_formfill.h
-  order. `CreateFormFillInfo()` populates all 16 v1 slots with real
-  stateless/no-op cdecl delegates (shared static array so they never get
-  collected; `m_pJsPlatform` stays null). `FFI_GetLocalTime` returns a pinned
-  process-lifetime zeroed `FPDF_SYSTEMTIME`. Never hand pdfium a null
-  function pointer — documents with page/document actions may invoke them.
+  order. `CreateFormFillInfo()` populates the 15 v1 slots with real
+  stateless/no-op `StdCall` delegates (shared static array so they never get
+  collected; `m_pJsPlatform` stays null). `FFI_GetLocalTime` implements the
+  Win64 hidden-out-param ABI — the 18-byte `FPDF_SYSTEMTIME` is returned by
+  value, so the delegate signature is `(IntPtr outSystemTime, IntPtr pThis)`;
+  it writes real local time into the caller buffer and returns the pointer.
+  Never hand pdfium a null function pointer — documents with page/document
+  actions may invoke them.
 - `RenderPageBgra(pageIndex, w, h, renderAnnotations = true)` — `byte[]`
   pinned + `FPDFBitmap_CreateEx(w, h, FPDFBitmapFormatBgra=4, scan0, w*4)` +
   `FPDFBitmap_FillRect(0xFFFFFFFF)` + `FPDF_RenderPageBitmap` +
@@ -51,15 +54,15 @@ future WinUI host share one UI-free raster backend.
 
 - `pdfium.dll` resolution: `EnsureLoaded` probes
   `AppDomain.RelativeSearchPath` then the assembly directory, appending
-  `x64`/`x86` (same order as PdfiumViewer's NativeMethods static ctor), then
-  `LoadLibraryW` + `FPDF_AddRef`.
+  `x64` (product is x64-only; same order as PdfiumViewer's NativeMethods
+  static ctor), then `LoadLibraryW` + `FPDF_AddRef`.
 - **Thread safety:** every native entry point locks `PdfiumNative.SyncRoot`
   — the interned string `e362349b-001d-4cb2-bf55-a71606a3e36f`, the *same*
   monitor PdfiumViewer uses — so both backends serialize on one process-wide
   pdfium lock (pdfium is not thread-safe).
 - Structs/imports: `FPDF_FILEACCESS` (uint FileLen + GetBlock fnptr + Param),
   `FpdfFormFillInfo` sequential layout; all imports declared
-  `CallingConvention.Cdecl`.
+  `CallingConvention.StdCall` (FPDF_CALLCONV per headers; identical codegen on x64).
 
 ## Important Notes / NEVER Change
 
@@ -78,3 +81,11 @@ future WinUI host share one UI-free raster backend.
   `EditorPage.RenderPrintablePages` and the insert-pages page-count probe —
   the last two production `PdfiumViewer` call sites (WPF `EditorPage` no
   longer references `PdfiumViewer`; only the parity test does, deliberately).
+- 2026-09-22: Spec-review fixes — `FFI_GetLocalTime` corrected to the Win64
+  hidden-out-param ABI (`(IntPtr outSystemTime, IntPtr pThis)` writing real
+  local time into the 18-byte `FPDF_SYSTEMTIME`; the previous
+  `(IntPtr pThis)->IntPtr` signature left the caller buffer unwritten = latent
+  UMR reachable via `FORM_DoDocumentJSAction` on every open). All imports +
+  callbacks now `StdCall` per `FPDF_CALLCONV`; x86 probe removed (x64-only);
+  `FPDFBitmap_Destroy`/`Release` return `void`; callback wording corrected to
+  15 delegates + null `m_pJsPlatform`.

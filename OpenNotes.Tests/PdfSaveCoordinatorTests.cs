@@ -516,12 +516,14 @@ public sealed class PdfSaveCoordinatorTests
         await using var service = new PdfService();
         await service.LoadPdfAsync(path);
 
-        // The backing-stream field lives on the Core base class
-        // (Caelum.Pdf.PdfService) after the Task 3 split; walk the hierarchy.
-        var backingField = FindPrivateInstanceField(typeof(PdfService), "_pdfBackingStream");
-        Assert.That(backingField, Is.Not.Null);
-        (backingField.GetValue(service) as Stream)?.Dispose();
-        backingField.SetValue(service, new ThrowingDisposeStream());
+        // The rasterizer owns the backing stream outright (factory
+        // contract), so the native release failure is injected at the
+        // _pdfDocument owner on the Core base class; walk the hierarchy.
+        var docField = FindPrivateInstanceField(typeof(PdfService), "_pdfDocument");
+        Assert.That(docField, Is.Not.Null);
+        var original = docField.GetValue(service) as Caelum.Pdf.IPdfRasterizer;
+        Assert.That(original, Is.Not.Null);
+        docField.SetValue(service, new ThrowOnceDisposeRasterizer(original));
 
         Assert.That(
             async () => await service.DisposeAsync().AsTask(),
@@ -605,15 +607,34 @@ public sealed class PdfSaveCoordinatorTests
     private static TaskCompletionSource<bool> NewSignal() =>
         new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-    private sealed class ThrowingDisposeStream : MemoryStream
+    /// <summary>
+    /// IPdfRasterizer wrapper that fails its first Dispose (simulating a
+    /// failed native/stream release) and forwards the second to the inner
+    /// rasterizer — mirrors the old ThrowingDisposeStream seam now that the
+    /// rasterizer owns the backing stream.
+    /// </summary>
+    private sealed class ThrowOnceDisposeRasterizer : Caelum.Pdf.IPdfRasterizer
     {
+        private readonly Caelum.Pdf.IPdfRasterizer _inner;
         private int _failed;
 
-        protected override void Dispose(bool disposing)
+        public ThrowOnceDisposeRasterizer(Caelum.Pdf.IPdfRasterizer inner) => _inner = inner;
+
+        public int PageCount => _inner.PageCount;
+        public IReadOnlyList<Caelum.Pdf.PdfPageSize> PageSizes => _inner.PageSizes;
+        public Caelum.Pdf.PdfPageBitmap RenderPageBgra(int pageIndex, int pixelWidth, int pixelHeight, bool renderAnnotations = true)
+            => _inner.RenderPageBgra(pageIndex, pixelWidth, pixelHeight, renderAnnotations);
+        public string GetPageText(int pageIndex) => _inner.GetPageText(pageIndex);
+        public IReadOnlyList<Caelum.Pdf.PdfRectF> GetTextBounds(int pageIndex, int offset, int length)
+            => _inner.GetTextBounds(pageIndex, offset, length);
+        public Caelum.Pdf.PdfRectI RectangleFromPdf(int pageIndex, Caelum.Pdf.PdfRectF rect)
+            => _inner.RectangleFromPdf(pageIndex, rect);
+
+        public void Dispose()
         {
-            if (disposing && Interlocked.Exchange(ref _failed, 1) == 0)
+            if (Interlocked.Exchange(ref _failed, 1) == 0)
                 throw new InvalidOperationException("expected release failure");
-            base.Dispose(disposing);
+            _inner.Dispose();
         }
     }
 }
