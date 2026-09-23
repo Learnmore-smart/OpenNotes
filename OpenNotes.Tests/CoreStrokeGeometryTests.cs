@@ -525,7 +525,7 @@ public sealed class CoreStrokeGeometryTests
             Assert.That(StrokeGeometry.TryRecognizeShape(zigzag, out _), Is.False);
             Assert.That(StrokeGeometry.TryRecognizeShape(
                 new List<PointD> { new(0, 0), new(1, 1), new(2, 0) }, out _), Is.False,
-                "A 3px scribble never reaches the diagonal gate.");
+                "A 3-point scribble is rejected by the MinRecognizedShapePoints gate.");
         });
     }
 
