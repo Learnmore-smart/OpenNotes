@@ -1,0 +1,29 @@
+<Page
+    x:Class="Caelum.Pages.EditorPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <!--
+        Task 5 stub editor: proves the HomePage → EditorPage navigation path
+        end to end (WPF parity for NavigateActiveTabToFile). The real editor
+        surface lands with the Task 6 port.
+    -->
+    <Grid Background="{ThemeResource ThemeWorkspaceBrush}">
+        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="560">
+            <FontIcon Glyph="&#xE8A5;" FontSize="32" Foreground="{ThemeResource ThemeAccentBrush}"
+                      HorizontalAlignment="Center" Margin="0,0,0,12"/>
+            <TextBlock x:Name="EditorTitleTextBlock"
+                       AutomationProperties.AutomationId="EditorPageTitle"
+                       FontSize="20" FontWeight="SemiBold"
+                       Foreground="{ThemeResource ThemeForegroundBrush}"
+                       HorizontalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+            <TextBlock x:Name="EditorPathTextBlock"
+                       AutomationProperties.AutomationId="EditorPagePath"
+                       FontSize="12" Foreground="{ThemeResource ThemeSubtleForegroundBrush}"
+                       HorizontalAlignment="Center" Margin="0,6,0,0"
+                       TextWrapping="Wrap" TextTrimming="CharacterEllipsis"/>
+            <TextBlock Text="The editor surface arrives with the Task 6 port."
+                       FontSize="12" Foreground="{ThemeResource ThemeSubtleForegroundBrush}"
+                       HorizontalAlignment="Center" Margin="0,14,0,0"/>
+        </StackPanel>
+    </Grid>
+</Page>

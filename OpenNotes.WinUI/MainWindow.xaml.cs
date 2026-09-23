@@ -1,7 +1,12 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.ComponentModel;
+using System.Diagnostics;
+using System.IO;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using Caelum.Models;
 using Caelum.Pages;
 using Caelum.Services;
@@ -12,6 +17,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Media.Animation;
 using Windows.Graphics;
 using Windows.System;
 using Windows.UI.Core;
@@ -20,18 +26,31 @@ using WinRT.Interop;
 namespace Caelum
 {
     /// <summary>
-    /// V6 WinUI main window. This step ports the chrome + tab model slice of
-    /// the WPF <c>MainWindow.xaml.cs</c>: the <c>_tabs</c> list, new/activate/
-    /// close/reorder semantics, caption buttons through
-    /// <see cref="AppWindow"/>/<see cref="OverlappedPresenter"/>, and the theme
-    /// apply on startup. Editor-tab navigation, save/close workflows, toasts,
-    /// and the toolbar clusters land in later tasks.
+    /// V6 WinUI main window. Ports the chrome + tab model slice of the WPF
+    /// <c>MainWindow.xaml.cs</c> plus the Task 5 toolbar slice: title-bar
+    /// SearchBox/SelectButton/SortButton/MoreButton wired to the active
+    /// <see cref="HomePage"/>, <see cref="ShowToast"/> overlay toasts,
+    /// <see cref="NavigateActiveTabToFile"/> → EditorPage navigation,
+    /// check-for-updates and the about dialog. Editor save/close workflows
+    /// land in later tasks.
     /// </summary>
     public sealed partial class MainWindow : Window
     {
         private readonly ObservableCollection<AppTab> _tabs = new ObservableCollection<AppTab>();
         private AppTab _activeTab;
         private bool _syncingTabSelection;
+
+        private readonly UpdateCheckService _updateCheckService = new UpdateCheckService();
+        private bool _isUpdateCheckInProgress;
+        private CancellationTokenSource _updateCheckCts;
+        private CancellationTokenSource _toastCts;
+
+        /// <summary>
+        /// The live window (single-window shell) — the WinUI stand-in for
+        /// <c>Window.GetWindow(this)</c>/<c>Application.Current.MainWindow</c>
+        /// that pages and services anchor pickers/dialogs/toasts to.
+        /// </summary>
+        internal static new MainWindow Current { get; private set; }
 
         private AppWindow _appWindow;
         private OverlappedPresenter _presenter;
@@ -46,6 +65,7 @@ namespace Caelum
         public MainWindow()
         {
             this.InitializeComponent();
+            Current = this;
 
             InitializeAppWindow();
             ApplyStartupSettings();
@@ -53,6 +73,7 @@ namespace Caelum
 
             WinUiThemeService.RegisterWindow(this);
             WinUiThemeService.ThemeApplied += WinUiThemeService_ThemeApplied;
+            LocalizationService.LanguageChanged += LocalizationService_LanguageChanged;
             this.Closed += MainWindow_Closed;
 
             // The normal application window starts with Home (WPF parity).
@@ -242,6 +263,28 @@ namespace Caelum
             if (ProductNameTextBlock != null)
                 ProductNameTextBlock.Text = ProductInfo.DisplayName;
             ToolTipService.SetToolTip(NewTabButton, LocalizationService.Get("Main.NewTabTooltip"));
+            if (SearchBox != null)
+                SearchBox.PlaceholderText = LocalizationService.Get("Main.SearchPlaceholder");
+            if (SelectButtonLabel != null)
+                SelectButtonLabel.Text = LocalizationService.Get("Main.Select");
+            if (SortByNameMenuItem != null)
+                SortByNameMenuItem.Text = LocalizationService.Get("Main.SortByName");
+            if (SortByDateMenuItem != null)
+                SortByDateMenuItem.Text = LocalizationService.Get("Main.SortByDate");
+            if (SettingsMenuItem != null)
+                SettingsMenuItem.Text = LocalizationService.Get("Main.Settings");
+            if (CheckForUpdatesMenuItem != null && !_isUpdateCheckInProgress)
+                CheckForUpdatesMenuItem.Text = LocalizationService.Get("Main.CheckForUpdates");
+            if (AboutMenuItem != null)
+                AboutMenuItem.Text = LocalizationService.Get("Main.About");
+        }
+
+        private void LocalizationService_LanguageChanged(object sender, EventArgs e)
+        {
+            ApplyLocalization();
+            // Pages built at navigation time re-localize on their own; the
+            // live HomePage rebinds through its ApplyLocalization too.
+            (ActiveFrame?.Content as HomePage)?.ApplyLocalization();
         }
 
         private void WinUiThemeService_ThemeApplied(object sender, EventArgs e)
@@ -250,11 +293,21 @@ namespace Caelum
             // them so a palette swap cannot leave stale brushes painted.
             foreach (var tab in _tabs)
                 tab.RefreshVisualState();
+            // Theme-resolved brushes on tiles are plain objects — re-raise
+            // them the way the WPF DynamicResource bindings did implicitly.
+            foreach (var tab in _tabs)
+                (tab.Frame?.Content as HomePage)?.RefreshTileVisualState();
+            RefreshSelectButtonVisualState();
         }
 
         private void MainWindow_Closed(object sender, WindowEventArgs args)
         {
             WinUiThemeService.ThemeApplied -= WinUiThemeService_ThemeApplied;
+            LocalizationService.LanguageChanged -= LocalizationService_LanguageChanged;
+            _updateCheckCts?.Cancel();
+            _toastCts?.Cancel();
+            if (ReferenceEquals(Current, this))
+                Current = null;
             if (_appWindow != null)
                 _appWindow.Changed -= AppWindow_Changed;
             var xamlRoot = RootGrid?.XamlRoot;
@@ -285,7 +338,7 @@ namespace Caelum
             frame.Visibility = Visibility.Collapsed;
             _tabs.Add(tab);
 
-            frame.Navigate(typeof(HomePlaceholderPage));
+            frame.Navigate(typeof(HomePage));
 
             if (activate)
                 ActivateTab(tab);
@@ -321,6 +374,7 @@ namespace Caelum
             }
 
             UpdateNavButtons();
+            UpdateToolbarForActivePage();
         }
 
         /// <summary>
@@ -575,20 +629,364 @@ namespace Caelum
         {
             if (ActiveFrame == null)
                 return;
-            ActiveFrame.Navigate(typeof(HomePlaceholderPage));
+            ActiveFrame.Navigate(typeof(HomePage));
         }
 
         private void UpdateActiveTabInfo()
         {
             if (_activeTab == null)
                 return;
-            if (ActiveFrame?.Content is HomePlaceholderPage)
+            if (ActiveFrame?.Content is HomePage)
             {
                 _activeTab.Title = GetHomeTabTitle();
                 _activeTab.Icon = "Home";
                 _activeTab.FilePath = null;
             }
-            // EditorPage branch arrives with the editor port.
+            else if (ActiveFrame?.Content is EditorPage editorPage)
+            {
+                var pdfPath = editorPage.CurrentPdfPath;
+                if (!string.IsNullOrWhiteSpace(pdfPath))
+                {
+                    _activeTab.Title = Path.GetFileNameWithoutExtension(pdfPath);
+                    _activeTab.Icon = "FileText";
+                    _activeTab.FilePath = pdfPath;
+                }
+            }
+            UpdateToolbarForActivePage();
+        }
+
+        // ── Home toolbar (WPF title-bar cluster port) ──────────────────────
+
+        /// <summary>
+        /// SearchBox + SelectButton + SortButton live on Home only — the
+        /// cluster collapses on editor tabs (WPF showed the cluster but the
+        /// buttons are no-ops off-Home; collapsing keeps the chrome honest).
+        /// </summary>
+        private void UpdateToolbarForActivePage()
+        {
+            if (HomeToolbarPanel != null)
+                HomeToolbarPanel.Visibility =
+                    ActiveFrame?.Content is HomePage ? Visibility.Visible : Visibility.Collapsed;
+            RefreshSelectButtonVisualState();
+        }
+
+        private HomePage GetActiveHomePage() => ActiveFrame?.Content as HomePage;
+
+        private void SearchBox_TextChanged(object sender, TextChangedEventArgs e)
+        {
+            GetActiveHomePage()?.Filter(SearchBox?.Text ?? string.Empty);
+        }
+
+        private void SortByName_Click(object sender, RoutedEventArgs e)
+        {
+            GetActiveHomePage()?.SortByName();
+        }
+
+        private void SortByDate_Click(object sender, RoutedEventArgs e)
+        {
+            GetActiveHomePage()?.SortByDate();
+        }
+
+        private void SelectButton_Click(object sender, RoutedEventArgs e)
+        {
+            var homePage = GetActiveHomePage();
+            if (homePage == null)
+            {
+                // The editor selection-mode branch lands with the Task 6
+                // editor port — WPF's EditorPage.IsSelectionMode counterpart.
+                return;
+            }
+
+            homePage.ToggleSelectionMode();
+            ShowToast(homePage.IsSelectionMode
+                ? LocalizationService.Get("Main.SelectionEnabled")
+                : LocalizationService.Get("Main.SelectionDisabled"), "\uE762");
+            RefreshSelectButtonVisualState();
+        }
+
+        /// <summary>
+        /// Active-state pill on SelectButton — the WinUI stand-in for the WPF
+        /// <c>SelectToolbarButtonStyle</c> DataTrigger on IsSelectionMode.
+        /// Foregrounds are set on the inner icon/label explicitly so the
+        /// accent color lands regardless of the NavButtonStyle hover setters.
+        /// </summary>
+        public void RefreshSelectButtonVisualState()
+        {
+            if (SelectButton == null)
+                return;
+
+            bool isActive = GetActiveHomePage()?.IsSelectionMode == true;
+            SelectButton.Background = isActive
+                ? ResolveThemeBrush("ThemeSelectionBrush", "#DBEAFE")
+                : new SolidColorBrush(Colors.Transparent);
+            var foreground = isActive
+                ? ResolveThemeBrush("ThemeAccentBrush", "#2563EB")
+                : ResolveThemeBrush("ThemeSubtleForegroundBrush", "#4B5563");
+            if (SelectButtonIcon != null)
+                SelectButtonIcon.Foreground = foreground;
+            if (SelectButtonLabel != null)
+                SelectButtonLabel.Foreground = foreground;
+        }
+
+        // ── Toast (WPF ShowToast parity) ───────────────────────────────────
+
+        /// <summary>
+        /// Transient overlay toast — same contract as the WPF version:
+        /// a Lucide icon name OR a raw Segoe MDL2 glyph string, ~2.2 s hold,
+        /// fade in/out on Border.Opacity. A new toast cancels the pending
+        /// dismissal of the previous one.
+        /// </summary>
+        public void ShowToast(string message, string iconGlyph = null, int durationMs = 2200)
+        {
+            if (ToastBorder == null || ToastText == null || ToastIcon == null)
+                return;
+
+            _toastCts?.Cancel();
+            _toastCts?.Dispose();
+            var cts = new CancellationTokenSource();
+            _toastCts = cts;
+
+            ToastText.Text = message ?? string.Empty;
+            ToastIcon.Glyph = MapToastIconGlyph(iconGlyph);
+            ToastBorder.Visibility = Visibility.Visible;
+
+            var fadeIn = WinUiThemeService.GetAnimationDuration(TimeSpan.FromMilliseconds(140));
+            var fadeOut = WinUiThemeService.GetAnimationDuration(TimeSpan.FromMilliseconds(200));
+            if (!WinUiThemeService.ShouldAnimate || fadeIn == TimeSpan.Zero)
+                ToastBorder.Opacity = 1.0;
+            else
+                AnimateToastOpacity(1.0, fadeIn, EasingMode.EaseOut);
+
+            _ = DismissToastAfterDelayAsync(cts, durationMs, fadeOut);
+        }
+
+        private async Task DismissToastAfterDelayAsync(CancellationTokenSource cts, int durationMs, TimeSpan fadeOut)
+        {
+            try
+            {
+                await Task.Delay(durationMs, cts.Token);
+            }
+            catch (TaskCanceledException)
+            {
+                return;
+            }
+
+            if (!WinUiThemeService.ShouldAnimate || fadeOut == TimeSpan.Zero)
+            {
+                ToastBorder.Opacity = 0.0;
+                ToastBorder.Visibility = Visibility.Collapsed;
+            }
+            else
+            {
+                AnimateToastOpacity(0.0, fadeOut, EasingMode.EaseIn);
+            }
+        }
+
+        private void AnimateToastOpacity(double to, TimeSpan duration, EasingMode easingMode)
+        {
+            var animation = new DoubleAnimation
+            {
+                To = to,
+                Duration = duration,
+                EasingFunction = new CubicEase { EasingMode = easingMode }
+            };
+            Storyboard.SetTarget(animation, ToastBorder);
+            Storyboard.SetTargetProperty(animation, "Opacity");
+            var storyboard = new Storyboard();
+            storyboard.Children.Add(animation);
+            if (to == 0.0)
+            {
+                storyboard.Completed += (_, _) =>
+                {
+                    if (ToastBorder != null && ToastBorder.Opacity == 0.0)
+                        ToastBorder.Visibility = Visibility.Collapsed;
+                };
+            }
+            storyboard.Begin();
+        }
+
+        /// <summary>
+        /// HomePage toasts pass Lucide icon names (WPF parity) or raw Segoe
+        /// MDL2 glyph strings — map the names to glyphs until the icon port
+        /// lands. Single/double-char strings are already glyphs and pass
+        /// through untouched.
+        /// </summary>
+        private static string MapToastIconGlyph(string icon)
+        {
+            if (string.IsNullOrWhiteSpace(icon))
+                return "\uE73E"; // Check
+            if (icon.Length <= 2)
+                return icon;
+            return icon switch
+            {
+                "Trash2" => "\uE74D",
+                "Folder" or "FolderOpen" => "\uE8B7",
+                "Check" or "CheckCircle" => "\uE73E",
+                _ => "\uE73E"
+            };
+        }
+
+        // ── Editor navigation + rename flow (WPF ports) ────────────────────
+
+        /// <summary>
+        /// Opens <paramref name="filePath"/> in the active tab — WPF parity:
+        /// promote in recents, retitle the tab, then navigate its Frame to
+        /// the editor. The Task 5 EditorPage is a stub that displays the path.
+        /// </summary>
+        public void NavigateActiveTabToFile(string filePath)
+        {
+            if (string.IsNullOrWhiteSpace(filePath) || _activeTab == null)
+                return;
+
+            RecentFilesService.AddOrPromote(filePath);
+            _activeTab.Title = Path.GetFileNameWithoutExtension(filePath);
+            _activeTab.Icon = "FileText";
+            _activeTab.FilePath = filePath;
+            ActiveFrame?.Navigate(typeof(EditorPage), filePath);
+        }
+
+        /// <summary>
+        /// Library-rename flow: retitle/repath every tab whose file moved so
+        /// the tab strip and the stub editor track the new path (WPF
+        /// <c>HandleFilePathChanged</c> parity).
+        /// </summary>
+        public void HandleFilePathChanged(string oldPath, string newPath)
+        {
+            if (string.IsNullOrWhiteSpace(oldPath) || string.IsNullOrWhiteSpace(newPath))
+                return;
+
+            foreach (var tab in _tabs)
+            {
+                if (string.IsNullOrWhiteSpace(tab.FilePath) ||
+                    !string.Equals(tab.FilePath, oldPath, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                tab.FilePath = newPath;
+                tab.Title = Path.GetFileNameWithoutExtension(newPath);
+                tab.Icon = "FileText";
+                if (tab.Frame?.Content is EditorPage editor)
+                    editor.UpdateCurrentPdfPath(newPath);
+            }
+
+            UpdateActiveTabInfo();
+        }
+
+        // ── More menu: updates + about (WPF ports) ─────────────────────────
+
+        private async void CheckForUpdates_Click(object sender, RoutedEventArgs e)
+        {
+            if (_isUpdateCheckInProgress)
+                return;
+
+            _isUpdateCheckInProgress = true;
+            if (CheckForUpdatesMenuItem != null)
+            {
+                CheckForUpdatesMenuItem.IsEnabled = false;
+                CheckForUpdatesMenuItem.Text = LocalizationService.Get("Main.CheckingForUpdates");
+            }
+
+            var requestCts = new CancellationTokenSource();
+            _updateCheckCts = requestCts;
+            try
+            {
+                Version installedVersion = typeof(App).Assembly.GetName().Version
+                    ?? Version.Parse(ProductInfo.Version);
+                UpdateCheckResult result = await _updateCheckService.CheckAsync(installedVersion, requestCts.Token);
+                string installedDisplay = FormatDisplayVersion(result.InstalledVersion);
+                var xamlRoot = RootGrid?.XamlRoot;
+
+                if (!result.IsUpdateAvailable)
+                {
+                    await WinUiDialogService.ShowInfoAsync(
+                        xamlRoot,
+                        LocalizationService.Get("Main.UpToDateTitle"),
+                        string.Format(LocalizationService.CurrentCulture,
+                            LocalizationService.Get("Main.UpToDateMessage"), installedDisplay));
+                    return;
+                }
+
+                bool? openRelease = await WinUiDialogService.ShowDialogAsync(
+                    xamlRoot,
+                    LocalizationService.Get("Main.UpdateAvailableTitle"),
+                    string.Format(LocalizationService.CurrentCulture,
+                        LocalizationService.Get("Main.UpdateAvailableMessage"),
+                        installedDisplay, FormatDisplayVersion(result.LatestVersion)),
+                    LocalizationService.Get("Common.Cancel"),
+                    LocalizationService.Get("Main.ViewRelease"));
+                if (openRelease == true)
+                    OpenTrustedReleasePage(result.ReleaseUri);
+            }
+            catch (OperationCanceledException) when (requestCts.IsCancellationRequested)
+            {
+                // Window closed mid-check — nothing to report.
+            }
+            catch (Exception ex) when (ex is UpdateCheckException or Win32Exception)
+            {
+                await WinUiDialogService.ShowErrorAsync(
+                    RootGrid?.XamlRoot,
+                    LocalizationService.Get("Main.UpdateCheckFailedTitle"),
+                    GetUpdateCheckFailureMessage(ex));
+            }
+            finally
+            {
+                requestCts.Dispose();
+                if (ReferenceEquals(_updateCheckCts, requestCts))
+                    _updateCheckCts = null;
+                _isUpdateCheckInProgress = false;
+                if (CheckForUpdatesMenuItem != null)
+                {
+                    CheckForUpdatesMenuItem.IsEnabled = true;
+                    CheckForUpdatesMenuItem.Text = LocalizationService.Get("Main.CheckForUpdates");
+                }
+            }
+        }
+
+        private static string FormatDisplayVersion(Version version)
+        {
+            if (version == null)
+                return "0.0.0";
+            return version.Revision > 0 ? version.ToString(4) : version.ToString(3);
+        }
+
+        private static string GetUpdateCheckFailureMessage(Exception ex)
+        {
+            if (ex is UpdateCheckException update)
+            {
+                return update.Kind switch
+                {
+                    UpdateCheckFailureKind.Network => LocalizationService.Get("Main.UpdateCheckFailedNetwork"),
+                    UpdateCheckFailureKind.Timeout => LocalizationService.Get("Main.UpdateCheckFailedTimeout"),
+                    UpdateCheckFailureKind.HttpStatus => LocalizationService.Get("Main.UpdateCheckFailedHttp"),
+                    UpdateCheckFailureKind.InvalidResponse => LocalizationService.Get("Main.UpdateCheckFailedInvalid"),
+                    _ => LocalizationService.Get("Main.UpdateCheckFailedMessage")
+                };
+            }
+
+            return LocalizationService.Get("Main.UpdateCheckFailedMessage");
+        }
+
+        private static void OpenTrustedReleasePage(Uri releaseUri)
+        {
+            if (!UpdateCheckService.IsTrustedReleaseUri(releaseUri))
+            {
+                throw new UpdateCheckException(
+                    UpdateCheckFailureKind.InvalidResponse,
+                    "The release URL is not trusted.");
+            }
+
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = releaseUri.AbsoluteUri,
+                UseShellExecute = true
+            });
+        }
+
+        private async void About_Click(object sender, RoutedEventArgs e)
+        {
+            await WinUiDialogService.ShowInfoAsync(
+                RootGrid?.XamlRoot,
+                LocalizationService.Get("Main.AboutTitle"),
+                LocalizationService.Get("Main.AboutMessage"));
         }
 
         // ── Keyboard shortcuts (WPF MainWindow_KeyDown parity) ──────────────

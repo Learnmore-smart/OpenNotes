@@ -240,6 +240,72 @@
             </Grid>
 
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                <!-- Home-toolbar cluster (WPF title-bar cluster port): search /
+                     select / sort, visible only while the active tab shows
+                     HomePage. MoreButton stays always visible. -->
+                <StackPanel x:Name="HomeToolbarPanel" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,8,0" Visibility="Collapsed"
+                        AutomationProperties.AutomationId="HomeToolbarPanel">
+                    <Border x:Name="SearchBoxBorder"
+                            Background="{ThemeResource ThemePaperBrush}"
+                            BorderBrush="{ThemeResource ThemeBorderBrush}"
+                            BorderThickness="1" CornerRadius="8" Margin="0,0,8,0"
+                            Height="28" VerticalAlignment="Center">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="120"/>
+                            </Grid.ColumnDefinitions>
+                            <FontIcon Glyph="&#xE721;" FontSize="12"
+                                      Foreground="{ThemeResource ThemeSubtleForegroundBrush}"
+                                      VerticalAlignment="Center" Margin="8,0,4,0"/>
+                            <TextBox x:Name="SearchBox" Grid.Column="1"
+                                     Background="Transparent" BorderThickness="0"
+                                     VerticalAlignment="Center" FontSize="12" Padding="2,0,6,0"
+                                     MinHeight="0"
+                                     TextChanged="SearchBox_TextChanged"
+                                     AutomationProperties.AutomationId="SearchBox"/>
+                        </Grid>
+                    </Border>
+                    <Button x:Name="SelectButton" Click="SelectButton_Click" Style="{StaticResource NavButtonStyle}"
+                            Width="Auto" MinWidth="56" Padding="8,0" Margin="0,0,2,0"
+                            AutomationProperties.AutomationId="SelectButton" AutomationProperties.Name="Select">
+                        <StackPanel Orientation="Horizontal">
+                            <FontIcon x:Name="SelectButtonIcon" Glyph="&#xE762;" FontSize="12"
+                                      Foreground="{ThemeResource ThemeSubtleForegroundBrush}" VerticalAlignment="Center"/>
+                            <TextBlock x:Name="SelectButtonLabel" FontSize="12"
+                                       Foreground="{ThemeResource ThemeSubtleForegroundBrush}"
+                                       Margin="5,0,0,0" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Button>
+                    <Button x:Name="SortButton" Style="{StaticResource NavButtonStyle}" Margin="0,0,2,0"
+                            AutomationProperties.AutomationId="SortButton" AutomationProperties.Name="Sort">
+                        <FontIcon Glyph="&#xE8CB;" FontSize="13" Foreground="{ThemeResource ThemeSubtleForegroundBrush}"/>
+                        <Button.Flyout>
+                            <MenuFlyout>
+                                <MenuFlyoutItem x:Name="SortByNameMenuItem" Click="SortByName_Click"
+                                                AutomationProperties.AutomationId="SortByNameMenuItem"/>
+                                <MenuFlyoutItem x:Name="SortByDateMenuItem" Click="SortByDate_Click"
+                                                AutomationProperties.AutomationId="SortByDateMenuItem"/>
+                            </MenuFlyout>
+                        </Button.Flyout>
+                    </Button>
+                </StackPanel>
+                <Button x:Name="MoreButton" Style="{StaticResource NavButtonStyle}" Margin="0,0,8,0"
+                        AutomationProperties.AutomationId="MoreButton" AutomationProperties.Name="More">
+                    <FontIcon Glyph="&#xE712;" FontSize="14" Foreground="{ThemeResource ThemeSubtleForegroundBrush}"/>
+                    <Button.Flyout>
+                        <MenuFlyout>
+                            <!-- Settings is disabled: the SettingsWindow port
+                                 lands with the Task 9 dialogs task. -->
+                            <MenuFlyoutItem x:Name="SettingsMenuItem" IsEnabled="False"
+                                            AutomationProperties.AutomationId="SettingsMenuItem"/>
+                            <MenuFlyoutItem x:Name="CheckForUpdatesMenuItem" Click="CheckForUpdates_Click"
+                                            AutomationProperties.AutomationId="CheckForUpdatesMenuItem"/>
+                            <MenuFlyoutItem x:Name="AboutMenuItem" Click="About_Click"
+                                            AutomationProperties.AutomationId="AboutMenuItem"/>
+                        </MenuFlyout>
+                    </Button.Flyout>
+                </Button>
                 <Button x:Name="MinimizeButton" Click="MinimizeButton_Click" Style="{StaticResource TitleBarButtonStyle}"
                         AutomationProperties.AutomationId="MinimizeButton" AutomationProperties.Name="Minimize">
                     <FontIcon Glyph="&#xE921;" FontSize="10"/>
@@ -297,5 +363,24 @@
         <!-- Per-tab navigation hosts (WPF TabContentArea): one Frame per tab,
              only the active one visible. -->
         <Grid x:Name="TabContentArea" Grid.Row="2"/>
+
+        <!-- Toast overlay (WPF ToastBorder port): dark pill + icon + message,
+             fades in over the content area and auto-fades after ~2.2 s. -->
+        <Border x:Name="ToastBorder" Grid.Row="2"
+                HorizontalAlignment="Center" VerticalAlignment="Bottom"
+                Margin="0,0,0,80" Padding="20,10" CornerRadius="10"
+                Visibility="Collapsed" Opacity="0" IsHitTestVisible="False"
+                Background="{ThemeResource ThemeForegroundBrush}"
+                AutomationProperties.AutomationId="ToastBorder">
+            <StackPanel Orientation="Horizontal">
+                <FontIcon x:Name="ToastIcon" Glyph="&#xE73E;" FontSize="14"
+                          Foreground="{ThemeResource ThemeAccentBrush}"
+                          VerticalAlignment="Center" Margin="0,0,10,0"/>
+                <TextBlock x:Name="ToastText" Text="" FontSize="13"
+                           Foreground="{ThemeResource ThemeWindowBackgroundBrush}"
+                           VerticalAlignment="Center"
+                           AutomationProperties.AutomationId="ToastText"/>
+            </StackPanel>
+        </Border>
     </Grid>
 </Window>
