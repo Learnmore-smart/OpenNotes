@@ -23,21 +23,23 @@
 
 ---
 
-## Task 1: `OpenNotes.Core` project scaffold + UI-free services
+## Task 1: `OpenNotes.Core` project scaffold + UI-free services — ✅ DONE (`ab5fbb7` + `ca64e05`)
+
+**As-implemented notes:** 19 services moved (not 20) — `NavigationCloseCoordinator` stayed in the WPF project: it is UI-free but semantically bound to WPF Frame/journal navigation; revisit during the navigation-abstraction task. `System.Drawing.Common` was NOT added — no moved file uses `System.Drawing` (Word→PDF uses COM + LibreOffice subprocess). `InternalsVisibleTo` added for `OpenNotes`, `OpenNotes.Tests`, and later `OpenNotes.WinUI` (`080296f`). `OpenNotes.slnx` turned out to be a `<Solution />` stub — only `OpenNotes.sln` was updated. `tools/verify-i18n.ps1` catalog path fixed in `ca64e05`. 466/466 tests green (batched).
 
 **Files:**
 - Create: `OpenNotes.Core/OpenNotes.Core.csproj`
-- Move (git mv): the 20 UI-free services into `OpenNotes.Core/Services/` — `AppSettingsService`, `DocumentEditAdmission`, `DocumentOperationSession`, `DocumentReleaseState`, `DocumentSaveCoordinator`, `InteractionCancellation`, `LocalizationService`, `NavigationCloseCoordinator`, `PageBookmarkService`, `PdfAtomicFile`, `PdfRenderPolicy`, `PdfSaveCoordinator`, `ProductInfo`, `RecentFilesService`, `RecycleBinService`, `UpdateCheckService`, `VersionControlService`, `WindowsEnvironment`, `WordDocumentImport`, `WordToPdfConverter`
+- Move (git mv): the 19 UI-free services into `OpenNotes.Core/Services/` — `AppSettingsService`, `DocumentEditAdmission`, `DocumentOperationSession`, `DocumentReleaseState`, `DocumentSaveCoordinator`, `InteractionCancellation`, `LocalizationService`, `PageBookmarkService`, `PdfAtomicFile`, `PdfRenderPolicy`, `PdfSaveCoordinator`, `ProductInfo`, `RecentFilesService`, `RecycleBinService`, `UpdateCheckService`, `VersionControlService`, `WindowsEnvironment`, `WordDocumentImport`, `WordToPdfConverter`
 - Move: `Models/` files that are already UI-free — `AnnotationModels.cs`, `AppLanguage.cs`, `AppSettings.cs`, `HiddenInkRevealState.cs`, `PageInsertTemplate.cs`, `TextAnnotationGeometry.cs`, `ThumbnailDropPlacement.cs`
 - Modify: `OpenNotes.csproj` — `<ProjectReference Include="OpenNotes.Core\OpenNotes.Core.csproj" />`; remove moved files via `<Compile Remove="OpenNotes.Core\**"/>`-style patterns and delete local copies
 - Modify: `OpenNotes.slnx`/`OpenNotes.sln` — add `OpenNotes.Core`
 
-- [ ] **Step 1: Create `OpenNotes.Core.csproj`** — `net8.0`, `Nullable disable`, `ImplicitUsings disable`, `RootNamespace=Caelum` (namespace compatibility). Packages: `PdfSharpCore 1.3.67`, `System.Drawing.Common 8.0.8` (word converter + EMF decode only — NOT exposed on public APIs).
-- [ ] **Step 2: `git mv` the listed files**, keeping `namespace Caelum.Services` / `Caelum.Models` names exactly (no namespace churn).
-- [ ] **Step 3: Wire `ProjectReference`** in `OpenNotes.csproj`; delete moved originals from WPF project.
-- [ ] **Step 4: `dotnet build OpenNotes.csproj -c Release`** — expect 0 errors; fix stray `using` gaps.
-- [ ] **Step 5: `dotnet test OpenNotes.Tests`** — tests reference both projects transitively; all currently-passing tests stay green.
-- [ ] **Step 6: Commit** `refactor: extract UI-free services and models into OpenNotes.Core`.
+- [x] **Step 1: Create `OpenNotes.Core.csproj`** — `net8.0`, `Nullable disable`, `ImplicitUsings disable`, `RootNamespace=Caelum` (namespace compatibility). Packages: `PdfSharpCore 1.3.67`, `System.Drawing.Common 8.0.8` (word converter + EMF decode only — NOT exposed on public APIs).
+- [x] **Step 2: `git mv` the listed files**, keeping `namespace Caelum.Services` / `Caelum.Models` names exactly (no namespace churn).
+- [x] **Step 3: Wire `ProjectReference`** in `OpenNotes.csproj`; delete moved originals from WPF project.
+- [x] **Step 4: `dotnet build OpenNotes.csproj -c Release`** — expect 0 errors; fix stray `using` gaps.
+- [x] **Step 5: `dotnet test OpenNotes.Tests`** — tests reference both projects transitively; all currently-passing tests stay green.
+- [x] **Step 6: Commit** `refactor: extract UI-free services and models into OpenNotes.Core`.
 
 ## Task 2: UI-free ink/geometry primitives in Core
 
@@ -139,4 +141,4 @@
 
 ## Session-1 scope (this run)
 
-Complete **Task 1** (Core extraction) and **Task 4 Step 1** (WinUI project builds + launches). Everything else is queued for follow-up sessions via Open Threads in `.ai/PROJECT_CONTEXT.md` and this plan's checkboxes.
+✅ **Task 1** done (`ab5fbb7`, `ca64e05`); ✅ **Task 4 Step 1** done (`1fa9859`, `080296f`) — `OpenNotes.WinUI.exe` builds and launches an empty themed window, WASDK self-contained. Execution continues into Task 2+. Progress is tracked via checkboxes here and `.ai/PROJECT_CONTEXT.md`.
