@@ -66,3 +66,8 @@ render/text/outline types.
 
 - 2026-09-22: Created by the Task 3 split (full ~3,600-line service moved to
   Core). Public API preserved for WPF consumers through the facade.
+- 2026-09-22: Rasterizer hardening wave (see `PdfiumRasterizer.md`): the
+  service's stream-ownership boundary stayed unchanged — `_hasBackingStream`
+  marker only, rasterizer sole disposer. Facade
+  `TryGetCachedPageTextInfo` is an overload (different out-param type),
+  documented in-code rather than `new`.

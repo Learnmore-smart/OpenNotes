@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Threading;
 
 namespace Caelum.Pdf
 {
@@ -71,7 +72,7 @@ namespace Caelum.Pdf
 
         private IntPtr _document;
         private IntPtr _form;
-        private bool _disposed;
+        private int _disposeFlag;
         private PdfiumNative.FpdfFormFillInfo _formInfo;
         private GCHandle _formInfoHandle;
         private GCHandle _streamHandle;
@@ -83,32 +84,26 @@ namespace Caelum.Pdf
             if (stream == null)
                 throw new ArgumentNullException(nameof(stream));
 
-            PdfiumNative.EnsureLoaded();
-
             _stream = stream;
-            _streamHandle = GCHandle.Alloc(stream);
-
             try
             {
+                // EnsureLoaded can throw DllNotFoundException before any
+                // native state exists; the catch below still runs, so the
+                // caller's stream is released on every construction failure
+                // (a failed ctor transfers no ownership to anyone).
+                PdfiumNative.EnsureLoaded();
+
+                _streamHandle = GCHandle.Alloc(stream);
                 _document = PdfiumNative.LoadCustomDocument(stream, _streamHandle);
                 if (_document == IntPtr.Zero)
                     throw new PdfiumException(PdfiumNative.FPDF_GetLastError());
-            }
-            catch
-            {
-                if (_streamHandle.IsAllocated)
-                    _streamHandle.Free();
-                _stream = null;
-                stream.Dispose();
-                throw;
-            }
 
-            try
-            {
                 InitializeFormEnvironment();
+                _pageSizes = LoadPageSizes();
             }
             catch
             {
+                // Release whatever was acquired, in reverse order.
                 if (_form != IntPtr.Zero)
                 {
                     PdfiumNative.FPDFDOC_ExitFormFillEnvironment(_form);
@@ -116,16 +111,17 @@ namespace Caelum.Pdf
                 }
                 if (_formInfoHandle.IsAllocated)
                     _formInfoHandle.Free();
-                PdfiumNative.FPDF_CloseDocument(_document);
-                _document = IntPtr.Zero;
+                if (_document != IntPtr.Zero)
+                {
+                    PdfiumNative.FPDF_CloseDocument(_document);
+                    _document = IntPtr.Zero;
+                }
                 if (_streamHandle.IsAllocated)
                     _streamHandle.Free();
                 _stream = null;
                 stream.Dispose();
                 throw;
             }
-
-            _pageSizes = LoadPageSizes();
         }
 
         /// <summary>
@@ -138,11 +134,13 @@ namespace Caelum.Pdf
             PdfiumNative.FPDF_GetDocPermissions(_document);
 
             // FPDF_FORMFILLINFO pinned for the form env's lifetime. All 15 v1
-            // callback slots carry real (mostly no-op) delegates — mirroring
-            // PdfiumViewer, which never hands pdfium a null function pointer.
-            // pdfium may call e.g. FFI_GetRotation/FFI_GetPage while running
-            // document or page actions, so nulls here would be a latent crash
-            // on action-bearing documents that the old backend tolerated.
+            // callback slots carry real (mostly no-op) delegates. NOTE:
+            // PdfiumViewer actually ships an all-NULL struct (version word
+            // only) and relies on pdfium's per-slot null checks — the claim
+            // that it fills these is false. Real delegates are our own
+            // belt-and-suspenders choice: pdfium may call e.g.
+            // FFI_GetRotation/FFI_GetPage while running document or page
+            // actions, and a real no-op can never be misdispatched.
             _formInfo = PdfiumNative.CreateFormFillInfo();
             _formInfoHandle = GCHandle.Alloc(_formInfo, GCHandleType.Pinned);
             IntPtr formInfoPtr = _formInfoHandle.AddrOfPinnedObject();
@@ -174,13 +172,15 @@ namespace Caelum.Pdf
             return result;
         }
 
-        public int PageCount => _pageSizes?.Count ?? 0;
+        // Doc contract: 0 when closed/disposed.
+        public int PageCount => Volatile.Read(ref _disposeFlag) != 0 ? 0 : _pageSizes?.Count ?? 0;
 
         public IReadOnlyList<PdfPageSize> PageSizes => _pageSizes ?? (IReadOnlyList<PdfPageSize>)Array.Empty<PdfPageSize>();
 
         public PdfPageBitmap RenderPageBgra(int pageIndex, int pixelWidth, int pixelHeight, bool renderAnnotations = true)
         {
             ThrowIfDisposed();
+            ThrowIfPageIndexOutOfRange(pageIndex);
             if (pixelWidth <= 0 || pixelHeight <= 0)
                 throw new ArgumentOutOfRangeException(nameof(pixelWidth), "Render size must be positive.");
 
@@ -192,6 +192,8 @@ namespace Caelum.Pdf
                 bitmapHandle = PdfiumNative.FPDFBitmap_CreateEx(
                     pixelWidth, pixelHeight, PdfiumNative.FPDFBitmapFormatBgra,
                     pixelsHandle.AddrOfPinnedObject(), pixelWidth * 4);
+                if (bitmapHandle == IntPtr.Zero)
+                    throw new PdfiumException($"FPDFBitmap_CreateEx returned null for {pixelWidth}x{pixelHeight}.");
 
                 // Opaque white background — same as the PdfiumViewer path when
                 // PdfRenderFlags.Transparent is not set.
@@ -233,9 +235,14 @@ namespace Caelum.Pdf
         public string GetPageText(int pageIndex)
         {
             ThrowIfDisposed();
+            ThrowIfPageIndexOutOfRange(pageIndex);
             using (var pageData = new PageData(_document, _form, pageIndex))
             {
                 int length = PdfiumNative.FPDFText_CountChars(pageData.TextPage);
+                // FPDFText_CountChars returns -1 on a corrupt/unreadable page —
+                // treat like an empty page instead of sizing a bad buffer.
+                if (length <= 0)
+                    return string.Empty;
                 return GetPageText(pageData, 0, length);
             }
         }
@@ -250,6 +257,7 @@ namespace Caelum.Pdf
         public IReadOnlyList<PdfRectF> GetTextBounds(int pageIndex, int offset, int length)
         {
             ThrowIfDisposed();
+            ThrowIfPageIndexOutOfRange(pageIndex);
             using (var pageData = new PageData(_document, _form, pageIndex))
             {
                 var result = new List<PdfRectF>();
@@ -309,6 +317,7 @@ namespace Caelum.Pdf
         public PdfRectI RectangleFromPdf(int pageIndex, PdfRectF rect)
         {
             ThrowIfDisposed();
+            ThrowIfPageIndexOutOfRange(pageIndex);
             using (var pageData = new PageData(_document, _form, pageIndex))
             {
                 PdfiumNative.FPDF_PageToDevice(
@@ -329,13 +338,24 @@ namespace Caelum.Pdf
 
         private void ThrowIfDisposed()
         {
-            if (_disposed)
+            if (Volatile.Read(ref _disposeFlag) != 0)
                 throw new ObjectDisposedException(GetType().Name);
+        }
+
+        private void ThrowIfPageIndexOutOfRange(int pageIndex)
+        {
+            // Self-defending bounds check — the service guards upstream but
+            // the Core API is public to future hosts.
+            if (pageIndex < 0 || pageIndex >= PageCount)
+                throw new ArgumentOutOfRangeException(nameof(pageIndex), pageIndex, "Page index out of range.");
         }
 
         public void Dispose()
         {
-            if (_disposed)
+            // Interlocked check-then-act: a concurrent Dispose cannot re-enter
+            // and double-free the native handles; publishing the flag first
+            // also makes other threads observe the disposed state immediately.
+            if (Interlocked.Exchange(ref _disposeFlag, 1) != 0)
                 return;
 
             // Order matches PdfiumViewer.PdfFile.Dispose.
@@ -364,7 +384,6 @@ namespace Caelum.Pdf
                 _stream = null;
             }
 
-            _disposed = true;
             GC.SuppressFinalize(this);
         }
 
@@ -485,6 +504,13 @@ namespace Caelum.Pdf
 
         internal static IntPtr LoadCustomDocument(Stream input, GCHandle streamHandle)
         {
+            // FPDF_FILEACCESS uses uint length/position — anything beyond
+            // 4 GiB would silently truncate the file length and read the
+            // wrong bytes. Fail loudly instead.
+            if (input.Length > uint.MaxValue)
+                throw new NotSupportedException(
+                    $"PDF stream length {input.Length} exceeds the 4 GiB limit of the FPDF_FILEACCESS interface.");
+
             var access = new FPDF_FILEACCESS
             {
                 m_FileLen = (uint)input.Length,
@@ -508,14 +534,23 @@ namespace Caelum.Pdf
                 if (!(GCHandle.FromIntPtr(param).Target is Stream stream))
                     return 0;
 
-                byte[] managedBuffer = new byte[size];
-                stream.Position = position;
-                int read = stream.Read(managedBuffer, 0, (int)size);
-                if (read != size)
-                    return 0;
+                // Rent instead of new byte[size]: pdfium calls this for every
+                // read, so per-call allocation churned the GC on large docs.
+                byte[] managedBuffer = System.Buffers.ArrayPool<byte>.Shared.Rent((int)size);
+                try
+                {
+                    stream.Position = position;
+                    int read = stream.Read(managedBuffer, 0, (int)size);
+                    if (read != size)
+                        return 0;
 
-                Marshal.Copy(managedBuffer, 0, buffer, (int)size);
-                return 1;
+                    Marshal.Copy(managedBuffer, 0, buffer, (int)size);
+                    return 1;
+                }
+                finally
+                {
+                    System.Buffers.ArrayPool<byte>.Shared.Return(managedBuffer);
+                }
             }
             catch
             {

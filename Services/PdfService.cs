@@ -64,6 +64,9 @@ namespace Caelum.Services
             public IReadOnlyList<PdfOutlineEntry> Children { get; init; } = Array.Empty<PdfOutlineEntry>();
         }
 
+        // NOTE: this is an overload, not a hide — the out-parameter type
+        // (WPF Rect-based PdfPageTextInfo) differs from the base member's
+        // Core RectD record, so `new` would be a CS0109 warning, not a fix.
         public bool TryGetCachedPageTextInfo(int pageIndex, out PdfPageTextInfo textInfo)
         {
             if (base.TryGetCachedPageTextInfo(pageIndex, out var coreInfo))

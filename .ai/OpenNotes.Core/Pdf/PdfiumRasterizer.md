@@ -89,3 +89,27 @@ future WinUI host share one UI-free raster backend.
   callbacks now `StdCall` per `FPDF_CALLCONV`; x86 probe removed (x64-only);
   `FPDFBitmap_Destroy`/`Release` return `void`; callback wording corrected to
   15 delegates + null `m_pJsPlatform`.
+- 2026-09-22: Quality-review hardening — `Dispose` uses
+  `Interlocked.Exchange(ref _disposeFlag, 1)` (concurrent dispose cannot
+  double-free; `PageCount` returns 0 post-dispose per doc contract);
+  `GetPageText` guards `FPDFText_CountChars` < 0 (corrupt page → empty
+  string); all four page APIs self-check `pageIndex` bounds;
+  `FPDFBitmap_CreateEx` null → `PdfiumException`; ctor wraps `EnsureLoaded`
+  too so any construction failure still disposes the caller's stream;
+  `FpdfGetBlock` rents `ArrayPool<byte>` per read; `LoadCustomDocument`
+  rejects streams > 4 GiB (`uint` length/position would silently truncate);
+  comment corrected — PdfiumViewer ships an all-NULL `FPDF_FORMFILLINFO`,
+  the 15 real delegates are our own belt-and-suspenders choice.
+
+## Open Threads / Resume Context
+
+- Parity-test coverage gaps (proper follow-up): the fixture is a 3-page
+  Letter doc — rotated pages (`/Rotate` 90/180/270), AcroForm/annotation
+  content that exercises FFLDraw deeply, non-default `/CropBox`/MediaBox
+  origins, and a stripped-stream document (real `ExtractAndStripAnnotations`
+  output) are not yet compared byte-for-byte. Extend
+  `PdfiumRasterizerParityTests` when those fixtures exist.
+- `FPDF_Release`/`FPDF_DeviceToPage` imports are declared but unused
+  (harmless; kept for API completeness).
+- `FPDF_GetDocPermissions` return value is intentionally ignored (load-time
+  parity probe only).

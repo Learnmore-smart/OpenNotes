@@ -161,3 +161,6 @@ PDF 核心服务：PdfiumViewer 负责加载/渲染"剥离注释后的干净流"
 - Plan: verify the Unicode XGraphics appearance baseline. Current code subtracts ascent before passing a baseline to DrawString, moving glyphs above the form bounds. Preserve rectangle, metadata, and existing Latin layout; correct the Unicode baseline after a failing saved-stream regression.
 - Verified: both saved-stream regressions failed with a 10.3125 pt upward shift before the fix; after removing the extra ascent subtraction, all 29 annotation-saving tests pass. Actual user PDF and Edge visual confirmation remain outstanding.
 - Final verification: 55/55 PdfService tests pass. Full suite aborted after 35 passes due to test-host FailFast in System.SR / MS.Win32.HwndSubclass; no full-suite success claimed.
+- 2026-09-22: `TryGetCachedPageTextInfo` is an *overload* (out-param type
+  differs from the Core `RectD` twin), so `new` is intentionally absent —
+  CS0109 would fire otherwise. Documented at the declaration.
