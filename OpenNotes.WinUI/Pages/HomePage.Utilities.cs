@@ -278,12 +278,21 @@ namespace Caelum.Pages
             if (selectedTiles.Count == 0)
                 return;
 
-            foreach (var tile in selectedTiles)
-                RecentFilesService.MoveToFolder(tile.Path, folderId);
+            try
+            {
+                foreach (var tile in selectedTiles)
+                    RecentFilesService.MoveToFolder(tile.Path, folderId);
 
-            IsChoosingMoveTarget = false;
-            ClearFolderPlacementHighlights();
-            await RefreshCurrentFolderAsync();
+                IsChoosingMoveTarget = false;
+                ClearFolderPlacementHighlights();
+                await RefreshCurrentFolderAsync();
+            }
+            catch (Exception ex)
+            {
+                await ShowDialogAsync(LocalizationService.Get("Common.Error"),
+                    LocalizationService.Format("Home.OperationFailed", ex.Message));
+            }
+
             ClearSelectedTiles();
         }
 
@@ -322,13 +331,22 @@ namespace Caelum.Pages
                 return;
 
             int deleted = 0;
-            foreach (var tile in selectedTiles)
+            try
             {
-                if (TryDeleteLibraryFile(tile.Path))
-                    deleted++;
+                foreach (var tile in selectedTiles)
+                {
+                    if (TryDeleteLibraryFile(tile.Path))
+                        deleted++;
+                }
+
+                await RefreshCurrentFolderAsync();
+            }
+            catch (Exception ex)
+            {
+                await ShowDialogAsync(LocalizationService.Get("Common.Error"),
+                    LocalizationService.Format("Home.OperationFailed", ex.Message));
             }
 
-            await RefreshCurrentFolderAsync();
             RefreshSelectionState();
             if (GetMainWindow() is MainWindow mw && deleted > 0)
                 mw.ShowToast(LocalizationService.Format("Home.Selection.DeletedCount", deleted), "Trash2");

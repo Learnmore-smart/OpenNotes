@@ -64,7 +64,6 @@ namespace Caelum.Pages
         /// <summary>Filtered + sorted view bound by the repeater.</summary>
         public ObservableCollection<HomeTile> VisibleTiles { get; } = new ObservableCollection<HomeTile>();
 
-        private bool _libraryLoaded;
         private string _currentFolderId = string.Empty;
         private string _currentFolderName = string.Empty;
         private string _searchQuery = string.Empty;
@@ -215,7 +214,8 @@ namespace Caelum.Pages
             }
 
             ApplyLocalization();
-            await EnsureLibraryLoadedAsync();
+            // WPF parity: every (re)navigation reloads from RecentFilesService.
+            await RefreshCurrentFolderAsync();
         }
 
         private void HomePage_Unloaded(object sender, RoutedEventArgs e)
@@ -230,18 +230,6 @@ namespace Caelum.Pages
         private void HomePage_LanguageChanged(object sender, EventArgs e)
         {
             ApplyLocalization();
-        }
-
-        private async Task EnsureLibraryLoadedAsync()
-        {
-            if (_libraryLoaded)
-            {
-                await RefreshCurrentFolderAsync();
-                return;
-            }
-
-            await RefreshCurrentFolderAsync();
-            _libraryLoaded = true;
         }
 
         public void Filter(string query)
@@ -306,6 +294,10 @@ namespace Caelum.Pages
             UpdateHeaderText();
             RebuildVisibleTiles();
             RefreshSelectionState();
+            // HomeTiles was just rebuilt, so any folder highlights from an
+            // armed choose-move-target are gone — re-derive them from the
+            // flag (WPF parity: highlights were bound to the page property).
+            UpdateFolderPlacementHighlights();
             await Task.CompletedTask;
         }
 
@@ -478,8 +470,16 @@ namespace Caelum.Pages
                 var moveToRootItem = CreateMenuItem(LocalizationService.Get("Home.Context.MoveToLibrary"), "\uE8DE");
                 moveToRootItem.Click += async (_, _) =>
                 {
-                    RecentFilesService.MoveToLibraryRoot(tile.Path);
-                    await RefreshCurrentFolderAsync();
+                    try
+                    {
+                        RecentFilesService.MoveToLibraryRoot(tile.Path);
+                        await RefreshCurrentFolderAsync();
+                    }
+                    catch (Exception ex)
+                    {
+                        await ShowDialogAsync(LocalizationService.Get("Common.Error"),
+                            LocalizationService.Format("Home.OperationFailed", ex.Message));
+                    }
                 };
                 menu.Items.Add(moveToRootItem);
             }
@@ -549,8 +549,16 @@ namespace Caelum.Pages
                 var swatchItem = new MenuFlyoutItem { Text = LocalizeFolderColor(swatch.Key), Tag = swatch.Hex };
                 swatchItem.Click += async (_, _) =>
                 {
-                    RecentFilesService.SetFolderColor(tile.Id, swatch.Hex);
-                    await RefreshCurrentFolderAsync();
+                    try
+                    {
+                        RecentFilesService.SetFolderColor(tile.Id, swatch.Hex);
+                        await RefreshCurrentFolderAsync();
+                    }
+                    catch (Exception ex)
+                    {
+                        await ShowDialogAsync(LocalizationService.Get("Common.Error"),
+                            LocalizationService.Format("Home.OperationFailed", ex.Message));
+                    }
                 };
                 colorItem.Items.Add(swatchItem);
             }
@@ -561,8 +569,16 @@ namespace Caelum.Pages
             var removeItem = CreateMenuItem(LocalizationService.Get("Home.Context.RemoveFolder"), "\uE74D", foregroundResourceKey: "ThemeDangerBrush");
             removeItem.Click += async (_, _) =>
             {
-                RecentFilesService.RemoveFolder(tile.Id);
-                await RefreshCurrentFolderAsync();
+                try
+                {
+                    RecentFilesService.RemoveFolder(tile.Id);
+                    await RefreshCurrentFolderAsync();
+                }
+                catch (Exception ex)
+                {
+                    await ShowDialogAsync(LocalizationService.Get("Common.Error"),
+                        LocalizationService.Format("Home.OperationFailed", ex.Message));
+                }
             };
             menu.Items.Add(removeItem);
 
@@ -621,8 +637,16 @@ namespace Caelum.Pages
                 if (string.IsNullOrWhiteSpace(newName) || string.Equals(newName.Trim(), tile.FileName, StringComparison.Ordinal))
                     return;
 
-                RecentFilesService.RenameFolder(tile.Id, newName.Trim());
-                await RefreshCurrentFolderAsync();
+                try
+                {
+                    RecentFilesService.RenameFolder(tile.Id, newName.Trim());
+                    await RefreshCurrentFolderAsync();
+                }
+                catch (Exception ex)
+                {
+                    await ShowDialogAsync(LocalizationService.Get("Common.Error"),
+                        LocalizationService.Format("Home.RenameFailed", ex.Message));
+                }
                 return;
             }
 
@@ -703,7 +727,9 @@ namespace Caelum.Pages
                 DefaultButton = ContentDialogButton.Primary
             };
 
-            var result = await dialog.ShowAsync();
+            // Local dialogs must share the WinUiDialogService gate — two
+            // ContentDialogs on one XamlRoot throw InvalidOperationException.
+            var result = await WinUiDialogService.RunUnderDialogGateAsync(() => dialog.ShowAsync().AsTask());
             return result == ContentDialogResult.Primary ? inputBox.Text.Trim() : null;
         }
 
@@ -754,9 +780,17 @@ namespace Caelum.Pages
             if (string.IsNullOrWhiteSpace(name))
                 return;
 
-            RecentFilesService.CreateFolder(name, _currentFolderId);
-            await RefreshCurrentFolderAsync();
-            GetMainWindow()?.ShowToast(LocalizationService.Format("Home.FolderCreated", name.Trim()), "\uE8B7");
+            try
+            {
+                RecentFilesService.CreateFolder(name, _currentFolderId);
+                await RefreshCurrentFolderAsync();
+                GetMainWindow()?.ShowToast(LocalizationService.Format("Home.FolderCreated", name.Trim()), "\uE8B7");
+            }
+            catch (Exception ex)
+            {
+                await ShowDialogAsync(LocalizationService.Get("Common.Error"),
+                    LocalizationService.Format("Home.OperationFailed", ex.Message));
+            }
         }
 
         /// <summary>
@@ -874,7 +908,9 @@ namespace Caelum.Pages
                 }
             };
 
-            var result = await dialog.ShowAsync();
+            // Gate: ContentDialog allows only one open instance per XamlRoot —
+            // serialize with the WinUiDialogService dialogs.
+            var result = await WinUiDialogService.RunUnderDialogGateAsync(() => dialog.ShowAsync().AsTask());
             if (result != ContentDialogResult.Primary || string.IsNullOrWhiteSpace(folderPath))
                 return null;
 
@@ -934,8 +970,16 @@ namespace Caelum.Pages
             if (File.Exists(path))
                 lastModifiedUtc = File.GetLastWriteTimeUtc(path);
 
-            RecentFilesService.AddOrPromote(path, null, lastModifiedUtc, folderId, isNotebook);
-            await RefreshCurrentFolderAsync();
+            try
+            {
+                RecentFilesService.AddOrPromote(path, null, lastModifiedUtc, folderId, isNotebook);
+                await RefreshCurrentFolderAsync();
+            }
+            catch (Exception ex)
+            {
+                await ShowDialogAsync(LocalizationService.Get("Common.Error"),
+                    LocalizationService.Format("Home.OperationFailed", ex.Message));
+            }
         }
 
         private async Task OpenFileTileAsync(HomeTile tile)
@@ -986,10 +1030,18 @@ namespace Caelum.Pages
             if (confirmed != true)
                 return;
 
-            if (TryDeleteLibraryFile(tile.Path) && GetMainWindow() is MainWindow mw)
-                mw.ShowToast(LocalizationService.Format("Home.Selection.DeletedCount", 1), "Trash2");
+            try
+            {
+                if (TryDeleteLibraryFile(tile.Path) && GetMainWindow() is MainWindow mw)
+                    mw.ShowToast(LocalizationService.Format("Home.Selection.DeletedCount", 1), "Trash2");
 
-            await RefreshCurrentFolderAsync();
+                await RefreshCurrentFolderAsync();
+            }
+            catch (Exception ex)
+            {
+                await ShowDialogAsync(LocalizationService.Get("Common.Error"),
+                    LocalizationService.Format("Home.OperationFailed", ex.Message));
+            }
         }
 
         private static readonly (string Key, string Hex)[] FolderColorSwatches =
@@ -1025,8 +1077,16 @@ namespace Caelum.Pages
             if (tile == null || !tile.IsFile)
                 return;
 
-            RecentFilesService.Remove(tile.Path);
-            await RefreshCurrentFolderAsync();
+            try
+            {
+                RecentFilesService.Remove(tile.Path);
+                await RefreshCurrentFolderAsync();
+            }
+            catch (Exception ex)
+            {
+                await ShowDialogAsync(LocalizationService.Get("Common.Error"),
+                    LocalizationService.Format("Home.OperationFailed", ex.Message));
+            }
         }
 
         private async Task ShowDialogAsync(string title, string content)
@@ -1173,6 +1233,12 @@ namespace Caelum.Pages
         private void FileTile_DropCompleted(UIElement sender, DropCompletedEventArgs args)
         {
             HomeSmokeLog($"drag-completed result={args.DropResult}");
+            // A cancelled/Esc'd drag ends here too — re-derive folder
+            // highlights (an armed move-target stays lit, drag-hover goes
+            // dark) and hide the page overlay so nothing sticks.
+            UpdateFolderPlacementHighlights();
+            if (DragDropOverlay != null)
+                DragDropOverlay.Visibility = Visibility.Collapsed;
         }
 
         private string[] GetDragCandidatePaths(HomeTile tile)
@@ -1221,6 +1287,7 @@ namespace Caelum.Pages
             tile.IsDropTarget = false;
             var deferral = e.GetDeferral();
             var movedAny = false;
+            Exception failure = null;
 
             try
             {
@@ -1247,17 +1314,25 @@ namespace Caelum.Pages
                         movedAny = true;
                     }
                 }
+
+                if (movedAny)
+                {
+                    await RefreshCurrentFolderAsync();
+                    GetMainWindow()?.ShowToast(LocalizationService.Format("Home.MovedToFolder", tile.FileName), "\uE8B7");
+                }
+            }
+            catch (Exception ex)
+            {
+                failure = ex;
             }
             finally
             {
                 deferral.Complete();
             }
 
-            if (movedAny)
-            {
-                await RefreshCurrentFolderAsync();
-                GetMainWindow()?.ShowToast(LocalizationService.Format("Home.MovedToFolder", tile.FileName), "\uE8B7");
-            }
+            if (failure != null)
+                await ShowDialogAsync(LocalizationService.Get("Common.Error"),
+                    LocalizationService.Format("Home.OperationFailed", failure.Message));
 
             e.Handled = true;
         }
@@ -1324,6 +1399,7 @@ namespace Caelum.Pages
 
             var deferral = e.GetDeferral();
             bool movedAny = false;
+            Exception failure = null;
 
             try
             {
@@ -1352,18 +1428,26 @@ namespace Caelum.Pages
                         movedAny = true;
                     }
                 }
+
+                if (movedAny)
+                {
+                    await RefreshCurrentFolderAsync();
+                    var targetName = IsInsideFolder ? _currentFolderName : LocalizationService.Get("Home.LibraryRoot");
+                    GetMainWindow()?.ShowToast(LocalizationService.Format("Home.MovedToFolder", targetName), "\uE8B7");
+                }
+            }
+            catch (Exception ex)
+            {
+                failure = ex;
             }
             finally
             {
                 deferral.Complete();
             }
 
-            if (movedAny)
-            {
-                await RefreshCurrentFolderAsync();
-                var targetName = IsInsideFolder ? _currentFolderName : LocalizationService.Get("Home.LibraryRoot");
-                GetMainWindow()?.ShowToast(LocalizationService.Format("Home.MovedToFolder", targetName), "\uE8B7");
-            }
+            if (failure != null)
+                await ShowDialogAsync(LocalizationService.Get("Common.Error"),
+                    LocalizationService.Format("Home.OperationFailed", failure.Message));
 
             e.Handled = true;
         }

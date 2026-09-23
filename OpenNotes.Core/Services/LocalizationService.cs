@@ -275,6 +275,7 @@ namespace Caelum.Services
             ["Home.WordConvertFailed"] = ("Couldn't convert \"{0}\" to PDF: {1}", "无法将“{0}”转换为 PDF：{1}", "Impossible de convertir « {0} » en PDF : {1}"),
             ["Home.RenameAction"] = ("Rename", "\u91CD\u547D\u540D", "Renommer"),
             ["Home.RenameFailed"] = ("Failed to rename: {0}", "\u91CD\u547D\u540D\u5931\u8D25\uFF1A{0}", "\u00C9chec du renommage : {0}"),
+            ["Home.OperationFailed"] = ("Operation failed: {0}", "\u64CD\u4F5C\u5931\u8D25\uFF1A{0}", "\u00C9chec de l'op\u00E9ration : {0}"),
             ["Home.RenameFolderPrompt"] = ("Enter a new name for this folder:", "\u8F93\u5165\u6587\u4EF6\u5939\u7684\u65B0\u540D\u79F0\uFF1A", "Saisissez un nouveau nom pour ce dossier :"),
             ["Home.RenameFolderTitle"] = ("Rename Folder", "\u91CD\u547D\u540D\u6587\u4EF6\u5939", "Renommer le dossier"),
             ["Home.RenamePrompt"] = ("Enter a new name for this file:", "\u8F93\u5165\u6587\u4EF6\u7684\u65B0\u540D\u79F0\uFF1A", "Saisissez un nouveau nom pour ce fichier :"),

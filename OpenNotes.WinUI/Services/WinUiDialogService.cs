@@ -107,6 +107,40 @@ namespace Caelum.Services
                 // WPF parity: confirm=true, cancel/dismiss=false.
                 return result == ContentDialogResult.Primary;
             }
+            catch (InvalidOperationException)
+            {
+                // Defense in depth: a ContentDialog that bypassed the gate was
+                // already open on this XamlRoot. Report "not confirmed" rather
+                // than crashing an async-void event handler.
+                return null;
+            }
+            finally
+            {
+                DialogGate.Release();
+            }
+        }
+
+        /// <summary>
+        /// Runs a caller-built <see cref="ContentDialog"/> (e.g. HomePage's
+        /// input/template pickers) under the same process-wide
+        /// <see cref="DialogGate"/> the service dialogs use, so no two
+        /// ContentDialogs are ever open on a XamlRoot at once. A stray
+        /// already-open dialog that still trips
+        /// <c>InvalidOperationException</c> returns <c>default(T)</c> —
+        /// for <see cref="ContentDialogResult"/> that is
+        /// <see cref="ContentDialogResult.None"/>, i.e. "dismissed".
+        /// </summary>
+        internal static async Task<T> RunUnderDialogGateAsync<T>(Func<Task<T>> showAsync)
+        {
+            await DialogGate.WaitAsync();
+            try
+            {
+                return await showAsync();
+            }
+            catch (InvalidOperationException)
+            {
+                return default;
+            }
             finally
             {
                 DialogGate.Release();

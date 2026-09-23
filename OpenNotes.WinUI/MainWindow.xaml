@@ -211,7 +211,7 @@
                  flow left-to-right exactly like the WPF title bar. Interactive
                  children are automatically excluded from the caption rect by
                  the framework's passthrough handling. -->
-            <Grid x:Name="AppTitleBar">
+            <Grid x:Name="AppTitleBar" AutomationProperties.AutomationId="AppTitleBar">
                 <Border x:Name="BrandMarginRail"
                         Width="3"
                         Margin="8,8,0,8"

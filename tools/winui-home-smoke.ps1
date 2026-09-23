@@ -33,6 +33,7 @@ public static class HomeSmokeMouse {
         return GetAncestor(WindowFromPoint(p), 2); // GA_ROOT
     }
     public static void Minimize(IntPtr hwnd) { ShowWindow(hwnd, 6); } // SW_MINIMIZE
+    public static void Restore(IntPtr hwnd) { ShowWindow(hwnd, 9); } // SW_RESTORE
     public const uint SWP_NOMOVE = 0x0002, SWP_NOSIZE = 0x0001, SWP_SHOWWINDOW = 0x0040;
     public static void RaiseToTop(IntPtr hwnd) {
         // HWND_TOP (0): brings the window above the driving console so real
@@ -59,6 +60,7 @@ public static class HomeSmokeMouse {
 "@
 
 $script:results = New-Object System.Collections.Generic.List[string]
+$script:minimizedHwnds = New-Object System.Collections.Generic.List[IntPtr]
 function Check([bool]$ok, [string]$label) {
     $mark = if ($ok) { "PASS" } else { "FAIL" }
     $script:results.Add("$mark $label")
@@ -70,8 +72,14 @@ function Get-Window {
     $cond = New-Object System.Windows.Automation.PropertyCondition(
         [System.Windows.Automation.AutomationElement]::NameProperty, "OpenNotes")
     for ($i = 0; $i -lt 40; $i++) {
+        $proc.Refresh()
         $w = $root.FindFirst([System.Windows.Automation.TreeScope]::Children, $cond)
-        if ($w -ne $null) { return $w }
+        # Another process can own a same-titled window — only drive ours.
+        if ($w -ne $null) {
+            try {
+                if ($w.Current.NativeWindowHandle -eq $proc.MainWindowHandle) { return $w }
+            } catch {}
+        }
         Start-Sleep -Milliseconds 500
     }
     return $null
@@ -124,6 +132,7 @@ function Clear-ClickPoint($win, [int]$px, [int]$py) {
         try { $owner = [HomeSmokeMouse]::TopLevelWindowAt($px, $py) } catch { return }
         if ($owner -eq $appHwnd) { return }
         if ($owner -eq [IntPtr]::Zero) { return }
+        if (-not $script:minimizedHwnds.Contains($owner)) { $script:minimizedHwnds.Add($owner) }
         [HomeSmokeMouse]::Minimize($owner)
         Start-Sleep -Milliseconds 300
     }
@@ -346,6 +355,12 @@ try {
 }
 finally {
     try { $proc.Kill() } catch {}
+    # Restore any foreign windows Clear-ClickPoint minimized out of the way.
+    foreach ($hwnd in $script:minimizedHwnds) {
+        try { [HomeSmokeMouse]::Restore($hwnd) } catch {}
+    }
+    # The seeded library root is throwaway — remove it.
+    try { Remove-Item -Recurse -Force $dataRoot -ErrorAction SilentlyContinue } catch {}
 }
 
 $failCount = @($script:results | Where-Object { $_ -like "FAIL*" }).Count

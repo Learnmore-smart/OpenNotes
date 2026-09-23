@@ -8,7 +8,7 @@
 - **Custom formats:** `Caelum.LibraryTilePath` (single path) and `Caelum.LibraryTilePaths` (newline-joined multi-selection) — internal library moves only.
 - `PackLibraryTilePaths` / `GetLibraryTilePathsAsync` — join/split, trim, dedupe (ordinal-ignore-case), drop blanks.
 - `HasLibraryTilePaths` / `HasStorageItems` / `HasSupportedFolderDropPayload` — synchronous `DataPackageView.Contains` probes for `DragEnter`/`DragOver` accept/reject decisions (async checks are impossible inside those events).
-- `GetDroppedImportablePathsAsync` — reads `StandardDataFormats.StorageItems`, filters to `WordDocumentImport.IsImportablePath` (pdf/doc/docx/docm), dedupes against the library's existing paths where the caller asks.
+- `GetDroppedImportablePathsAsync` — reads `StandardDataFormats.StorageItems`, filters to `WordDocumentImport.IsImportablePath` (pdf/doc/docx/docm), dedupes WITHIN the dropped list only — no library-path check; `RecentFilesService.AddOrPromote` owns collisions.
 
 ## Important Notes / NEVER Change
 - NEVER move the `Contains` probes to async — `DragEventArgs` must be answered synchronously; WinUI gives no deferrable format query.
