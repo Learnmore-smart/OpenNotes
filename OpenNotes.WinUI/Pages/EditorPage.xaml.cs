@@ -8,6 +8,7 @@ using System.Runtime.InteropServices.WindowsRuntime;
 using System.Threading;
 using System.Threading.Tasks;
 using Caelum.Controls;
+using Caelum.Ink;
 using Caelum.Models;
 using Caelum.Pdf;
 using Caelum.Services;
@@ -88,6 +89,47 @@ namespace Caelum.Pages
         private string CurrentPerformanceMode
             => PdfRenderPolicy.NormalizeMode(_applicationSettings?.PerformanceMode);
 
+        // ── Ink tools / undo (Task 7 Phase A) ──────────────────────────────
+
+        /// <summary>
+        /// Toolbar tool set — mirrors the WPF ToolType order. Phase A wires
+        /// Pen/Highlighter/Eraser; the rest keep their visual toggle but map
+        /// to InkSurfaceTool.None until Phase B.
+        /// </summary>
+        private enum ToolType
+        {
+            None,
+            Pen,
+            Highlighter,
+            HiddenInk,
+            StickyNote,
+            Eraser,
+            Shape,
+            Laser,
+            Ruler,
+            Select,
+            Text,
+        }
+
+        private ToolType _currentTool = ToolType.None;
+        private ToolType _previousTool = ToolType.None;
+
+        // WPF defaults: pen black @1.5 DIP (settings-driven), highlighter
+        // yellow at the fixed 140-alpha translucency, eraser 20 DIP.
+        private const byte FreehandHighlighterOpacity = 140;
+        private Windows.UI.Color _penColor = Windows.UI.Color.FromArgb(255, 0, 0, 0);
+        private Windows.UI.Color _highlighterColor = Windows.UI.Color.FromArgb(255, 255, 255, 0);
+        private double _penSize = 1.5;
+        private double _highlighterSize = 6.0;
+        private double _eraserSize = 20.0;
+
+        private bool _isLoadingAnnotations;
+        private readonly Stack<IUndoAction> _undoStack = new();
+        private readonly Stack<IUndoAction> _redoStack = new();
+
+        // Pen hardware service (Huawei hotkey toggle + capability probing).
+        private Caelum.Services.PenService _penService;
+
         // ── Pages/rendering ─────────────────────────────────────────────────
         private readonly List<PdfPageControl> _pageControls = new();
         private readonly List<double> _pageTopOffsets = new();
@@ -144,6 +186,25 @@ namespace Caelum.Pages
             InitializeComponent();
             _pdfService = new PdfService(PdfiumRasterizerFactory.Shared);
             _applicationSettings = AppSettingsService.Load();
+            ApplySettingsToToolState();
+
+            // Undo/redo shortcuts — the accelerators live on the buttons so
+            // they share the buttons' enabled state (empty stack = inert).
+            UndoButton.KeyboardAccelerators.Add(new KeyboardAccelerator
+            {
+                Key = VirtualKey.Z,
+                Modifiers = VirtualKeyModifiers.Control,
+            });
+            UndoButton.KeyboardAccelerators.Add(new KeyboardAccelerator
+            {
+                Key = VirtualKey.Z,
+                Modifiers = VirtualKeyModifiers.Control | VirtualKeyModifiers.Shift,
+            });
+            RedoButton.KeyboardAccelerators.Add(new KeyboardAccelerator
+            {
+                Key = VirtualKey.Y,
+                Modifiers = VirtualKeyModifiers.Control,
+            });
 
             _zoomRenderDebounceTimer = DispatcherQueue.CreateTimer();
             _zoomRenderDebounceTimer.Interval = TimeSpan.FromMilliseconds(250);
@@ -260,9 +321,113 @@ namespace Caelum.Pages
                 _languageChangedSubscribed = true;
             }
 
+            InitializePenService();
             AutoCollapseSidebarForNarrowLayout();
             if (_completedLoadSessionId != 0 && _pageControls.Count > 0)
                 KickViewportRender();
+        }
+
+        /// <summary>
+        /// WinUI port of the WPF pen-service init: one service per editor
+        /// page (the WPF window-scoped instance shared the HWND subclass —
+        /// here each page subclasses its own window; duplicate hotkey
+        /// registrations on the same HWND are idempotent per id).
+        /// </summary>
+        private void InitializePenService()
+        {
+            if (_penService != null)
+                return;
+
+            var window = GetMainWindow();
+            if (window == null)
+                return;
+
+            _penService = new Caelum.Services.PenService();
+            _penService.ToolToggleRequested += PenService_ToolToggleRequested;
+            _penService.PenDeviceDetected += PenService_PenDeviceDetected;
+            _penService.Initialize(window);
+            PushPenServiceToPages();
+        }
+
+        private void PushPenServiceToPages()
+        {
+            if (_penService == null)
+                return;
+            foreach (var page in _pageControls)
+                page.Ink.SetPenService(_penService);
+        }
+
+        /// <summary>
+        /// Huawei M-Pencil double-tap (Win+F19/F20 via the HWND subclass) →
+        /// eraser toggle, marshalled to the UI thread. WPF parity.
+        /// </summary>
+        private void PenService_ToolToggleRequested(object sender, EventArgs e)
+        {
+            DispatcherQueue.TryEnqueue(ToggleEraserMode);
+        }
+
+        private void PenService_PenDeviceDetected(object sender, Caelum.Services.PenDeviceInfo info)
+        {
+            // Packet probing fires on the UI thread already; the guard keeps
+            // the toast honest if the service ever moves off it.
+            DispatcherQueue.TryEnqueue(() =>
+            {
+                if (info == null)
+                    return;
+                var featureLabels = new List<string>();
+                if (info.SupportsPressure)
+                    featureLabels.Add(LocalizationService.Get("Editor.PenFeaturePressure"));
+                if (info.SupportsXTilt || info.SupportsYTilt)
+                    featureLabels.Add(LocalizationService.Get("Editor.PenFeatureTilt"));
+                if (info.SupportsBarrelButton)
+                    featureLabels.Add(LocalizationService.Get("Editor.PenFeatureBarrel"));
+                string features = featureLabels.Count == 0
+                    ? string.Empty
+                    : $" ({string.Join(" · ", featureLabels)})";
+                GetMainWindow()?.ShowToast(
+                    LocalizationService.Get("Editor.Stylus") + features, "🖊", 2500);
+            });
+        }
+
+        /// <summary>
+        /// Barrel/hotkey eraser toggle: eraser → back to the previous tool,
+        /// otherwise → eraser (current becomes previous). WPF parity.
+        /// </summary>
+        private void ToggleEraserMode()
+        {
+            ActivateTool(_currentTool == ToolType.Eraser ? _previousTool : ToolType.Eraser);
+        }
+
+        /// <summary>
+        /// Sets the active tool and syncs the toolbar toggle visuals —
+        /// programmatic equivalent of clicking the tool button.
+        /// </summary>
+        private void ActivateTool(ToolType tool)
+        {
+            var toolButtons = new (ToggleButton Button, ToolType Tool)[]
+            {
+                (PenToolButton, ToolType.Pen),
+                (HighlighterToolButton, ToolType.Highlighter),
+                (HiddenInkToolButton, ToolType.HiddenInk),
+                (StickyNoteToolButton, ToolType.StickyNote),
+                (EraserToolButton, ToolType.Eraser),
+                (ShapeToolButton, ToolType.Shape),
+                (LaserToolButton, ToolType.Laser),
+                (RulerToolButton, ToolType.Ruler),
+                (SelectToolButton, ToolType.Select),
+                (TextToolButton, ToolType.Text),
+            };
+            foreach (var (button, t) in toolButtons)
+            {
+                if (button != null)
+                    button.IsChecked = t == tool;
+            }
+            if (tool != _currentTool)
+            {
+                _previousTool = _currentTool;
+                _currentTool = tool;
+            }
+            ApplyToolToAllPages();
         }
 
         private void EditorPage_Unloaded(object sender, RoutedEventArgs e) => ReleaseResources();
@@ -394,6 +559,7 @@ namespace Caelum.Pages
                 _pagesInitiallyRendered.Clear();
                 _pagesRenderedAtScale.Clear();
                 ReleaseThumbnailCache();
+                ClearUndoRedoHistory();
                 SidebarPageItems.Clear();
                 SidebarBookmarkItems.Clear();
                 _sidebarOutlineItems.Clear();
@@ -410,9 +576,6 @@ namespace Caelum.Pages
                 _completedLoadSessionId = sessionId;
 
                 int pageCount = _pdfService.PageCount;
-                // Retained for the annotation tasks: ExtractedAnnotations is
-                // page-indexed markup harvested during LoadPdfAsync.
-                _ = _pdfService.ExtractedAnnotations;
 
                 double currentTop = 0;
                 for (int i = 0; i < pageCount; i++)
@@ -420,6 +583,8 @@ namespace Caelum.Pages
                     var size = _pdfService.GetPageSizeInDips(i);
                     AddPdfPage(i, size, ref currentTop, pageCount);
                 }
+                ApplyToolToAllPages();
+                LoadAnnotationsIntoPages();
 
                 _zoomLevel = 1.0;
                 PdfScrollViewer.ChangeView(0, 0, 1.0f, disableAnimation: true);
@@ -461,6 +626,10 @@ namespace Caelum.Pages
             AutomationProperties.SetAutomationId(pageControl, $"PdfPageControl.{index}");
             AutomationProperties.SetName(pageControl, LocalizationService.Format("Editor.PageNumber", index + 1));
 
+            pageControl.StrokeCollected += PageControl_StrokeCollected;
+            pageControl.StrokesErased += PageControl_StrokesErased;
+            pageControl.InkMutated += PageControl_InkMutated;
+
             _pageTopOffsets.Add(currentTop);
             _pageHeights.Add(size.Height);
 
@@ -475,6 +644,38 @@ namespace Caelum.Pages
                 PagesContainer.Children.Add(new Grid { Height = PageSpacing });
 
             currentTop += size.Height + PageSpacing;
+        }
+
+        /// <summary>
+        /// Quiet sidecar load: ExtractedAnnotations is page-indexed markup
+        /// harvested during LoadPdfAsync. Strokes enter through the store's
+        /// quiet path under the _isLoadingAnnotations guard so loading never
+        /// creates undo actions — the same contract as the WPF loader.
+        /// </summary>
+        private void LoadAnnotationsIntoPages()
+        {
+            var annotations = _pdfService.ExtractedAnnotations;
+            if (annotations == null || annotations.Count == 0)
+                return;
+
+            _isLoadingAnnotations = true;
+            try
+            {
+                foreach (var page in _pageControls)
+                {
+                    if (!annotations.TryGetValue(page.PageIndex, out var pageAnnotation)
+                        || pageAnnotation?.Strokes == null)
+                    {
+                        continue;
+                    }
+                    foreach (var stroke in pageAnnotation.Strokes)
+                        page.AddStroke(stroke);
+                }
+            }
+            finally
+            {
+                _isLoadingAnnotations = false;
+            }
         }
 
         private async Task RenderInitialPagesAsync(CancellationToken token)
@@ -1176,44 +1377,266 @@ namespace Caelum.Pages
             AutomationProperties.SetItemStatus(PageNumberTextBox, string.Empty);
         }
 
-        // ── Toolbar (visual-state only until T7–T9) ─────────────────────────
-
-        private void UndoButton_Click(object sender, RoutedEventArgs e)
-        {
-            // T7/T8: undo pipeline not ported.
-        }
-
-        private void RedoButton_Click(object sender, RoutedEventArgs e)
-        {
-            // T7/T8: redo pipeline not ported.
-        }
+        // ── Toolbar + ink tools (Task 7 Phase A) ────────────────────────────
 
         /// <summary>
-        /// T7/T8 annotation tools are inert; the toggle visuals still track a
-        /// single active tool so the chrome behaves like the WPF toolbar
-        /// (click to check, re-click to clear, mutually exclusive).
+        /// Settings → tool state. Runs at construction; the pen colour/size
+        /// follow AppSettings defaults exactly like the WPF shell.
+        /// </summary>
+        private void ApplySettingsToToolState()
+        {
+            if (_applicationSettings == null)
+                return;
+
+            try
+            {
+                _penColor = ParseHexColor(_applicationSettings.DefaultPenColorHex);
+            }
+            catch
+            {
+                _penColor = Windows.UI.Color.FromArgb(255, 0, 0, 0);
+            }
+            _penSize = Math.Clamp(_applicationSettings.DefaultPenSize, 0.5, 24.0);
+            if (PenColorIndicator != null)
+                PenColorIndicator.Background = new SolidColorBrush(_penColor);
+            if (PenOnlyButton != null)
+                PenOnlyButton.IsChecked = _applicationSettings.PenOnlyMode;
+        }
+
+        /// <summary>#RRGGBB / #AARRGGBB → Color. Throws on bad input.</summary>
+        private static Windows.UI.Color ParseHexColor(string hex)
+        {
+            if (string.IsNullOrWhiteSpace(hex))
+                throw new FormatException("empty color");
+            var s = hex.Trim().TrimStart('#');
+            if (s.Length == 6)
+            {
+                return Windows.UI.Color.FromArgb(
+                    255,
+                    Convert.ToByte(s.Substring(0, 2), 16),
+                    Convert.ToByte(s.Substring(2, 2), 16),
+                    Convert.ToByte(s.Substring(4, 2), 16));
+            }
+            if (s.Length == 8)
+            {
+                return Windows.UI.Color.FromArgb(
+                    Convert.ToByte(s.Substring(0, 2), 16),
+                    Convert.ToByte(s.Substring(2, 2), 16),
+                    Convert.ToByte(s.Substring(4, 2), 16),
+                    Convert.ToByte(s.Substring(6, 2), 16));
+            }
+            throw new FormatException($"bad color: {hex}");
+        }
+
+        private void UndoButton_Click(object sender, RoutedEventArgs e) => _ = PerformUndoAsync();
+        private void RedoButton_Click(object sender, RoutedEventArgs e) => _ = PerformRedoAsync();
+
+        /// <summary>
+        /// Tool toggles stay mutually exclusive like the WPF toolbar; Phase A
+        /// maps Pen/Highlighter/Eraser onto the ink surface and leaves the
+        /// Phase-B tools visual-only (their InkSurfaceTool is None).
+        /// Re-clicking the active tool keeps it armed (WPF: the tool stays
+        /// selected — a second click doesn't drop it to None).
         /// </summary>
         private void ToolButton_Click(object sender, RoutedEventArgs e)
         {
             if (sender is not ToggleButton clicked)
                 return;
 
-            var toolButtons = new[]
+            var toolButtons = new (ToggleButton Button, ToolType Tool)[]
             {
-                PenToolButton, HighlighterToolButton, HiddenInkToolButton,
-                StickyNoteToolButton, EraserToolButton, ShapeToolButton,
-                LaserToolButton, SelectToolButton, TextToolButton
+                (PenToolButton, ToolType.Pen),
+                (HighlighterToolButton, ToolType.Highlighter),
+                (HiddenInkToolButton, ToolType.HiddenInk),
+                (StickyNoteToolButton, ToolType.StickyNote),
+                (EraserToolButton, ToolType.Eraser),
+                (ShapeToolButton, ToolType.Shape),
+                (LaserToolButton, ToolType.Laser),
+                (RulerToolButton, ToolType.Ruler),
+                (SelectToolButton, ToolType.Select),
+                (TextToolButton, ToolType.Text),
             };
-            foreach (var button in toolButtons)
+
+            ToolType next = ToolType.None;
+            foreach (var (button, tool) in toolButtons)
             {
-                if (!ReferenceEquals(button, clicked))
+                if (ReferenceEquals(button, clicked))
+                {
+                    if (clicked.IsChecked == true)
+                        next = tool;
+                }
+                else
+                {
                     button.IsChecked = false;
+                }
+            }
+
+            if (next != _currentTool)
+            {
+                _previousTool = _currentTool;
+                _currentTool = next;
+            }
+            ApplyToolToAllPages();
+        }
+
+        /// <summary>
+        /// Pushes the current tool + ink settings into every page surface —
+        /// the ApplyToolToAllPages port. Phase-B tools resolve to None so
+        /// their buttons arm visually without enabling ink input.
+        /// </summary>
+        private void ApplyToolToAllPages()
+        {
+            var surfaceTool = _currentTool switch
+            {
+                ToolType.Pen => InkSurfaceTool.Pen,
+                ToolType.Highlighter => InkSurfaceTool.Highlighter,
+                ToolType.Eraser => InkSurfaceTool.Eraser,
+                _ => InkSurfaceTool.None,
+            };
+
+            var settings = _applicationSettings;
+            foreach (var page in _pageControls)
+            {
+                var ink = page.Ink;
+                ink.SetPenService(_penService);
+                ink.Tool = surfaceTool;
+                ink.PenColor = _penColor;
+                ink.PenSize = _penSize;
+                ink.HighlighterColor = Windows.UI.Color.FromArgb(
+                    FreehandHighlighterOpacity,
+                    _highlighterColor.R, _highlighterColor.G, _highlighterColor.B);
+                ink.HighlighterSize = _highlighterSize;
+                ink.EraserSize = _eraserSize;
+                if (settings != null)
+                {
+                    ink.PenOnlyMode = settings.PenOnlyMode;
+                    ink.EnablePressure = settings.EnablePressure;
+                    ink.WholeStrokeEraser = settings.WholeStrokeEraser;
+                    ink.InkSimulationEnabled = settings.InkSimulation;
+                    ink.StrokeSmoothingLevel = settings.StrokeSmoothing;
+                }
+                page.CancelInteraction();
             }
         }
 
         private void PenOnlyButton_Click(object sender, RoutedEventArgs e)
         {
-            // T7: palm-rejection toggle — visual state only.
+            if (_applicationSettings == null)
+                return;
+            _applicationSettings.PenOnlyMode = PenOnlyButton.IsChecked == true;
+            AppSettingsService.Save(_applicationSettings);
+            foreach (var page in _pageControls)
+                page.Ink.PenOnlyMode = _applicationSettings.PenOnlyMode;
+        }
+
+        // ── Undo/redo (Core IUndoAction over InkStrokeStore) ──────────────
+
+        private void PushUndoAction(IUndoAction action)
+        {
+            if (action == null)
+                return;
+            _undoStack.Push(action);
+            _redoStack.Clear();
+            UpdateUndoRedoButtons();
+        }
+
+        private async Task PerformUndoAsync()
+        {
+            if (_undoStack.Count == 0)
+                return;
+            var action = _undoStack.Peek();
+            try
+            {
+                await action.UndoAsync();
+                // A failed token-resolution undo stays on the stack as a
+                // no-op — same contract as the WPF StrokesErasedAction path.
+                if (action is InkStrokesErasedAction erased && !erased.LastOperationSucceeded)
+                    return;
+                _undoStack.Pop();
+                _redoStack.Push(action);
+                UpdateUndoRedoButtons();
+            }
+            catch (Exception ex)
+            {
+                GetMainWindow()?.ShowToast(
+                    LocalizationService.Format("Editor.UndoFailed", ex.Message), "", 3500);
+            }
+        }
+
+        private async Task PerformRedoAsync()
+        {
+            if (_redoStack.Count == 0)
+                return;
+            var action = _redoStack.Peek();
+            try
+            {
+                await action.RedoAsync();
+                if (action is InkStrokesErasedAction erased && !erased.LastOperationSucceeded)
+                    return;
+                _redoStack.Pop();
+                _undoStack.Push(action);
+                UpdateUndoRedoButtons();
+            }
+            catch (Exception ex)
+            {
+                GetMainWindow()?.ShowToast(
+                    LocalizationService.Format("Editor.RedoFailed", ex.Message), "", 3500);
+            }
+        }
+
+        private void UpdateUndoRedoButtons()
+        {
+            if (UndoButton != null)
+                UndoButton.IsEnabled = _undoStack.Count > 0;
+            if (RedoButton != null)
+                RedoButton.IsEnabled = _redoStack.Count > 0;
+        }
+
+        private void ClearUndoRedoHistory()
+        {
+            _undoStack.Clear();
+            _redoStack.Clear();
+            UpdateUndoRedoButtons();
+        }
+
+        // ── Page ink events ────────────────────────────────────────────────
+
+        private void PageControl_StrokeCollected(object sender, InkStrokeData stroke)
+        {
+            if (_isLoadingAnnotations || sender is not PdfPageControl page)
+                return;
+            PushUndoAction(new InkStrokeAddedAction(page.Ink.Store, stroke));
+        }
+
+        private void PageControl_StrokesErased(object sender, InkStrokesErasedEventArgs e)
+        {
+            if (_isLoadingAnnotations || sender is not PdfPageControl page)
+                return;
+            PushUndoAction(new InkStrokesErasedAction(
+                page.Ink.Store,
+                e.RemovedPlacements.ToList(),
+                e.AddedPlacements.ToList()));
+        }
+
+        private void PageControl_InkMutated(object sender, EventArgs e)
+        {
+            if (sender is PdfPageControl page)
+                InvalidateThumbnail(page.PageIndex);
+        }
+
+        /// <summary>
+        /// Evicts a page's cached sidebar thumbnail so the next realization
+        /// re-renders with current ink. (Ink is not composited into the
+        /// thumbnail yet — that is the T9 save/render pipeline's job — but
+        /// eviction is the correct invalidation seam.)
+        /// </summary>
+        private void InvalidateThumbnail(int pageIndex)
+        {
+            if (pageIndex < 0)
+                return;
+            _thumbnailCache.Remove(pageIndex);
+            _thumbnailCacheLru.Remove(pageIndex);
+            _thumbnailPagesLoading.Remove(pageIndex);
         }
 
         // ── Sidebar: collapse geometry (228/32 DIP contract) ────────────────
@@ -2833,6 +3256,12 @@ namespace Caelum.Pages
             _zoomRenderDebounceTimer.Stop();
             _scrollRenderDebounceTimer.Stop();
             _documentOperationSession.Cancel();
+
+            _penService?.Dispose();
+            _penService = null;
+
+            foreach (var page in _pageControls)
+                page.CancelInteraction();
 
             // PdfService owns the rasterizer/document; async-dispose is
             // fire-and-forget on teardown (the tab is leaving the tree) but

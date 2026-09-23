@@ -122,7 +122,7 @@
 - DEBUG-only seams (`Editor.DebugSidebarNarrow`, `DebugCommitJump`, `DebugOpenSearch`, `DebugOpenContextMenu`) + `pages-margin-left`/`current-page` HelpText probes exist because the smoke session cannot deliver OS input; they call the identical handlers.
 - `MainWindow`: `CloseTab` → `EditorPage.ShutdownEditor()` (deterministic session/render/PdfService teardown — a collapsed Frame's page may never raise `Unloaded`); window-level Ctrl+F → `OpenSearchPanel`. csproj gains `PdfiumViewer.Native.x86_64.v8-xfa` for `x64\pdfium.dll`.
 - Search: `GetPageTextInfoAsync` per page → results list → jump + `SetPdfTextSelectionRects` highlight. Context menu: rotate (`RotatePageAsync`+reload), export current-page PNG incl. 1×, insert/delete/duplicate/reorder/print entries.
-- **Deferred (inert/visual-only until T7–T9):** ink canvas + pen/eraser/shape/laser/ruler/select/text tools (T7); text/sticky/image overlays + persistent PDF text selection (T8); save/autosave/dirty-close/version-history/settings (T9); Undo/Redo buttons inert.
+- **Deferred (inert/visual-only until T7–T9):** ink canvas + pen/eraser/shape/laser/ruler/select/text tools (T7 — **Phase A done 2026-09-23**: pen/highlighter/eraser + pressure + undo live; Phase B remains); text/sticky/image overlays + persistent PDF text selection (T8); save/autosave/dirty-close/version-history/settings (T9); Undo/Redo buttons wired in T7A.
 - Verification: `tools/winui-editor-smoke.ps1` (new) 60/60 — ids, margins 228/32/narrow, nav, zoom 110%, search BRAVO, context items, tab-close survival.
 - **Review adjudications (2026-09-23):** the spec's named `PagesZoomTransform` element was substituted by `ScrollViewer ZoomMode` + code-side `_zoomLevel` — functionally equivalent anchored zoom (ChangeView commits zoom+offsets atomically). `LoadingOverlay` during zoom re-render matches WPF behavior rather than the spec letter — adjudicated WPF-parity. `ZoomTextBox` commits on Enter AND LostFocus via `ApplyZoomFromTextBox` (`%`-strip, `[ZoomMin*100,ZoomMax*100]` range-check, `ZoomAroundPoint` — review fix; was Enter-only bare `SetZoom`). `EditorPage` self-subscribes `LocalizationService.LanguageChanged` in `Loaded`, unsubscribes in `ReleaseResources` (review fix — MainWindow's handler doesn't reach open editor tabs).
 
@@ -134,11 +134,13 @@
 - Port: eraser modes (whole-stroke + point eraser with stroke splitting — Core `StrokeGeometry`), shape tools (line/rect/ellipse/arrow/dashed/grouping), selection lasso + move/rotate/scale, hidden ink masks, laser fade (timer-driven alpha decay)
 - Port: `WindowsPenService`/`HuaweiPenService` pressure + hotkey glue onto WinUI pointer model + `SetWindowSubclass` WndProc for Win+F19/20
 
-- [ ] **Step 1:** Pen draws pressure strokes rendered live; stroke persists to `StrokeAnnotation` + undo action.
-- [ ] **Step 2:** Eraser parity: whole-stroke + geometric point erase (`StrokeEraserGeometryTests` equivalent green against Core math).
-- [ ] **Step 3:** Selection/move/rotate/scale + shape tools + undo/redo stack parity.
-- [ ] **Step 4:** Hidden ink, laser, ruler overlay.
+- [x] **Step 1:** Pen draws pressure strokes rendered live; stroke persists to `StrokeAnnotation` + undo action. *(Phase A, 2026-09-23 — `InkSurface` + `StrokeRenderer` + `StrokeOutline`; `[x,y,p]` persistence with legacy `[x,y]` → p=0.5; `InkStrokeStore` + `InkStrokeAddedAction`.)*
+- [x] **Step 2:** Eraser parity: whole-stroke + geometric point erase (`StrokeEraserGeometryTests` equivalent green against Core math). *(Phase A — square-stamp model replaces the capsule approximation; `WpfCoreEraserParityTests` cross-validates 23 cases against live `Stroke.GetEraseResult`; barrel/inverted-pen erase wired.)*
+- [ ] **Step 3:** Selection/move/rotate/scale + shape tools + undo/redo stack parity. *(**Phase B** — undo/redo stack itself is done; selection + shape tooling deferred.)*
+- [ ] **Step 4:** Hidden ink, laser, ruler overlay. *(**Phase B**.)*
 - [ ] **Step 5: Commit.**
+
+**Phase A/B split (2026-09-23):** Phase A shipped pen/highlighter/eraser with pointer capture, pen-vs-touch arbitration (`PenOnlyMode`), pressure capture + pressure-varying live render, `[x,y,p]` sidecar persistence, square-stamp eraser parity, tokenized undo/redo, tool color/size state, `ApplyToolToAllPages`, and the WinUI `PenService` (HWND subclass + Win+F19/20 hotkeys + pointer-capability probing). **Phase B deferred:** selection lasso/move/rotate/scale, shape tools + recognition UI, hidden ink masks, laser fade, ruler.
 
 **Review note (2026-09-22, Task 2 quality follow-up):** before the WinUI eraser ships, tighten `StrokeGeometry.SplitStrokeAtEraser` — replace the circle-capsule interval model with a square-stamp model (axis-aligned slab per spine segment, closed-form) matching the WPF `RectangleStylusShape` footprint, plus pressure-scaled radius (`eraser/2 + size·pressure(t)/2`), cross-validated against `Stroke.GetEraseResult` on a random stroke/eraser-path corpus. Also: the `InkStrokeData`↔`StrokeAnnotation` converter must decide whether per-point pressure enters the sidecar schema — the format is `[x,y]` only today and loads pressure as 0.5.
 

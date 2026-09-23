@@ -1,7 +1,8 @@
 <UserControl
     x:Class="Caelum.Controls.PdfPageControl"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:controls="using:Caelum.Controls">
 
     <!--
         V6 WinUI port of WPF Controls/PdfPageControl.xaml.
@@ -42,9 +43,9 @@
             <Canvas x:Name="ImageOverlayCanvas" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
                     Background="{x:Null}" IsHitTestVisible="True"/>
 
-            <!-- T7: the WPF InkCanvas slot lives here. The WinUI ink surface
-                 arrives with the annotation tasks; overlay order is kept so
-                 it slots in without re-layering. -->
+            <!-- T7 Phase A: the custom ink surface occupies the WPF InkCanvas
+                 slot — above image annotations, below shape preview/text. -->
+            <controls:InkSurface x:Name="InkSurface" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"/>
 
             <!-- T7: Shape Drag Preview Layer (dashed outline while dragging a shape) -->
             <Canvas x:Name="ShapePreviewCanvas" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"

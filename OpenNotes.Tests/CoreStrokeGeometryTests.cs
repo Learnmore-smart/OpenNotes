@@ -138,7 +138,8 @@ public sealed class CoreStrokeGeometryTests
             Assert.That(StrokeGeometry.CreateEraserRects(eraserPath, 20)[0]
                     .IntersectsWith(bounds), Is.True,
                 "The eraser rect really does overlap the inflated bounds — prefilter would pass.");
-            Assert.That(StrokeGeometry.EraserHitsStroke(spine, eraserPath, hitRadius: 10), Is.False,
+            Assert.That(StrokeGeometry.EraserHitsStroke(
+                spine, strokeSize: 10, strokeIgnoresPressure: true, eraserPath, eraserSize: 10), Is.False,
                 "The spine itself stays far away, so the eraser must not touch.");
         });
     }
@@ -151,9 +152,9 @@ public sealed class CoreStrokeGeometryTests
         Assert.Multiple(() =>
         {
             Assert.That(StrokeGeometry.EraserHitsStroke(
-                spine, new List<PointD> { new(50, 50) }, hitRadius: 10), Is.True);
+                spine, strokeSize: 10, strokeIgnoresPressure: true, new List<PointD> { new(50, 50) }, eraserSize: 10), Is.True);
             Assert.That(StrokeGeometry.EraserHitsStroke(
-                spine, new List<PointD> { new(25, 20), new(75, 80) }, hitRadius: 10), Is.True,
+                spine, strokeSize: 10, strokeIgnoresPressure: true, new List<PointD> { new(25, 20), new(75, 80) }, eraserSize: 10), Is.True,
                 "A swept path must hit even when both endpoints are far away.");
         });
     }
@@ -164,7 +165,7 @@ public sealed class CoreStrokeGeometryTests
         var spine = Spine((0, 50), (100, 50));
 
         var fragments = StrokeGeometry.SplitStrokeAtEraser(
-            spine, new List<PointD> { new(50, 50) }, hitRadius: 10);
+            spine, strokeSize: 10, strokeIgnoresPressure: true, new List<PointD> { new(50, 50) }, eraserSize: 10);
 
         Assert.That(fragments, Has.Count.EqualTo(2));
         Assert.Multiple(() =>
@@ -186,7 +187,7 @@ public sealed class CoreStrokeGeometryTests
         // Eraser travels (50,0) -> (50,100): both endpoints miss the ink but
         // the swept capsule crosses it, so the split must still happen.
         var fragments = StrokeGeometry.SplitStrokeAtEraser(
-            spine, new List<PointD> { new(50, 0), new(50, 100) }, hitRadius: 10);
+            spine, strokeSize: 10, strokeIgnoresPressure: true, new List<PointD> { new(50, 0), new(50, 100) }, eraserSize: 10);
 
         Assert.That(fragments, Has.Count.EqualTo(2));
         Assert.Multiple(() =>
@@ -206,7 +207,7 @@ public sealed class CoreStrokeGeometryTests
         };
 
         var fragments = StrokeGeometry.SplitStrokeAtEraser(
-            spine, new List<PointD> { new(50, 50) }, hitRadius: 10);
+            spine, strokeSize: 10, strokeIgnoresPressure: true, new List<PointD> { new(50, 50) }, eraserSize: 10);
 
         Assert.That(fragments, Has.Count.EqualTo(2));
         // Cut at t=0.4: pressure = 0.2 + (1.0-0.2)*0.4 = 0.52
@@ -221,13 +222,13 @@ public sealed class CoreStrokeGeometryTests
         var spine = Spine((0, 50), (30, 50), (70, 50), (100, 50));
 
         var fragments = StrokeGeometry.SplitStrokeAtEraser(
-            spine, new List<PointD> { new(50, 50) }, hitRadius: 10);
+            spine, strokeSize: 10, strokeIgnoresPressure: true, new List<PointD> { new(50, 50) }, eraserSize: 10);
 
         Assert.That(fragments, Has.Count.EqualTo(2));
         Assert.Multiple(() =>
         {
-            Assert.That(fragments[0].Select(p => p.X), Is.EqualTo(new[] { 0.0, 30.0, 40.0 }).Within(1e-9));
-            Assert.That(fragments[1].Select(p => p.X), Is.EqualTo(new[] { 60.0, 70.0, 100.0 }).Within(1e-9));
+            Assert.That(fragments[0].Select(p => p.X), Is.EqualTo(new[] { 0.0, 30.0, 40.0 }).Within(1e-6));
+            Assert.That(fragments[1].Select(p => p.X), Is.EqualTo(new[] { 60.0, 70.0, 100.0 }).Within(1e-6));
         });
     }
 
@@ -237,7 +238,7 @@ public sealed class CoreStrokeGeometryTests
         var spine = Spine((0, 50), (100, 50));
 
         var fragments = StrokeGeometry.SplitStrokeAtEraser(
-            spine, new List<PointD> { new(50, 200) }, hitRadius: 10);
+            spine, strokeSize: 10, strokeIgnoresPressure: true, new List<PointD> { new(50, 200) }, eraserSize: 10);
 
         Assert.That(fragments, Has.Count.EqualTo(1));
         Assert.That(fragments[0], Is.EqualTo(spine));
@@ -249,7 +250,7 @@ public sealed class CoreStrokeGeometryTests
         var spine = Spine((0, 50), (100, 50));
 
         var fragments = StrokeGeometry.SplitStrokeAtEraser(
-            spine, new List<PointD> { new(50, 50) }, hitRadius: 200);
+            spine, strokeSize: 10, strokeIgnoresPressure: true, new List<PointD> { new(50, 50) }, eraserSize: 200);
 
         Assert.That(fragments, Is.Empty);
     }
@@ -260,15 +261,15 @@ public sealed class CoreStrokeGeometryTests
         Assert.Multiple(() =>
         {
             Assert.That(StrokeGeometry.SplitStrokeAtEraser(
-                new List<InkPointData>(), new List<PointD> { new(0, 0) }, 10), Is.Empty);
+                new List<InkPointData>(), 10, true, new List<PointD> { new(0, 0) }, 10), Is.Empty);
             Assert.That(StrokeGeometry.SplitStrokeAtEraser(
-                Spine((50, 50)), new List<PointD> { new(50, 50) }, 10), Is.Empty,
+                Spine((50, 50)), 10, true, new List<PointD> { new(50, 50) }, 10), Is.Empty,
                 "A single point inside the eraser is fully erased.");
             Assert.That(StrokeGeometry.SplitStrokeAtEraser(
-                Spine((50, 200)), new List<PointD> { new(50, 50) }, 10), Has.Count.EqualTo(1),
+                Spine((50, 200)), 10, true, new List<PointD> { new(50, 50) }, 10), Has.Count.EqualTo(1),
                 "A single point outside the eraser survives.");
             Assert.That(StrokeGeometry.EraserHitsStroke(
-                new List<InkPointData>(), new List<PointD> { new(0, 0) }, 10), Is.False);
+                new List<InkPointData>(), 10, true, new List<PointD> { new(0, 0) }, 10), Is.False);
         });
     }
 

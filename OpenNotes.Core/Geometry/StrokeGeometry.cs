@@ -415,60 +415,112 @@ public static class StrokeGeometry
     }
 
     /// <summary>
+    /// The pressure→half-width law measured from WPF
+    /// <c>System.Windows.Ink.Stroke</c> rendering (empirical, exact on the
+    /// probed corpus): rendered diameter = size·(0.25 + 1.5·p), so the
+    /// half-width is size·(0.125 + 0.75·p). p=0.5 — the StylusPoint default
+    /// and the effective value WPF uses when DrawingAttributes.IgnorePressure
+    /// is set — renders at exactly the nominal size; p=1.0 renders at 1.75×,
+    /// p=0.25 at 0.625×.
+    /// </summary>
+    public static double GetRenderedStrokeHalfWidth(double size, float pressure)
+    {
+        double p = pressure;
+        if (p < 0.0) p = 0.0;
+        else if (p > 1.0) p = 1.0;
+        return size * (0.125 + 0.75 * p);
+    }
+
+    /// <summary>
+    /// The per-point effective pressure: <paramref name="ignorePressure"/>
+    /// pins every point to WPF's uniform-width pressure factor (0.5).
+    /// </summary>
+    private static float EffectivePressure(InkPointData point, bool ignorePressure)
+        => ignorePressure ? 0.5f : point.Pressure;
+
+    /// <summary>
     /// True when an eraser travelling along <paramref name="eraserPath"/>
-    /// (a capsule chain of radius <paramref name="hitRadius"/>) touches the
-    /// stroke spine — the whole-stroke eraser decision and the prefilter for
-    /// <see cref="SplitStrokeAtEraser"/>.
+    /// (an axis-aligned square stamp of <paramref name="eraserSize"/> swept
+    /// along the path — WPF <c>RectangleStylusShape</c> parity) touches the
+    /// rendered stroke outline. This is the whole-stroke eraser decision and
+    /// the prefilter for <see cref="SplitStrokeAtEraser"/>.
+    /// A spine point s(t) is touched when its rendered disc — radius
+    /// <see cref="GetRenderedStrokeHalfWidth"/> of the (interpolated) point
+    /// pressure — intersects the swept footprint: square stamps at every
+    /// path point plus the convex swept hull of each consecutive pair.
     /// </summary>
     public static bool EraserHitsStroke(
         IReadOnlyList<InkPointData> strokePoints,
+        double strokeSize,
+        bool strokeIgnoresPressure,
         IReadOnlyList<PointD> eraserPath,
-        double hitRadius)
+        double eraserSize)
     {
-        if (strokePoints == null || strokePoints.Count == 0
-            || eraserPath == null || eraserPath.Count == 0
-            || hitRadius < 0)
-        {
+        var pieces = BuildEraserFootprint(eraserPath, eraserSize);
+        if (strokePoints == null || strokePoints.Count == 0 || pieces.Count == 0)
             return false;
-        }
 
         if (strokePoints.Count == 1)
-            return PointInsideEraserPath(AsPoint(strokePoints[0]), eraserPath, hitRadius);
+        {
+            var point = strokePoints[0];
+            double w = GetRenderedStrokeHalfWidth(
+                strokeSize, EffectivePressure(point, strokeIgnoresPressure));
+            return PointWithinFootprint(AsPoint(point), pieces, w);
+        }
 
         for (int i = 1; i < strokePoints.Count; i++)
         {
-            var intervals = CollectRemovedIntervals(
-                AsPoint(strokePoints[i - 1]), AsPoint(strokePoints[i]), eraserPath, hitRadius);
-            if (intervals.Count > 0)
-                return true;
+            var a = strokePoints[i - 1];
+            var b = strokePoints[i];
+            double wa = GetRenderedStrokeHalfWidth(
+                strokeSize, EffectivePressure(a, strokeIgnoresPressure));
+            double wb = GetRenderedStrokeHalfWidth(
+                strokeSize, EffectivePressure(b, strokeIgnoresPressure));
+
+            foreach (var piece in pieces)
+            {
+                if (CollectConvexStampIntervals(
+                        AsPoint(a), AsPoint(b), wa, wb, piece, null))
+                {
+                    return true;
+                }
+            }
         }
         return false;
     }
 
     /// <summary>
-    /// Splits a stroke spine where an eraser capsule chain (stamp circles at
-    /// each path point + the swept capsule of each path segment) overlaps it.
-    /// <paramref name="hitRadius"/> should be eraserSize/2 + strokeSize/2 to
-    /// approximate the widened rendered stroke, matching the convention
-    /// <see cref="HiddenInkIntersectsEraser"/> already uses.
-    /// Returns the surviving fragments in draw order: an empty list means the
-    /// stroke was fully erased; when the eraser misses, the result is a
-    /// single fragment equal to the input points (the caller treats that as
-    /// "unchanged", mirroring <c>Stroke.GetEraseResult</c> returning the
-    /// original stroke). Fragment endpoints on cut boundaries are
-    /// interpolated, including pressure.
+    /// Splits a stroke spine where the swept square-stamp eraser footprint
+    /// (<paramref name="eraserSize"/>-sided axis-aligned stamps at every path
+    /// point plus the convex hull swept between consecutive points, matching
+    /// WPF <c>RectangleStylusShape</c>+<c>Stroke.GetEraseResult</c>) overlaps
+    /// the rendered stroke outline.
+    /// The stroke's own rendered half-width is applied per spine point via
+    /// <see cref="GetRenderedStrokeHalfWidth"/> — pressure-varying strokes
+    /// clip at their true visual edge. Returns the surviving fragments in
+    /// draw order: an empty list means the stroke was fully erased; when the
+    /// eraser misses, the result is a single fragment equal to the input
+    /// points (the caller treats that as "unchanged", mirroring
+    /// <c>Stroke.GetEraseResult</c> returning the original stroke). Fragment
+    /// endpoints on cut boundaries are interpolated, including pressure.
+    /// Boundary agreement with <c>Stroke.GetEraseResult</c> is exact to
+    /// ~1e-2 DIP on straight strokes (cross-validated by the corpus test);
+    /// corner grazes can differ by up to ~0.4·strokeWidth because WPF clips
+    /// the quad patch while this model clips the node-disc union.
     /// </summary>
     public static List<List<InkPointData>> SplitStrokeAtEraser(
         IReadOnlyList<InkPointData> strokePoints,
+        double strokeSize,
+        bool strokeIgnoresPressure,
         IReadOnlyList<PointD> eraserPath,
-        double hitRadius)
+        double eraserSize)
     {
         var fragments = new List<List<InkPointData>>();
         if (strokePoints == null || strokePoints.Count == 0)
             return fragments;
 
-        bool canErase = eraserPath != null && eraserPath.Count > 0 && hitRadius >= 0;
-        if (!canErase)
+        var pieces = BuildEraserFootprint(eraserPath, eraserSize);
+        if (pieces.Count == 0)
         {
             fragments.Add(new List<InkPointData>(strokePoints));
             return fragments;
@@ -476,8 +528,11 @@ public static class StrokeGeometry
 
         if (strokePoints.Count == 1)
         {
-            if (!PointInsideEraserPath(AsPoint(strokePoints[0]), eraserPath, hitRadius))
-                fragments.Add(new List<InkPointData> { strokePoints[0] });
+            var point = strokePoints[0];
+            double w = GetRenderedStrokeHalfWidth(
+                strokeSize, EffectivePressure(point, strokeIgnoresPressure));
+            if (!PointWithinFootprint(AsPoint(point), pieces, w))
+                fragments.Add(new List<InkPointData> { point });
             return fragments;
         }
 
@@ -486,7 +541,15 @@ public static class StrokeGeometry
         {
             var a = strokePoints[i - 1];
             var b = strokePoints[i];
-            var removed = CollectRemovedIntervals(AsPoint(a), AsPoint(b), eraserPath, hitRadius);
+            double wa = GetRenderedStrokeHalfWidth(
+                strokeSize, EffectivePressure(a, strokeIgnoresPressure));
+            double wb = GetRenderedStrokeHalfWidth(
+                strokeSize, EffectivePressure(b, strokeIgnoresPressure));
+
+            var removed = new List<(double t0, double t1)>();
+            foreach (var piece in pieces)
+                CollectConvexStampIntervals(AsPoint(a), AsPoint(b), wa, wb, piece, removed);
+            MergeIntervalsInPlace(removed);
 
             // Complement of the removed intervals within [0,1] = kept pieces.
             double cursor = 0.0;
@@ -578,196 +641,408 @@ public static class StrokeGeometry
             (float)(a.Pressure + (b.Pressure - a.Pressure) * t));
     }
 
+    // ------------------------------------------------------------------
+    // Square-stamp eraser model (WPF RectangleStylusShape parity)
+    //
+    // The eraser footprint is the union of convex pieces: one axis-aligned
+    // square stamp per path point, plus the swept hull (convex hexagon) of
+    // each consecutive stamp pair — exactly the region a
+    // RectangleStylusShape(size,size) covers while travelling the path.
+    // A spine point s(t) is erased when dist(s(t), piece) ≤ w(t), where
+    // w(t) is the stroke's rendered half-width lerped between the segment
+    // endpoints — i.e. the node disc touches the stamp. WPF clips the
+    // tapered quad patch against the same polygon; on the probed corpus the
+    // two models produce identical clip parameters to ~1e-2 DIP on
+    // non-degenerate geometry.
+    // ------------------------------------------------------------------
+
     /// <summary>
-    /// Union of the t-intervals along segment a→b where the eraser capsule
-    /// chain (radius <paramref name="hitRadius"/>) overlaps it, sorted and
-    /// merged.
+    /// Builds the eraser footprint as a list of convex polygons: one square
+    /// stamp per path point plus the convex hull of each adjacent stamp pair
+    /// (the swept connector — a hexagon for off-axis motion, a rectangle for
+    /// axis-aligned motion).
     /// </summary>
-    private static List<(double t0, double t1)> CollectRemovedIntervals(
-        PointD a,
-        PointD b,
+    private static List<IReadOnlyList<PointD>> BuildEraserFootprint(
         IReadOnlyList<PointD> eraserPath,
-        double hitRadius)
+        double eraserSize)
     {
-        var intervals = new List<(double t0, double t1)>();
+        var pieces = new List<IReadOnlyList<PointD>>();
+        if (eraserPath == null || eraserPath.Count == 0 || eraserSize < 0.0)
+            return pieces;
+
+        double h = eraserSize * 0.5;
         foreach (var center in eraserPath)
-            AddCircleInterval(intervals, a, b, center, hitRadius);
+            pieces.Add(SquareAt(center, h));
 
         for (int i = 1; i < eraserPath.Count; i++)
-            AddCapsuleInterval(intervals, a, b, eraserPath[i - 1], eraserPath[i], hitRadius);
-
-        if (intervals.Count == 0)
-            return intervals;
-
-        intervals.Sort((x, y) => x.t0.CompareTo(y.t0));
-        var merged = new List<(double t0, double t1)>(intervals.Count);
-        double cur0 = intervals[0].t0;
-        double cur1 = intervals[0].t1;
-        for (int i = 1; i < intervals.Count; i++)
         {
-            if (intervals[i].t0 <= cur1)
+            var hull = SweptSquareHull(eraserPath[i - 1], eraserPath[i], h);
+            if (hull != null)
+                pieces.Add(hull);
+        }
+        return pieces;
+    }
+
+    /// <summary>The four corners of the axis-aligned stamp centered at c.</summary>
+    private static IReadOnlyList<PointD> SquareAt(PointD c, double h) =>
+        new List<PointD>
+        {
+            new(c.X - h, c.Y - h),
+            new(c.X + h, c.Y - h),
+            new(c.X + h, c.Y + h),
+            new(c.X - h, c.Y + h),
+        };
+
+    /// <summary>
+    /// Convex hull of the two square stamps at e1/e2 — the region the square
+    /// covers while sweeping from e1 to e2. Returns null for a degenerate
+    /// (coincident) pair; the per-point stamps already cover that case.
+    /// </summary>
+    private static IReadOnlyList<PointD> SweptSquareHull(PointD e1, PointD e2, double h)
+    {
+        if (Math.Abs(e2.X - e1.X) <= 1e-9 && Math.Abs(e2.Y - e1.Y) <= 1e-9)
+            return null;
+
+        var points = new List<PointD>(8);
+        foreach (var c in new[] { e1, e2 })
+        {
+            points.Add(new PointD(c.X - h, c.Y - h));
+            points.Add(new PointD(c.X + h, c.Y - h));
+            points.Add(new PointD(c.X + h, c.Y + h));
+            points.Add(new PointD(c.X - h, c.Y + h));
+        }
+        return ConvexHull(points);
+    }
+
+    /// <summary>
+    /// Andrew monotone-chain convex hull. Returns vertices in CCW order
+    /// (mathematical orientation; screen-space Y direction is irrelevant
+    /// because every consumer derives the inside side from the centroid).
+    /// Collinear hull-edge points are dropped.
+    /// </summary>
+    private static List<PointD> ConvexHull(List<PointD> points)
+    {
+        var sorted = points
+            .OrderBy(p => p.X)
+            .ThenBy(p => p.Y)
+            .ToList();
+        var hull = new List<PointD>(sorted.Count);
+
+        // Lower hull
+        foreach (var p in sorted)
+        {
+            while (hull.Count >= 2
+                && Cross(hull[^1] - hull[^2], p - hull[^1]) <= 1e-12)
             {
-                if (intervals[i].t1 > cur1)
-                    cur1 = intervals[i].t1;
+                hull.RemoveAt(hull.Count - 1);
+            }
+            hull.Add(p);
+        }
+
+        // Upper hull
+        int lowerCount = hull.Count;
+        for (int i = sorted.Count - 2; i >= 0; i--)
+        {
+            var p = sorted[i];
+            while (hull.Count > lowerCount
+                && Cross(hull[^1] - hull[^2], p - hull[^1]) <= 1e-12)
+            {
+                hull.RemoveAt(hull.Count - 1);
+            }
+            hull.Add(p);
+        }
+
+        if (hull.Count > 1)
+            hull.RemoveAt(hull.Count - 1); // last == first
+        return hull;
+    }
+
+    private static double Cross(PointD u, PointD v) => u.X * v.Y - u.Y * v.X;
+
+    /// <summary>
+    /// Collects the merged t-intervals of segment a→b (half-width lerped
+    /// wa→wb) where dist(s(t), convexPolygon) ≤ w(t). When
+    /// <paramref name="intervals"/> is null the call acts as an early-out
+    /// predicate and returns true on the first hit.
+    /// </summary>
+    private static bool CollectConvexStampIntervals(
+        PointD a,
+        PointD b,
+        double wa,
+        double wb,
+        IReadOnlyList<PointD> polygon,
+        List<(double t0, double t1)> intervals)
+    {
+        bool hit = false;
+
+        double ux = b.X - a.X;
+        double uy = b.Y - a.Y;
+        double segLenSq = ux * ux + uy * uy;
+        if (segLenSq <= 1e-18)
+        {
+            // Degenerate spine point: disc-vs-polygon is a pure distance test.
+            if (PointWithinPolygonDistance(a, polygon, wa))
+            {
+                if (intervals == null)
+                    return true;
+                intervals.Add((0.0, 1.0));
+                return true;
+            }
+            return false;
+        }
+
+        // Centroid — inside side reference for every edge half-plane.
+        double cx = 0, cy = 0;
+        foreach (var v in polygon) { cx += v.X; cy += v.Y; }
+        cx /= polygon.Count; cy /= polygon.Count;
+
+        // 1. Interior interval: s(t) satisfies every edge half-plane.
+        double lo = 0.0, hi = 1.0;
+        bool insideOk = true;
+        for (int k = 0; k < polygon.Count && insideOk; k++)
+        {
+            var v = polygon[k];
+            var f = polygon[(k + 1) % polygon.Count];
+            double ex = f.X - v.X, ey = f.Y - v.Y;
+            double cRef = ex * (cy - v.Y) - ey * (cx - v.X);
+            if (Math.Abs(cRef) <= 1e-12)
+                continue; // degenerate edge
+            double s = cRef > 0 ? 1.0 : -1.0;
+            // g(t) = cross(e, s(t) − v); need s·g(t) ≥ 0.
+            double g0 = ex * (a.Y - v.Y) - ey * (a.X - v.X);
+            double g1 = ex * (uy) - ey * (ux);
+            insideOk = RefineGeq(ref lo, ref hi, s * g0, s * g1);
+        }
+        if (insideOk && hi > lo)
+        {
+            if (intervals == null)
+                return true;
+            intervals.Add((lo, hi));
+            hit = true;
+        }
+
+        // 2. Per edge: strip (projection inside + |perp| ≤ w(t)) + vertex caps.
+        for (int k = 0; k < polygon.Count; k++)
+        {
+            var e = polygon[k];
+            var f = polygon[(k + 1) % polygon.Count];
+            double ex = f.X - e.X, ey = f.Y - e.Y;
+            double edgeLenSq = ex * ex + ey * ey;
+            if (edgeLenSq <= 1e-18)
+            {
+                if (TryAddVertexCapInterval(intervals, a, b, wa, wb, e))
+                    hit = true;
+                continue;
+            }
+
+            double edgeLen = Math.Sqrt(edgeLenSq);
+            double nx = ex / edgeLen, ny = ey / edgeLen;
+
+            double lo2 = 0.0, hi2 = 1.0;
+            // proj(t) = dot(s(t)−e, n) must stay in [0, edgeLen]
+            double h0 = (a.X - e.X) * nx + (a.Y - e.Y) * ny;
+            double dh = ux * nx + uy * ny;
+            bool ok = RefineGeq(ref lo2, ref hi2, h0, dh)
+                && RefineGeq(ref lo2, ref hi2, edgeLen - h0, -dh);
+            // perp(t) = cross(n, s(t)−e) must satisfy |perp| ≤ w(t)
+            double q0 = nx * (a.Y - e.Y) - ny * (a.X - e.X);
+            double dq = nx * uy - ny * ux;
+            double dw = wb - wa;
+            if (ok)
+                ok = RefineGeq(ref lo2, ref hi2, wa - q0, dw - dq)
+                    && RefineGeq(ref lo2, ref hi2, wa + q0, dw + dq);
+            if (ok && hi2 > lo2)
+            {
+                if (intervals == null)
+                    return true;
+                intervals.Add((lo2, hi2));
+                hit = true;
+            }
+
+            // Vertex caps: |s(t) − v|² ≤ w(t)² — quadratic in t.
+            if (TryAddVertexCapInterval(intervals, a, b, wa, wb, e))
+                hit = true;
+        }
+
+        return hit;
+    }
+
+    /// <summary>
+    /// Intersects [lo,hi] with the solution set of c0 + c1·t ≥ −eps.
+    /// Returns false when the result is empty.
+    /// </summary>
+    private static bool RefineGeq(ref double lo, ref double hi, double c0, double c1)
+    {
+        const double eps = 1e-9;
+        if (Math.Abs(c1) <= 1e-12)
+            return c0 >= -eps;
+
+        double t = (-eps - c0) / c1;
+        if (c1 > 0)
+        {
+            if (t > lo) lo = t;
+        }
+        else
+        {
+            if (t < hi) hi = t;
+        }
+        return hi > lo;
+    }
+
+    /// <summary>
+    /// Adds the t-interval(s) where |s(t) − v| ≤ w(t). Both sides are
+    /// linear in t, giving a quadratic inequality A t² + B t + C ≤ 0.
+    /// A &lt; 0 (pressure grows faster than the spine moves) produces the
+    /// "outside the roots" solution pair.
+    /// </summary>
+    private static bool TryAddVertexCapInterval(
+        List<(double t0, double t1)> intervals,
+        PointD a,
+        PointD b,
+        double wa,
+        double wb,
+        PointD v)
+    {
+        double ux = b.X - a.X, uy = b.Y - a.Y;
+        double fx = a.X - v.X, fy = a.Y - v.Y;
+        double dw = wb - wa;
+
+        double A = ux * ux + uy * uy - dw * dw;
+        double B = 2.0 * (fx * ux + fy * uy - wa * dw);
+        double C = fx * fx + fy * fy - wa * wa;
+
+        bool any = false;
+        if (Math.Abs(A) <= 1e-12)
+        {
+            // Linear (or constant) inequality.
+            if (Math.Abs(B) <= 1e-12)
+            {
+                if (C <= 0.0) { EmitInterval(intervals, 0.0, 1.0, ref any); }
             }
             else
             {
-                merged.Add((cur0, cur1));
-                cur0 = intervals[i].t0;
-                cur1 = intervals[i].t1;
+                double t = -C / B;
+                if (B > 0) EmitInterval(intervals, 0.0, t, ref any);       // t ≤ −C/B
+                else EmitInterval(intervals, t, 1.0, ref any);           // t ≥ −C/B
+            }
+            return any;
+        }
+
+        double disc = B * B - 4.0 * A * C;
+        if (disc < 0.0)
+        {
+            // No real roots: sign is constant — positive for A>0 (no
+            // interval), negative for A<0 (always within reach).
+            if (A < 0.0)
+                EmitInterval(intervals, 0.0, 1.0, ref any);
+            return any;
+        }
+
+        double root = Math.Sqrt(disc);
+        double tA = (-B - root) / (2.0 * A);
+        double tB = (-B + root) / (2.0 * A);
+        double r0 = Math.Min(tA, tB);
+        double r1 = Math.Max(tA, tB);
+        if (A > 0.0)
+        {
+            EmitInterval(intervals, r0, r1, ref any);
+        }
+        else
+        {
+            EmitInterval(intervals, 0.0, r0, ref any);
+            EmitInterval(intervals, r1, 1.0, ref any);
+        }
+        return any;
+    }
+
+    private static void EmitInterval(
+        List<(double t0, double t1)> intervals,
+        double t0,
+        double t1,
+        ref bool any)
+    {
+        double c0 = Math.Max(0.0, t0);
+        double c1 = Math.Min(1.0, t1);
+        // A zero-width interval is a tangent touch, not an overlap —
+        // admitting it would split a fragment at a single point.
+        if (c1 <= c0)
+            return;
+        intervals?.Add((c0, c1));
+        any = true;
+    }
+
+    /// <summary>Sorts and merges the collected intervals in place.</summary>
+    private static void MergeIntervalsInPlace(List<(double t0, double t1)> intervals)
+    {
+        if (intervals.Count <= 1)
+            return;
+
+        intervals.Sort((x, y) => x.t0.CompareTo(y.t0));
+        int write = 0;
+        for (int read = 1; read < intervals.Count; read++)
+        {
+            var current = intervals[write];
+            var next = intervals[read];
+            if (next.t0 <= current.t1)
+            {
+                if (next.t1 > current.t1)
+                    intervals[write] = (current.t0, next.t1);
+            }
+            else
+            {
+                intervals[++write] = next;
             }
         }
-        merged.Add((cur0, cur1));
-        return merged;
+        intervals.RemoveRange(write + 1, intervals.Count - write - 1);
     }
 
     /// <summary>
-    /// Adds the t-interval where |a + t·(b−a) − center| ≤ r, i.e. the
-    /// intersection of the segment with the stamp disc.
+    /// True when the point's rendered disc of radius w touches any footprint
+    /// piece — inside the polygon counts as distance 0.
     /// </summary>
-    private static void AddCircleInterval(
-        List<(double t0, double t1)> intervals,
-        PointD a,
-        PointD b,
-        PointD center,
-        double r)
-    {
-        double dx = b.X - a.X;
-        double dy = b.Y - a.Y;
-        double fx = a.X - center.X;
-        double fy = a.Y - center.Y;
-
-        double A = dx * dx + dy * dy;
-        double r2 = r * r;
-        if (A <= double.Epsilon)
-        {
-            // Degenerate segment: the whole point is either in or out.
-            if (fx * fx + fy * fy <= r2)
-                intervals.Add((0.0, 1.0));
-            return;
-        }
-
-        double B = 2.0 * (fx * dx + fy * dy);
-        double C = fx * fx + fy * fy - r2;
-        double discriminant = B * B - 4.0 * A * C;
-        if (discriminant < 0)
-            return;
-
-        double root = Math.Sqrt(discriminant);
-        double t0 = (-B - root) / (2.0 * A);
-        double t1 = (-B + root) / (2.0 * A);
-        if (t1 < 0.0 || t0 > 1.0)
-            return;
-
-        double clamped0 = Math.Max(0.0, t0);
-        double clamped1 = Math.Min(1.0, t1);
-        // A tangent graze (discriminant ≈ 0) produces a zero-width interval;
-        // admitting it would split the stroke into two touching fragments.
-        if (clamped1 > clamped0)
-            intervals.Add((clamped0, clamped1));
-    }
-
-    /// <summary>
-    /// Adds the t-interval where the distance from s(t) = a + t·(b−a) to the
-    /// eraser segment e1→e2 is ≤ r: the two endpoint discs plus the lateral
-    /// strip (|signed distance to the capsule axis| ≤ r while the projection
-    /// onto the axis stays inside the segment). Together these cover the
-    /// capsule exactly.
-    /// </summary>
-    private static void AddCapsuleInterval(
-        List<(double t0, double t1)> intervals,
-        PointD a,
-        PointD b,
-        PointD e1,
-        PointD e2,
-        double r)
-    {
-        AddCircleInterval(intervals, a, b, e1, r);
-        AddCircleInterval(intervals, a, b, e2, r);
-
-        double ex = e2.X - e1.X;
-        double ey = e2.Y - e1.Y;
-        double axisLenSq = ex * ex + ey * ey;
-        if (axisLenSq <= double.Epsilon)
-            return;
-
-        double axisLen = Math.Sqrt(axisLenSq);
-        double ux = ex / axisLen;
-        double uy = ey / axisLen;
-
-        // Signed perpendicular distance from s(t) to the capsule axis:
-        // g(t) = cross(s(t) − e1, u) — linear in t. |g| ≤ r inside the strip.
-        double g0 = (a.X - e1.X) * uy - (a.Y - e1.Y) * ux;
-        double g1 = (b.X - e1.X) * uy - (b.Y - e1.Y) * ux;
-        double dg = g1 - g0;
-
-        double strip0;
-        double strip1;
-        if (Math.Abs(dg) <= 1e-12)
-        {
-            if (Math.Abs(g0) > r)
-                return; // parallel and outside the strip — only caps could hit
-            strip0 = 0.0;
-            strip1 = 1.0;
-        }
-        else
-        {
-            double tA = (-r - g0) / dg;
-            double tB = (r - g0) / dg;
-            strip0 = Math.Max(0.0, Math.Min(tA, tB));
-            strip1 = Math.Min(1.0, Math.Max(tA, tB));
-            if (strip0 > strip1)
-                return;
-        }
-
-        // Projection of s(t) onto the capsule axis must stay within [0, len].
-        double h0 = (a.X - e1.X) * ux + (a.Y - e1.Y) * uy;
-        double h1 = (b.X - e1.X) * ux + (b.Y - e1.Y) * uy;
-        double dh = h1 - h0;
-
-        double proj0;
-        double proj1;
-        if (Math.Abs(dh) <= 1e-12)
-        {
-            if (h0 < 0.0 || h0 > axisLen)
-                return; // projection sits beyond the caps — circles already handled
-            proj0 = 0.0;
-            proj1 = 1.0;
-        }
-        else
-        {
-            double tA = (0.0 - h0) / dh;
-            double tB = (axisLen - h0) / dh;
-            proj0 = Math.Max(0.0, Math.Min(tA, tB));
-            proj1 = Math.Min(1.0, Math.Max(tA, tB));
-            if (proj0 > proj1)
-                return;
-        }
-
-        double t0 = Math.Max(strip0, proj0);
-        double t1 = Math.Min(strip1, proj1);
-        // Strict inequality: a zero-width interval is a tangent touch, not an
-        // overlap — admitting it would split a fragment at a single point.
-        if (t1 > t0)
-            intervals.Add((t0, t1));
-    }
-
-    private static bool PointInsideEraserPath(
+    private static bool PointWithinFootprint(
         PointD point,
-        IReadOnlyList<PointD> eraserPath,
-        double hitRadius)
+        IReadOnlyList<IReadOnlyList<PointD>> pieces,
+        double w)
     {
-        double r2 = hitRadius * hitRadius;
-        foreach (var center in eraserPath)
+        foreach (var piece in pieces)
         {
-            double dx = point.X - center.X;
-            double dy = point.Y - center.Y;
-            if (dx * dx + dy * dy <= r2)
+            if (PointWithinPolygonDistance(point, piece, w))
                 return true;
         }
-        for (int i = 1; i < eraserPath.Count; i++)
+        return false;
+    }
+
+    private static bool PointWithinPolygonDistance(
+        PointD point, IReadOnlyList<PointD> polygon, double w)
+    {
+        bool inside = true;
+        double cx = 0, cy = 0;
+        foreach (var v in polygon) { cx += v.X; cy += v.Y; }
+        cx /= polygon.Count; cy /= polygon.Count;
+
+        for (int k = 0; k < polygon.Count; k++)
         {
-            if (DistanceToSegment(point, eraserPath[i - 1], eraserPath[i]) <= hitRadius)
+            var v = polygon[k];
+            var f = polygon[(k + 1) % polygon.Count];
+            double ex = f.X - v.X, ey = f.Y - v.Y;
+            double cRef = ex * (cy - v.Y) - ey * (cx - v.X);
+            if (Math.Abs(cRef) <= 1e-12)
+                continue;
+            double s = cRef > 0 ? 1.0 : -1.0;
+            double g = ex * (point.Y - v.Y) - ey * (point.X - v.X);
+            if (s * g < -1e-9)
+            {
+                inside = false;
+                break;
+            }
+        }
+        if (inside)
+            return true;
+
+        for (int k = 0; k < polygon.Count; k++)
+        {
+            if (DistanceToSegment(point, polygon[k], polygon[(k + 1) % polygon.Count]) <= w)
                 return true;
         }
         return false;

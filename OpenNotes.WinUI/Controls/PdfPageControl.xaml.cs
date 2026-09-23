@@ -1,3 +1,5 @@
+using System;
+using Caelum.Models;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media.Imaging;
@@ -5,29 +7,61 @@ using Microsoft.UI.Xaml.Media.Imaging;
 namespace Caelum.Controls
 {
     /// <summary>
-    /// V6 WinUI port of WPF <c>Controls/PdfPageControl.xaml.cs</c>, scoped to
-    /// the Task 6 shell: page frame, fixed DIP size, rendered bitmap slot and
-    /// the named overlay canvases the annotation tasks (T7/T8/T9) attach to.
+    /// V6 WinUI port of WPF <c>Controls/PdfPageControl.xaml.cs</c>: page
+    /// frame, fixed DIP size, rendered bitmap slot, the custom
+    /// <see cref="InkSurface"/> (Task 7 Phase A: pen/highlighter/eraser) and
+    /// the named overlay canvases later tasks (T8/T9) attach to.
     ///
     /// Not ported (deferred):
     /// <list type="bullet">
-    /// <item>WPF <c>InkCanvas</c> input/processing — the WinUI ink surface is
-    /// Task 7.</item>
     /// <item><c>SetBitmapScalingMode</c> — WPF toggled
     /// <c>RenderOptions.BitmapScalingMode</c> during scroll/zoom; WinUI
     /// images always sample at full quality so the hook is unnecessary.</item>
-    /// <item>Stroke/annotation selection and text-hit overlays — Tasks 7/8.</item>
+    /// <item>Selection, shapes, hidden ink, laser, ruler overlays — Task 7
+    /// Phase B.</item>
     /// </list>
     /// </summary>
     public sealed partial class PdfPageControl : UserControl
     {
+        private bool _hostActive = true;
+        private bool _documentInputEnabled = true;
+
         public PdfPageControl()
         {
             InitializeComponent();
+
+            // The eraser cursor lives in EraserCanvas (above the ink layer);
+            // the surface moves/sizes it during erase gestures and hover.
+            InkSurface.EraserIndicator = EraserIndicator;
+
+            InkSurface.StrokeCollected += (s, stroke) =>
+                StrokeCollected?.Invoke(this, stroke);
+            InkSurface.StrokesErased += (s, e) =>
+                StrokesErased?.Invoke(this, e);
+            InkSurface.InkMutated += (s, e) =>
+                InkMutated?.Invoke(this, e);
         }
 
         /// <summary>Zero-based page index inside the loaded document.</summary>
         public int PageIndex { get; set; }
+
+        /// <summary>
+        /// The custom ink surface (stroke store + pointer pipeline). EditorPage
+        /// configures tool/colour/size fields directly.
+        /// </summary>
+        public InkSurface Ink => InkSurface;
+
+        /// <summary>
+        /// A user pen/highlighter stroke completed — the editor pushes the
+        /// undo action. Never raised for quiet loads.
+        /// </summary>
+        public event EventHandler<InkStrokeData> StrokeCollected;
+
+        /// <summary>One erase gesture finished (net placements payload).</summary>
+        public event EventHandler<InkStrokesErasedEventArgs> StrokesErased;
+
+        /// <summary>Any visible ink change — hosts invalidate thumbnails.</summary>
+        public event EventHandler InkMutated;
 
         /// <summary>
         /// The rasterized page bitmap. Assignment mirrors the WPF
@@ -49,21 +83,43 @@ namespace Caelum.Controls
         public void SetPageImage(SoftwareBitmapSource source) => PageSource = source;
 
         /// <summary>
-        /// WPF gated ink input on the active tab. Kept as a no-op seam until
-        /// the ink surface lands (T7).
+        /// Quiet annotation-load path: appends the stroke without raising
+        /// <see cref="StrokeCollected"/> (no undo entry), mirroring the WPF
+        /// loader which adds sidecar strokes outside history.
+        /// </summary>
+        public InkStrokeData AddStroke(StrokeAnnotation annotation)
+            => InkSurface.AddStroke(annotation);
+
+        /// <summary>
+        /// Cancels in-flight ink gestures (discards a live stroke, rolls back
+        /// a partial erase). Called on tool switch and page teardown.
+        /// </summary>
+        public void CancelInteraction() => InkSurface.CancelInteraction();
+
+        /// <summary>
+        /// WPF gated ink input on the active tab.
         /// </summary>
         public void SetHostActive(bool isActive)
         {
-            // T7: forward to the ink surface / selection overlays.
+            _hostActive = isActive;
+            ApplyInputGate();
         }
 
         /// <summary>
-        /// WPF enabled/disabled document input during modal flows. No-op until
-        /// the annotation surfaces exist (T7/T8).
+        /// WPF enabled/disabled document input during modal flows.
         /// </summary>
         public void SetDocumentInputEnabled(bool enabled)
         {
-            // T7/T8: forward to ink + overlay hit-testing.
+            _documentInputEnabled = enabled;
+            ApplyInputGate();
+        }
+
+        private void ApplyInputGate()
+        {
+            var enabled = _hostActive && _documentInputEnabled;
+            InkSurface.InputEnabled = enabled;
+            if (!enabled)
+                InkSurface.CancelInteraction();
         }
 
         /// <summary>

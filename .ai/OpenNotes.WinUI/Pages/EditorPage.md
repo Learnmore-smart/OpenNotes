@@ -1,5 +1,5 @@
 # OpenNotes.WinUI/Pages/EditorPage.xaml(.cs)
-> Last updated: 2026-09-23 (V6 Task 6 hardening — rename/DPI/bookmark-cache/CTS edges) | Protection: STANDARD
+> Last updated: 2026-09-23 (V6 Task 7 Phase A — custom ink engine) | Protection: STANDARD
 
 ## Purpose
 `Caelum.Pages.EditorPage : Page` — the WinUI editor shell port of the WPF
@@ -8,8 +8,8 @@
 AutomationIds + `LucideIcon`), `DocumentSidebar` overlay (Pages/Outline/
 Bookmarks tabs + collapse rail, **5.2.15 228-DIP content-offset rule**),
 page-jump navigator, `PdfSearchPanel`, page context `MenuFlyout`, loading
-overlay. Annotation interaction (ink/text/sticky/shapes) is explicitly
-deferred — toolbar annotation buttons are visual/inert until T7–T9.
+overlay. Phase-A ink (pen/highlighter/eraser + pressure + undo) is live;
+text/sticky/image overlays and Phase-B ink tools remain deferred to T7B–T9.
 
 ## What It Does
 - **Load/render:** `PdfService.LoadPdfAsync(filePath, CancellationToken)` on
@@ -97,6 +97,21 @@ deferred — toolbar annotation buttons are visual/inert until T7–T9.
   handlers real input would. `Editor.PageJumpGroup` `HelpText` =
   `current-page=N` (the WinUI TextBox UIA Value can stay pinned after a
   SetValue+programmatic rewrite).
+- **Ink engine (Task 7 Phase A):** each `PdfPageControl` hosts an
+  `InkSurface`; the page owns tool state (`_activeTool`, `_strokeColor`,
+  `_strokeSize`, `_highlighterColor`, `_eraserSize`, `_pressureEnabled`,
+  `_penOnlyMode`, `_wholeStrokeErase`, `_barrelErase`) and broadcasts it via
+  `ApplyToolToAllPages()`. `StrokeCollected` → `InkStrokeAddedAction` onto
+  `_undoStack`; `EraserGestureEnded` → `InkStrokesErasedAction`;
+  `Store.Mutated` → thumbnail invalidation (`_dirtyPages`/`MarkThumbnailDirty`).
+  Undo/Redo toolbar buttons + Ctrl+Z/Y consume `_undoStack`/`_redoStack` of
+  `Caelum.Ink.IUndoAction` (`UndoAsync`/`RedoAsync` awaited; button
+  `IsEnabled` refreshed after every mutation). `CancelInteraction` is called
+  on every page before viewport re-renders/tab teardown so a stroke in
+  progress can't strand pointer capture. Pen service: `PenService.Current`
+  is initialized for the window on first editor load and its
+  `PenHotKeyPressed` toggles pen-only/`PressureEnabled` per settings; each
+  `InkSurface`'s `ProbePointerProperties` feed accumulates capabilities.
 - **Localization:** `ApplyLocalization()` refreshes chrome/tooltips/context
   menu labels; validation message strings `Editor.PageJump*`. The page
   self-subscribes `LocalizationService.LanguageChanged` in `Loaded`
@@ -123,8 +138,11 @@ deferred — toolbar annotation buttons are visual/inert until T7–T9.
   them.
 
 ## Open Threads / Resume Context
-- **Status:** GREEN — `tools/winui-editor-smoke.ps1` 60/60.
-- **Deferred (stubbed, by design):** ink surface + eraser/shape/laser/ruler/
-  select/text tools (T7); text/sticky/image overlays + persistent PDF text
-  selection visuals (T8); save/autosave/dirty-close + version history +
-  settings + remaining flyout actions (T9). Undo/Redo buttons are inert.
+- **Status:** GREEN — `tools/winui-editor-smoke.ps1` 60/60; Task 7 Phase A
+  ink engine live (82/82 headless ink tests).
+- **Deferred (stubbed, by design):** selection lasso/move/rotate/scale,
+  shape tools + recognition UI, hidden ink, laser, ruler (Task 7 Phase B);
+  text/sticky/image overlays + persistent PDF text selection visuals (T8);
+  save/autosave/dirty-close + version history + settings + remaining
+  flyout actions (T9). `Select`/`None` tools exist as enum values but have
+  no interaction yet.
