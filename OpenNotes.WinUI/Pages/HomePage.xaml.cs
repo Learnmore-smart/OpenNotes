@@ -215,7 +215,15 @@ namespace Caelum.Pages
 
             ApplyLocalization();
             // WPF parity: every (re)navigation reloads from RecentFilesService.
-            await RefreshCurrentFolderAsync();
+            try
+            {
+                await RefreshCurrentFolderAsync();
+            }
+            catch (Exception ex)
+            {
+                await ShowDialogAsync(LocalizationService.Get("Common.Error"),
+                    LocalizationService.Format("Home.OperationFailed", ex.Message));
+            }
         }
 
         private void HomePage_Unloaded(object sender, RoutedEventArgs e)
@@ -1135,7 +1143,7 @@ namespace Caelum.Pages
             }
         }
 
-        private void NavigateUpButton_Click(object sender, RoutedEventArgs e)
+        private async void NavigateUpButton_Click(object sender, RoutedEventArgs e)
         {
             if (!IsInsideFolder)
                 return;
@@ -1150,7 +1158,15 @@ namespace Caelum.Pages
             var parent = RecentFilesService.GetFolder(_currentFolderId)?.ParentFolderId;
             _currentFolderId = parent ?? string.Empty;
             _currentFolderName = RecentFilesService.GetFolder(_currentFolderId)?.DisplayName ?? string.Empty;
-            _ = RefreshCurrentFolderAsync();
+            try
+            {
+                await RefreshCurrentFolderAsync();
+            }
+            catch (Exception ex)
+            {
+                await ShowDialogAsync(LocalizationService.Get("Common.Error"),
+                    LocalizationService.Format("Home.OperationFailed", ex.Message));
+            }
         }
 
         // ── Drag: file tile drag-out (WPF DoDragDrop → CanDrag/DragStarting) ─
@@ -1474,12 +1490,6 @@ namespace Caelum.Pages
             }
 
             return null;
-        }
-
-        private static bool IsPdfFile(string path)
-        {
-            return !string.IsNullOrWhiteSpace(path) &&
-                   string.Equals(Path.GetExtension(path), ".pdf", StringComparison.OrdinalIgnoreCase);
         }
 
         private static string SanitizeFileName(string name)

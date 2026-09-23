@@ -184,13 +184,22 @@ namespace Caelum.Pages
             if (selectedTiles.Count == 0)
                 return;
 
-            foreach (var tile in selectedTiles)
+            try
             {
-                if (!string.IsNullOrWhiteSpace(tile.Path))
-                    RecentFilesService.Remove(tile.Path);
+                foreach (var tile in selectedTiles)
+                {
+                    if (!string.IsNullOrWhiteSpace(tile.Path))
+                        RecentFilesService.Remove(tile.Path);
+                }
+
+                await RefreshCurrentFolderAsync();
+            }
+            catch (Exception ex)
+            {
+                await ShowDialogAsync(LocalizationService.Get("Common.Error"),
+                    LocalizationService.Format("Home.OperationFailed", ex.Message));
             }
 
-            await RefreshCurrentFolderAsync();
             RefreshSelectionState();
 
             if (GetMainWindow() is MainWindow mw)
