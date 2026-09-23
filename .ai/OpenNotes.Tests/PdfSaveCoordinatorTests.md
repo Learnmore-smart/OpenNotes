@@ -1,5 +1,5 @@
 # OpenNotes.Tests/PdfSaveCoordinatorTests.cs
-> Last updated: 2026-08-23（Wave 2 final review GREEN: coordinator/PDF/autosave/structural contracts）| Protection: STANDARD
+> Last updated: 2026-09-22（Task 3 split: internals reflection walks to the Core base class; source contract reads `OpenNotes.Core/Pdf/PdfService.cs`）| Protection: STANDARD
 
 ## Purpose
 
@@ -28,3 +28,4 @@ Prove same-path PDF save delegates never overlap, independent paths can overlap,
 | 2026-08-23 | Added deterministic multi-path sorted admission, source-read import barriers, crossed import no-deadlock, and atomic replacement failure/temp cleanup tests; Save-As source+target admission is covered by production code. | Codex |
 | 2026-08-23 | Replaced scheduler-sensitive waits with deterministic barriers, added HomePage PDF export atomic-target contract, and retained full PDFService/stream/structural coverage; 21/21 pass. | Codex |
 | 2026-08-23 | Planned replacement of scheduler-sensitive `Task.Delay`/`Task.Yield`/`IsCompleted` assertions with entered/release task-completion barriers and bounded waits. HomePage export audit confirms blank PDF creation already routes through `PdfService.CreateBlankPdfAsync` and its atomic target-write contract. | Codex |
+|| 2026-09-22 | Task 3 split adaptations: `FailedNativeStreamReleaseLeavesPdfServiceRetryable` resolves `_pdfBackingStream` via `FindPrivateInstanceField` (walks the `BaseType` chain — the field lives on `Caelum.Pdf.PdfService` since the WPF class is now a facade); `SaveAndAutosaveSourceRequiresSharedGenerationAwareInFlightGate` greps `OpenNotes.Core/Pdf/PdfService.cs` for `PdfSaveCoordinator.RunExclusiveAsync`/`PdfAtomicFile.Replace` because the save pipeline moved to Core. Same contracts, new locations. | Devin |

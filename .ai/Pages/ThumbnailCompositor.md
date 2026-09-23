@@ -45,3 +45,4 @@ strip-and-rebuild PDF rendering boundary.
 | Date | Change | Author |
 |---|---|---|
 | 2026-08-26 | Implemented frozen clean-base + live-ink composition and page/session stale-result guard. | Codex |
+- 2026-09-22: Task 3 — unchanged by design; still consumes frozen `BitmapSource`s produced by the WPF `PdfService` facade (`RenderPageBitmapSourceAsync` → Core BGRA buffer → `BitmapSource.Create`). No adaptation needed because the facade preserves the same output type.

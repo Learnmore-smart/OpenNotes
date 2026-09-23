@@ -1,33 +1,26 @@
 using System;
 using System.Windows;
+using Caelum.InkGeometry;
 
 namespace Caelum.Models
 {
+    /// <summary>
+    /// WPF <see cref="Point"/> adapter over the UI-free math in Core
+    /// (<see cref="AnnotationRotation"/>). Signatures are unchanged so the
+    /// PdfPageControl call sites and tests keep working.
+    /// </summary>
     internal static class AnnotationTransform
     {
         public static Point RotatePoint(Point point, Point center, double degrees)
         {
-            double radians = degrees * Math.PI / 180.0;
-            double cos = Math.Cos(radians);
-            double sin = Math.Sin(radians);
-            double dx = point.X - center.X;
-            double dy = point.Y - center.Y;
-            return new Point(
-                center.X + (dx * cos) - (dy * sin),
-                center.Y + (dx * sin) + (dy * cos));
+            var rotated = AnnotationRotation.RotatePoint(
+                new PointD(point.X, point.Y),
+                new PointD(center.X, center.Y),
+                degrees);
+            return new Point(rotated.X, rotated.Y);
         }
 
         public static double NormalizeDegrees(double degrees)
-        {
-            if (double.IsNaN(degrees) || double.IsInfinity(degrees))
-                return 0;
-
-            degrees %= 360.0;
-            if (degrees > 180.0)
-                degrees -= 360.0;
-            if (degrees <= -180.0)
-                degrees += 360.0;
-            return degrees;
-        }
+            => AnnotationRotation.NormalizeDegrees(degrees);
     }
 }

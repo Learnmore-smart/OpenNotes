@@ -56,7 +56,7 @@
 - [x] **Step 3:** WPF build + tests green.
 - [x] **Step 4: Commit.**
 
-## Task 3: PDF rasterization abstraction
+## Task 3: PDF rasterization abstraction ✅ done (as-implemented notes below)
 
 **Files:**
 - Create: `OpenNotes.Core/Pdf/IPdfRasterizer.cs` — `PageCount`, `PageSize`, `RenderPng(pageIndex, dpiScale)` / `RenderBgra(pageIndex, w, h, dpi)`
@@ -64,10 +64,19 @@
 - Modify: `Services/PdfService.cs` — split into `OpenNotes.Core/Services/PdfService.cs` (document ops, annotation strip/save, page edits) + render call sites taking `IPdfRasterizer`; WPF keeps `RenderPageBitmapSourceAsync` adapter converting BGRA → `BitmapSource`
 - Modify: `Pages/ThumbnailCompositor.cs` — accept rasterizer output instead of BitmapSource directly
 
-- [ ] **Step 1:** Failing/Core-first contract: rendering the known 3-page fixture returns identical PNG SHA-256 as current WPF path.
-- [ ] **Step 2:** Implement `PdfiumRasterizer` (reuse existing render flag/DPI math from `PdfService.cs` ~line 1513).
-- [ ] **Step 3:** WPF adapter + tests green (PdfRenderPolicyTests, PdfService*Tests).
-- [ ] **Step 4: Commit.**
+- [x] **Step 1:** Failing/Core-first contract: rendering the known 3-page fixture returns identical PNG SHA-256 as current WPF path.
+- [x] **Step 2:** Implement `PdfiumRasterizer` (reuse existing render flag/DPI math from `PdfService.cs` ~line 1513).
+- [x] **Step 3:** WPF adapter + tests green (PdfRenderPolicyTests, PdfService*Tests).
+- [x] **Step 4: Commit.**
+
+**As implemented (2026-09-22):**
+- `IPdfRasterizer` exposes `PageCount`, `PageSizes`, `RenderPageBgra(pageIndex, w, h)` → `PdfPageBitmap` (BGRA + stride + DPI), `GetPageText`, `GetTextBounds`, `RectangleFromPdf`; `IPdfRasterizerFactory` (`LoadFromStream`/`LoadFromFile`, rasterizer owns the stream) is the test seam. PNG encoding intentionally stayed WPF-side — the facade re-encodes the same BGRA buffer through the same GDI+ encoder so `RenderPagePngBytesAsync` bytes are unchanged.
+- `PdfiumRasterizer` does **not** reference `PdfiumViewer` — direct `pdfium.dll` P/Invoke (cdecl): `FPDF_LoadCustomDocument` via pinned `FPDF_FILEACCESS` + stream `m_GetBlock`, version-probed `FPDFDOC_InitFormFillEnvironment` over a pinned `FPDF_FORMFILLINFO` populated with 16 real no-op callbacks (null fnptrs would be a latent crash on action-bearing docs), `FPDFBitmap_CreateEx` BGRA + white fill + `FPDF_RenderPageBitmap` + `FPDF_FFLDraw`, `FPDFText_*`, full page/document action lifecycle, `FPDF_AddRef` preload probing app-dir `x64`/`x86`. Every call serializes on the **same interned lock string** PdfiumViewer uses, so both backends can never enter pdfium concurrently.
+- The **entire** `Services/PdfService.cs` (~3,609 lines) moved to `OpenNotes.Core/Pdf/PdfService.cs` (`namespace Caelum.Pdf`, `PointD`/`RectD` geometry, `_pdfDocument`→`_rasterizer`); WPF keeps a ~252-line facade `Caelum.Services.PdfService : Caelum.Pdf.PdfService` — all public signatures preserved (`RenderPageAsync`/`RenderPagePngBytesAsync`/`RenderPageBitmapSourceAsync`, `Rect`-based text/outline `new` twins). `Models/AnnotationTransform.cs` delegates to new `OpenNotes.Core/Models/AnnotationRotation.cs` for persisted `/WNARotation` normalization.
+- `ThumbnailCompositor` needed **no changes** — it still consumes frozen `BitmapSource`s from the facade.
+- Parity: `OpenNotes.Tests/PdfiumRasterizerParityTests.cs` proves byte-identical BGRA vs `PdfiumViewer.Render` (3-page fixture × 96/144/192 dpi), identical text/bounds/device-rect answers, idempotent dispose. Fixture writes text via raw `/Helv` content ops — no `XFont`, so it survives the app's CJK-only font resolver being installed by other tests first.
+- `EditorPage` print (`RenderPrintablePages`) and the insert-pages page-count probe also migrated to `PdfiumRasterizerFactory.Shared` — `RenderPageBgra` gained an optional `renderAnnotations` flag mapping to the old `PdfRenderFlags` toggle. Production code no longer references `PdfiumViewer`; the package stays referenced only for the parity test.
+- Verification: solution build 0 errors; `FullyQualifiedName~Pdf` 112/112; all fixtures green in batches; `git diff --check` clean.
 
 ## Task 4: `OpenNotes.WinUI` project + app shell
 
@@ -145,4 +154,4 @@
 
 ## Session-1 scope (this run)
 
-✅ **Task 1** done (`ab5fbb7`, `ca64e05`); ✅ **Task 4 Step 1** done (`1fa9859`, `080296f`) — `OpenNotes.WinUI.exe` builds and launches an empty themed window, WASDK self-contained; ✅ **Task 2** done (`f4922d0`) — UI-free ink/geometry primitives in `OpenNotes.Core` (`Caelum.InkGeometry.StrokeGeometry`, `InkPointData`, `InkStrokeData`, shape identity/keys, replacement snapshots) with WPF adapters. Execution continues into Task 3+. Progress is tracked via checkboxes here and `.ai/PROJECT_CONTEXT.md`.
+✅ **Task 1** done (`ab5fbb7`, `ca64e05`); ✅ **Task 4 Step 1** done (`1fa9859`, `080296f`) — `OpenNotes.WinUI.exe` builds and launches an empty themed window, WASDK self-contained; ✅ **Task 2** done (`f4922d0`) — UI-free ink/geometry primitives in `OpenNotes.Core` (`Caelum.InkGeometry.StrokeGeometry`, `InkPointData`, `InkStrokeData`, shape identity/keys, replacement snapshots) with WPF adapters; ✅ **Task 3** done — `IPdfRasterizer`/`PdfiumRasterizer` direct pdfium.dll P/Invoke in Core, full `PdfService` split with WPF facade, byte-identical render parity proven. Execution continues into Task 5+. Progress is tracked via checkboxes here and `.ai/PROJECT_CONTEXT.md`.

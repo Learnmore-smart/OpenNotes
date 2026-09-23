@@ -323,7 +323,7 @@ Wave 1 note: shape replacement undo stores only session token/index and immutabl
 
 ## Dependencies
 - `Controls/PdfPageControl`（页面交互层）、`Services/PdfService`、`Services/VersionControlService`、`Services/AppSettingsService`、`Services/LocalizationService`、`Services/DialogService`、`MainWindow`（Toast）。
-- WPF Ink（Stroke/DrawingAttributes）、PdfiumViewer（别名 `PdfiumPdfDocument`）。
+- WPF Ink（Stroke/DrawingAttributes）。~~PdfiumViewer~~ → Task 3 起 print (`RenderPrintablePages`) 与 insert-pages 页数探测改用 `Caelum.Pdf.PdfiumRasterizerFactory.Shared`（Core pdfium P/Invoke）；`RenderPageBgra(..., renderAnnotations)` 映射原 `PdfRenderFlags` 开关，PrintablePageImage 仍按 `pageSize * 96/72` 算 DIP。
 
 ## Open Threads / Resume Context
 - **Status:** complete for Wave 3 P2 automated scope; visual screenshots and foreground/device checks remain external.

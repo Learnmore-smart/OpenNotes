@@ -27,7 +27,6 @@ using Microsoft.Win32;
 using Caelum.Controls;
 using Caelum.Models;
 using Caelum.Services;
-using PdfiumPdfDocument = PdfiumViewer.PdfDocument;
 using Path = System.Windows.Shapes.Path;
 
 namespace Caelum.Pages
@@ -11209,7 +11208,7 @@ namespace Caelum.Pages
                 int sourcePageCount;
                 try
                 {
-                    using var source = PdfiumPdfDocument.Load(dialog.FileName);
+                    using var source = Caelum.Pdf.PdfiumRasterizerFactory.Shared.LoadFromFile(dialog.FileName);
                     sourcePageCount = source.PageCount;
                 }
                 catch (Exception ex)
@@ -11625,48 +11624,36 @@ namespace Caelum.Pages
 
         private static IReadOnlyList<PrintablePageImage> RenderPrintablePages(string filePath, bool includeAnnotations, double dpiScale = 1.0)
         {
-            using var document = PdfiumPdfDocument.Load(filePath);
-            var pages = new List<PrintablePageImage>(document.PageCount);
+            // Same backend as the Core service: direct pdfium.dll P/Invoke.
+            // includeAnnotations maps to FFLDraw (old PdfRenderFlags.Annotations).
+            using var rasterizer = Caelum.Pdf.PdfiumRasterizerFactory.Shared.LoadFromFile(filePath);
+            var pages = new List<PrintablePageImage>(rasterizer.PageCount);
             int renderDpi = Math.Max(72, (int)Math.Round(220 * Math.Max(1.0, dpiScale)));
-            var renderFlags = includeAnnotations ? PdfiumViewer.PdfRenderFlags.Annotations : (PdfiumViewer.PdfRenderFlags)0;
 
-            for (int pageIndex = 0; pageIndex < document.PageCount; pageIndex++)
+            for (int pageIndex = 0; pageIndex < rasterizer.PageCount; pageIndex++)
             {
-                var pageSize = document.PageSizes[pageIndex];
+                var pageSize = rasterizer.PageSizes[pageIndex];
                 int width = Math.Max(1, (int)Math.Ceiling(pageSize.Width * renderDpi / 72.0));
                 int height = Math.Max(1, (int)Math.Ceiling(pageSize.Height * renderDpi / 72.0));
 
-                using var gdiBitmap = (System.Drawing.Bitmap)document.Render(pageIndex, width, height, renderDpi, renderDpi, renderFlags);
-                var bitmapData = gdiBitmap.LockBits(
-                    new System.Drawing.Rectangle(0, 0, width, height),
-                    System.Drawing.Imaging.ImageLockMode.ReadOnly,
-                    System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+                var rendered = rasterizer.RenderPageBgra(pageIndex, width, height, includeAnnotations);
+                var bitmapSource = BitmapSource.Create(
+                    rendered.Width,
+                    rendered.Height,
+                    renderDpi,
+                    renderDpi,
+                    PixelFormats.Bgra32,
+                    null,
+                    rendered.Bgra,
+                    rendered.Stride);
+                bitmapSource.Freeze();
 
-                try
+                pages.Add(new PrintablePageImage
                 {
-                    var bitmapSource = BitmapSource.Create(
-                        width,
-                        height,
-                        renderDpi,
-                        renderDpi,
-                        PixelFormats.Bgra32,
-                        null,
-                        bitmapData.Scan0,
-                        bitmapData.Stride * height,
-                        bitmapData.Stride);
-                    bitmapSource.Freeze();
-
-                    pages.Add(new PrintablePageImage
-                    {
-                        Bitmap = bitmapSource,
-                        Width = pageSize.Width * 96.0 / 72.0,
-                        Height = pageSize.Height * 96.0 / 72.0
-                    });
-                }
-                finally
-                {
-                    gdiBitmap.UnlockBits(bitmapData);
-                }
+                    Bitmap = bitmapSource,
+                    Width = pageSize.Width * 96.0 / 72.0,
+                    Height = pageSize.Height * 96.0 / 72.0
+                });
             }
 
             return pages;

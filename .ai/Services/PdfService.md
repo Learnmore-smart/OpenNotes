@@ -1,5 +1,25 @@
 # Services/PdfService.cs
 
+## Task 3 split (2026-09-22) — this file is now a WPF facade
+
+- `Services/PdfService.cs` shrank from ~3,609 lines to ~252 lines. The full
+  service (load, `ExtractAndStripAnnotations`, page edits, outline, text
+  info, `SaveAnnotationsToPdfAsync`, atomic replacement, coordinator/gate
+  ordering) moved verbatim-in-spirit to `OpenNotes.Core/Pdf/PdfService.cs`
+  (namespace `Caelum.Pdf`); all mechanism notes below describe the Core file.
+- WPF facade `Caelum.Services.PdfService : Caelum.Pdf.PdfService` keeps every
+  public signature consumers use and adapts only: `RenderPageAsync`
+  (BitmapImage), `RenderPagePngBytesAsync` (GDI+ PNG encode of the Core BGRA
+  buffer with `SetResolution(renderDpi)` — byte-identical PNG output),
+  `RenderPageBitmapSourceAsync` (BGRA → frozen `BitmapSource`, no PNG
+  roundtrip), `Rect`-based `PdfTextCharacterInfo`/`PdfPageTextInfo`/
+  `PdfOutlineEntry` `new` twins over the Core `RectD` records.
+- `PdfiumViewer.PdfDocument` is no longer referenced here; Core drives
+  `pdfium.dll` via `Caelum.Pdf.IPdfRasterizer`/`PdfiumRasterizer`
+  (`PdfiumRasterizerFactory.Shared`, internal ctor seam for tests).
+- `ThumbnailCompositor` unchanged — it still consumes frozen `BitmapSource`s
+  produced by the facade.
+
 ## Annotation rotation metadata (2026-09-05)
 
 - Owned FreeText / Stamp / Sticky write optional `/WNARotation`. Missing keys load as 0. Strip/rebuild, DIP coordinates, and atomic save are unchanged.
@@ -127,6 +147,7 @@ PDF 核心服务：PdfiumViewer 负责加载/渲染"剥离注释后的干净流"
 - Open threads: no required V5/Hidden Ink service implementation remains; third-party viewer and online/manual verification are external.
 
 ## Change History
+- 2026-09-22: Task 3 — split to `OpenNotes.Core/Pdf/PdfService.cs`; this file became the WPF adapter facade (BitmapImage/BitmapSource/PNG + Rect text/outline twins). Public API unchanged.
 - 2026-08-18: 建立镜像文档（Task 0）。
 - 2026-08-18: Task 18 —— FreeText CJK 导出修复：XGraphics+XForm 外观流、Type0/Identity-H 嵌入 SimHei 子集、MeasureString 真实宽度、/Contents Unicode 编码（修 RawEncoding 截断乱码）、字体回退链探测；新增 6 个测试（嵌入结构/往返解析/混排零回归/二次保存）。
 - 2026-08-18: Task 19 图片注释——保存：SaveAnnotationsCore 先删循环扩自有 /Stamp（IsOwnImageStamp，/NM 前缀 wna_img_；外来 /Stamp 保留）+ 逐 ImageAnnotation 建 /Stamp（XImage.FromStream(Func<Stream>) → XForm/DrawImage /AP + /Contents base64 原始字节，单图失败跳过）；装载：ExtractAndStripAnnotations 增 /Stamp 分支 → TryExtractImageAnnotation（internal static：NM 严格判定 + base64 + /Rect 反变换）→ Images + 剥离；新增 DetectImageFormat 魔数嗅探（internal，EditorPage 复用）；新增 2 个测试（1x1 红 PNG 往返 + 二次保存幂等/外来 Stamp 保留），21/21 通过。

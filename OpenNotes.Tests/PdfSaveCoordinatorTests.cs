@@ -516,9 +516,9 @@ public sealed class PdfSaveCoordinatorTests
         await using var service = new PdfService();
         await service.LoadPdfAsync(path);
 
-        var backingField = typeof(PdfService).GetField(
-            "_pdfBackingStream",
-            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+        // The backing-stream field lives on the Core base class
+        // (Caelum.Pdf.PdfService) after the Task 3 split; walk the hierarchy.
+        var backingField = FindPrivateInstanceField(typeof(PdfService), "_pdfBackingStream");
         Assert.That(backingField, Is.Not.Null);
         (backingField.GetValue(service) as Stream)?.Dispose();
         backingField.SetValue(service, new ThrowingDisposeStream());
@@ -540,7 +540,9 @@ public sealed class PdfSaveCoordinatorTests
     public void SaveAndAutosaveSourceRequiresSharedGenerationAwareInFlightGate()
     {
         string editorSource = ReadProjectFile("Pages", "EditorPage.xaml.cs");
-        string pdfSource = ReadProjectFile("Services", "PdfService.cs");
+        // The save pipeline moved to OpenNotes.Core with the Task 3 split; the
+        // contract is verified where the code now lives.
+        string pdfSource = ReadProjectFile("OpenNotes.Core", "Pdf", "PdfService.cs");
 
         Assert.Multiple(() =>
         {
@@ -574,6 +576,19 @@ public sealed class PdfSaveCoordinatorTests
         page.Width = 612;
         page.Height = 792;
         document.Save(filePath);
+    }
+
+    private static System.Reflection.FieldInfo FindPrivateInstanceField(Type type, string name)
+    {
+        for (Type current = type; current != null; current = current.BaseType)
+        {
+            var field = current.GetField(
+                name,
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.DeclaredOnly);
+            if (field != null)
+                return field;
+        }
+        return null;
     }
 
     private static string ReadProjectFile(params string[] segments)
