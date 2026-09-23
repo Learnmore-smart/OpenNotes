@@ -34,14 +34,16 @@
 - Modify: `OpenNotes.csproj` — `<ProjectReference Include="OpenNotes.Core\OpenNotes.Core.csproj" />`; remove moved files via `<Compile Remove="OpenNotes.Core\**"/>`-style patterns and delete local copies
 - Modify: `OpenNotes.slnx`/`OpenNotes.sln` — add `OpenNotes.Core`
 
-- [x] **Step 1: Create `OpenNotes.Core.csproj`** — `net8.0`, `Nullable disable`, `ImplicitUsings disable`, `RootNamespace=Caelum` (namespace compatibility). Packages: `PdfSharpCore 1.3.67`, `System.Drawing.Common 8.0.8` (word converter + EMF decode only — NOT exposed on public APIs).
-- [x] **Step 2: `git mv` the listed files**, keeping `namespace Caelum.Services` / `Caelum.Models` names exactly (no namespace churn).
-- [x] **Step 3: Wire `ProjectReference`** in `OpenNotes.csproj`; delete moved originals from WPF project.
-- [x] **Step 4: `dotnet build OpenNotes.csproj -c Release`** — expect 0 errors; fix stray `using` gaps.
-- [x] **Step 5: `dotnet test OpenNotes.Tests`** — tests reference both projects transitively; all currently-passing tests stay green.
-- [x] **Step 6: Commit** `refactor: extract UI-free services and models into OpenNotes.Core`.
+- [ ] **Step 1: Create `OpenNotes.Core.csproj`** — `net8.0`, `Nullable disable`, `ImplicitUsings disable`, `RootNamespace=Caelum` (namespace compatibility). Packages: `PdfSharpCore 1.3.67`, `System.Drawing.Common 8.0.8` (word converter + EMF decode only — NOT exposed on public APIs).
+- [ ] **Step 2: `git mv` the listed files**, keeping `namespace Caelum.Services` / `Caelum.Models` names exactly (no namespace churn).
+- [ ] **Step 3: Wire `ProjectReference`** in `OpenNotes.csproj`; delete moved originals from WPF project.
+- [ ] **Step 4: `dotnet build OpenNotes.csproj -c Release`** — expect 0 errors; fix stray `using` gaps.
+- [ ] **Step 5: `dotnet test OpenNotes.Tests`** — tests reference both projects transitively; all currently-passing tests stay green.
+- [ ] **Step 6: Commit** `refactor: extract UI-free services and models into OpenNotes.Core`.
 
-## Task 2: UI-free ink/geometry primitives in Core
+## Task 2: UI-free ink/geometry primitives in Core — ✅ DONE (`f4922d0`)
+
+**As-implemented notes:** Core geometry namespace is `Caelum.InkGeometry`, not `Caelum.Geometry` — the latter collides with `System.Windows.Media.Geometry` inside `Caelum.*` code. Tests stayed in the existing `OpenNotes.Tests` project (`CoreStrokeGeometryTests`, 36 tests) rather than a new `OpenNotes.Core.Tests` project. `StrokeReplacementSnapshot.cs` moved verbatim to Core (it was already UI-free); `ShapeStrokeMetadata.cs` split into a Core identity/keys file plus a WPF `Stroke` extended-property facade. `PdfPageControl` delegates all pure math to `StrokeGeometry` via `WpfStrokeAdapter`; exact rendered-geometry ops (`Stroke.HitTest`, `GetEraseResult`, `GetBounds`, `RectangleStylusShape`) intentionally remain WPF-side — `StrokeGeometry.SplitStrokeAtEraser` is the capsule-model approximation for the UI-free host only. Reflection-pinned private method names kept as wrappers. Required fixtures 93/93; all 57 fixtures green in per-fixture batches (~493 tests).
 
 **Files:**
 - Create: `OpenNotes.Core/Models/InkPointData.cs` — `{ double X, Y; float Pressure; }`
@@ -49,10 +51,10 @@
 - Create: `OpenNotes.Core/Geometry/StrokeGeometry.cs` — port of the eraser/selection math currently in `System.Windows.Media` (hit-test, split-at-point, bounds, path build) expressed on `InkStrokeData`
 - Modify: `Models/StrokeReplacementSnapshot.cs`, `ShapeStrokeMetadata.cs` — replace `System.Windows.*` types with Core equivalents; WPF side gets thin adapters
 
-- [ ] **Step 1:** Write Core primitives + port `StrokeEraserGeometryTests` expectations into `OpenNotes.Core.Tests` (or keep existing NUnit suite compiling against Core types via adapters).
-- [ ] **Step 2:** Move eraser/split/hit-test math into Core; WPF `Stroke` ↔ `InkStrokeData` adapters live in the WPF project (`WpfStrokeAdapter`).
-- [ ] **Step 3:** WPF build + tests green.
-- [ ] **Step 4: Commit.**
+- [x] **Step 1:** Write Core primitives + port `StrokeEraserGeometryTests` expectations into `OpenNotes.Core.Tests` (or keep existing NUnit suite compiling against Core types via adapters).
+- [x] **Step 2:** Move eraser/split/hit-test math into Core; WPF `Stroke` ↔ `InkStrokeData` adapters live in the WPF project (`WpfStrokeAdapter`).
+- [x] **Step 3:** WPF build + tests green.
+- [x] **Step 4: Commit.**
 
 ## Task 3: PDF rasterization abstraction
 
@@ -141,4 +143,4 @@
 
 ## Session-1 scope (this run)
 
-✅ **Task 1** done (`ab5fbb7`, `ca64e05`); ✅ **Task 4 Step 1** done (`1fa9859`, `080296f`) — `OpenNotes.WinUI.exe` builds and launches an empty themed window, WASDK self-contained. Execution continues into Task 2+. Progress is tracked via checkboxes here and `.ai/PROJECT_CONTEXT.md`.
+✅ **Task 1** done (`ab5fbb7`, `ca64e05`); ✅ **Task 4 Step 1** done (`1fa9859`, `080296f`) — `OpenNotes.WinUI.exe` builds and launches an empty themed window, WASDK self-contained; ✅ **Task 2** done (`f4922d0`) — UI-free ink/geometry primitives in `OpenNotes.Core` (`Caelum.InkGeometry.StrokeGeometry`, `InkPointData`, `InkStrokeData`, shape identity/keys, replacement snapshots) with WPF adapters. Execution continues into Task 3+. Progress is tracked via checkboxes here and `.ai/PROJECT_CONTEXT.md`.
