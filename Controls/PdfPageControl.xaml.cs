@@ -977,7 +977,7 @@ namespace Caelum.Controls
             // stroke is replaced wholesale by its ideal shape (uniform
             // width), so simulating ink on the original would be wasted.
             if (ShapeRecognitionEnabled && !stroke.DrawingAttributes.IsHighlighter
-                && stroke.StylusPoints.Count >= MinRecognizedShapePoints
+                && stroke.StylusPoints.Count >= StrokeGeometry.MinRecognizedShapePoints
                 && TryRecognizeShape(stroke, out var idealStroke))
             {
                 var token = EnsureStrokeToken(stroke);
@@ -2796,11 +2796,10 @@ namespace Caelum.Controls
 
         #region Scribble shape recognition (pen tool)
 
-        // --- tunable heuristics (deliberate shapes pass, scribbles fail) ---
-        private const int MinRecognizedShapePoints = 8;             // fewer points cannot evidence a shape
-        // The remaining thresholds, direction-run bucketing and the
-        // line/rectangle/ellipse gate helpers were ported verbatim into
-        // Caelum.InkGeometry.StrokeGeometry (V6 Task 2); TryRecognizeShape
+        // The recognition thresholds (including the ≥8-point gate, exposed as
+        // StrokeGeometry.MinRecognizedShapePoints), direction-run bucketing
+        // and the line/rectangle/ellipse gate helpers were ported verbatim
+        // into Caelum.InkGeometry.StrokeGeometry (V6 Task 2); TryRecognizeShape
         // below delegates to StrokeGeometry.TryRecognizeShape.
 
         /// <summary>

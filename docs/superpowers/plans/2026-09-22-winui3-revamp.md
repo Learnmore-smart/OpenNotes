@@ -119,6 +119,8 @@
 - [ ] **Step 4:** Hidden ink, laser, ruler overlay.
 - [ ] **Step 5: Commit.**
 
+**Review note (2026-09-22, Task 2 quality follow-up):** before the WinUI eraser ships, tighten `StrokeGeometry.SplitStrokeAtEraser` — replace the circle-capsule interval model with a square-stamp model (axis-aligned slab per spine segment, closed-form) matching the WPF `RectangleStylusShape` footprint, plus pressure-scaled radius (`eraser/2 + size·pressure(t)/2`), cross-validated against `Stroke.GetEraseResult` on a random stroke/eraser-path corpus. Also: the `InkStrokeData`↔`StrokeAnnotation` converter must decide whether per-point pressure enters the sidecar schema — the format is `[x,y]` only today and loads pressure as 0.5.
+
 ## Task 8: Text/sticky/image annotations + PDF text selection
 
 - [ ] Port `TextOverlayCanvas` widgets (text boxes, drag handles, 8-point resize, rotation), sticky notes with Save/Cancel/Delete lifecycle, image annotations (clipboard/drag-in via `Windows.ApplicationModel.DataTransfer` + Win32 EMF path for Excel charts), persistent highlights, PDF text selection surface (was disabled stub in WPF — decide: keep stub-off or implement via PdfiumViewer text page API).

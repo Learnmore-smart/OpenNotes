@@ -11,19 +11,19 @@ Pure, UI-free stroke/ink geometry for the V6 WinUI 3 migration (Task 2). Everyth
 
 ## API surface
 
-- Value types: `PointD` (ops/dot/midpoint), `RectD` (contains/intersects/inflate/union), `enum InkShapeKind` (member order identical to WPF `ShapeKind`).
+- Value types: `PointD` (ops/dot/midpoint), `RectD` (contains/intersects/inflate/union), `enum InkShapeKind` (member names identical to WPF `ShapeKind` — the adapter maps by name and throws on unknown; order locked for any ordinal consumers).
 - Distance/projection: `Dist`, `PerpendicularDistance`, `DistanceToSegment`, `ProjectToSegment`, `MaxDistanceToSegment`, `DirectionBucket`.
 - Bounds: `GetBounds`, `GetSpineBounds`.
-- Eraser: `CreateEraserRects`, `HiddenInkIntersectsEraser`, `SegmentIntersectsRect`, `EraserHitsStroke`, `SplitStrokeAtEraser` (capsule-model approximation).
+- Eraser: `CreateEraserRects`, `HiddenInkIntersectsEraser`, `SegmentIntersectsRect` (rejects non-finite endpoints), `EraserHitsStroke`, `SplitStrokeAtEraser` (capsule-model approximation; interval emitters skip zero-width tangent touches and fragment dedup compares X/Y/Pressure).
 - Hit-testing/selection: `HitTestStroke`, `HitTestPolyline`, `HitTestClosedOrBounds`, `IsPointInPolygon`, `IsRectInsidePolygon`, `IsStrokeInsidePolygon`, `IsContainerInsidePolygon`, `IsStrokeInsideRect`.
 - Shape generation: `BuildShapeOutline` (all `InkShapeKind` members incl. 64-segment ellipse), `BuildArrowGeometry`, `ConstrainShapeEndpoints`, `BuildDashedLine`/`BuildDashedPolyline` (phase carries across corners).
-- Recognition: `TryRecognizeShape` + scribble thresholds and `DirectionRun` helper.
+- Recognition: `TryRecognizeShape` (enforces `public const int MinRecognizedShapePoints = 8` — the same ≥8-point gate the WPF call site applies) + scribble thresholds and `DirectionRun` helper.
 - Point transforms: `SimulateInkFlow`, `SmoothPoints`, `TryGetStraightEndpoints`, `ConstrainPointsToRuler`, `IsPointInsideConvexQuad`, `TryFindFirstQuadIntersection`.
 
 ## Constraints / NEVER Change
 
-- One deliberate approximation: `SplitStrokeAtEraser` models the eraser as capsules along its path. The WPF layer still uses exact `Stroke.GetEraseResult` rendered-geometry clipping at runtime; the pure split exists for the UI-free host and tests.
-- `InkShapeKind` member order must stay identical to `Caelum.Controls.ShapeKind` — `WpfStrokeAdapter` maps by name.
+- One deliberate approximation: `SplitStrokeAtEraser` models the eraser as capsules along its path. The WPF layer still uses exact `Stroke.GetEraseResult` rendered-geometry clipping at runtime; the pure split exists for the UI-free host and tests. (Task 7 review note: tighten to a square-stamp interval model + pressure-scaled radius before the WinUI eraser ships — see the plan doc.)
+- `InkShapeKind` member NAMES must stay identical to `Caelum.Controls.ShapeKind` — `WpfStrokeAdapter` maps by name-switch and throws `ArgumentOutOfRangeException` on unknown members. Order is irrelevant to the adapter but locked for any ordinal consumers.
 - No `System.Windows.*` references; `net8.0`, `ImplicitUsings` disabled (explicit `using System.Linq` etc.).
 - Scribble-recognition thresholds ported verbatim; do not retune.
 

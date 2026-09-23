@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Windows;
 using System.Windows.Ink;
@@ -85,12 +86,13 @@ internal static class WpfStrokeAdapter
     }
 
     /// <summary>
-    /// Maps the WPF shape-tool kind onto its UI-free mirror. The enums share
-    /// member names/order; anything unrecognized degrades to Line like the
-    /// original switch default.
+    /// Maps the WPF shape-tool kind onto its UI-free mirror by member name.
+    /// Fails loud on unrecognized kinds — silently degrading a future
+    /// <see cref="ShapeKind"/> member to Line would corrupt shape geometry.
     /// </summary>
     public static InkShapeKind ToInkShapeKind(ShapeKind kind) => kind switch
     {
+        ShapeKind.Line => InkShapeKind.Line,
         ShapeKind.Rectangle => InkShapeKind.Rectangle,
         ShapeKind.Ellipse => InkShapeKind.Ellipse,
         ShapeKind.Arrow => InkShapeKind.Arrow,
@@ -100,7 +102,10 @@ internal static class WpfStrokeAdapter
         ShapeKind.Pentagon => InkShapeKind.Pentagon,
         ShapeKind.Hexagon => InkShapeKind.Hexagon,
         ShapeKind.DashedLine => InkShapeKind.DashedLine,
-        _ => InkShapeKind.Line
+        _ => throw new ArgumentOutOfRangeException(
+            nameof(kind),
+            kind,
+            "Unrecognized ShapeKind — add a member to InkShapeKind and map it here.")
     };
 
     /// <summary>Snapshot of a live stroke as a UI-free payload.</summary>
@@ -126,10 +131,24 @@ internal static class WpfStrokeAdapter
     /// <summary>
     /// Rebuilds a live stroke from a UI-free payload (used where the page
     /// pipeline needs a real <see cref="Stroke"/>; shape identity is written
-    /// back through <see cref="ShapeStrokeMetadata.Apply"/>).
+    /// back through <see cref="ShapeStrokeMetadata.Apply"/>). Returns null for
+    /// a null payload or a null/empty point list — the same "no stroke"
+    /// contract <c>CreateStrokeFromSnapshot</c> uses. A single-point payload
+    /// is expanded to a 0.1-DIP segment so it renders as a dot, matching
+    /// <c>AddStroke</c>/<c>PreserveTapStroke</c>/<c>ThumbnailCompositor</c>.
     /// </summary>
     public static Stroke ToStroke(InkStrokeData data)
     {
+        if (data?.Points == null || data.Points.Count == 0)
+            return null;
+
+        var points = ToStylusPoints(data.Points);
+        if (points.Count == 1)
+        {
+            var dot = points[0];
+            points.Add(new StylusPoint(dot.X + 0.1, dot.Y, dot.PressureFactor));
+        }
+
         var attrs = new DrawingAttributes
         {
             Color = Color.FromArgb(data.A, data.R, data.G, data.B),
@@ -142,7 +161,7 @@ internal static class WpfStrokeAdapter
         if (!string.IsNullOrWhiteSpace(identity.GroupId))
             attrs.IgnorePressure = true;
 
-        var stroke = new Stroke(ToStylusPoints(data.Points)) { DrawingAttributes = attrs };
+        var stroke = new Stroke(points) { DrawingAttributes = attrs };
         if (!string.IsNullOrWhiteSpace(identity.GroupId) || !string.IsNullOrWhiteSpace(identity.Kind))
         {
             ShapeStrokeMetadata.Apply(

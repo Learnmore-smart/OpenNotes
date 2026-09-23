@@ -70,8 +70,10 @@ public readonly record struct RectD(double X, double Y, double Width, double Hei
 
 /// <summary>
 /// UI-free mirror of the shape-tool kind enum (<c>Caelum.Controls.ShapeKind</c>
-/// on the WPF side). Member order must stay identical so the WPF adapter can
-/// map by name.
+/// on the WPF side). Member NAMES must stay identical — the WPF adapter maps
+/// by name-switch and fails loud on unrecognized kinds. Member order is
+/// irrelevant to the adapter but locked anyway for any ordinal consumers
+/// (persistence uses the kind name string, not the ordinal).
 /// </summary>
 public enum InkShapeKind
 {
@@ -105,6 +107,9 @@ public static class StrokeGeometry
     private const int EllipseSegmentCount = 64;
 
     // Scribble shape-recognition thresholds (ported verbatim).
+
+    /// <summary>Fewer points cannot evidence a shape; recognition callers gate on this.</summary>
+    public const int MinRecognizedShapePoints = 8;
     private const double MinRecognizedDiagonal = 24.0;          // px; tiny scribbles are left alone
     private const double ClosedGapRatio = 0.15;                 // first-last gap < 15% of perimeter → closed
     private const double LineMeanDeviationRatio = 0.06;         // mean perp deviation / diagonal
@@ -297,6 +302,12 @@ public static class StrokeGeometry
     /// <summary>Liang–Barsky style segment/rect intersection.</summary>
     public static bool SegmentIntersectsRect(PointD start, PointD end, RectD rect)
     {
+        // Non-finite endpoints poison the clip comparisons (NaN never fails
+        // a relational test, so a NaN segment could report a hit).
+        if (!double.IsFinite(start.X) || !double.IsFinite(start.Y) ||
+            !double.IsFinite(end.X) || !double.IsFinite(end.Y))
+            return false;
+
         if (rect.Contains(start) || rect.Contains(end))
             return true;
 
@@ -521,9 +532,12 @@ public static class StrokeGeometry
             // A piece starting at the shared vertex (t0 == 0) continues the
             // open fragment — the vertex is already its last point. A piece
             // starting mid-segment follows an erased gap and must begin a
-            // new fragment instead.
+            // new fragment instead. Pressure is part of the vertex identity:
+            // two consecutive spine points may share X/Y yet differ in
+            // pressure, and dropping one would make an untouched stroke
+            // return a fragment that differs from the input.
             var last = current[current.Count - 1];
-            if (last.X != start.X || last.Y != start.Y)
+            if (last.X != start.X || last.Y != start.Y || last.Pressure != start.Pressure)
             {
                 CloseFragment(fragments, ref current);
                 current = new List<InkPointData> { start };
@@ -536,7 +550,7 @@ public static class StrokeGeometry
 
         var end = LerpPoint(a, b, t1);
         var tail = current[current.Count - 1];
-        if (tail.X != end.X || tail.Y != end.Y)
+        if (tail.X != end.X || tail.Y != end.Y || tail.Pressure != end.Pressure)
             current.Add(end);
 
         if (t1 < 1.0)
@@ -645,7 +659,12 @@ public static class StrokeGeometry
         if (t1 < 0.0 || t0 > 1.0)
             return;
 
-        intervals.Add((Math.Max(0.0, t0), Math.Min(1.0, t1)));
+        double clamped0 = Math.Max(0.0, t0);
+        double clamped1 = Math.Min(1.0, t1);
+        // A tangent graze (discriminant ≈ 0) produces a zero-width interval;
+        // admitting it would split the stroke into two touching fragments.
+        if (clamped1 > clamped0)
+            intervals.Add((clamped0, clamped1));
     }
 
     /// <summary>
@@ -727,7 +746,9 @@ public static class StrokeGeometry
 
         double t0 = Math.Max(strip0, proj0);
         double t1 = Math.Min(strip1, proj1);
-        if (t1 >= t0)
+        // Strict inequality: a zero-width interval is a tangent touch, not an
+        // overlap — admitting it would split a fragment at a single point.
+        if (t1 > t0)
             intervals.Add((t0, t1));
     }
 
@@ -784,8 +805,9 @@ public static class StrokeGeometry
 
     /// <summary>
     /// Lasso rule for a stroke: inside when its bounds fit in the polygon, or
-    /// when ≥ 60% of spine points are inside (small strokes of ≤ 3 points
-    /// must be fully inside).
+    /// when ≥ 60% of spine points are inside. (A ≤ 3-point stroke that is
+    /// fully inside already satisfies the ratio, so no special-casing is
+    /// needed for small strokes.)
     /// </summary>
     public static bool IsStrokeInsidePolygon(
         IReadOnlyList<PointD> polygon,
@@ -805,8 +827,7 @@ public static class StrokeGeometry
                 insideCount++;
         }
 
-        return (double)insideCount / strokePoints.Count >= 0.6
-            || (strokePoints.Count <= 3 && insideCount == strokePoints.Count);
+        return (double)insideCount / strokePoints.Count >= 0.6;
     }
 
     /// <summary>
@@ -1157,8 +1178,10 @@ public static class StrokeGeometry
     public static bool TryRecognizeShape(IReadOnlyList<PointD> points, out List<PointD> outline)
     {
         outline = null;
+        if (points == null)
+            return false;
         int n = points.Count;
-        if (n == 0)
+        if (n < MinRecognizedShapePoints)
             return false;
 
         double minX = double.MaxValue, minY = double.MaxValue;
