@@ -11,6 +11,7 @@ using System.Windows.Media.Animation;
 using System.Windows.Media.Imaging;
 using System.Windows.Ink;
 using System.Runtime.CompilerServices;
+using Caelum.InkGeometry;
 using Caelum.Models;
 using Caelum.Services;
 
@@ -683,7 +684,6 @@ namespace Caelum.Controls
 
         // Shape drag state (anchor = pointer-down point, current = live point).
         private const double ShapeDragThreshold = 4.0; // px; below this a tap commits nothing
-        private const int EllipseSegmentCount = 64;
         private bool _isShapeDragging;
         private Point _shapeAnchor;
         private Point _shapeCurrent;
@@ -1452,34 +1452,14 @@ namespace Caelum.Controls
         /// </summary>
         private Stroke ApplyInkSimulation(Stroke stroke)
         {
-            var points = stroke.StylusPoints;
-            int count = points.Count;
-
-            var stepDist = new double[count];
-            double maxDist = 0;
-            for (int i = 1; i < count; i++)
-            {
-                double dx = points[i].X - points[i - 1].X;
-                double dy = points[i].Y - points[i - 1].Y;
-                stepDist[i] = Math.Sqrt(dx * dx + dy * dy);
-                if (stepDist[i] > maxDist)
-                    maxDist = stepDist[i];
-            }
+            var simulatedPoints = StrokeGeometry.SimulateInkFlow(
+                WpfStrokeAdapter.ToInkPoints(stroke.StylusPoints));
 
             // Stationary stroke (all points coincident) — nothing to simulate.
-            if (maxDist <= double.Epsilon)
+            if (simulatedPoints == null)
                 return stroke;
 
-            var simulatedPoints = new StylusPointCollection();
-            for (int i = 0; i < count; i++)
-            {
-                var sp = points[i];
-                double speedNorm = stepDist[i] / maxDist;
-                sp.PressureFactor = (float)Math.Max(0.25, 1.0 - 0.75 * speedNorm);
-                simulatedPoints.Add(sp);
-            }
-
-            var replacement = new Stroke(simulatedPoints)
+            var replacement = new Stroke(WpfStrokeAdapter.ToStylusPoints(simulatedPoints))
             {
                 DrawingAttributes = stroke.DrawingAttributes.Clone()
             };
@@ -1509,14 +1489,18 @@ namespace Caelum.Controls
             if (points.Count < 2)
                 return stroke;
 
-            var first = points[0];
-            var last = points[points.Count - 1];
-            double dx = last.X - first.X;
-            double dy = last.Y - first.Y;
-            if (dx * dx + dy * dy < 1e-4) // tap dot — nothing to straighten
+            if (!StrokeGeometry.TryGetStraightEndpoints(
+                WpfStrokeAdapter.ToInkPoints(points), out var first, out var last))
+            {
+                // tap dot — nothing to straighten
                 return stroke;
+            }
 
-            var straightened = new StylusPointCollection { first, last };
+            var straightened = new StylusPointCollection
+            {
+                WpfStrokeAdapter.ToStylusPoint(first),
+                WpfStrokeAdapter.ToStylusPoint(last)
+            };
             var attributes = stroke.DrawingAttributes.Clone();
             attributes.FitToCurve = false;
             var replacement = new Stroke(straightened) { DrawingAttributes = attributes };
@@ -1581,130 +1565,25 @@ namespace Caelum.Controls
             if (points == null || points.Count == 0)
                 return stroke;
 
-            var quad = new[] { topA, topB, bottomB, bottomA };
-            var first = new Point(points[0].X, points[0].Y);
-            if (IsPointInsideConvexQuad(first, quad))
+            var inkPoints = WpfStrokeAdapter.ToInkPoints(points);
+            var result = StrokeGeometry.ConstrainPointsToRuler(
+                inkPoints,
+                WpfStrokeAdapter.ToPointD(topA),
+                WpfStrokeAdapter.ToPointD(topB),
+                WpfStrokeAdapter.ToPointD(bottomA),
+                WpfStrokeAdapter.ToPointD(bottomB),
+                RulerSnapTolerancePx);
+
+            if (result == null)
                 return null;
-
-            for (int i = 1; i < points.Count; i++)
-            {
-                var from = new Point(points[i - 1].X, points[i - 1].Y);
-                var to = new Point(points[i].X, points[i].Y);
-                if (!TryFindFirstQuadIntersection(from, to, quad, out double entryT, out Point entry))
-                {
-                    // A gesture may begin exactly on the edge. That boundary
-                    // point is allowed for along-edge drawing, but moving from
-                    // it into the body must still produce no ink.
-                    if (IsPointInsideConvexQuad(to, quad))
-                        return null;
-                    continue;
-                }
-
-                var clipped = new StylusPointCollection();
-                for (int j = 0; j < i; j++)
-                    clipped.Add(points[j]);
-                float pressure = (float)(points[i - 1].PressureFactor
-                    + (points[i].PressureFactor - points[i - 1].PressureFactor) * entryT);
-                clipped.Add(new StylusPoint(entry.X, entry.Y, pressure));
-                return CloneStroke(stroke, clipped);
-            }
-
-            double topDistance = MaxDistanceToSegment(points, topA, topB);
-            double bottomDistance = MaxDistanceToSegment(points, bottomA, bottomB);
-            if (Math.Min(topDistance, bottomDistance) >= RulerSnapTolerancePx)
+            if (ReferenceEquals(result, inkPoints))
                 return stroke;
-
-            Point edgeA = topDistance <= bottomDistance ? topA : bottomA;
-            Point edgeB = topDistance <= bottomDistance ? topB : bottomB;
-            var snapped = new StylusPointCollection();
-            foreach (var point in points)
-            {
-                Point projected = ProjectToSegment(new Point(point.X, point.Y), edgeA, edgeB);
-                snapped.Add(new StylusPoint(projected.X, projected.Y, point.PressureFactor));
-            }
-            return CloneStroke(stroke, snapped);
+            return CloneStroke(stroke, WpfStrokeAdapter.ToStylusPoints(result));
         }
 
         private static Stroke CloneStroke(Stroke source, StylusPointCollection points)
         {
             return new Stroke(points) { DrawingAttributes = source.DrawingAttributes.Clone() };
-        }
-
-        private static double MaxDistanceToSegment(StylusPointCollection points, Point a, Point b)
-        {
-            double max = 0;
-            foreach (var point in points)
-            {
-                var source = new Point(point.X, point.Y);
-                max = Math.Max(max, PointDistance(source, ProjectToSegment(source, a, b)));
-            }
-            return max;
-        }
-
-        private static Point ProjectToSegment(Point point, Point a, Point b)
-        {
-            Vector edge = b - a;
-            double lengthSquared = edge.X * edge.X + edge.Y * edge.Y;
-            if (lengthSquared < 1e-4)
-                return a;
-            double t = Vector.Multiply(point - a, edge) / lengthSquared;
-            t = Math.Max(0, Math.Min(1, t));
-            return a + edge * t;
-        }
-
-        private static bool IsPointInsideConvexQuad(Point point, IReadOnlyList<Point> quad)
-        {
-            double? sign = null;
-            for (int i = 0; i < quad.Count; i++)
-            {
-                Point a = quad[i];
-                Point b = quad[(i + 1) % quad.Count];
-                double cross = (b.X - a.X) * (point.Y - a.Y) - (b.Y - a.Y) * (point.X - a.X);
-                if (Math.Abs(cross) < 1e-7)
-                    return false;
-                double current = Math.Sign(cross);
-                if (sign.HasValue && current != sign.Value)
-                    return false;
-                sign = current;
-            }
-            return sign.HasValue;
-        }
-
-        private static bool TryFindFirstQuadIntersection(
-            Point from,
-            Point to,
-            IReadOnlyList<Point> quad,
-            out double firstT,
-            out Point intersection)
-        {
-            firstT = double.MaxValue;
-            intersection = default;
-            for (int i = 0; i < quad.Count; i++)
-            {
-                if (TryIntersectSegments(from, to, quad[i], quad[(i + 1) % quad.Count], out double t)
-                    && t > 1e-7 && t < firstT)
-                {
-                    firstT = t;
-                    intersection = from + (to - from) * t;
-                }
-            }
-            return firstT != double.MaxValue;
-        }
-
-        private static bool TryIntersectSegments(Point p, Point p2, Point q, Point q2, out double t)
-        {
-            Vector r = p2 - p;
-            Vector s = q2 - q;
-            double cross = r.X * s.Y - r.Y * s.X;
-            if (Math.Abs(cross) < 1e-7)
-            {
-                t = 0;
-                return false;
-            }
-            Vector qp = q - p;
-            t = (qp.X * s.Y - qp.Y * s.X) / cross;
-            double u = (qp.X * r.Y - qp.Y * r.X) / cross;
-            return t >= 0 && t <= 1 && u >= 0 && u <= 1;
         }
 
         /// <summary>
@@ -1753,37 +1632,15 @@ namespace Caelum.Controls
                 return rawReplacement;
             }
 
-            int count = points.Count;
-            if (count < 3)
+            var smoothed = StrokeGeometry.SmoothPoints(
+                WpfStrokeAdapter.ToInkPoints(points), level);
+            if (smoothed == null)
                 return stroke;
-
-            int window = level == 1 ? 1 : level == 2 ? 2 : 4;
-            // Clamp the effective window for short strokes: with a window
-            // wider than half the stroke every averaged point collapses
-            // toward the centroid and the stroke shrinks to a dot.
-            int maxWindow = (count - 1) / 2;
-            if (window > maxWindow)
-                window = maxWindow;
-
-            var smoothed = new StylusPointCollection();
-            for (int i = 0; i < count; i++)
-            {
-                int lo = Math.Max(0, i - window);
-                int hi = Math.Min(count - 1, i + window);
-                double sumX = 0, sumY = 0;
-                for (int j = lo; j <= hi; j++)
-                {
-                    sumX += points[j].X;
-                    sumY += points[j].Y;
-                }
-                int n = hi - lo + 1;
-                smoothed.Add(new StylusPoint(sumX / n, sumY / n, points[i].PressureFactor));
-            }
 
             var attributes = stroke.DrawingAttributes.Clone();
             attributes.FitToCurve = true;
 
-            var replacement = new Stroke(smoothed) { DrawingAttributes = attributes };
+            var replacement = new Stroke(WpfStrokeAdapter.ToStylusPoints(smoothed)) { DrawingAttributes = attributes };
             int index = _strokes.IndexOf(stroke);
             if (index >= 0)
                 ReplaceStrokeAt(index, replacement, EnsureStrokeToken(stroke), GetStrokeSide(stroke));
@@ -2621,46 +2478,16 @@ namespace Caelum.Controls
         /// original length) and rectangle/ellipse become square/circle
         /// (side = max(|dx|,|dy|), drag direction signs preserved). Without
         /// Shift the end point is returned unchanged. Feeding both the live
-        /// preview and the final commit keeps them consistent.
+        /// preview and the final commit keeps them consistent. The math lives
+        /// in <see cref="StrokeGeometry.ConstrainShapeEndpoints"/>.
         /// </summary>
         private static Point ConstrainShapeEndpoints(Point start, Point end, ShapeKind kind, bool isShift)
         {
-            if (!isShift)
-                return end;
-
-            double dx = end.X - start.X;
-            double dy = end.Y - start.Y;
-
-            switch (kind)
-            {
-                case ShapeKind.Line:
-                case ShapeKind.Arrow:
-                {
-                    double len = Math.Sqrt(dx * dx + dy * dy);
-                    if (len < double.Epsilon)
-                        return end;
-                    double snapped = Math.Round(Math.Atan2(dy, dx) / (Math.PI / 4.0)) * (Math.PI / 4.0);
-                    return new Point(start.X + len * Math.Cos(snapped), start.Y + len * Math.Sin(snapped));
-                }
-                case ShapeKind.Rectangle:
-                case ShapeKind.Ellipse:
-                case ShapeKind.Triangle:
-                case ShapeKind.Diamond:
-                case ShapeKind.Parallelogram:
-                case ShapeKind.Pentagon:
-                case ShapeKind.Hexagon:
-                {
-                    // Square / circle: the larger extent wins; sign(0)
-                    // defaults to + so pure vertical/horizontal drags still
-                    // produce a full-size square.
-                    double side = Math.Max(Math.Abs(dx), Math.Abs(dy));
-                    double sx = dx >= 0 ? 1 : -1;
-                    double sy = dy >= 0 ? 1 : -1;
-                    return new Point(start.X + sx * side, start.Y + sy * side);
-                }
-                default:
-                    return end;
-            }
+            return WpfStrokeAdapter.ToPoint(StrokeGeometry.ConstrainShapeEndpoints(
+                WpfStrokeAdapter.ToPointD(start),
+                WpfStrokeAdapter.ToPointD(end),
+                WpfStrokeAdapter.ToInkShapeKind(kind),
+                isShift));
         }
 
         private void UpdateShapePreview()
@@ -2694,150 +2521,35 @@ namespace Caelum.Controls
 
         /// <summary>
         /// Outline point list for line / rectangle / ellipse. The ellipse is a
-        /// parametric polygon with <see cref="EllipseSegmentCount"/> segments,
-        /// which renders crisp because shape strokes use FitToCurve=false.
+        /// parametric polygon with 64 segments, which renders crisp because
+        /// shape strokes use FitToCurve=false. The math lives in
+        /// <see cref="StrokeGeometry.BuildShapeOutline"/>.
         /// </summary>
         private static List<Point> BuildShapeOutline(ShapeKind kind, Point start, Point end)
         {
-            switch (kind)
-            {
-                case ShapeKind.Rectangle:
-                    return new List<Point>
-                    {
-                        start,
-                        new Point(end.X, start.Y),
-                        end,
-                        new Point(start.X, end.Y),
-                        start // closed
-                    };
-                case ShapeKind.Ellipse:
-                    var points = new List<Point>(EllipseSegmentCount + 1);
-                    double cx = (start.X + end.X) / 2;
-                    double cy = (start.Y + end.Y) / 2;
-                    double rx = Math.Abs(end.X - start.X) / 2;
-                    double ry = Math.Abs(end.Y - start.Y) / 2;
-                    for (int i = 0; i <= EllipseSegmentCount; i++)
-                    {
-                        double t = 2 * Math.PI * i / EllipseSegmentCount;
-                        points.Add(new Point(cx + rx * Math.Cos(t), cy + ry * Math.Sin(t)));
-                    }
-                    return points;
-                case ShapeKind.Triangle:
-                {
-                    double left = Math.Min(start.X, end.X);
-                    double right = Math.Max(start.X, end.X);
-                    double top = Math.Min(start.Y, end.Y);
-                    double bottom = Math.Max(start.Y, end.Y);
-                    var apex = new Point((left + right) / 2, top);
-                    return new List<Point>
-                    {
-                        apex,
-                        new Point(right, bottom),
-                        new Point(left, bottom),
-                        apex
-                    };
-                }
-                case ShapeKind.Diamond:
-                {
-                    double left = Math.Min(start.X, end.X);
-                    double right = Math.Max(start.X, end.X);
-                    double top = Math.Min(start.Y, end.Y);
-                    double bottom = Math.Max(start.Y, end.Y);
-                    double diamondCx = (left + right) / 2;
-                    double diamondCy = (top + bottom) / 2;
-                    var first = new Point(diamondCx, top);
-                    return new List<Point>
-                    {
-                        first,
-                        new Point(right, diamondCy),
-                        new Point(diamondCx, bottom),
-                        new Point(left, diamondCy),
-                        first
-                    };
-                }
-                case ShapeKind.Parallelogram:
-                {
-                    double left = Math.Min(start.X, end.X);
-                    double right = Math.Max(start.X, end.X);
-                    double top = Math.Min(start.Y, end.Y);
-                    double bottom = Math.Max(start.Y, end.Y);
-                    double inset = (right - left) * 0.24;
-                    var first = new Point(left + inset, top);
-                    return new List<Point>
-                    {
-                        first,
-                        new Point(right, top),
-                        new Point(right - inset, bottom),
-                        new Point(left, bottom),
-                        first
-                    };
-                }
-                case ShapeKind.Pentagon:
-                    return BuildRegularPolygonOutline(start, end, 5);
-                case ShapeKind.Hexagon:
-                    return BuildRegularPolygonOutline(start, end, 6);
-                case ShapeKind.Line:
-                default:
-                    return new List<Point> { start, end };
-            }
-        }
-
-        private static List<Point> BuildRegularPolygonOutline(Point start, Point end, int sides)
-        {
-            double left = Math.Min(start.X, end.X);
-            double right = Math.Max(start.X, end.X);
-            double top = Math.Min(start.Y, end.Y);
-            double bottom = Math.Max(start.Y, end.Y);
-            double cx = (left + right) / 2;
-            double cy = (top + bottom) / 2;
-            double rx = (right - left) / 2;
-            double ry = (bottom - top) / 2;
-            var points = new List<Point>(sides + 1);
-
-            for (int i = 0; i < sides; i++)
-            {
-                double angle = -Math.PI / 2 + (2 * Math.PI * i / sides);
-                points.Add(new Point(cx + rx * Math.Cos(angle), cy + ry * Math.Sin(angle)));
-            }
-
-            points.Add(points[0]);
-            return points;
+            return WpfStrokeAdapter.ToPointList(StrokeGeometry.BuildShapeOutline(
+                WpfStrokeAdapter.ToInkShapeKind(kind),
+                WpfStrokeAdapter.ToPointD(start),
+                WpfStrokeAdapter.ToPointD(end)));
         }
 
         /// <summary>
         /// Arrow geometry: a shaft (start → end) plus a two-wing head drawn as
         /// a 'V' through the end point. Head length scales with the stroke
-        /// size and is capped at half the shaft length.
+        /// size and is capped at half the shaft length. The math lives in
+        /// <see cref="StrokeGeometry.BuildArrowGeometry"/>.
         /// </summary>
         private static void BuildArrowGeometry(Point start, Point end, double strokeSize,
             out List<Point> shaft, out List<Point> head)
         {
-            double dx = end.X - start.X;
-            double dy = end.Y - start.Y;
-            double len = Math.Sqrt(dx * dx + dy * dy);
-
-            if (len < double.Epsilon)
-            {
-                shaft = new List<Point> { start, end };
-                head = new List<Point> { end, end, end };
-                return;
-            }
-
-            double ux = dx / len;   // unit direction
-            double uy = dy / len;
-            double px = -uy;        // unit perpendicular
-            double py = ux;
-
-            double headLen = Math.Min(Math.Max(strokeSize * 3.0, 10.0), len * 0.5);
-            double headWidth = headLen * 0.6;
-
-            var wing1 = new Point(end.X - ux * headLen + px * headWidth,
-                                  end.Y - uy * headLen + py * headWidth);
-            var wing2 = new Point(end.X - ux * headLen - px * headWidth,
-                                  end.Y - uy * headLen - py * headWidth);
-
-            shaft = new List<Point> { start, end };
-            head = new List<Point> { wing1, end, wing2 };
+            StrokeGeometry.BuildArrowGeometry(
+                WpfStrokeAdapter.ToPointD(start),
+                WpfStrokeAdapter.ToPointD(end),
+                strokeSize,
+                out var shaftD,
+                out var headD);
+            shaft = WpfStrokeAdapter.ToPointList(shaftD);
+            head = WpfStrokeAdapter.ToPointList(headD);
         }
 
         /// <summary>
@@ -3460,7 +3172,8 @@ namespace Caelum.Controls
             var lastPoint = erasePathPoints[erasePathPoints.Count - 1];
             _lastErasePoint = lastPoint;
 
-            var eraserRects = CreateEraserRects(erasePathPoints);
+            var eraserRects = StrokeGeometry.CreateEraserRects(
+                WpfStrokeAdapter.ToPointDList(erasePathPoints), _eraserSize);
             if (eraserRects.Count == 0)
                 return;
 
@@ -3480,9 +3193,10 @@ namespace Caelum.Controls
             if (InkCanvas.Strokes.Count == 0)
                 return;
 
-            var candidateBounds = eraserRects[0];
+            var candidateBoundsCore = eraserRects[0];
             for (int i = 1; i < eraserRects.Count; i++)
-                candidateBounds.Union(eraserRects[i]);
+                candidateBoundsCore = candidateBoundsCore.Union(eraserRects[i]);
+            var candidateBounds = WpfStrokeAdapter.ToRect(candidateBoundsCore);
 
             var candidateStrokes = InkCanvas.Strokes
                 .Cast<Stroke>()
@@ -3532,10 +3246,10 @@ namespace Caelum.Controls
                 InkMutated?.Invoke(this, EventArgs.Empty);
         }
 
-        private void EraseHiddenInksAtRects(IReadOnlyList<Rect> eraserRects)
+        private void EraseHiddenInksAtRects(IReadOnlyList<RectD> eraserRects)
         {
             var hitMasks = _hiddenInks
-                .Where(annotation => HiddenInkIntersectsEraser(annotation, eraserRects))
+                .Where(annotation => StrokeGeometry.HiddenInkIntersectsEraser(annotation, eraserRects, _eraserSize))
                 .ToList();
 
             foreach (var annotation in hitMasks)
@@ -3547,81 +3261,6 @@ namespace Caelum.Controls
                 _eraseGestureRemovedHiddenInks.Add(CloneHiddenInk(annotation));
                 RemoveHiddenInkQuiet(annotation);
             }
-        }
-
-        private bool HiddenInkIntersectsEraser(
-            HiddenInkAnnotation annotation,
-            IReadOnlyList<Rect> eraserRects)
-        {
-            if (annotation?.Points == null || annotation.Points.Count == 0)
-                return false;
-
-            double radius = Math.Max(1.0, _eraserSize / 2.0 + annotation.Size / 2.0);
-            var points = annotation.Points
-                .Where(point => point != null && point.Length >= 2
-                    && double.IsFinite(point[0]) && double.IsFinite(point[1]))
-                .Select(point => new Point(point[0], point[1]))
-                .ToList();
-
-            for (int i = 0; i < points.Count; i++)
-            {
-                for (int rectIndex = 0; rectIndex < eraserRects.Count; rectIndex++)
-                {
-                    var expanded = eraserRects[rectIndex];
-                    expanded.Inflate(radius, radius);
-                    if (i == 0
-                        ? expanded.Contains(points[i])
-                        : SegmentIntersectsRect(points[i - 1], points[i], expanded))
-                        return true;
-                }
-            }
-
-            return false;
-        }
-
-        private static bool SegmentIntersectsRect(Point start, Point end, Rect rect)
-        {
-            if (rect.Contains(start) || rect.Contains(end))
-                return true;
-
-            double dx = end.X - start.X;
-            double dy = end.Y - start.Y;
-            double tMin = 0.0;
-            double tMax = 1.0;
-
-            return ClipSegmentToBoundary(-dx, start.X - rect.Left, ref tMin, ref tMax)
-                && ClipSegmentToBoundary(dx, rect.Right - start.X, ref tMin, ref tMax)
-                && ClipSegmentToBoundary(-dy, start.Y - rect.Top, ref tMin, ref tMax)
-                && ClipSegmentToBoundary(dy, rect.Bottom - start.Y, ref tMin, ref tMax);
-        }
-
-        private static bool ClipSegmentToBoundary(
-            double p,
-            double q,
-            ref double tMin,
-            ref double tMax)
-        {
-            const double epsilon = 1e-12;
-            if (Math.Abs(p) < epsilon)
-                return q >= 0;
-
-            double ratio = q / p;
-            if (p < 0)
-            {
-                if (ratio > tMax)
-                    return false;
-                if (ratio > tMin)
-                    tMin = ratio;
-            }
-            else
-            {
-                if (ratio < tMin)
-                    return false;
-                if (ratio < tMax)
-                    tMax = ratio;
-            }
-
-            return true;
         }
 
         /// <summary>
@@ -3771,21 +3410,6 @@ namespace Caelum.Controls
                         AddHiddenInkQuiet(CloneHiddenInk(annotation));
                 }
             }
-        }
-
-        private List<Rect> CreateEraserRects(IReadOnlyList<Point> points)
-        {
-            var eraserRects = new List<Rect>(points.Count);
-            foreach (var pt in points)
-            {
-                eraserRects.Add(new Rect(
-                    pt.X - _eraserSize / 2,
-                    pt.Y - _eraserSize / 2,
-                    _eraserSize,
-                    _eraserSize));
-            }
-
-            return eraserRects;
         }
 
         private static void OnPageSourceChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
@@ -6270,31 +5894,13 @@ namespace Caelum.Controls
             if (stroke.HitTest(point, 8))
                 return true;
 
-            // 2. Closed shapes use their actual polygon interior. Do not fall
-            // back to the axis-aligned bounds for these strokes, or a click in
-            // a corner outside a triangle/ellipse would select it.
-            var pts = stroke.StylusPoints;
-            if (pts.Count >= 4)
-            {
-                var pFirst = new Point(pts[0].X, pts[0].Y);
-                var pLast = new Point(pts[pts.Count - 1].X, pts[pts.Count - 1].Y);
-                if (Math.Abs(pFirst.X - pLast.X) < 4.0 && Math.Abs(pFirst.Y - pLast.Y) < 4.0)
-                {
-                    var poly = new System.Windows.Media.PointCollection(pts.Count);
-                    for (int i = 0; i < pts.Count; i++)
-                        poly.Add(new Point(pts[i].X, pts[i].Y));
-
-                    if (IsPointInPolygon(poly, point))
-                        return true;
-
-                    return false;
-                }
-            }
-
-            // 3. Freehand/open drawings are selectable anywhere in their
-            // visible bounded area. This restores the broad-stroke behavior
-            // without expanding the hit target beyond the stroke bounds.
-            return stroke.GetBounds().Contains(point);
+            // 2. Closed shapes use their actual polygon interior (no bounds
+            // fallback); 3. open drawings hit anywhere in their bounds.
+            // The rule itself is ported to StrokeGeometry.HitTestClosedOrBounds.
+            return StrokeGeometry.HitTestClosedOrBounds(
+                WpfStrokeAdapter.ToPointDList(stroke.StylusPoints),
+                WpfStrokeAdapter.ToRectD(stroke.GetBounds()),
+                WpfStrokeAdapter.ToPointD(point));
         }
 
         private void ToggleStrokeSelection(Stroke stroke)
@@ -6707,78 +6313,32 @@ namespace Caelum.Controls
 
         private static bool IsPointInPolygon(System.Windows.Media.PointCollection polygon, Point p)
         {
-            bool inside = false;
-            int j = polygon.Count - 1;
-            for (int i = 0; i < polygon.Count; i++)
-            {
-                if (((polygon[i].Y > p.Y) != (polygon[j].Y > p.Y)) &&
-                    (p.X < (polygon[j].X - polygon[i].X) * (p.Y - polygon[i].Y) / (polygon[j].Y - polygon[i].Y) + polygon[i].X))
-                    inside = !inside;
-                j = i;
-            }
-            return inside;
-        }
-
-        private static bool IsRectInsidePolygon(System.Windows.Media.PointCollection polygon, Rect rect)
-        {
-            return IsPointInPolygon(polygon, rect.TopLeft) &&
-                   IsPointInPolygon(polygon, rect.TopRight) &&
-                   IsPointInPolygon(polygon, rect.BottomLeft) &&
-                   IsPointInPolygon(polygon, rect.BottomRight);
+            return StrokeGeometry.IsPointInPolygon(
+                WpfStrokeAdapter.ToPointDList(polygon),
+                WpfStrokeAdapter.ToPointD(p));
         }
 
         private static bool IsStrokeInsidePolygon(System.Windows.Media.PointCollection polygon, Stroke stroke)
         {
-            if (IsRectInsidePolygon(polygon, stroke.GetBounds()))
-                return true;
-
-            var pts = stroke.StylusPoints;
-            if (pts.Count == 0) return false;
-
-            int insideCount = 0;
-            foreach (var pt in pts)
-            {
-                if (IsPointInPolygon(polygon, new Point(pt.X, pt.Y)))
-                    insideCount++;
-            }
-
-            return (double)insideCount / pts.Count >= 0.6 || (pts.Count <= 3 && insideCount == pts.Count);
+            return StrokeGeometry.IsStrokeInsidePolygon(
+                WpfStrokeAdapter.ToPointDList(polygon),
+                WpfStrokeAdapter.ToPointDList(stroke.StylusPoints),
+                WpfStrokeAdapter.ToRectD(stroke.GetBounds()));
         }
 
         private static bool IsContainerInsidePolygon(System.Windows.Media.PointCollection polygon, Rect containerRect)
         {
-            if (IsRectInsidePolygon(polygon, containerRect))
-                return true;
-
-            var center = new Point(containerRect.Left + containerRect.Width / 2, containerRect.Top + containerRect.Height / 2);
-            if (IsPointInPolygon(polygon, center))
-                return true;
-
-            int cornersIn = 0;
-            if (IsPointInPolygon(polygon, containerRect.TopLeft)) cornersIn++;
-            if (IsPointInPolygon(polygon, containerRect.TopRight)) cornersIn++;
-            if (IsPointInPolygon(polygon, containerRect.BottomLeft)) cornersIn++;
-            if (IsPointInPolygon(polygon, containerRect.BottomRight)) cornersIn++;
-
-            return cornersIn >= 2;
+            return StrokeGeometry.IsContainerInsidePolygon(
+                WpfStrokeAdapter.ToPointDList(polygon),
+                WpfStrokeAdapter.ToRectD(containerRect));
         }
 
         private static bool IsStrokeInsideRect(Rect selRect, Stroke stroke)
         {
-            if (selRect.Contains(stroke.GetBounds()))
-                return true;
-
-            var pts = stroke.StylusPoints;
-            if (pts.Count == 0) return false;
-
-            int insideCount = 0;
-            foreach (var pt in pts)
-            {
-                if (selRect.Contains(new Point(pt.X, pt.Y)))
-                    insideCount++;
-            }
-
-            return (double)insideCount / pts.Count >= 0.7;
+            return StrokeGeometry.IsStrokeInsideRect(
+                WpfStrokeAdapter.ToRectD(selRect),
+                WpfStrokeAdapter.ToPointDList(stroke.StylusPoints),
+                WpfStrokeAdapter.ToRectD(stroke.GetBounds()));
         }
 
         private void SelectionOverlayCanvas_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)

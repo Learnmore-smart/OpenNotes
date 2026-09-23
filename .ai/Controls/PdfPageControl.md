@@ -18,6 +18,13 @@
 |------|-----|-------|-----|
 | 2026-09-08 | After writing on a PDF, tab/window close sometimes does nothing | Native inking can keep InkCanvas capture; `CancelInteraction` only released erase/shape/laser/area captures | Always `ReleaseInkCaptures`; treat InkCanvas capture as an active interaction |
 
+## V6 Task 2 — Core geometry delegation (2026-09-22) — GREEN
+
+- All pure ink math now delegates to `Caelum.InkGeometry.StrokeGeometry` (`OpenNotes.Core/Geometry/StrokeGeometry.cs`) through `Controls/WpfStrokeAdapter.cs`: eraser rects, hidden-ink segment/rect hits, capsule/polyline hit tests, closed-shape polygon vs bounds fallback (`HitStroke`), lasso/marquee containment, `BuildShapeOutline`, `BuildArrowGeometry`, `ConstrainShapeEndpoints`, dashed-polyline segmentation, scribble `TryRecognizeShape`, `SimulateInkFlow`, `SmoothPoints`, shift straightening endpoints, and ruler constraint/quad intersection.
+- WPF-side by design (exact `Stroke` rendered-geometry semantics): `Stroke.HitTest(eraserPath, RectangleStylusShape)`, `Stroke.GetEraseResult(...)` splitting in `EraseStrokesAtPoints`, `Stroke.GetBounds()` where live-stroke bounds are needed, and `RectangleStylusShape` eraser footprint construction.
+- Reflection-visible seams pinned by existing tests are kept as thin wrappers with identical names/signatures: `HitStroke`, `IsStrokeInsidePolygon`, `IsStrokeInsideRect`, `ConstrainShapeEndpoints`, `BuildShapeOutline`.
+- Required fixtures pass 93/93 (incl. new `CoreStrokeGeometryTests` 36/36); all 57 fixtures green in per-fixture batches; only the pre-existing `HwndSubclass` testhost teardown flake aborts batches (reproduces on clean baseline).
+
 ## Selection rotate and blank context (2026-09-05)
 
 - Top-edge rotate handle; `RotateItemsDirectly` + `SelectionRotateCompleted`. Ink/shapes transform points; text/image/sticky use `RotateTransform` + `RotationDegrees`.

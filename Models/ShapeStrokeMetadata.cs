@@ -2,39 +2,36 @@ using System;
 using System.Collections.Generic;
 using System.Windows;
 using System.Windows.Ink;
+using Caelum.InkGeometry;
 
 namespace Caelum.Models;
 
-public readonly record struct ShapeStrokeIdentity(
-    string GroupId,
-    string Kind,
-    int PartIndex,
-    bool IsDashed);
-
+/// <summary>
+/// WPF adapter over the UI-free shape-identity primitives in OpenNotes.Core.
+/// <see cref="ShapeStrokeIdentity"/>, the stable property keys and the
+/// dash-path math now live in Core; this facade keeps the live-
+/// <see cref="Stroke"/> extended-property interop (Apply/Read) and the
+/// System.Windows.Point-based dash builders the shape tool and tests use.
+/// </summary>
 public static class ShapeStrokeMetadata
 {
-    private static readonly Guid GroupIdKey = new("767C2E92-6A10-4D55-9B79-5DCA69089B28");
-    private static readonly Guid KindKey = new("4F97F528-AB40-4091-8899-326019220E6F");
-    private static readonly Guid PartIndexKey = new("3A1127F7-2EA3-48D8-A5E4-B376AEAC2C87");
-    private static readonly Guid DashedKey = new("D3F93EA9-D2D1-476A-BF14-9F267205983A");
-
     public static void Apply(Stroke stroke, string groupId, string kind, int partIndex, bool isDashed)
     {
         ArgumentNullException.ThrowIfNull(stroke);
-        SetProperty(stroke, GroupIdKey, groupId ?? string.Empty);
-        SetProperty(stroke, KindKey, kind ?? string.Empty);
-        SetProperty(stroke, PartIndexKey, partIndex);
-        SetProperty(stroke, DashedKey, isDashed);
+        SetProperty(stroke, ShapeStrokeMetadataKeys.GroupId, groupId ?? string.Empty);
+        SetProperty(stroke, ShapeStrokeMetadataKeys.Kind, kind ?? string.Empty);
+        SetProperty(stroke, ShapeStrokeMetadataKeys.PartIndex, partIndex);
+        SetProperty(stroke, ShapeStrokeMetadataKeys.IsDashed, isDashed);
     }
 
     public static ShapeStrokeIdentity Read(Stroke stroke)
     {
         ArgumentNullException.ThrowIfNull(stroke);
         return new ShapeStrokeIdentity(
-            ReadProperty(stroke, GroupIdKey, string.Empty),
-            ReadProperty(stroke, KindKey, string.Empty),
-            ReadProperty(stroke, PartIndexKey, 0),
-            ReadProperty(stroke, DashedKey, false));
+            ReadProperty(stroke, ShapeStrokeMetadataKeys.GroupId, string.Empty),
+            ReadProperty(stroke, ShapeStrokeMetadataKeys.Kind, string.Empty),
+            ReadProperty(stroke, ShapeStrokeMetadataKeys.PartIndex, 0),
+            ReadProperty(stroke, ShapeStrokeMetadataKeys.IsDashed, false));
     }
 
     public static IReadOnlyList<IReadOnlyList<Point>> BuildDashedLine(
@@ -50,68 +47,20 @@ public static class ShapeStrokeMetadata
         double gapLength)
     {
         ArgumentNullException.ThrowIfNull(points);
-        if (dashLength <= 0)
-            throw new ArgumentOutOfRangeException(nameof(dashLength));
-        if (gapLength < 0)
-            throw new ArgumentOutOfRangeException(nameof(gapLength));
-        var parts = new List<IReadOnlyList<Point>>();
-        if (points.Count < 2)
-            return parts;
+        var corePoints = new List<PointD>(points.Count);
+        foreach (var point in points)
+            corePoints.Add(new PointD(point.X, point.Y));
 
-        bool drawingDash = true;
-        double patternRemaining = dashLength;
-        List<Point> currentDash = null;
-
-        for (int segmentIndex = 1; segmentIndex < points.Count; segmentIndex++)
+        var parts = StrokeGeometry.BuildDashedPolyline(corePoints, dashLength, gapLength);
+        var result = new List<IReadOnlyList<Point>>(parts.Count);
+        foreach (var part in parts)
         {
-            Point start = points[segmentIndex - 1];
-            Point end = points[segmentIndex];
-            double dx = end.X - start.X;
-            double dy = end.Y - start.Y;
-            double length = Math.Sqrt((dx * dx) + (dy * dy));
-            if (length <= double.Epsilon)
-                continue;
-
-            double unitX = dx / length;
-            double unitY = dy / length;
-            double offset = 0;
-            while (offset < length)
-            {
-                double step = Math.Min(patternRemaining, length - offset);
-                Point from = new(start.X + (unitX * offset), start.Y + (unitY * offset));
-                Point to = new(start.X + (unitX * (offset + step)), start.Y + (unitY * (offset + step)));
-
-                if (drawingDash)
-                {
-                    currentDash ??= new List<Point> { from };
-                    if (currentDash[^1] != to)
-                        currentDash.Add(to);
-                }
-
-                offset += step;
-                patternRemaining -= step;
-                if (patternRemaining <= double.Epsilon)
-                {
-                    if (drawingDash && currentDash is { Count: > 1 })
-                        parts.Add(currentDash);
-                    currentDash = null;
-                    drawingDash = !drawingDash;
-                    patternRemaining = drawingDash ? dashLength : gapLength;
-
-                    // A zero-length gap means consecutive dashes are equivalent
-                    // to one continuous stroke, but still must make progress.
-                    if (!drawingDash && patternRemaining <= double.Epsilon)
-                    {
-                        drawingDash = true;
-                        patternRemaining = dashLength;
-                    }
-                }
-            }
+            var segment = new List<Point>(part.Count);
+            foreach (var point in part)
+                segment.Add(new Point(point.X, point.Y));
+            result.Add(segment);
         }
-
-        if (currentDash is { Count: > 1 })
-            parts.Add(currentDash);
-        return parts;
+        return result;
     }
 
     private static void SetProperty(Stroke stroke, Guid key, object value)
