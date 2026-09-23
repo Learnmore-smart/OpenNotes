@@ -18,7 +18,7 @@ WPF (.NET 8) PDF 笔记应用，正式产品和工作区名称为 **OpenNotes**�
 | `OpenNotes.Core/Models/AnnotationModels.cs` | AnnotationData/PageAnnotation/Stroke/Text/Highlight/Sticky/HiddenInk 数据模型（文本/图片/便签可选 `RotationDegrees`） |
 | `Models/AnnotationTransform.cs` | 选区旋转点变换与角度归一化 |
 | `OpenNotes.Core/Services/RecycleBinService.cs` | `SHFileOperation` 将库文件移入回收站 |
-| `Models/StrokeReplacementSnapshot.cs` | Wave 1 immutable token/side/pressure snapshot and production replacement-state ledger |
+| `OpenNotes.Core/Models/StrokeReplacementSnapshot.cs` | Wave 1 immutable token/side/pressure snapshot and production replacement-state ledger |
 | `OpenNotes.Core/Models/TextAnnotationGeometry.cs` | 文本框默认/最小尺寸、八方向缩放和页面边界约束 |
 | `OpenNotes.Core/Models/HiddenInkRevealState.cs` | Hidden Ink reveal 截止时间的纯函数规则 |
 | `OpenNotes.Core/Models/AppSettings.cs` | 完整设置快照：语言、压感/平滑/预设、自动保存、默认笔参数、主题 |

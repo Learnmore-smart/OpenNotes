@@ -2798,31 +2798,10 @@ namespace Caelum.Controls
 
         // --- tunable heuristics (deliberate shapes pass, scribbles fail) ---
         private const int MinRecognizedShapePoints = 8;             // fewer points cannot evidence a shape
-        private const double MinRecognizedDiagonal = 24.0;          // px; tiny scribbles are left alone
-        private const double ClosedGapRatio = 0.15;                 // first-last gap < 15% of perimeter → closed
-        private const double LineMeanDeviationRatio = 0.06;         // mean perp deviation / diagonal
-        private const double EllipseMinCircularity = 0.82;          // 1 - stdR/meanR of centroid distances
-        private const double EllipseMinSweepRadians = 300.0 * Math.PI / 180.0;
-        private const double RectMinRunFraction = 0.06;             // runs shorter than 6% of points are noise
-        private const double RectMinRunCoverage = 0.80;             // dominant runs must cover ≥ 80% of points
-        private const double RectSideStraightness = 0.06;           // mean deviation / side chord length
-        private const double RectCornerToleranceRatio = 0.12;       // corner match tolerance / diagonal
-
-        /// <summary>Contiguous span of points sharing one direction bucket.</summary>
-        private readonly struct DirectionRun
-        {
-            public DirectionRun(int bucket, int start, int end)
-            {
-                Bucket = bucket;
-                Start = start;
-                End = end;
-            }
-
-            public int Bucket { get; }
-            public int Start { get; }
-            public int End { get; }
-            public int Length => End - Start + 1;
-        }
+        // The remaining thresholds, direction-run bucketing and the
+        // line/rectangle/ellipse gate helpers were ported verbatim into
+        // Caelum.InkGeometry.StrokeGeometry (V6 Task 2); TryRecognizeShape
+        // below delegates to StrokeGeometry.TryRecognizeShape.
 
         /// <summary>
         /// Swaps a freshly collected original for its ideal snapshot at the
@@ -2859,292 +2838,31 @@ namespace Caelum.Controls
         /// line / rectangle / ellipse and to produce the ideal replacement
         /// stroke (original colour and width, FitToCurve=false,
         /// IgnorePressure=true). Returns false when none of the confidence
-        /// gates pass — the original stroke is then left untouched.
+        /// gates pass — the original stroke is then left untouched. The
+        /// classification gates and ideal-outline generation are ported in
+        /// <see cref="StrokeGeometry.TryRecognizeShape"/>; this wrapper only
+        /// converts to/from live <see cref="Stroke"/> objects.
         /// </summary>
         private bool TryRecognizeShape(Stroke stroke, out Stroke idealStroke)
         {
             idealStroke = null;
 
-            var points = new List<Point>(stroke.StylusPoints.Count);
-            foreach (var sp in stroke.StylusPoints)
-                points.Add(new Point(sp.X, sp.Y));
-            int n = points.Count;
-
-            double minX = double.MaxValue, minY = double.MaxValue;
-            double maxX = double.MinValue, maxY = double.MinValue;
-            foreach (var p in points)
+            if (!StrokeGeometry.TryRecognizeShape(
+                    WpfStrokeAdapter.ToPointDList(stroke.StylusPoints),
+                    out var outline))
             {
-                if (p.X < minX) minX = p.X;
-                if (p.Y < minY) minY = p.Y;
-                if (p.X > maxX) maxX = p.X;
-                if (p.Y > maxY) maxY = p.Y;
-            }
-            var bounds = new Rect(new Point(minX, minY), new Point(maxX, maxY));
-            double diag = Math.Sqrt(bounds.Width * bounds.Width + bounds.Height * bounds.Height);
-            if (diag < MinRecognizedDiagonal)
                 return false;
-
-            double perimeter = 0;
-            for (int i = 1; i < n; i++)
-                perimeter += Dist(points[i - 1], points[i]);
-            if (perimeter <= double.Epsilon)
-                return false;
-
-            bool closed = Dist(points[0], points[n - 1]) < ClosedGapRatio * perimeter;
-
-            List<Point> outline;
-            if (closed)
-            {
-                // Rectangles are tested first: a near-square hand-drawn
-                // rectangle also passes the ellipse circularity gate and
-                // would otherwise be snapped to a circle.
-                if (LooksLikeRectangle(points, bounds, diag))
-                    outline = BuildShapeOutline(ShapeKind.Rectangle, bounds.TopLeft, bounds.BottomRight);
-                else if (LooksLikeEllipse(points))
-                    outline = BuildShapeOutline(ShapeKind.Ellipse, bounds.TopLeft, bounds.BottomRight);
-                else
-                    return false;
             }
-            else
-            {
-                if (!LooksLikeLine(points, diag))
-                    return false;
-                outline = BuildShapeOutline(ShapeKind.Line, points[0], points[n - 1]);
-            }
-
-            var stylusPoints = new StylusPointCollection();
-            foreach (var p in outline)
-                stylusPoints.Add(new StylusPoint(p.X, p.Y));
 
             var attributes = stroke.DrawingAttributes.Clone();
             attributes.FitToCurve = false;    // crisp polygon edges like the shape tool
             attributes.IgnorePressure = true; // uniform width, no pressure jitter
 
-            idealStroke = new Stroke(stylusPoints) { DrawingAttributes = attributes };
+            idealStroke = new Stroke(WpfStrokeAdapter.ToStylusPoints(outline))
+            {
+                DrawingAttributes = attributes
+            };
             return true;
-        }
-
-        /// <summary>
-        /// Open stroke whose points hug the first→last chord: the mean
-        /// perpendicular deviation stays below 6% of the diagonal.
-        /// </summary>
-        private static bool LooksLikeLine(List<Point> points, double diag)
-        {
-            var a = points[0];
-            var b = points[points.Count - 1];
-            double sum = 0;
-            foreach (var p in points)
-                sum += PerpendicularDistance(p, a, b);
-            return sum / points.Count < LineMeanDeviationRatio * diag;
-        }
-
-        /// <summary>
-        /// Closed stroke whose points stay at a near-constant distance from
-        /// the centroid (circularity &gt; 0.82) while sweeping at least 300°
-        /// around it. The ideal fit is axis-aligned to the original bounds.
-        /// </summary>
-        private static bool LooksLikeEllipse(List<Point> points)
-        {
-            double cx = 0, cy = 0;
-            foreach (var p in points)
-            {
-                cx += p.X;
-                cy += p.Y;
-            }
-            cx /= points.Count;
-            cy /= points.Count;
-
-            double sumR = 0, sumR2 = 0;
-            var angles = new List<double>(points.Count);
-            foreach (var p in points)
-            {
-                double dx = p.X - cx, dy = p.Y - cy;
-                double r = Math.Sqrt(dx * dx + dy * dy);
-                if (r < 1e-6)
-                    continue; // centroid-coincident points carry no angle
-                sumR += r;
-                sumR2 += r * r;
-                angles.Add(Math.Atan2(dy, dx));
-            }
-            if (angles.Count < 4)
-                return false;
-
-            int m = angles.Count;
-            double meanR = sumR / m;
-            if (meanR <= double.Epsilon)
-                return false;
-            double stdR = Math.Sqrt(Math.Max(0, sumR2 / m - meanR * meanR));
-            if (1 - stdR / meanR <= EllipseMinCircularity)
-                return false;
-
-            // Angular coverage = 2π minus the largest gap between sorted
-            // angles (the wrap-around gap included).
-            angles.Sort();
-            double maxGap = angles[0] + 2 * Math.PI - angles[m - 1];
-            for (int i = 1; i < m; i++)
-            {
-                double gap = angles[i] - angles[i - 1];
-                if (gap > maxGap)
-                    maxGap = gap;
-            }
-            return 2 * Math.PI - maxGap >= EllipseMinSweepRadians;
-        }
-
-        /// <summary>
-        /// Closed stroke with exactly four dominant direction runs: local
-        /// directions (5-point window) are quantised into four 45° buckets
-        /// (mod 180°), short runs are dropped as noise, and the survivors
-        /// must alternate between two perpendicular buckets, be straight,
-        /// cover most of the stroke and turn near the four corners of the
-        /// fitted bounds (rejects rotated rects, diamonds and trapezoids).
-        /// </summary>
-        private static bool LooksLikeRectangle(List<Point> points, Rect bounds, double diag)
-        {
-            int n = points.Count;
-
-            var buckets = new int[n];
-            for (int i = 0; i < n; i++)
-            {
-                int lo = Math.Max(0, i - 2);
-                int hi = Math.Min(n - 1, i + 2);
-                double dx = points[hi].X - points[lo].X;
-                double dy = points[hi].Y - points[lo].Y;
-                buckets[i] = (dx == 0 && dy == 0) ? -1 : DirectionBucket(dx, dy);
-            }
-
-            // Contiguous same-bucket runs.
-            var runs = new List<DirectionRun>();
-            for (int i = 0; i < n; )
-            {
-                int j = i;
-                while (j + 1 < n && buckets[j + 1] == buckets[i])
-                    j++;
-                runs.Add(new DirectionRun(buckets[i], i, j));
-                i = j + 1;
-            }
-
-            // Drop noise runs (corner arcs, jitter); merge same-bucket
-            // neighbours that only a dropped run separated.
-            int minRunPoints = Math.Max(2, (int)Math.Ceiling(n * RectMinRunFraction));
-            var dominant = new List<DirectionRun>();
-            foreach (var run in runs)
-            {
-                if (run.Bucket < 0 || run.Length < minRunPoints)
-                    continue;
-                if (dominant.Count > 0 && dominant[^1].Bucket == run.Bucket)
-                    dominant[^1] = new DirectionRun(run.Bucket, dominant[^1].Start, run.End);
-                else
-                    dominant.Add(run);
-            }
-
-            // A closed stroke may start mid-side: then the first and last
-            // dominant runs are the two halves of one side (same bucket).
-            bool wrapped = dominant.Count > 1
-                && dominant[0].Start == 0 && dominant[^1].End == n - 1
-                && dominant[0].Bucket == dominant[^1].Bucket;
-            int sideCount = dominant.Count - (wrapped ? 1 : 0);
-            if (sideCount != 4)
-                return false;
-
-            // Consecutive sides must be perpendicular (bucket +2 mod 4).
-            for (int k = 0; k + 1 < dominant.Count; k++)
-                if (dominant[k + 1].Bucket != (dominant[k].Bucket + 2) % 4)
-                    return false;
-            if (!wrapped && dominant[0].Bucket != (dominant[^1].Bucket + 2) % 4)
-                return false;
-
-            // Dominant runs must cover most of the stroke.
-            int covered = 0;
-            foreach (var run in dominant)
-                covered += run.Length;
-            if (covered < RectMinRunCoverage * n)
-                return false;
-
-            // Each side must be straight: mean perpendicular deviation from
-            // its run chord below 6% of the chord length.
-            foreach (var run in dominant)
-            {
-                var a = points[run.Start];
-                var b = points[run.End];
-                double chord = Dist(a, b);
-                if (chord <= double.Epsilon)
-                    return false;
-                double sum = 0;
-                for (int i = run.Start; i <= run.End; i++)
-                    sum += PerpendicularDistance(points[i], a, b);
-                if (sum / run.Length > RectSideStraightness * chord)
-                    return false;
-            }
-
-            // Detected corners (midpoints of the transitions between
-            // consecutive sides) and the four bounds corners must match
-            // each other within 12% of the diagonal.
-            var detectedCorners = new List<Point>();
-            for (int k = 0; k + 1 < dominant.Count; k++)
-            {
-                int mid = (dominant[k].End + dominant[k + 1].Start) / 2;
-                detectedCorners.Add(points[mid]);
-            }
-            if (!wrapped)
-            {
-                int mid = (dominant[^1].End + n + dominant[0].Start) / 2;
-                detectedCorners.Add(points[mid % n]);
-            }
-            if (detectedCorners.Count != 4)
-                return false;
-
-            double cornerTolerance = RectCornerToleranceRatio * diag;
-            var boundsCorners = new[] { bounds.TopLeft, bounds.TopRight, bounds.BottomRight, bounds.BottomLeft };
-            foreach (var detected in detectedCorners)
-            {
-                double nearest = double.MaxValue;
-                foreach (var corner in boundsCorners)
-                    nearest = Math.Min(nearest, Dist(detected, corner));
-                if (nearest > cornerTolerance)
-                    return false;
-            }
-            foreach (var corner in boundsCorners)
-            {
-                double nearest = double.MaxValue;
-                foreach (var detected in detectedCorners)
-                    nearest = Math.Min(nearest, Dist(detected, corner));
-                if (nearest > cornerTolerance)
-                    return false;
-            }
-
-            return true;
-        }
-
-        /// <summary>
-        /// Quantises a direction into four 45° buckets over the mod-180°
-        /// range: 0 ≈ horizontal, 2 ≈ vertical, 1/3 ≈ diagonals ('up' and
-        /// 'down' share a bucket). Perpendicular directions always land two
-        /// buckets apart.
-        /// </summary>
-        private static int DirectionBucket(double dx, double dy)
-        {
-            double angle = Math.Atan2(dy, dx) * 180.0 / Math.PI;
-            double normalized = angle % 180.0;
-            if (normalized < 0)
-                normalized += 180.0;
-            return (int)Math.Floor((normalized + 22.5) / 45.0) % 4;
-        }
-
-        private static double Dist(Point a, Point b)
-        {
-            double dx = a.X - b.X;
-            double dy = a.Y - b.Y;
-            return Math.Sqrt(dx * dx + dy * dy);
-        }
-
-        private static double PerpendicularDistance(Point p, Point a, Point b)
-        {
-            double dx = b.X - a.X;
-            double dy = b.Y - a.Y;
-            double len = Math.Sqrt(dx * dx + dy * dy);
-            if (len < double.Epsilon)
-                return Dist(p, a);
-            return Math.Abs((p.X - a.X) * dy - (p.Y - a.Y) * dx) / len;
         }
 
         #endregion
