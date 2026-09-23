@@ -1118,7 +1118,12 @@ namespace Caelum.Pages
                 return;
             }
 
-            e.AllowedOperations = DataPackageOperation.Copy | DataPackageOperation.Move;
+            // Copy-only, matching the WPF DragDropEffects.Copy invariant pinned
+            // by HomePageLibrarySourceTests: with Move advertised, a same-volume
+            // Explorer drop could relocate the library PDF and dangle the entry.
+            // In-app folder moves never reach this negotiation — they ride the
+            // custom Caelum.LibraryTilePath(s) payloads through our own handlers.
+            e.AllowedOperations = DataPackageOperation.Copy;
             e.Data.RequestedOperation = DataPackageOperation.Copy;
             e.Data.SetData(HomePageDragDropHelper.LibraryTilePathsDataFormat,
                 HomePageDragDropHelper.PackLibraryTilePaths(paths));
@@ -1157,6 +1162,17 @@ namespace Caelum.Pages
             {
                 deferral.Complete();
             }
+        }
+
+        /// <summary>
+        /// Drag completion probe: the OS may only ever negotiate
+        /// <see cref="DataPackageOperation.Copy"/> out of this drag
+        /// (AllowedOperations is Copy-only) — logging DropResult keeps the
+        /// end-to-end invariant observable in the DEBUG smoke log.
+        /// </summary>
+        private void FileTile_DropCompleted(UIElement sender, DropCompletedEventArgs args)
+        {
+            HomeSmokeLog($"drag-completed result={args.DropResult}");
         }
 
         private string[] GetDragCandidatePaths(HomeTile tile)

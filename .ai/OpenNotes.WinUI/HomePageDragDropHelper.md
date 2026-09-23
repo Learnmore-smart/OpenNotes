@@ -14,3 +14,4 @@
 - NEVER move the `Contains` probes to async — `DragEventArgs` must be answered synchronously; WinUI gives no deferrable format query.
 - The custom-format payload is newline-separated plain text (no JSON) — keep the format names stable; a rename silently breaks internal drag.
 - External import stays routed through `WordDocumentImport.IsImportablePath` — the library remains PDF-only; Word files convert on import, matching WPF behavior.
+- Also consumed by `MainWindow.Window_DragOver`/`Window_Drop` (WPF `Window_Drop` parity): on non-Home pages the window imports dropped files and opens them in new tabs; while HomePage is active the window defers — HomePage's own grid already handles drops on its surface.

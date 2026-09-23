@@ -6,6 +6,7 @@
 
 ## What It Does
 - `OnNavigatedTo` accepts a `string` path (or `NavigationEventArgs.Parameter`-equivalent), stores `CurrentPdfPath`, and renders `EditorTitleTextBlock` (file name) + `EditorPathTextBlock` (full path) on `ThemeWorkspaceBrush` with a document glyph.
+- The stub notice `EditorStubNoticeTextBlock` is localized via the `Editor.StubNotice` catalog key (EN/ZH/FR) set in the ctor — no literal UI strings in the XAML (spec-review fix).
 - `UpdateCurrentPdfPath(newPath)` retitles in place — called by `MainWindow.HandleFilePathChanged` when a library rename moves an open file.
 - AutomationIds `EditorPageTitle`/`EditorPagePath` let `tools/winui-home-smoke.ps1` verify navigation + path display.
 

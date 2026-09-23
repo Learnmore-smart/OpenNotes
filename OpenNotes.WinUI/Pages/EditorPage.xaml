@@ -21,9 +21,10 @@
                        FontSize="12" Foreground="{ThemeResource ThemeSubtleForegroundBrush}"
                        HorizontalAlignment="Center" Margin="0,6,0,0"
                        TextWrapping="Wrap" TextTrimming="CharacterEllipsis"/>
-            <TextBlock Text="The editor surface arrives with the Task 6 port."
+            <TextBlock x:Name="EditorStubNoticeTextBlock"
                        FontSize="12" Foreground="{ThemeResource ThemeSubtleForegroundBrush}"
-                       HorizontalAlignment="Center" Margin="0,14,0,0"/>
+                       HorizontalAlignment="Center" Margin="0,14,0,0"
+                       AutomationProperties.AutomationId="EditorStubNotice"/>
         </StackPanel>
     </Grid>
 </Page>

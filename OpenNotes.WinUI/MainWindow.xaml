@@ -19,7 +19,8 @@
         hasTitleBar: false) so these XAML buttons are the only caption UI.
     -->
 
-    <Grid x:Name="RootGrid" Background="{ThemeResource ThemeWindowBrush}" PreviewKeyDown="RootGrid_PreviewKeyDown">
+    <Grid x:Name="RootGrid" Background="{ThemeResource ThemeWindowBrush}" PreviewKeyDown="RootGrid_PreviewKeyDown"
+          AllowDrop="True" DragOver="Window_DragOver" Drop="Window_Drop">
         <Grid.Resources>
             <!-- 28px pill toolbar button (WPF NavButtonStyle). -->
             <Style x:Key="NavButtonStyle" TargetType="Button">

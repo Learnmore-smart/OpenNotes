@@ -245,6 +245,7 @@
                             Tag="{x:Bind}"
                             CanDrag="True"
                             DragStarting="FileTile_DragStarting"
+                            DropCompleted="FileTile_DropCompleted"
                             PointerEntered="TileButton_PointerEntered" PointerExited="TileButton_PointerExited">
                         <Grid x:Name="IconGrid" Width="120" Height="160" RenderTransformOrigin="0.5,0.5">
                             <Grid.RenderTransform>

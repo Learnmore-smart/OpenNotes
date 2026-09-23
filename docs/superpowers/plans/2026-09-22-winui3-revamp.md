@@ -98,10 +98,10 @@
 - Create: `OpenNotes.WinUI/Pages/HomePage.xaml(.cs)` — library grid, search/sort, folder colors, tile drag/move, recycle-bin delete, export — consuming `RecentFilesService`/`RecycleBinService`/`PdfAtomicFile` from Core
 - Port: `Pages/HomePage.DragDropHelper.cs`, `HomePage.Utilities.cs`, `HomeTileTemplateSelector.cs`
 
-- [ ] **Step 1:** XAML port (WPF→WinUI control swaps: `ContextMenu`→`MenuFlyout`, `Style` triggers→`VisualStateManager` where needed, `DynamicResource`→`ThemeResource`/`StaticResource` or code-applied brushes).
-- [ ] **Step 2:** Wire Core services; open PDF → navigates to EditorPage stub.
-- [ ] **Step 3:** Smoke: seeded `%LOCALAPPDATA%\Caelum` library renders tiles; context commands work.
-- [ ] **Step 4: Commit.**
+- [x] **Step 1:** XAML port (WPF→WinUI control swaps: `ContextMenu`→`MenuFlyout`, `Style` triggers→`VisualStateManager` where needed, `DynamicResource`→`ThemeResource`/`StaticResource` or code-applied brushes). **As implemented:** `ItemsRepeater`+`UniformGridLayout` replaces the WrapPanel ItemsControl; `x:Bind` computed properties on `HomeTile` replace `DataTrigger`s (x:Bind templates never populate `DataContext` — handlers resolve tiles via `Tag="{x:Bind}"`); context menus are per-show code-built `MenuFlyout`s fired from `ContextRequested` — NOT `RightTapped`, which `ButtonBase` marks handled (post-review fix in `6c80948` follow-up).
+- [x] **Step 2:** Wire Core services; open PDF → navigates to EditorPage stub. **As implemented:** `RecentFilesService`/`RecycleBinService`/`PdfService`/`WordDocumentImport`/`WordToPdfConverter`/`LocalizationService` consumed directly; `MainWindow.NavigateActiveTabToFile` retitles the tab and navigates the frame to the `EditorPage` stub; `HandleFilePathChanged` retitles open tabs on rename.
+- [x] **Step 3:** Smoke: seeded `%LOCALAPPDATA%\Caelum` library renders tiles; context commands work. **As implemented:** `tools/winui-home-smoke.ps1` — seeds a throwaway library under `OPENNOTES_DATA_ROOT` and asserts 27 checks (tile render, context menu via real right-click, folder nav + breadcrumb, search, selection bar, EditorPage navigation, More flyout). Drag-out is Copy-only (`AllowedOperations = Copy`, `RequestedOperation = Copy` — `DataFormats.FileDrop`→`StorageItems` for Explorer).
+- [x] **Step 4: Commit.** `6c80948` `feat(winui): library HomePage — tiles, folders, selection, drag/drop, context menus`.
 
 ## Task 6: EditorPage shell — scroll/zoom/pages/sidebar/toolbar
 

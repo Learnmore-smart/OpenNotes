@@ -65,6 +65,7 @@ namespace Caelum.Services
             ["Editor.SelectFilterDrawings"] = ("Drawings", "\u56FE\u5F62", "Dessins"),
             ["Editor.SelectFilterText"] = ("Text", "\u6587\u672C", "Texte"),
             ["Editor.SelectedDrawingStyle"] = ("Selected drawing", "\u5DF2\u9009\u56FE\u5F62", "Dessin s\u00E9lectionn\u00E9"),
+            ["Editor.StubNotice"] = ("The editor surface arrives with the Task 6 port.", "编辑器界面将随任务 6 移植到位。", "La surface de l'éditeur arrive avec le portage de la tâche 6."),
             ["Editor.SelectShape"] = ("Shape", "\u9009\u62E9\u65B9\u5F0F", "Forme"),
             ["Editor.SelectShapeRect"] = ("Rectangle", "\u77E9\u5F62\u9009\u62E9", "Rectangle"),
             ["Editor.SelectShapeFree"] = ("Freehand", "\u81EA\u7531\u9009\u62E9", "Main lev\u00E9e"),

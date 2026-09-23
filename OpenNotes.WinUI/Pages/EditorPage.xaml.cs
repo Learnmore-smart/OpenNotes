@@ -1,4 +1,5 @@
 using System.IO;
+using Caelum.Services;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Navigation;
 
@@ -16,6 +17,7 @@ namespace Caelum.Pages
         public EditorPage()
         {
             this.InitializeComponent();
+            EditorStubNoticeTextBlock.Text = LocalizationService.Get("Editor.StubNotice");
         }
 
         /// <summary>Full path of the PDF this tab is showing.</summary>

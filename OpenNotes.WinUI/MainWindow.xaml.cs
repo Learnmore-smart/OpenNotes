@@ -18,6 +18,7 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Animation;
+using Windows.ApplicationModel.DataTransfer;
 using Windows.Graphics;
 using Windows.System;
 using Windows.UI.Core;
@@ -869,6 +870,116 @@ namespace Caelum
             }
 
             UpdateActiveTabInfo();
+        }
+
+        /// <summary>
+        /// WPF <c>OpenFileInNewTab</c>: drop-onto-window and future "open
+        /// externally" flows create a file tab rather than hijacking the
+        /// active one.
+        /// </summary>
+        public void OpenFileInNewTab(string filePath)
+        {
+            if (string.IsNullOrWhiteSpace(filePath))
+                return;
+
+            RecentFilesService.AddOrPromote(filePath);
+            var tab = new AppTab
+            {
+                Title = Path.GetFileNameWithoutExtension(filePath),
+                Icon = "FileText",
+                FilePath = filePath
+            };
+            var frame = new Frame();
+            frame.Navigated += Frame_Navigated;
+            tab.Frame = frame;
+            TabContentArea.Children.Add(frame);
+            frame.Visibility = Visibility.Collapsed;
+            _tabs.Add(tab);
+            frame.Navigate(typeof(EditorPage), filePath);
+            ActivateTab(tab);
+            UpdateCloseButtonVisibility();
+        }
+
+        // ── Window-level file drop (WPF Window_Drop parity) ────────────────
+        // When the Home page is active it owns file drops on its own surface
+        // (WPF ShouldDeferWindowFileDrop); on non-Home pages the window
+        // imports each dropped file and opens it in a NEW tab. WinUI drag
+        // events bubble: HomePage's root Grid marks accepted drops handled,
+        // so these handlers only ever see drops HomePage declined or drops
+        // that land while a non-Home page is active.
+        private void Window_DragOver(object sender, DragEventArgs e)
+        {
+            if (GetActiveHomePage() != null)
+                return;
+
+            e.AcceptedOperation = HomePageDragDropHelper.HasStorageItems(e.DataView)
+                ? DataPackageOperation.Copy
+                : DataPackageOperation.None;
+            e.Handled = true;
+        }
+
+        private async void Window_Drop(object sender, DragEventArgs e)
+        {
+            if (GetActiveHomePage() != null)
+                return;
+
+            var deferral = e.GetDeferral();
+            string[] paths;
+            try
+            {
+                paths = await HomePageDragDropHelper.GetDroppedImportablePathsAsync(e.DataView);
+            }
+            finally
+            {
+                deferral.Complete();
+            }
+
+            if (paths.Length == 0)
+                return;
+
+            foreach (var path in paths)
+            {
+                var pdfPath = await TryImportDroppedDocumentAsync(path);
+                if (!string.IsNullOrWhiteSpace(pdfPath))
+                    OpenFileInNewTab(pdfPath);
+            }
+            e.Handled = true;
+        }
+
+        /// <summary>WPF <c>TryImportDroppedDocumentAsync</c>: PDFs pass
+        /// through untouched; Word docs convert to a sibling PDF first.</summary>
+        private async Task<string> TryImportDroppedDocumentAsync(string path)
+        {
+            if (WordDocumentImport.IsPdfPath(path))
+                return path;
+            if (!WordDocumentImport.IsWordPath(path))
+                return null;
+
+            ShowToast(LocalizationService.Get("Home.ConvertingWord"), "");
+            // WPF swapped in a wait cursor via Mouse.OverrideCursor; WinUI's
+            // only cursor hook is UIElement.ProtectedCursor — protected, so a
+            // Window can't reach it on RootGrid. The toast carries the
+            // progress signal instead.
+            try
+            {
+                return await WordToPdfConverter.Default.ImportAsync(path);
+            }
+            catch (WordConverterNotFoundException)
+            {
+                await WinUiDialogService.ShowErrorAsync(
+                    RootGrid?.XamlRoot,
+                    LocalizationService.Get("Common.Error"),
+                    LocalizationService.Get("Home.WordConverterMissing"));
+                return null;
+            }
+            catch (Exception ex)
+            {
+                await WinUiDialogService.ShowErrorAsync(
+                    RootGrid?.XamlRoot,
+                    LocalizationService.Get("Common.Error"),
+                    LocalizationService.Format("Home.WordConvertFailed", Path.GetFileName(path), ex.Message));
+                return null;
+            }
         }
 
         // ── More menu: updates + about (WPF ports) ─────────────────────────
