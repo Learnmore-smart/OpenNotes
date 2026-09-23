@@ -54,6 +54,14 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Compile Remove="OpenNotes.WinUI\**" />
+    <EmbeddedResource Remove="OpenNotes.WinUI\**" />
+    <None Remove="OpenNotes.WinUI\**" />
+    <Page Remove="OpenNotes.WinUI\**" />
+    <ApplicationDefinition Remove="OpenNotes.WinUI\**" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Compile Remove="Tests\**" />
     <EmbeddedResource Remove="Tests\**" />
     <None Remove="Tests\**" />

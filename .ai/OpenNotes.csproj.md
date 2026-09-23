@@ -1,4 +1,5 @@
 # OpenNotes.csproj
+> 2026-09-22 V6 Task 4 Step 1: added `Compile/EmbeddedResource/None/Page/ApplicationDefinition Remove="OpenNotes.WinUI\**"` so the sibling WinUI 3 project (and its generated `obj` items) stays out of the WPF project's default globs. Release `dotnet build` remains 0 errors.
 > 2026-09-22 V6: added `ProjectReference` to `OpenNotes.Core\OpenNotes.Core.csproj` and `Compile/EmbeddedResource/None/Page Remove="OpenNotes.Core\**"` so the sibling Core folder is excluded from this project's default globs (the WPF app consumes moved `Caelum.Services`/`Caelum.Models` types through the reference; `InternalsVisibleTo` in Core keeps moved internals reachable). Part of the `v6/winui3` Task 1 extraction.
 > 2026-09-22 GREEN: package/assembly/file/informational metadata are 5.2.15/5.2.15.0 for the sidebar content-offset fix; `RootNamespace=Caelum`, self-contained win-x64 settings, and all compatibility identities remain unchanged.
 > 2026-09-02 RELEASED: package/assembly/file/informational metadata are 5.2.9/5.2.9.0 in tag `v5.2.9`; `RootNamespace=Caelum`, self-contained win-x64 settings, and all compatibility identities remain unchanged.
@@ -32,6 +33,7 @@ The build definition for the OpenNotes desktop application. The file name, assem
 
 | Date | Change | Author |
 |---|---|---|
+| 2026-09-22 | V6 WinUI 3 Task 4 Step 1 (`v6/winui3`): added `OpenNotes.WinUI\**` item exclusions (Compile/EmbeddedResource/None/Page/ApplicationDefinition) so the new WinUI 3 project's sources and `obj` output are never globbed by the WPF build. | Devin |
 | 2026-09-22 | V6 WinUI 3 Task 1 (`v6/winui3`): added `ProjectReference` to `OpenNotes.Core` and `OpenNotes.Core\**` item exclusions so the extracted sibling project builds separately while the app keeps using the moved `Caelum.*` types. | Devin |
 | 2026-08-26 | Bumped assembly/package metadata to 5.2.3/5.2.3.0 while preserving legacy compatibility identifiers; focused ProductInfo tests are GREEN. | Codex |
 | 2026-08-24 | Bumped assembly/package metadata to OpenNotes 5.0.0 for the release. | Codex |
