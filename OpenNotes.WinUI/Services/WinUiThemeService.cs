@@ -199,6 +199,10 @@ namespace Caelum.Services
                 window.Closed -= OnWindowClosed;
                 Windows.Remove(window);
             }
+            // Last window gone: unhook OS listeners so a late callback can't
+            // resurrect the service or run Apply against a dying process.
+            if (Windows.Count == 0)
+                Shutdown();
         }
 
         /// <summary>
@@ -421,19 +425,36 @@ namespace Caelum.Services
             if (SystemEventsHooked || Application.Current == null)
                 return;
 
+            // Independent hookups: if the first threw before subscribing, a
+            // retry would double-subscribe the second — keep each in its own
+            // try/catch and mark done only when both had their chance.
+            bool uiHooked = false;
+            bool accessibilityHooked = false;
             try
             {
                 _uiSettings ??= new UISettings();
                 _uiSettings.ColorValuesChanged += UiSettings_ColorValuesChanged;
-                _accessibilitySettings ??= new AccessibilitySettings();
-                _accessibilitySettings.HighContrastChanged += AccessibilitySettings_HighContrastChanged;
-                SystemEventsHooked = true;
+                uiHooked = true;
             }
             catch
             {
-                // OS preference listeners are best-effort; an explicit theme
-                // apply still works without them.
+                // OS preference listeners are best-effort.
             }
+            try
+            {
+                _accessibilitySettings ??= new AccessibilitySettings();
+                _accessibilitySettings.HighContrastChanged += AccessibilitySettings_HighContrastChanged;
+                accessibilityHooked = true;
+            }
+            catch
+            {
+                // OS preference listeners are best-effort.
+            }
+
+            // "Hooked" means "won't be retried" — partial success still counts
+            // as hooked for the half that succeeded, and a retry for the
+            // failed half would risk a double-subscribe on the working half.
+            SystemEventsHooked = uiHooked || accessibilityHooked;
         }
 
         private static void UiSettings_ColorValuesChanged(UISettings sender, object args)
@@ -450,8 +471,12 @@ namespace Caelum.Services
         {
             if (RequestedTheme != "System" && !IsHighContrast)
                 return;
+            // No windows left: nothing to refresh, and RefreshSystemPreferences
+            // → Apply would mutate Application.Resources off the UI thread.
+            if (Windows.Count == 0)
+                return;
 
-            var dispatcher = Windows.Count > 0 ? Windows[0].DispatcherQueue : null;
+            var dispatcher = Windows[0].DispatcherQueue;
             if (dispatcher == null || dispatcher.HasThreadAccess)
                 RefreshSystemPreferences();
             else
@@ -462,7 +487,7 @@ namespace Caelum.Services
         {
             try
             {
-                var color = new UISettings().GetColorValue(UIColorType.Background);
+                var color = (_uiSettings ??= new UISettings()).GetColorValue(UIColorType.Background);
                 // Dark mode reports a near-black system background.
                 return color.R + color.G + color.B < 128 * 3 / 2;
             }
@@ -489,7 +514,7 @@ namespace Caelum.Services
         {
             try
             {
-                return new AccessibilitySettings().HighContrast;
+                return (_accessibilitySettings ??= new AccessibilitySettings()).HighContrast;
             }
             catch
             {
@@ -501,7 +526,7 @@ namespace Caelum.Services
         {
             try
             {
-                return new UISettings().AnimationsEnabled;
+                return (_uiSettings ??= new UISettings()).AnimationsEnabled;
             }
             catch
             {
@@ -513,7 +538,7 @@ namespace Caelum.Services
         {
             try
             {
-                return new UISettings().AdvancedEffectsEnabled;
+                return (_uiSettings ??= new UISettings()).AdvancedEffectsEnabled;
             }
             catch
             {
@@ -586,7 +611,7 @@ namespace Caelum.Services
         {
             try
             {
-                var color = new UISettings().GetColorValue(colorType);
+                var color = (_uiSettings ??= new UISettings()).GetColorValue(colorType);
                 return new SolidColorBrush(color);
             }
             catch

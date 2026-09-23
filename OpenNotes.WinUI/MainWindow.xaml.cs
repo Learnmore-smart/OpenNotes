@@ -63,17 +63,22 @@ namespace Caelum
             _presenter = _appWindow?.Presenter as OverlappedPresenter;
             ApplyCustomChrome(_presenter);
 
-            // WPF: 1280x720, WindowStartupLocation=CenterScreen.
-            const int startupWidth = 1280;
-            const int startupHeight = 720;
-            var displayArea = DisplayArea.GetFromWindowId(windowId, DisplayAreaFallback.Nearest);
-            if (displayArea != null && _appWindow != null)
+            // Floor under the shell so nav/brand can never slide under the
+            // caption buttons on very narrow windows (the XAML title row also
+            // reserves the right 138px for the caption cluster).
+            if (_presenter != null)
             {
-                var workArea = displayArea.WorkArea;
-                int x = workArea.X + Math.Max(0, (workArea.Width - startupWidth) / 2);
-                int y = workArea.Y + Math.Max(0, (workArea.Height - startupHeight) / 2);
-                _appWindow.MoveAndResize(new RectInt32(x, y, startupWidth, startupHeight));
+                _presenter.PreferredMinimumWidth = 560;
+                _presenter.PreferredMinimumHeight = 360;
             }
+
+            // WPF: 1280x720, WindowStartupLocation=CenterScreen. MoveAndResize
+            // takes PHYSICAL pixels under PerMonitorV2 while the WPF sizes
+            // were DIPs — the immediate pass uses scale 1.0 only as a
+            // fallback, and RootGrid_Loaded re-sizes through
+            // XamlRoot.RasterizationScale once the visual tree exists.
+            SizeAndCenter(1.0);
+            RootGrid.Loaded += RootGrid_Loaded;
 
             if (_appWindow != null)
                 _appWindow.Changed += AppWindow_Changed;
@@ -82,7 +87,31 @@ namespace Caelum
             // and AppTitleBar becomes the real caption/drag rect.
             ExtendsContentIntoTitleBar = true;
             SetTitleBar(AppTitleBar);
-            Title = ProductInfo.DisplayName;
+        }
+
+        private void RootGrid_Loaded(object sender, RoutedEventArgs e)
+        {
+            RootGrid.Loaded -= RootGrid_Loaded;
+            SizeAndCenter(RootGrid.XamlRoot?.RasterizationScale ?? 1.0);
+        }
+
+        private void SizeAndCenter(double rasterizationScale)
+        {
+            if (_appWindow == null)
+                return;
+            if (rasterizationScale <= 0)
+                rasterizationScale = 1.0;
+
+            var displayArea = DisplayArea.GetFromWindowId(_appWindow.Id, DisplayAreaFallback.Nearest);
+            if (displayArea == null)
+                return;
+
+            var workArea = displayArea.WorkArea;
+            int width = (int)Math.Round(1280 * rasterizationScale);
+            int height = (int)Math.Round(720 * rasterizationScale);
+            int x = workArea.X + Math.Max(0, (workArea.Width - width) / 2);
+            int y = workArea.Y + Math.Max(0, (workArea.Height - height) / 2);
+            _appWindow.MoveAndResize(new RectInt32(x, y, width, height));
         }
 
         /// <summary>
@@ -209,7 +238,8 @@ namespace Caelum
             }
 
             tab.IsActive = true;
-            tab.Frame.Visibility = Visibility.Visible;
+            if (tab.Frame != null)
+                tab.Frame.Visibility = Visibility.Visible;
             _activeTab = tab;
 
             _syncingTabSelection = true;
@@ -240,6 +270,9 @@ namespace Caelum
             {
                 tab.Frame.Navigated -= Frame_Navigated;
                 TabContentArea.Children.Remove(tab.Frame);
+                // Release the page tree now — the WPF port keeps the Frame
+                // only while the tab lives.
+                tab.Frame = null;
             }
             bool wasActive = ReferenceEquals(tab, _activeTab);
             // Suppress the ListView's auto-selection while the item leaves the
@@ -285,14 +318,27 @@ namespace Caelum
             if (sourceIndex < 0 || targetIndex < 0)
                 return false;
 
-            _tabs.RemoveAt(sourceIndex);
-            if (sourceIndex < targetIndex)
-                targetIndex--;
+            // Suppress ListView auto-selection while the collection mutates —
+            // otherwise removing the item lets the strip select a neighbor
+            // mid-move and SelectionChanged would flip _activeTab.
+            _syncingTabSelection = true;
+            try
+            {
+                _tabs.RemoveAt(sourceIndex);
+                if (sourceIndex < targetIndex)
+                    targetIndex--;
 
-            int insertIndex = insertAfter ? targetIndex + 1 : targetIndex;
-            insertIndex = Math.Max(0, Math.Min(insertIndex, _tabs.Count));
+                int insertIndex = insertAfter ? targetIndex + 1 : targetIndex;
+                insertIndex = Math.Max(0, Math.Min(insertIndex, _tabs.Count));
 
-            _tabs.Insert(insertIndex, draggedTab);
+                _tabs.Insert(insertIndex, draggedTab);
+                TabStrip.SelectedItem = _activeTab;
+            }
+            finally
+            {
+                _syncingTabSelection = false;
+            }
+
             return true;
         }
 
@@ -313,10 +359,43 @@ namespace Caelum
                 ActivateTab(tab);
         }
 
+        private void TabStrip_DragItemsStarting(object sender, DragItemsStartingEventArgs e)
+        {
+#if DEBUG
+            // Smoke seam: proves the pointer drag actually became an item drag
+            // (DragItemsCompleted only fires if the gesture got this far).
+            try
+            {
+                System.IO.File.AppendAllText(
+                    System.IO.Path.Combine(System.IO.Path.GetTempPath(), "opennotes_winui_tabsmoke.log"),
+                    $"drag-items-starting count={_tabs.Count}{Environment.NewLine}");
+            }
+            catch
+            {
+                // Smoke logging is best-effort only.
+            }
+#endif
+        }
+
         private void TabStrip_DragItemsCompleted(ListViewBase sender, DragItemsCompletedEventArgs args)
         {
             // CanReorderItems reorders the bound ObservableCollection in place,
             // so _tabs already matches the visual order here.
+#if DEBUG
+            // Smoke seam: lets tools/winui-uia-pointer-smoke.ps1 prove a REAL
+            // pointer drag reordered the collection (UIA can't distinguish
+            // same-titled tabs).
+            try
+            {
+                System.IO.File.AppendAllText(
+                    System.IO.Path.Combine(System.IO.Path.GetTempPath(), "opennotes_winui_tabsmoke.log"),
+                    $"drag-items-completed count={_tabs.Count} order={string.Join(":", _tabs.Select(t => t.Id.Substring(0, 6)))} active={_activeTab?.Id?.Substring(0, 6)}{Environment.NewLine}");
+            }
+            catch
+            {
+                // Smoke logging is best-effort only.
+            }
+#endif
         }
 
         private void TabItem_PointerPressed(object sender, PointerRoutedEventArgs e)
@@ -345,8 +424,12 @@ namespace Caelum
 
         private void TabItem_PointerExited(object sender, PointerRoutedEventArgs e)
         {
-            if (sender is Border border)
-                border.ClearValue(Border.BackgroundProperty);
+            // ClearValue would null the pill (x:Bind has no BindingExpression
+            // to restore) and strip the ACTIVE tab's surface brush after one
+            // hover. Re-apply the computed brush — for the active tab that is
+            // ThemeSurfaceAltBrush, for inactive ones the inactive brush.
+            if (sender is Border border && border.DataContext is AppTab tab)
+                border.SetValue(Border.BackgroundProperty, tab.TabBackground);
         }
 
         private void TabCloseButton_PointerPressed(object sender, PointerRoutedEventArgs e)
@@ -358,17 +441,31 @@ namespace Caelum
                 return;
 
             e.Handled = true;
-            if ((sender as FrameworkElement)?.DataContext is AppTab tab)
+            if (sender is FrameworkElement element && element.DataContext is AppTab tab)
+            {
+                // Tag the press-target so a trailing Click (if one ever
+                // arrives on this same button) cannot re-close a DIFFERENT
+                // tab after the ListView recycled the container.
+                element.Tag = tab;
                 CloseTab(tab);
+            }
         }
 
         private void TabCloseButton_Click(object sender, RoutedEventArgs e)
         {
             // Keyboard activation path (Enter/Space on a focused close button)
-            // and a safety net if the press path was skipped; CloseTab is a
-            // no-op for already-removed tabs.
-            if ((sender as FrameworkElement)?.DataContext is AppTab tab)
-                CloseTab(tab);
+            // and a safety net if the press path was skipped. When a press did
+            // close a tab, the tag tells us which tab the press targeted —
+            // ignore the Click if the container was recycled onto another tab.
+            if (sender is not FrameworkElement element || element.DataContext is not AppTab tab)
+                return;
+            if (element.Tag is AppTab pressedTab)
+            {
+                element.Tag = null;
+                if (!ReferenceEquals(pressedTab, tab))
+                    return;
+            }
+            CloseTab(tab);
         }
 
         private void NewTab_Click(object sender, RoutedEventArgs e)

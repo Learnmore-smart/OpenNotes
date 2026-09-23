@@ -7,7 +7,7 @@ One tab in the WinUI shell — the counterpart of the WPF `Models/AppTab.cs`. Ow
 ## Design Decisions
 - **Lives in OpenNotes.WinUI, not Core.** The plan's "AppTab moves to Core minus Frame" was dropped: a Frame-free AppTab carries almost nothing (the Frame IS the payload) and would force a second synced type. Documented in the type's XML doc.
 - `Id` is stable for the tab's lifetime (drag-payload fallback identity, same contract as WPF).
-- `IsHome` derives from `FilePath`, never from frame content.
+- `IsHome` derives from `FilePath`, never from frame content — the `FilePath` setter raises `PropertyChanged` for BOTH itself and `IsHome` (derived property must notify or bindings go stale).
 - **Computed chrome properties** (`TabBackground`, `TabBorderBrush`, `TabForeground`, `TitleFontWeight`, `CloseButtonOpacity`, `CloseButtonVisibility`, `DisplayTitle`, `IconGlyph`, `CloseTooltip`) resolve theme brushes at get-time; the tab template binds them so active/inactive visuals stay declarative (replaces WPF's code-built tab chrome + `ApplyTabChrome`). `RefreshVisualState()` re-raises them after each palette swap (driven by `WinUiThemeService.ThemeApplied`).
 - `IconGlyph` maps the Lucide name to a Segoe Fluent/MDL2 glyph — interim until the icon port lands (`Home`→E80F, `FileText`/`File`→E8A5).
 - `IsCloseButtonVisible` hides the close button while only one tab exists (WPF parity).

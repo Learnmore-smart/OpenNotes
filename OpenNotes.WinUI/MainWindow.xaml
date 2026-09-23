@@ -217,7 +217,7 @@
                         HorizontalAlignment="Left"
                         Background="{ThemeResource ThemeMarginBrush}"
                         CornerRadius="2"/>
-                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,138,0">
                     <TextBlock x:Name="ProductNameTextBlock" Text="OpenNotes" FontSize="13"
                                Foreground="{ThemeResource ThemeForegroundBrush}"
                                Margin="14,0,12,0" VerticalAlignment="Center" FontWeight="SemiBold"/>
@@ -263,8 +263,10 @@
                           HorizontalScrollMode="Auto" VerticalScrollMode="Disabled">
                 <StackPanel Orientation="Horizontal">
                     <ListView x:Name="TabStrip"
-                              ItemsSource="{x:Bind _tabs, Mode=OneWay}"
+                              ItemsSource="{x:Bind _tabs, Mode=OneTime}"
                               SelectionMode="Single"
+                              CanDragItems="True"
+                              AllowDrop="True"
                               CanReorderItems="True"
                               IsItemClickEnabled="True"
                               ItemTemplate="{StaticResource TabItemTemplate}"
@@ -274,6 +276,7 @@
                               ScrollViewer.VerticalScrollMode="Disabled"
                               ScrollViewer.VerticalScrollBarVisibility="Disabled"
                               SelectionChanged="TabStrip_SelectionChanged"
+                              DragItemsStarting="TabStrip_DragItemsStarting"
                               DragItemsCompleted="TabStrip_DragItemsCompleted"
                               AutomationProperties.AutomationId="TabStrip">
                         <ListView.ItemsPanel>

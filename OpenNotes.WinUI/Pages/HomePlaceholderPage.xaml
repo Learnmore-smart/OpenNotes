@@ -11,7 +11,7 @@
         <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
             <FontIcon Glyph="&#xE80F;" FontSize="32" Foreground="{ThemeResource ThemeAccentBrush}"
                       HorizontalAlignment="Center" Margin="0,0,0,12"/>
-            <TextBlock x:Name="PlaceholderTitle" Text="Home" FontSize="20" FontWeight="SemiBold"
+            <TextBlock Text="Home" FontSize="20" FontWeight="SemiBold"
                        Foreground="{ThemeResource ThemeForegroundBrush}" HorizontalAlignment="Center"/>
             <TextBlock Text="The library arrives with the Task 5 HomePage port."
                        FontSize="12" Foreground="{ThemeResource ThemeSubtleForegroundBrush}"

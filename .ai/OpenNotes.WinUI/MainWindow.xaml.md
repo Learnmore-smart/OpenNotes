@@ -7,7 +7,7 @@ WinUI 3 `Microsoft.UI.Xaml.Window` markup (NOT WPF `System.Windows.Window`) — 
 ## Layout
 - `RootGrid` (bg `ThemeWindowBrush`): Row0 = `TitleBarGrid` (`ThemeToolbarBrush`), Row1 = tab strip `Border` (`ThemePaperBrush` + bottom `ThemeBorderBrush`), Row2 = `TabContentArea` (frames added in code).
 - **Title bar:** `AppTitleBar` (the `SetTitleBar` drag surface) contains `BrandMarginRail` + product name + nav Back/Forward/Home buttons — mirroring the WPF flow; framework passthrough keeps interactive children clickable over the caption rect. Right-aligned overlay `StackPanel` holds Minimize/Maximize/Close caption buttons.
-- **Tab strip:** horizontal `ListView` (`TabStrip`, `ItemsStackPanel` horizontal, internal scroll disabled) inside an outer `ScrollViewer` + `NewTabButton` — same structure as the WPF `TabBar` + button. `CanReorderItems` provides drag-reorder; `IsItemClickEnabled` + single selection drives activation.
+- **Tab strip:** horizontal `ListView` (`TabStrip`, `ItemsStackPanel` horizontal, internal scroll disabled) inside an outer `ScrollViewer` + `NewTabButton` — same structure as the WPF `TabBar` + button. Drag-reorder needs ALL of `CanReorderItems`+`CanDragItems`+`AllowDrop` (`CanReorderItems` alone is inert — earlier builds could not reorder); `IsItemClickEnabled` + single selection drives activation; `ItemsSource` binds `OneTime` (the `ObservableCollection` itself carries change notifications).
 - Styles ported to VSM form: `NavButtonStyle` (32×28 pill, radius 16), `TitleBarButtonStyle` (46×40), `CloseButtonStyle` (red hover #C42B1C / pressed #B22A1B, `Content.Foreground`→White), `TabListViewItemStyle` (bare transparent container — the pill paints all chrome), `TabItemTemplate` (`x:DataType AppTab`: icon glyph + truncated title + close `Button`, binds the model's computed chrome properties, hover via code-behind `PointerEntered/Exited`).
 
 ## Important Notes / NEVER Change
@@ -16,6 +16,8 @@ WinUI 3 `Microsoft.UI.Xaml.Window` markup (NOT WPF `System.Windows.Window`) — 
 - `{ThemeResource}` is used everywhere (not `StaticResource`) so `WinUiThemeService` resource replacement re-renders chrome live.
 - Lucide vectors are NOT ported yet: `FontIcon` glyphs stand in (E72B/E72A back/fwd, E80F home, E921/E922/E923 min/max/restore, E8BB close, E710 plus, E711 tab-close, E8A5 doc) — swap when the icon port lands.
 - The only WPF `AutomationProperties.AutomationId` on MainWindow was `MoreButton` (deferred to Task 5); stable IDs were added to all new chrome for the UIA smoke scripts — keep them.
+- The nav/brand `StackPanel` inside `AppTitleBar` carries `Margin="0,0,138,0"` (≥3×46px caption cluster) and the presenter sets `PreferredMinimumWidth/Height` (560×360) — without both, narrow windows slide nav/brand under the caption buttons.
+- `x:Bind` is `OneWay` — it keeps no `BindingExpression`, so `PointerExited` must `SetValue` the computed `TabBackground` (NOT `ClearValue`, which would null the pill and strip the active tab's surface brush — regression fixed).
 - No app icon `Image` in the title bar yet: `Assets/app-icon.ico` is ICO (WinUI `Image` can't decode it); the icon port should add a PNG.
 
 ## Open Threads / Resume Context

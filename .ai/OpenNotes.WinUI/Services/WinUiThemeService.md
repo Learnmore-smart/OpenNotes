@@ -12,6 +12,9 @@ WinUI 3 counterpart of the WPF `Services/ThemeService.cs` — owns the runtime-s
 - System inputs use `UISettings` (`GetColorValue(Background)` dark probe, `AnimationsEnabled`, `AdvancedEffectsEnabled`, `ColorValuesChanged`) and `AccessibilitySettings` (`HighContrast`, `HighContrastChanged`), with the WPF HKCU `AppsUseLightTheme` registry probe as dark fallback. OS-HC resource repainting maps to `UIColorType` (Background/Foreground/Accent/Complement) — the closest public surface to WPF `SystemColors`.
 - `ThemeApplied` event fires after each apply so chrome holding computed brushes (`AppTab` tab pills) re-resolves.
 - `RefreshSystemPreferences()` (public), `Shutdown()`, `ResetForTests()`, `NormalizeWorkspaceBackdrop`, `GetAnimationDuration`, `GetShadowOpacity`, `ShouldAnimate` mirror the WPF API surface.
+- Lifecycle: `OnWindowClosed` calls `Shutdown()` when `Windows.Count` hits 0 — unhooks `UISettings.ColorValuesChanged`/`AccessibilitySettings.HighContrastChanged` so a late OS callback can't fire `Apply` while the process dies. `RefreshOnUiThread` early-returns when no windows are registered (else a late callback would mutate `Application.Resources` off the UI thread).
+- `EnsureSystemEventsHooked` hooks the two OS listeners in INDEPENDENT try/catch blocks and sets `SystemEventsHooked` on any partial success — a shared catch could leave a successful hookup re-hookable on the next `Apply` → double-handler.
+- `_uiSettings`/`_accessibilitySettings` are lazy singletons reused by every `IsSystem*` probe and `CreateSystemBrush` (previously `new UISettings()` ×3+ per `Apply`).
 
 ## Important Notes / NEVER Change
 - Keep resource key NAMES identical to WPF — later ported XAML binds via `{ThemeResource}` and must not be touched.

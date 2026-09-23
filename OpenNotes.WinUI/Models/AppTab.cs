@@ -77,7 +77,14 @@ namespace Caelum.Models
         public string FilePath
         {
             get => _filePath;
-            set { _filePath = value; OnPropertyChanged(); }
+            set
+            {
+                if (_filePath == value)
+                    return;
+                _filePath = value;
+                OnPropertyChanged();
+                OnPropertyChanged(nameof(IsHome)); // derived from FilePath
+            }
         }
 
         public bool IsHome => string.IsNullOrEmpty(_filePath);
