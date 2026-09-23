@@ -86,11 +86,11 @@
 - Create: `OpenNotes.WinUI/MainWindow.xaml(.cs)` — WinUI `Window` (not WPF `Window`): ExtendsContentIntoTitleBar or custom chrome, tab strip, `Frame` navigation identical to current `AppTab`/`_tabs` model
 - Create: `OpenNotes.WinUI/app.manifest`, `Package.appxmanifest` (Version 6.0.0.0, same `WindowsNotesApp` name + publisher)
 
-- [ ] **Step 1:** Create csproj + minimal `App`/`MainWindow` that launches an empty window. Build via `build.ps1` (CJK-path junction already handles WinUI XAML compiler limitation).
-- [ ] **Step 2:** Launch smoke — window opens, title `OpenNotes`, closes cleanly.
-- [ ] **Step 3:** Port theme resource keys (`Theme*Brush`) into `App.xaml` ThemeDictionaries; `ThemeService` port swaps `RequestedTheme` + resource overrides.
-- [ ] **Step 4:** Tab strip: new/close/activate/drag-reorder against `_tabs` model (reuse `AppTab` semantics; `AppTab` moves to Core minus `Frame`).
-- [ ] **Step 5: Commit** `feat(winui): V6 shell — app, themed chrome, tab strip`.
+- [x] **Step 1:** Create csproj + minimal `App`/`MainWindow` that launches an empty window. Build via `build.ps1` (CJK-path junction already handles WinUI XAML compiler limitation).
+- [x] **Step 2:** Launch smoke — window opens, title `OpenNotes`, closes cleanly. (Re-verified 2026-09-23: UIA finds the `OpenNotes` window; real click on `CloseButton` closes it cleanly.)
+- [x] **Step 3:** Port theme resource keys (`Theme*Brush`) into `App.xaml` ThemeDictionaries; `ThemeService` port swaps `RequestedTheme` + resource overrides. **As implemented:** root-level Light defaults + `Light`/`Dark`/`HighContrast` ThemeDictionaries with all WPF `Theme*Brush` keys + `AppGlass*` (root, unswitched) + `ThemeAnimationDuration`/`ThemeSurfaceOpacity`/`ThemeShadowOpacity`; `ThemePopupAnimation` dropped (WPF-only). `Services/WinUiThemeService.cs` mirrors `ThemeService.Apply` — rewrites `Application.Resources` brushes and sets `RequestedTheme` on each registered window's root element (WinUI has no app-level runtime setter; explicit HC falls back to `ElementTheme.Dark` for Fluent chrome since `ElementTheme` can't express HC); `UISettings`/`AccessibilitySettings` + HKCU fallback replace `SystemEvents`; `ThemeApplied` event added for computed-brush chrome.
+- [x] **Step 4:** Tab strip: new/close/activate/drag-reorder against `_tabs` model (reuse `AppTab` semantics; `AppTab` moves to Core minus `Frame`). **As implemented:** `AppTab` stayed in `OpenNotes.WinUI/Models/` holding a WinUI `Frame` — a Frame-free Core model carries almost nothing (decision documented in type + `.ai`). Strip is a horizontal `ListView` (`CanReorderItems` = built-in drag-reorder on the bound `ObservableCollection`, selection→activate) instead of WPF's code-built `StackPanel`+custom drag; tab pill template binds `AppTab` computed chrome properties; middle-click + per-tab close button; `MoveTab` keeps the WPF index math for programmatic moves. Chrome: `ExtendsContentIntoTitleBar`+`SetTitleBar` with custom Min/Max/Close via `OverlappedPresenter` (WPF `WindowStyle=None` equivalent). Home content is a stub `HomePlaceholderPage` until Task 5.
+- [x] **Step 5: Commit** `feat(winui): V6 shell — app, themed chrome, tab strip`. (Committed as `feat(winui): themed chrome and tab strip`.)
 
 ## Task 5: HomePage (library) on WinUI
 

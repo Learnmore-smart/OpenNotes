@@ -1,8 +1,21 @@
 # OpenNotes.WinUI/MainWindow.xaml
-> Last updated: 2026-09-22 (V6 Task 4 Step 1) | Protection: STANDARD
+> Last updated: 2026-09-23 (V6 Task 4 Steps 2–5 — themed chrome + tab strip) | Protection: STANDARD
 
 ## Purpose
-WinUI 3 `Microsoft.UI.Xaml.Window` (NOT WPF `System.Windows.Window`). `Title="OpenNotes"`, single centered `TextBlock` "OpenNotes V6" — deliberately trivial; custom chrome/tab strip arrives in Task 4 Step 4.
+WinUI 3 `Microsoft.UI.Xaml.Window` markup (NOT WPF `System.Windows.Window`) — the V6 chrome: 40px custom title bar, tab strip, per-tab `Frame` host area.
+
+## Layout
+- `RootGrid` (bg `ThemeWindowBrush`): Row0 = `TitleBarGrid` (`ThemeToolbarBrush`), Row1 = tab strip `Border` (`ThemePaperBrush` + bottom `ThemeBorderBrush`), Row2 = `TabContentArea` (frames added in code).
+- **Title bar:** `AppTitleBar` (the `SetTitleBar` drag surface) contains `BrandMarginRail` + product name + nav Back/Forward/Home buttons — mirroring the WPF flow; framework passthrough keeps interactive children clickable over the caption rect. Right-aligned overlay `StackPanel` holds Minimize/Maximize/Close caption buttons.
+- **Tab strip:** horizontal `ListView` (`TabStrip`, `ItemsStackPanel` horizontal, internal scroll disabled) inside an outer `ScrollViewer` + `NewTabButton` — same structure as the WPF `TabBar` + button. `CanReorderItems` provides drag-reorder; `IsItemClickEnabled` + single selection drives activation.
+- Styles ported to VSM form: `NavButtonStyle` (32×28 pill, radius 16), `TitleBarButtonStyle` (46×40), `CloseButtonStyle` (red hover #C42B1C / pressed #B22A1B, `Content.Foreground`→White), `TabListViewItemStyle` (bare transparent container — the pill paints all chrome), `TabItemTemplate` (`x:DataType AppTab`: icon glyph + truncated title + close `Button`, binds the model's computed chrome properties, hover via code-behind `PointerEntered/Exited`).
 
 ## Important Notes / NEVER Change
-- Keep `x:Class="Caelum.MainWindow"`.
+- WinUI `Window` has NO `Resources` property — all styles/templates live under `RootGrid.Resources`.
+- `{ThemeResource}` is used everywhere (not `StaticResource`) so `WinUiThemeService` resource replacement re-renders chrome live.
+- Lucide vectors are NOT ported yet: `FontIcon` glyphs stand in (E72B/E72A back/fwd, E80F home, E921/E922/E923 min/max/restore, E8BB close, E710 plus, E711 tab-close, E8A5 doc) — swap when the icon port lands.
+- The only WPF `AutomationProperties.AutomationId` on MainWindow was `MoreButton` (deferred to Task 5); stable IDs were added to all new chrome for the UIA smoke scripts — keep them.
+- No app icon `Image` in the title bar yet: `Assets/app-icon.ico` is ICO (WinUI `Image` can't decode it); the icon port should add a PNG.
+
+## Open Threads / Resume Context
+- **Status:** verified — real-pointer UIA smoke clicks through new-tab, tab select, middle-close, min/max/restore/close, NavHome.

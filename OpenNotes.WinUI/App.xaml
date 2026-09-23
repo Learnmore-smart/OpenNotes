@@ -7,6 +7,202 @@
             <ResourceDictionary.MergedDictionaries>
                 <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" />
             </ResourceDictionary.MergedDictionaries>
+
+            <!-- Glass overlay tokens. Kept at root level (never theme-switched),
+                 exactly as the WPF App.xaml defines them. -->
+            <SolidColorBrush x:Key="AppGlassPanelBrush" Color="White" Opacity="0.08"/>
+            <SolidColorBrush x:Key="AppGlassSurfaceBrush" Color="White" Opacity="0.12"/>
+            <SolidColorBrush x:Key="AppGlassSurfaceHoverBrush" Color="White" Opacity="0.18"/>
+            <SolidColorBrush x:Key="AppGlassSurfacePressedBrush" Color="White" Opacity="0.24"/>
+            <SolidColorBrush x:Key="AppGlassBorderBrush" Color="White" Opacity="0.22"/>
+            <SolidColorBrush x:Key="AppGlassSubtleBorderBrush" Color="White" Opacity="0.10"/>
+
+            <!-- Runtime-swappable application chrome palette (WPF Task 39).
+                 Root-level entries are the Light defaults — the same baseline
+                 the WPF App.xaml carries — and WinUiThemeService.Apply replaces
+                 them in place whenever the effective theme changes. The
+                 ThemeDictionaries below mirror the three palettes so a bare
+                 RequestedTheme switch already resolves sensible colors before
+                 the service writes its overrides. Key NAMES are identical to
+                 WPF so ported XAML keeps binding via {ThemeResource}. -->
+            <SolidColorBrush x:Key="ThemeWindowBackgroundBrush" Color="#FFFFFF"/>
+            <SolidColorBrush x:Key="ThemeSurfaceBrush" Color="#FFFFFF"/>
+            <SolidColorBrush x:Key="ThemeSurfaceAltBrush" Color="#F8F9FA"/>
+            <SolidColorBrush x:Key="ThemeCanvasBrush" Color="#FFFFFF"/>
+            <SolidColorBrush x:Key="ThemeBorderBrush" Color="#D1D5DB"/>
+            <SolidColorBrush x:Key="ThemeForegroundBrush" Color="#1F2937"/>
+            <SolidColorBrush x:Key="ThemeSubtleForegroundBrush" Color="#4B5563"/>
+            <SolidColorBrush x:Key="ThemeControlHoverBrush" Color="#EEF0F2"/>
+            <SolidColorBrush x:Key="ThemeControlPressedBrush" Color="#E2E5E9"/>
+            <SolidColorBrush x:Key="ThemeSelectionBrush" Color="#DBEAFE"/>
+            <SolidColorBrush x:Key="ThemeSelectionForegroundBrush" Color="#1E40AF"/>
+            <SolidColorBrush x:Key="ThemeAccentBrush" Color="#2563EB"/>
+            <SolidColorBrush x:Key="ThemeAccentHoverBrush" Color="#1D4ED8"/>
+            <SolidColorBrush x:Key="ThemeAccentPressedBrush" Color="#1E40AF"/>
+            <SolidColorBrush x:Key="ThemeDisabledForegroundBrush" Color="#9CA3AF"/>
+            <SolidColorBrush x:Key="ThemeScrollbarTrackBrush" Color="#1F52606C"/>
+            <SolidColorBrush x:Key="ThemeScrollbarThumbBrush" Color="#A85C6975"/>
+            <SolidColorBrush x:Key="ThemeScrollbarThumbHoverBrush" Color="#CC394B5A"/>
+            <SolidColorBrush x:Key="ThemeScrollbarThumbPressedBrush" Color="#E8212D38"/>
+            <SolidColorBrush x:Key="ThemeSliderTrackBrush" Color="#221C5D99"/>
+            <SolidColorBrush x:Key="ThemeMenuSeparatorBrush" Color="#1F1E2933"/>
+            <SolidColorBrush x:Key="ThemeFocusBrush" Color="#154F86"/>
+            <SolidColorBrush x:Key="ThemeDeskBrush" Color="#FFFFFF"/>
+            <SolidColorBrush x:Key="ThemePaperBrush" Color="#FFFFFF"/>
+            <SolidColorBrush x:Key="ThemePaperAltBrush" Color="#F8F9FA"/>
+            <SolidColorBrush x:Key="ThemeInkBrush" Color="#2563EB"/>
+            <SolidColorBrush x:Key="ThemeMarginBrush" Color="#C2414B"/>
+            <SolidColorBrush x:Key="ThemeMarkBrush" Color="#D9A72E"/>
+            <SolidColorBrush x:Key="ThemeDangerBrush" Color="#FFB42318"/>
+            <SolidColorBrush x:Key="ThemeWindowOutlineBrush" Color="#1F2937"/>
+            <!-- Wave5 semantic aliases. WinUiThemeService rewrites these at runtime. -->
+            <SolidColorBrush x:Key="ThemeWindowBrush" Color="#FFFFFF"/>
+            <SolidColorBrush x:Key="ThemeWorkspaceBackdropBrush" Color="#FFFFFF"/>
+            <SolidColorBrush x:Key="ThemeWorkspaceBrush" Color="#FFFFFF"/>
+            <SolidColorBrush x:Key="ThemeSidebarBrush" Color="#F8F9FA"/>
+            <SolidColorBrush x:Key="ThemeToolbarBrush" Color="#FFFFFF"/>
+            <SolidColorBrush x:Key="ThemeControlBrush" Color="#F8F9FA"/>
+            <SolidColorBrush x:Key="ThemeTextBrush" Color="#1F2937"/>
+            <SolidColorBrush x:Key="ThemeSubtleTextBrush" Color="#4B5563"/>
+            <Duration x:Key="ThemeAnimationDuration">0:0:0.16</Duration>
+            <x:Double x:Key="ThemeSurfaceOpacity">0.96</x:Double>
+            <x:Double x:Key="ThemeShadowOpacity">0.12</x:Double>
+
+            <ResourceDictionary.ThemeDictionaries>
+                <ResourceDictionary x:Key="Light">
+                    <SolidColorBrush x:Key="ThemeWindowBackgroundBrush" Color="#FFFFFF"/>
+                    <SolidColorBrush x:Key="ThemeSurfaceBrush" Color="#FFFFFF"/>
+                    <SolidColorBrush x:Key="ThemeSurfaceAltBrush" Color="#F8F9FA"/>
+                    <SolidColorBrush x:Key="ThemeCanvasBrush" Color="#FFFFFF"/>
+                    <SolidColorBrush x:Key="ThemeBorderBrush" Color="#D1D5DB"/>
+                    <SolidColorBrush x:Key="ThemeForegroundBrush" Color="#1F2937"/>
+                    <SolidColorBrush x:Key="ThemeSubtleForegroundBrush" Color="#4B5563"/>
+                    <SolidColorBrush x:Key="ThemeControlHoverBrush" Color="#EEF0F2"/>
+                    <SolidColorBrush x:Key="ThemeControlPressedBrush" Color="#E2E5E9"/>
+                    <SolidColorBrush x:Key="ThemeSelectionBrush" Color="#DBEAFE"/>
+                    <SolidColorBrush x:Key="ThemeSelectionForegroundBrush" Color="#1E40AF"/>
+                    <SolidColorBrush x:Key="ThemeAccentBrush" Color="#2563EB"/>
+                    <SolidColorBrush x:Key="ThemeAccentHoverBrush" Color="#1D4ED8"/>
+                    <SolidColorBrush x:Key="ThemeAccentPressedBrush" Color="#1E40AF"/>
+                    <SolidColorBrush x:Key="ThemeDisabledForegroundBrush" Color="#9CA3AF"/>
+                    <SolidColorBrush x:Key="ThemeScrollbarTrackBrush" Color="#1F52606C"/>
+                    <SolidColorBrush x:Key="ThemeScrollbarThumbBrush" Color="#A85C6975"/>
+                    <SolidColorBrush x:Key="ThemeScrollbarThumbHoverBrush" Color="#CC394B5A"/>
+                    <SolidColorBrush x:Key="ThemeScrollbarThumbPressedBrush" Color="#E8212D38"/>
+                    <SolidColorBrush x:Key="ThemeSliderTrackBrush" Color="#221C5D99"/>
+                    <SolidColorBrush x:Key="ThemeMenuSeparatorBrush" Color="#1F1E2933"/>
+                    <SolidColorBrush x:Key="ThemeFocusBrush" Color="#154F86"/>
+                    <SolidColorBrush x:Key="ThemeDeskBrush" Color="#FFFFFF"/>
+                    <SolidColorBrush x:Key="ThemePaperBrush" Color="#FFFFFF"/>
+                    <SolidColorBrush x:Key="ThemePaperAltBrush" Color="#F8F9FA"/>
+                    <SolidColorBrush x:Key="ThemeInkBrush" Color="#2563EB"/>
+                    <SolidColorBrush x:Key="ThemeMarginBrush" Color="#C2414B"/>
+                    <SolidColorBrush x:Key="ThemeMarkBrush" Color="#D9A72E"/>
+                    <SolidColorBrush x:Key="ThemeDangerBrush" Color="#FFB42318"/>
+                    <SolidColorBrush x:Key="ThemeWindowOutlineBrush" Color="#1F2937"/>
+                    <SolidColorBrush x:Key="ThemeWindowBrush" Color="#FFFFFF"/>
+                    <SolidColorBrush x:Key="ThemeWorkspaceBackdropBrush" Color="#FFFFFF"/>
+                    <SolidColorBrush x:Key="ThemeWorkspaceBrush" Color="#FFFFFF"/>
+                    <SolidColorBrush x:Key="ThemeSidebarBrush" Color="#F8F9FA"/>
+                    <SolidColorBrush x:Key="ThemeToolbarBrush" Color="#FFFFFF"/>
+                    <SolidColorBrush x:Key="ThemeControlBrush" Color="#F8F9FA"/>
+                    <SolidColorBrush x:Key="ThemeTextBrush" Color="#1F2937"/>
+                    <SolidColorBrush x:Key="ThemeSubtleTextBrush" Color="#4B5563"/>
+                    <Duration x:Key="ThemeAnimationDuration">0:0:0.16</Duration>
+                    <x:Double x:Key="ThemeSurfaceOpacity">0.96</x:Double>
+                    <x:Double x:Key="ThemeShadowOpacity">0.12</x:Double>
+                </ResourceDictionary>
+
+                <ResourceDictionary x:Key="Dark">
+                    <SolidColorBrush x:Key="ThemeWindowBackgroundBrush" Color="#0C141D"/>
+                    <SolidColorBrush x:Key="ThemeSurfaceBrush" Color="#17212C"/>
+                    <SolidColorBrush x:Key="ThemeSurfaceAltBrush" Color="#1D2A37"/>
+                    <SolidColorBrush x:Key="ThemeCanvasBrush" Color="#081019"/>
+                    <SolidColorBrush x:Key="ThemeBorderBrush" Color="#314151"/>
+                    <SolidColorBrush x:Key="ThemeForegroundBrush" Color="#EEF2F4"/>
+                    <SolidColorBrush x:Key="ThemeSubtleForegroundBrush" Color="#A9B5BF"/>
+                    <SolidColorBrush x:Key="ThemeControlHoverBrush" Color="#223343"/>
+                    <SolidColorBrush x:Key="ThemeControlPressedBrush" Color="#2C4054"/>
+                    <SolidColorBrush x:Key="ThemeSelectionBrush" Color="#203E5C"/>
+                    <SolidColorBrush x:Key="ThemeSelectionForegroundBrush" Color="#E2F0FD"/>
+                    <SolidColorBrush x:Key="ThemeAccentBrush" Color="#6EACEA"/>
+                    <SolidColorBrush x:Key="ThemeAccentHoverBrush" Color="#8ABEF0"/>
+                    <SolidColorBrush x:Key="ThemeAccentPressedBrush" Color="#4A8CCC"/>
+                    <SolidColorBrush x:Key="ThemeDisabledForegroundBrush" Color="#6F7B86"/>
+                    <SolidColorBrush x:Key="ThemeScrollbarTrackBrush" Color="#3D465666"/>
+                    <SolidColorBrush x:Key="ThemeScrollbarThumbBrush" Color="#B88999AA"/>
+                    <SolidColorBrush x:Key="ThemeScrollbarThumbHoverBrush" Color="#D8B6C0CA"/>
+                    <SolidColorBrush x:Key="ThemeScrollbarThumbPressedBrush" Color="#F0E5EBF0"/>
+                    <SolidColorBrush x:Key="ThemeSliderTrackBrush" Color="#526EACEA"/>
+                    <SolidColorBrush x:Key="ThemeMenuSeparatorBrush" Color="#3AEEF2F4"/>
+                    <SolidColorBrush x:Key="ThemeFocusBrush" Color="#92C7F5"/>
+                    <SolidColorBrush x:Key="ThemeDeskBrush" Color="#0C141D"/>
+                    <SolidColorBrush x:Key="ThemePaperBrush" Color="#17212C"/>
+                    <SolidColorBrush x:Key="ThemePaperAltBrush" Color="#1D2A37"/>
+                    <SolidColorBrush x:Key="ThemeInkBrush" Color="#6EACEA"/>
+                    <SolidColorBrush x:Key="ThemeMarginBrush" Color="#ED7A80"/>
+                    <SolidColorBrush x:Key="ThemeMarkBrush" Color="#F2C75C"/>
+                    <SolidColorBrush x:Key="ThemeDangerBrush" Color="#FFFF8A8A"/>
+                    <SolidColorBrush x:Key="ThemeWindowOutlineBrush" Color="#9CA3AF"/>
+                    <SolidColorBrush x:Key="ThemeWindowBrush" Color="#0C141D"/>
+                    <SolidColorBrush x:Key="ThemeWorkspaceBackdropBrush" Color="#151D26"/>
+                    <SolidColorBrush x:Key="ThemeWorkspaceBrush" Color="#151D26"/>
+                    <SolidColorBrush x:Key="ThemeSidebarBrush" Color="#1D2A37"/>
+                    <SolidColorBrush x:Key="ThemeToolbarBrush" Color="#17212C"/>
+                    <SolidColorBrush x:Key="ThemeControlBrush" Color="#1D2A37"/>
+                    <SolidColorBrush x:Key="ThemeTextBrush" Color="#EEF2F4"/>
+                    <SolidColorBrush x:Key="ThemeSubtleTextBrush" Color="#A9B5BF"/>
+                    <Duration x:Key="ThemeAnimationDuration">0:0:0.16</Duration>
+                    <x:Double x:Key="ThemeSurfaceOpacity">0.96</x:Double>
+                    <x:Double x:Key="ThemeShadowOpacity">0.12</x:Double>
+                </ResourceDictionary>
+
+                <ResourceDictionary x:Key="HighContrast">
+                    <SolidColorBrush x:Key="ThemeWindowBackgroundBrush" Color="#000000"/>
+                    <SolidColorBrush x:Key="ThemeSurfaceBrush" Color="#000000"/>
+                    <SolidColorBrush x:Key="ThemeSurfaceAltBrush" Color="#1A1A1A"/>
+                    <SolidColorBrush x:Key="ThemeCanvasBrush" Color="#000000"/>
+                    <SolidColorBrush x:Key="ThemeBorderBrush" Color="#FFFFFF"/>
+                    <SolidColorBrush x:Key="ThemeForegroundBrush" Color="#FFFFFF"/>
+                    <SolidColorBrush x:Key="ThemeSubtleForegroundBrush" Color="#FFFFFF"/>
+                    <SolidColorBrush x:Key="ThemeControlHoverBrush" Color="#333333"/>
+                    <SolidColorBrush x:Key="ThemeControlPressedBrush" Color="#4D4D4D"/>
+                    <SolidColorBrush x:Key="ThemeSelectionBrush" Color="#FFFF00"/>
+                    <SolidColorBrush x:Key="ThemeSelectionForegroundBrush" Color="#000000"/>
+                    <SolidColorBrush x:Key="ThemeAccentBrush" Color="#00FFFF"/>
+                    <SolidColorBrush x:Key="ThemeAccentHoverBrush" Color="#FFFFFF"/>
+                    <SolidColorBrush x:Key="ThemeAccentPressedBrush" Color="#FFFF00"/>
+                    <SolidColorBrush x:Key="ThemeDisabledForegroundBrush" Color="#BFBFBF"/>
+                    <SolidColorBrush x:Key="ThemeScrollbarTrackBrush" Color="#000000"/>
+                    <SolidColorBrush x:Key="ThemeScrollbarThumbBrush" Color="#FFFFFF"/>
+                    <SolidColorBrush x:Key="ThemeScrollbarThumbHoverBrush" Color="#FFFF00"/>
+                    <SolidColorBrush x:Key="ThemeScrollbarThumbPressedBrush" Color="#00FFFF"/>
+                    <SolidColorBrush x:Key="ThemeSliderTrackBrush" Color="#FFFFFF"/>
+                    <SolidColorBrush x:Key="ThemeMenuSeparatorBrush" Color="#FFFFFF"/>
+                    <SolidColorBrush x:Key="ThemeFocusBrush" Color="#FFFF00"/>
+                    <SolidColorBrush x:Key="ThemeDeskBrush" Color="#000000"/>
+                    <SolidColorBrush x:Key="ThemePaperBrush" Color="#000000"/>
+                    <SolidColorBrush x:Key="ThemePaperAltBrush" Color="#1A1A1A"/>
+                    <SolidColorBrush x:Key="ThemeInkBrush" Color="#00FFFF"/>
+                    <SolidColorBrush x:Key="ThemeMarginBrush" Color="#FF8080"/>
+                    <SolidColorBrush x:Key="ThemeMarkBrush" Color="#FFFF00"/>
+                    <SolidColorBrush x:Key="ThemeDangerBrush" Color="#FFFF00"/>
+                    <SolidColorBrush x:Key="ThemeWindowOutlineBrush" Color="#FFFFFF"/>
+                    <SolidColorBrush x:Key="ThemeWindowBrush" Color="#000000"/>
+                    <SolidColorBrush x:Key="ThemeWorkspaceBackdropBrush" Color="#000000"/>
+                    <SolidColorBrush x:Key="ThemeWorkspaceBrush" Color="#000000"/>
+                    <SolidColorBrush x:Key="ThemeSidebarBrush" Color="#1A1A1A"/>
+                    <SolidColorBrush x:Key="ThemeToolbarBrush" Color="#000000"/>
+                    <SolidColorBrush x:Key="ThemeControlBrush" Color="#1A1A1A"/>
+                    <SolidColorBrush x:Key="ThemeTextBrush" Color="#FFFFFF"/>
+                    <SolidColorBrush x:Key="ThemeSubtleTextBrush" Color="#FFFFFF"/>
+                    <!-- High contrast forces reduced motion/transparency, mirroring
+                         ThemeService.Apply's accessibility behavior. -->
+                    <Duration x:Key="ThemeAnimationDuration">0:0:0</Duration>
+                    <x:Double x:Key="ThemeSurfaceOpacity">1</x:Double>
+                    <x:Double x:Key="ThemeShadowOpacity">0</x:Double>
+                </ResourceDictionary>
+            </ResourceDictionary.ThemeDictionaries>
         </ResourceDictionary>
     </Application.Resources>
 </Application>
