@@ -203,8 +203,10 @@ the save/history pipeline remain deferred to T8–T9.
   on the current page; Delete/Back → `DeleteSelection` — the page is
   captured FIRST (`ClearSelection` fires `SelectionChanged(false)`
   synchronously and the handler nulls `_activeSelectionPage`), then
-  placements → `InkStrokesRemovedAction`; Escape → search close else
-  `ActivateTool(None)` (WPF Esc parity — also drops live selection).
+  placements → `InkStrokesRemovedAction`; Escape → `CloseTransientUi("escape")`
+  + `ActivateTool(None)` ahead of the ctrl/`textInputFocused` gates (WPF Esc
+  parity — the resize-restore Escape keeps precedence; the tool switch
+  commits the live edit session).
 - Hidden-ink load: `LoadAnnotationsIntoPages` feeds
   `pageAnnotation.HiddenInks` quietly under `_isLoadingAnnotations` (no
   undo entries, WPF loader parity); save-side `HiddenInks` writers already
@@ -218,6 +220,20 @@ the save/history pipeline remain deferred to T8–T9.
   render/scroll state stays warm). `EditorPage_SizeChanged` also
   re-clamps a visible ruler's centre via `ClampRulerCenter` so a
   shrinking viewport can't strand it off-canvas.
+- `CloseTransientUi(reason)` (spec fix 2026-09-23) — the WPF transient
+  sweep: restore-bounds cancels for text drag/resize +
+  `page.CancelInteraction()` (covers the sticky drag) + search cancel/
+  close + `CancelStickyNoteEdit` + `_textColorFlyout`/`_transientFlyout`/
+  `_pageContextMenu` hides + sticky-marker `ContextFlyout.Hide()` sweep +
+  inline-toolbar hide. Idempotent; the text-edit session is intentionally
+  excluded (commits later via LostFocus/tool-switch — WPF parity).
+  `_transientFlyout` tracks the last-shown tool/options/context flyout at
+  each `ShowAt` site. `SetHostActive(false)` sweeps BEFORE the no-op
+  early return (WPF ordering); reactivate re-shows the toolbar over a
+  still-selected box. `ReleaseResources` shares the helper
+  (`CloseTransientUi("release")`). Text-resize handles carry a
+  transparent `Background` — panels only hit-test through a non-null
+  Background.
 
 ## Open Threads / Resume Context
 - **Status:** GREEN — `tools/winui-editor-smoke.ps1` 60/60; Task 7 Phase A

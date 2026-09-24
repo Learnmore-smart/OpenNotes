@@ -153,6 +153,15 @@
   `SelectionMoveCompletedEventArgs` / `SelectionResizeCompletedEventArgs` /
   `SelectionRotateCompletedEventArgs` carry the selected containers so the
   editor can push ONE mixed `Annotation*Action` per gesture.
+- **`CancelInteraction()` covers the sticky drag** (spec fix 2026-09-23) —
+  `CancelStickyDrag()` folds into the shared cancel so the editor's
+  `CloseTransientUi` gesture sweep ends a captured marker drag too (WPF
+  `InteractionCancellation.CancelAll` parity). Marker pointer capture
+  targets the inner `Button` (owner of the Moved/Released handlers) —
+  capturing the parent container would route the stream past the button
+  whenever `ButtonBase` skips its internal capture on a handled press.
+  `ApplyTextContainerBoundsQuiet` restores auto-size legs as `NaN` like
+  the live path — a fixed restore would freeze an auto annotation.
 
 ## Important Notes / NEVER Change
 - The ink layer sits UNDER `ShapePreviewCanvas`/`TextOverlayCanvas` — strokes must

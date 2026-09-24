@@ -545,6 +545,9 @@ namespace Caelum.Controls
         {
             InkSurface.CancelInteraction();
             CancelSelectionInteraction(restoreSnapshot: true);
+            // WPF InteractionCancellation.CancelAll covers the marker drag
+            // too — a captured sticky gesture is still an interaction.
+            CancelStickyDrag();
             ClearShapePreview();
         }
 

@@ -48,6 +48,17 @@ source contract on the port itself.
   `IAnnotationContainerHost` method contract and every action class
   name, so a rename/removal anywhere in the chain fails a test instead
   of silently regressing.
+- `SpecFixContract_HitTestEscapeOrderingAndTransientSweep` (spec-fix
+  contract, 2026-09-23) — positional assertions, not just containment:
+  the `TextResizeHandleElement` creation block must assign a `Background`
+  (panels are pointer-dead without one); the generic
+  `CloseTransientUi("escape")` + `ActivateTool(ToolType.None)` branch in
+  `EditorPage_PreviewKeyDown` must sit after the resize-restore branch
+  but BEFORE the `if (textInputFocused)` bail; `SetHostActive` must call
+  `CloseTransientUi("inactive editor")` before the
+  `_isHostActive == isActive` no-op guard; `ReleaseResources` shares the
+  sweep via `CloseTransientUi("release")`; page `CancelInteraction()`
+  must cancel the sticky drag before `ClearShapePreview()`.
 
 ## Constraints
 

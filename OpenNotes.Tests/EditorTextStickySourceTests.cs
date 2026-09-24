@@ -179,6 +179,79 @@ public sealed class EditorTextStickySourceTests
         });
     }
 
+    [Test]
+    public void SpecFixContract_HitTestEscapeOrderingAndTransientSweep()
+    {
+        string editor = Read("Pages", "EditorPage.xaml.cs");
+        string page = Read("Controls", "PdfPageControl.xaml.cs");
+
+        Assert.Multiple(() =>
+        {
+            // P1 — the resize handle Grid carries a non-null Background in
+            // its creation block; a background-less panel is pointer-dead.
+            int handleCtor = editor.IndexOf(
+                "new TextResizeHandleElement", StringComparison.Ordinal);
+            Assert.That(handleCtor, Is.GreaterThanOrEqualTo(0),
+                "TextResizeHandleElement creation not found");
+            int cursorLine = editor.IndexOf(
+                "resizeHandle.SetCursor", handleCtor, StringComparison.Ordinal);
+            Assert.That(cursorLine, Is.GreaterThan(handleCtor));
+            string ctorBlock = editor.Substring(handleCtor, cursorLine - handleCtor);
+            Assert.That(ctorBlock, Does.Contain("Background ="),
+                "Resize handle must assign a (transparent) Background to hit-test");
+
+            // P2a — generic Escape runs BEFORE the textInputFocused bail,
+            // and the resize-restore Escape keeps precedence ahead of it.
+            int preview = editor.IndexOf(
+                "private void EditorPage_PreviewKeyDown", StringComparison.Ordinal);
+            Assert.That(preview, Is.GreaterThanOrEqualTo(0));
+            int resizeEscape = editor.IndexOf(
+                "_resizingTextContainer != null", preview, StringComparison.Ordinal);
+            int escapeSweep = editor.IndexOf(
+                "CloseTransientUi(\"escape\")", preview, StringComparison.Ordinal);
+            int focusBail = editor.IndexOf(
+                "if (textInputFocused)", preview, StringComparison.Ordinal);
+            Assert.That(resizeEscape, Is.GreaterThan(0),
+                "Escape resize-restore branch missing");
+            Assert.That(escapeSweep, Is.GreaterThan(resizeEscape),
+                "Generic Escape must follow the resize-restore branch");
+            Assert.That(focusBail, Is.GreaterThan(escapeSweep),
+                "Escape must be handled before the textInputFocused bail");
+            int escapeTool = editor.IndexOf(
+                "ActivateTool(ToolType.None)", escapeSweep, StringComparison.Ordinal);
+            Assert.That(escapeTool, Is.GreaterThan(escapeSweep));
+            Assert.That(escapeTool, Is.LessThan(focusBail),
+                "Escape branch must ActivateTool(None) before the focus bail");
+
+            // P2b — SetHostActive sweeps transient UI ahead of the no-op
+            // early return (WPF ordering); ReleaseResources shares the helper.
+            int setHost = editor.IndexOf(
+                "public void SetHostActive(bool isActive)", StringComparison.Ordinal);
+            Assert.That(setHost, Is.GreaterThanOrEqualTo(0));
+            int sweep = editor.IndexOf(
+                "CloseTransientUi(\"inactive editor\")", setHost, StringComparison.Ordinal);
+            int guard = editor.IndexOf(
+                "_isHostActive == isActive", setHost, StringComparison.Ordinal);
+            Assert.That(sweep, Is.GreaterThan(setHost),
+                "SetHostActive must call CloseTransientUi");
+            Assert.That(sweep, Is.LessThan(guard),
+                "Transient sweep must precede the no-op early return");
+            Assert.That(editor, Does.Contain("CloseTransientUi(\"release\")"),
+                "ReleaseResources should share the transient sweep");
+
+            // The page-level interaction cancel must also end a captured
+            // sticky-marker drag (WPF InteractionCancellation.CancelAll).
+            int cancel = page.IndexOf(
+                "public void CancelInteraction()", StringComparison.Ordinal);
+            Assert.That(cancel, Is.GreaterThanOrEqualTo(0));
+            int stickyCancel = page.IndexOf("CancelStickyDrag();", cancel, StringComparison.Ordinal);
+            int shapeClear = page.IndexOf("ClearShapePreview();", cancel, StringComparison.Ordinal);
+            Assert.That(stickyCancel, Is.GreaterThan(cancel));
+            Assert.That(stickyCancel, Is.LessThan(shapeClear),
+                "CancelInteraction should cancel the sticky drag");
+        });
+    }
+
     private static string Read(params string[] segments)
     {
         // The WinUI tree sits next to the WPF project — walk up to the

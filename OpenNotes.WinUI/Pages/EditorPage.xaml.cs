@@ -172,6 +172,9 @@ namespace Caelum.Pages
         private ComboBox _textAlignmentCombo;
         private Border _colorIndicator;
         private Flyout _textColorFlyout;
+        // The last-shown tool/options/context flyout — tracked so
+        // CloseTransientUi can sweep it (WPF transient-registry parity).
+        private FlyoutBase _transientFlyout;
         private bool _isRefreshingTextAlignmentOptions;
 
         // Border-band drag state (arm on press, start past 4 DIP, cross-page
@@ -3092,6 +3095,7 @@ namespace Caelum.Pages
                 flyout.Items.Add(deleteItem);
             }
 
+            _transientFlyout = flyout;
             flyout.ShowAt(PdfScrollViewer);
         }
 
@@ -3319,6 +3323,10 @@ namespace Caelum.Pages
                     Visibility = select ? Visibility.Visible : Visibility.Collapsed,
                     Tag = definition.Item1,
                     IsTabStop = true,
+                    // Panels only hit-test through a non-null Background —
+                    // without this the handle is pointer-dead and presses
+                    // fall through to the container drag/deselect paths.
+                    Background = new SolidColorBrush(Color.FromArgb(0, 0, 0, 0)),
                 };
                 resizeHandle.SetCursor(definition.Item4);
                 // Visual square: accent fill + focus ring inside a 10 DIP
@@ -5431,6 +5439,7 @@ namespace Caelum.Pages
             }));
 
             var flyout = new Flyout { Content = panel };
+            _transientFlyout = flyout;
             flyout.ShowAt(anchor);
         }
 
@@ -5557,6 +5566,7 @@ namespace Caelum.Pages
             panel.Children.Add(colorRow);
 
             var flyout = new Flyout { Content = panel };
+            _transientFlyout = flyout;
             flyout.ShowAt(anchor);
         }
 
@@ -6476,6 +6486,7 @@ namespace Caelum.Pages
             AutomationProperties.SetAutomationId(removeItem, "Editor.Sidebar.Bookmark.Remove");
             removeItem.Click += BookmarkContextMenu_Remove_Click;
             flyout.Items.Add(removeItem);
+            _transientFlyout = flyout;
             flyout.ShowAt(itemElement);
             e.Handled = true;
         }
@@ -7099,6 +7110,19 @@ namespace Caelum.Pages
                 return;
             }
 
+            // WPF Escape parity — the routed KeyDown runs regardless of text
+            // focus or modifiers: sweep transient UI (covers the search
+            // panel) and drop the active tool back to None. ActivateTool
+            // commits any live edit session via the tool-switch path —
+            // nothing is discarded.
+            if (e.Key == VirtualKey.Escape)
+            {
+                CloseTransientUi("escape");
+                ActivateTool(ToolType.None);
+                e.Handled = true;
+                return;
+            }
+
             bool ctrl = InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Control)
                 .HasFlag(Microsoft.UI.Input.VirtualKeyStates.Down);
             bool shift = InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Shift)
@@ -7203,15 +7227,6 @@ namespace Caelum.Pages
                 }
             }
 
-            // WPF: Escape closes the search panel even while its TextBox
-            // owns focus.
-            if (e.Key == VirtualKey.Escape && PdfSearchPanel.Visibility == Visibility.Visible)
-            {
-                ClosePdfSearch();
-                e.Handled = true;
-                return;
-            }
-
             // WPF Delete/Back branch — unguarded by focus: an empty selected
             // box is deleted even while its TextBox holds the caret, and the
             // Select-tool branch removes the live selection.
@@ -7268,13 +7283,6 @@ namespace Caelum.Pages
                     break;
                 case VirtualKey.F3:
                     MovePdfSearchSelection(backwards: shift);
-                    e.Handled = true;
-                    break;
-                case VirtualKey.Escape:
-                    // WPF Esc parity: dismiss the active tool back to
-                    // None (which also drops any live selection). The
-                    // search-panel case was handled above the focus bail.
-                    ActivateTool(ToolType.None);
                     e.Handled = true;
                     break;
             }
@@ -7498,14 +7506,59 @@ namespace Caelum.Pages
         public void ShutdownEditor() => ReleaseResources();
 
         /// <summary>
-        /// WPF SetHostActive parity (minimal): MainWindow calls this on tab
-        /// switches so hidden tabs gate page input AND stop the selection
-        /// marching-ants timer via <see cref="PdfPageControl.SetHostActive"/>
-        /// → ApplyInputGate. Rendering/scroll state stays warm — the tab is
-        /// hidden, not torn down.
+        /// Closes every editor-owned transient surface — WPF
+        /// <c>CloseTransientUi(reason)</c> parity. Idempotent and null-safe
+        /// when nothing is transient. The ordinary text-edit session is
+        /// intentionally excluded: it commits later via LostFocus / the tool
+        /// switch, exactly as WPF leaves it open across a deactivate.
+        /// </summary>
+        private void CloseTransientUi(string reason = null)
+        {
+            // Gesture boundary first (WPF CancelInteraction): restore
+            // in-flight text geometry + selection snapshots before the
+            // popup sweep so capture-loss callbacks cannot leave a stale
+            // transaction behind. Page CancelInteraction now also cancels
+            // any captured sticky-marker drag.
+            CancelTextBoxDrag(restoreBounds: true);
+            CancelTextResize(restoreBounds: true);
+            foreach (var page in _pageControls)
+                page.CancelInteraction();
+
+            _pdfSearchCts?.Cancel();
+            ClosePdfSearch();
+            CancelStickyNoteEdit();
+            _textColorFlyout?.Hide();
+            _transientFlyout?.Hide();
+            _transientFlyout = null;
+            _pageContextMenu?.Hide();
+            RemoveInlineTextBoxToolbar();
+
+            // Sticky marker menus live on the page overlay containers —
+            // sweep them so a right-click menu cannot survive tab
+            // switching or Alt-Tab (WPF container.ContextMenu.IsOpen=false).
+            foreach (var page in _pageControls)
+            {
+                foreach (var container in page.GetOverlayContainers())
+                    container.ContextFlyout?.Hide();
+            }
+        }
+
+        /// <summary>
+        /// WPF SetHostActive parity: MainWindow calls this on tab switches so
+        /// hidden tabs sweep transient UI, gate page input AND stop the
+        /// selection marching-ants timer via
+        /// <see cref="PdfPageControl.SetHostActive"/> → ApplyInputGate.
+        /// Rendering/scroll state stays warm — the tab is hidden, not torn
+        /// down.
         /// </summary>
         public void SetHostActive(bool isActive)
         {
+            // WPF runs the transient sweep BEFORE the no-op early return —
+            // repeated SetHostActive(false) calls still close anything that
+            // opened since the last gate.
+            if (!isActive)
+                CloseTransientUi("inactive editor");
+
             if (_resourcesReleased || _isHostActive == isActive)
                 return;
             _isHostActive = isActive;
@@ -7514,6 +7567,11 @@ namespace Caelum.Pages
                 page.SetHostActive(isActive);
                 page.SetDocumentInputEnabled(isActive);
             }
+
+            // The sweep hid the text chrome — re-show it over the still-
+            // selected box when the tab comes back.
+            if (isActive && _selectedTextBox != null && _currentTool == ToolType.Text)
+                PositionInlineTextBoxToolbar(_selectedTextBox.Parent as UIElement ?? _selectedTextBox);
         }
 
         // ── Session/lease plumbing ──────────────────────────────────────────
@@ -7628,12 +7686,11 @@ namespace Caelum.Pages
 
             // Task 8: close the sticky bubble + drop the text selection
             // chrome/toolbar before the pages tear down — a late layout pass
-            // against a detached container throws.
-            CancelStickyNoteEdit();
+            // against a detached container throws. CloseTransientUi owns the
+            // popup/flyout/gesture sweep (WPF "release" parity);
+            // DeselectTextBox additionally drops the selection itself.
+            CloseTransientUi("release");
             DeselectTextBox();
-            CancelTextBoxDrag(restoreBounds: false);
-            CancelTextResize(restoreBounds: false);
-            RemoveInlineTextBoxToolbar();
 
             foreach (var page in _pageControls)
             {
