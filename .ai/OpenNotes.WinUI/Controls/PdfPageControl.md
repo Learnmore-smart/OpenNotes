@@ -62,9 +62,12 @@
   `ShapeStrokeFactory.BuildShapeStrokes` quiet-adds every part then raises
   `ShapeCommittedUndoable` (editor pushes ONE `InkStrokesAddedAction` and
   arms Select — WPF order).
-- **Hidden ink** (`HiddenInkCanvas` + `HiddenInkStore`): freehand gesture →
+- **Hidden ink** (`HiddenInkCanvas` + `HiddenInkStore`): the canvas clips to
+  its size via `SizeChanged` → `Clip = RectangleGeometry` (WPF
+  `ClipToBounds="True"` parity — WinUI `Canvas` has no `ClipToBounds`
+  member); freehand gesture →
   `HiddenInkAnnotation` (default `HiddenInkMaskColor` opaque 199,205,212,
-  `HiddenInkSize` 28) → `HiddenInkCreated` event. Opaque `Path` visuals +
+  `HiddenInkSize` 28) → `HiddenInkCreated` event. Opaque `Polyline` visuals (keyed by mask Id in `_hiddenInkVisuals`) +
   tap-to-reveal (`DispatcherQueueTimer`, auto-recover after
   `HiddenInkRevealDurationMs`/`RevealDurationMs`, `HiddenInkRevealState`
   deadline math). Eraser path hits whole masks via

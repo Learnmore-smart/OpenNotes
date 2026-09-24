@@ -749,8 +749,15 @@ public sealed class CoreInkPhaseBTests
     {
         var source = new InkStrokeStore();
         var target = new InkStrokeStore();
-        var stroke = Stroke();
+        var stroke = Stroke(); // spine (0,0),(10,0),(20,0)
         var placement = source.AddStrokeQuiet(stroke);
+
+        // The page already applied the pointer delta to the spine during the
+        // live drag (source-page coords). The ACTION owns the
+        // container→page adjust inside ExecuteInitialTransfer — WPF
+        // MoveItemsDirectly parity. Hand-applying it here would mask the
+        // P1 regression this test exists to pin.
+        StrokeGeometry.TranslateSpinePoints(stroke.Points, 10, 5);
 
         var action = new InkSelectionCrossPageMoveAction(
             source, target, new[] { stroke },
@@ -760,17 +767,22 @@ public sealed class CoreInkPhaseBTests
         Assert.That(action.ExecuteInitialTransfer(), Is.True);
         Assert.That(source.Count, Is.EqualTo(0));
         Assert.That(target.Count, Is.EqualTo(1));
+        // Drop position in TARGET coords: live drag (10,5) + adjust (0,-800).
+        Assert.That(stroke.Points[0].X, Is.EqualTo(10).Within(1e-9));
+        Assert.That(stroke.Points[0].Y, Is.EqualTo(-795).Within(1e-9));
+        Assert.That(stroke.Points[2].X, Is.EqualTo(30).Within(1e-9));
 
-        // The initial transfer only relocates ownership; the pointer delta was
-        // already applied live by the page (WPF parity), so undo subtracts
-        // dx+adjust AND puts the stroke back at its captured source index.
-        StrokeGeometry.TranslateSpinePoints(stroke.Points, 10, 5 - 800); // simulate live drag
+        // Undo pulls back to the source store at the captured index AND
+        // restores the exact pre-drag source coordinates.
         await action.UndoAsync();
         Assert.That(source.Count, Is.EqualTo(1));
+        Assert.That(source.IndexOf(stroke), Is.EqualTo(0));
         Assert.That(target.Count, Is.EqualTo(0));
         Assert.That(stroke.Points[0].X, Is.EqualTo(0).Within(1e-9));
         Assert.That(stroke.Points[0].Y, Is.EqualTo(0).Within(1e-9));
+        Assert.That(stroke.Points[2].X, Is.EqualTo(20).Within(1e-9));
 
+        // Redo re-transfers and re-applies drag+adjust.
         await action.RedoAsync();
         Assert.That(source.Count, Is.EqualTo(0));
         Assert.That(target.Count, Is.EqualTo(1));

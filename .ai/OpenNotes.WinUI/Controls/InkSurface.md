@@ -23,11 +23,11 @@ The custom pointer-ink pipeline for the WinUI editor (`Caelum.Controls`, Task 7 
 - Undo/dirty/thumbnail policy lives in `EditorPage` — the surface only mutates the store quietly and raises `StrokeCollected`/`StrokeRecognized`/`StrokesErased`/`InkMutated`.
 ## Phase B additions (2026-09-23)
 
-- `InkSurfaceTool.Laser` added (Phase-B tools otherwise ride `CustomInkInputProcessingMode` on the page, not `Tool`).
+- `InkSurfaceTool` gained the Phase-B members `HiddenInk`/`Laser`/`Shape` — `ApplyToolToAllPages` still drives them primarily through `CustomInkInputProcessingMode` on the page (only Pen/Highlighter pre-seed `ink.Tool`).
 - **Laser gesture**: pointer drags emit `LaserStrokeStarted`/`LaserStrokePointsAppended`/`LaserStrokeCompleted` (`LaserStrokeEventArgs` — batched raw page-DIP points); the page draws the ephemeral polyline on `LaserInkCanvas`. Laser never touches `Store`/undo — the surface only arbitrates capture the same way as ink.
-- **Shape gesture**: in shape mode the surface owns the drag lifecycle and raises `ShapeDragStarted`/`ShapeDragUpdated`/`ShapeDragCompleted`/`ShapeDragCanceled` (`ShapeDragEventArgs` — anchor, current, live `ShiftHeld` sampled per event like WPF `Keyboard.IsKeyDown`). The page renders the preview and commits.
+- **Shape gesture**: in shape mode the surface owns the drag lifecycle and raises `ShapeDragStarted`/`ShapeDragUpdated`/`ShapeDragEnded`/`ShapeDragCancelled` (`ShapeDragEventArgs` — anchor, current, live `ShiftHeld` sampled per event like WPF `Keyboard.IsKeyDown`). The page renders the preview and commits.
 - **Hidden ink**: `HiddenInkColor` (opaque 199,205,212 default) + `HiddenInkSize` (28.0) snapshot at pointer-down; completed freehand masks raise `HiddenInkStrokeCommitted` (`IReadOnlyList<PointD>`) instead of `StrokeCollected` — the page builds the `HiddenInkAnnotation`.
-- **Eraser path**: `EraserPathTraced` (`EraserPathEventArgs` — path + `EraserSize`) so the page can hit hidden-ink masks with `StrokeGeometry.HiddenInkIntersectsEraser` during the same gesture.
+- **Eraser path**: `EraserPathUpdated` (`EraserPathEventArgs` — swept path + `EraserSize`) so the page can hit hidden-ink masks with `StrokeGeometry.HiddenInkIntersectsEraser` during the same gesture; `EraseGestureCompleted`/`EraseGestureCancelled` bracket the gesture for the page's batch-remove bookkeeping.
 - **Ruler**: `RulerGeometryProvider` (`Func<(TopA,TopB,BottomA,BottomB)?>` — null while hidden) + `RulerSnapTolerance = 24.0`; `CompleteStroke` runs `StrokeGeometry.ConstrainPointsToRuler` on Pen/Highlighter commits (start-inside → stroke dropped; crossing → clipped; near edge → snapped). Snapped strokes are ordinary ink — undo/save unchanged.
 - Selection visuals/lasso still live on the PAGE (`SelectionOverlayCanvas`), not the surface — the surface only needs `Tool`/mode flags.
 

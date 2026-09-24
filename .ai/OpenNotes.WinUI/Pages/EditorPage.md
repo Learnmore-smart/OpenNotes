@@ -9,7 +9,9 @@ AutomationIds + `LucideIcon`), `DocumentSidebar` overlay (Pages/Outline/
 Bookmarks tabs + collapse rail, **5.2.15 228-DIP content-offset rule**),
 page-jump navigator, `PdfSearchPanel`, page context `MenuFlyout`, loading
 overlay. Phase-A ink (pen/highlighter/eraser + pressure + undo) is live;
-text/sticky/image overlays and Phase-B ink tools remain deferred to T7B–T9.
+Phase-B ink tools (select/transforms incl. cross-page moves, shapes,
+hidden ink, laser, ruler) are live too — text/sticky/image overlays and
+the save/history pipeline remain deferred to T8–T9.
 
 ## What It Does
 - **Load/render:** `PdfService.LoadPdfAsync(filePath, CancellationToken)` on
@@ -178,8 +180,9 @@ text/sticky/image overlays and Phase-B ink tools remain deferred to T7B–T9.
   (semi-transparent themed body, tick canvas every 10 DIP with 50-DIP
   majors, centre dot, transparent end-cap rotate zones, edge length
   handles) — WPF `Cursor=` parity needs cursor-capable element subclasses
-  (`CursorGrid`; `Rectangle`/`Ellipse` are SEALED in WinUI and
-  `UIElement.ProtectedCursor` is protected). Left-drag body = move
+  (`CursorGrid`): `UIElement.ProtectedCursor` is protected so a page cannot
+  assign a cursor to an arbitrary child (the shape types are also sealed —
+  `Grid` is the only viable wrapper base). Left-drag body = move
   (clamped to viewport), left-drag end caps OR right-drag anywhere =
   rotate with 15° snapping, handles resize 80..∞; session-only state,
   first show centres in the viewport.

@@ -287,6 +287,18 @@ namespace Caelum.Controls
             SelectionOverlayCanvas.RightTapped += SelectionOverlay_RightTapped;
 
             HiddenInkStore.Changed += (s, e) => RebuildHiddenInkVisuals();
+
+            // WPF HiddenInkCanvas ClipToBounds="True" parity — WinUI Canvas
+            // has no ClipToBounds member, so the clip rect tracks the
+            // element size directly (masks drawn off-page must not bleed
+            // into neighbouring pages/chrome).
+            HiddenInkCanvas.SizeChanged += (s, e) =>
+            {
+                HiddenInkCanvas.Clip = new RectangleGeometry
+                {
+                    Rect = new Rect(0, 0, e.NewSize.Width, e.NewSize.Height),
+                };
+            };
         }
 
         /// <summary>Zero-based page index inside the loaded document.</summary>

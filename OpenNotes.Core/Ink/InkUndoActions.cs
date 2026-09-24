@@ -512,9 +512,11 @@ public sealed class InkSelectionCrossPageMoveAction : IUndoAction
     public List<int> TargetIndices { get; } = new();
 
     /// <summary>
-    /// Moves the strokes into the target store; idempotent. Returns false
-    /// when nothing could be transferred — the editor then skips the undo
-    /// push (WPF SelectionCrossPageMoveAction parity).
+    /// Moves the strokes into the target store AND applies the
+    /// container→page coordinate adjust to their spines (WPF
+    /// ExecuteInitialTransfer → targetPage.MoveItemsDirectly parity);
+    /// idempotent. Returns false when nothing could be transferred — the
+    /// editor then skips the undo push.
     /// </summary>
     public bool ExecuteInitialTransfer()
     {
@@ -527,9 +529,19 @@ public sealed class InkSelectionCrossPageMoveAction : IUndoAction
         foreach (var stroke in sorted)
         {
             _sourceStore.RemoveStrokeQuiet(stroke);
+            // The action owns the container→page coordinate adjust — WPF
+            // runs targetPage.MoveItemsDirectly(strokes, adjustX, adjustY)
+            // inside the transfer. Without it the strokes would keep
+            // source-page coordinates on the target page (drop teleport)
+            // and undo would subtract a delta that was never applied.
+            // Translate BEFORE the add so the target's Added mutation
+            // builds the visual at the final coordinates.
+            Caelum.InkGeometry.StrokeGeometry.TranslateSpinePoints(
+                stroke.Points, _adjustX, _adjustY);
             _targetStore.AddStrokeQuiet(stroke);
             TargetIndices.Add(_targetStore.IndexOf(stroke));
         }
+        _targetStore.NotifyGeometryChanged(sorted);
         return TargetIndices.Count > 0;
     }
 

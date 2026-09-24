@@ -35,19 +35,21 @@ using Windows.UI.Text;
 namespace Caelum.Pages
 {
     /// <summary>
-    /// V6 WinUI port of WPF <c>Pages/EditorPage.xaml.cs</c>, scoped to the
-    /// Task 6 shell: PDF load/render, scroll/zoom/page navigation, the
-    /// three-tab document sidebar (pages / outline / bookmarks), the toolbar
-    /// chrome + page-jump navigator, full-text search, the page context menu
-    /// (PNG export, insert, rotate), the loading overlay and tab-close
-    /// disposal.
+    /// V6 WinUI port of WPF <c>Pages/EditorPage.xaml.cs</c> — Task 6 shell
+    /// (PDF load/render, scroll/zoom/page navigation, three-tab document
+    /// sidebar, toolbar chrome + page-jump navigator, full-text search,
+    /// page context menu, loading overlay, tab-close disposal) plus the
+    /// complete Task 7 ink toolset: pen/highlighter/eraser with pressure +
+    /// scribble recognition (Phase A), and selection lasso/marquee with
+    /// move/rotate/scale incl. cross-page moves, shape tools, hidden-ink
+    /// masks, ephemeral laser and the viewport-anchored ruler (Phase B),
+    /// all driven through the token/snapshot undo/redo pipeline.
     ///
     /// Deliberately deferred, preserving element names + AutomationIds:
-    /// T7 — pen/highlighter/eraser/shape/laser/ruler/hidden-ink input
-    /// surfaces (toolbar toggles are visual-only); T8 — text/select/sticky
-    /// annotations, search-bound text highlights, selectable-PDF surface;
-    /// T9 — undo/redo pipeline, save/version history, thumbnail
-    /// drag-reorder, insert-gap affordances, page delete buttons, print.
+    /// T8 — text/select/sticky annotations, search-bound text highlights,
+    /// selectable-PDF surface; T9 — save/autosave/dirty-close pipeline,
+    /// version history, thumbnail drag-reorder, insert-gap affordances,
+    /// page delete buttons, print.
     /// </summary>
     public sealed partial class EditorPage : Page
     {
@@ -1497,11 +1499,13 @@ namespace Caelum.Pages
         private void RedoButton_Click(object sender, RoutedEventArgs e) => _ = PerformRedoAsync();
 
         /// <summary>
-        /// Tool toggles stay mutually exclusive like the WPF toolbar; Phase A
-        /// maps Pen/Highlighter/Eraser onto the ink surface and leaves the
-        /// Phase-B tools visual-only (their InkSurfaceTool is None).
-        /// Re-clicking the active tool keeps it armed (WPF: the tool stays
-        /// selected — a second click doesn't drop it to None).
+        /// Tool toggles stay mutually exclusive like the WPF toolbar —
+        /// every Phase-B tool (Select/Shape/HiddenInk/Laser included) arms a
+        /// real <see cref="CustomInkInputProcessingMode"/> on each page via
+        /// <see cref="ApplyToolToAllPages"/>; only the ruler sits outside
+        /// this set (it is an overlay toggle, not a ToolType). Re-clicking
+        /// the armed tool unchecks it and deactivates to
+        /// <see cref="ToolType.None"/> (WPF parity).
         /// </summary>
         private void ToolButton_Click(object sender, RoutedEventArgs e)
         {
@@ -2163,8 +2167,13 @@ namespace Caelum.Pages
             {
                 await action.UndoAsync();
                 // A failed token-resolution undo stays on the stack as a
-                // no-op — same contract as the WPF StrokesErasedAction path.
+                // no-op — same contract as the WPF StrokesErasedAction path
+                // (cross-page moves carry the same LastOperationSucceeded
+                // contract, WPF :3815-3817 parity).
                 if (action is InkStrokesErasedAction erased && !erased.LastOperationSucceeded)
+                    return;
+                if (action is InkSelectionCrossPageMoveAction crossPage
+                    && !crossPage.LastOperationSucceeded)
                     return;
                 _undoStack.Pop();
                 _redoStack.Push(action);
@@ -2186,6 +2195,9 @@ namespace Caelum.Pages
             {
                 await action.RedoAsync();
                 if (action is InkStrokesErasedAction erased && !erased.LastOperationSucceeded)
+                    return;
+                if (action is InkSelectionCrossPageMoveAction crossPage
+                    && !crossPage.LastOperationSucceeded)
                     return;
                 _redoStack.Pop();
                 _undoStack.Push(action);
@@ -4711,7 +4723,12 @@ namespace Caelum.Pages
             _penService = null;
 
             foreach (var page in _pageControls)
-                page.CancelInteraction();
+            {
+                // ReleaseResources = CancelInteraction + hidden-ink reveal /
+                // selection-dash / laser-fade timer teardown (the timers
+                // otherwise keep ticking against a detached page).
+                page.ReleaseResources();
+            }
 
             // PdfService owns the rasterizer/document; async-dispose is
             // fire-and-forget on teardown (the tab is leaving the tree) but
