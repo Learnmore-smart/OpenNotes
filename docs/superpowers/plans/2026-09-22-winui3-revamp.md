@@ -146,7 +146,7 @@
 
 ## Task 8: Text/sticky/image annotations + PDF text selection
 
-- [ ] Port `TextOverlayCanvas` widgets (text boxes, drag handles, 8-point resize, rotation), sticky notes with Save/Cancel/Delete lifecycle, image annotations (clipboard/drag-in via `Windows.ApplicationModel.DataTransfer` + Win32 EMF path for Excel charts), persistent highlights, PDF text selection surface (was disabled stub in WPF — decide: keep stub-off or implement via PdfiumViewer text page API).
+- [~] Port `TextOverlayCanvas` widgets (text boxes, drag handles, 8-point resize, rotation), sticky notes with Save/Cancel/Delete lifecycle, image annotations (clipboard/drag-in via `Windows.ApplicationModel.DataTransfer` + Win32 EMF path for Excel charts), persistent highlights, PDF text selection surface (was disabled stub in WPF — decide: keep stub-off or implement via PdfiumViewer text page API). *(Phase A shipped 2026-09-23 — text boxes (create/edit-session/inline toolbar/8-pt resize/drag/nudge) + sticky notes (marker + popup Save/Cancel/Delete + drag), full undo ledger in Core `AnnotationUndoActions.cs` behind UI-free `IAnnotationContainerHost`, mixed-selection transforms, cross-page moves, strokes+text+sticky clipboard copy/paste, quiet load + `CollectAnnotations` collectors for T9. Remaining: image annotations + persistent highlights/PDF text selection.)*
 - [ ] **Commit.**
 
 ## Task 9: Save/load pipeline + dialogs + misc services

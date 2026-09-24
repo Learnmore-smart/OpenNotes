@@ -1,5 +1,5 @@
 # OpenNotes.WinUI/Controls/PdfPageControl.xaml(.cs)
-> Last updated: 2026-09-23 (V6 Task 7 Phase A — ink engine wired) | Protection: STANDARD
+> Last updated: 2026-09-23 (V6 Task 8 Phase A — text/sticky overlays) | Protection: STANDARD
 
 ## Purpose
 `Caelum.Controls.PdfPageControl : UserControl` — the per-page frame stacked in
@@ -105,6 +105,55 @@
   alias — `Windows.System` is also imported and its type wins unqualified
   (was a build break).
 
+## Task 8 Phase A additions (2026-09-23 — text/sticky overlays)
+
+- **`SetMode(bool isTextMode)`** — text-tool gate pushed by
+  `ApplyToolToAllPages`: the page raises `TextOverlayPointerPressed`
+  (empty-overlay press → editor's `CreateTextBox`) and
+  `BackgroundPointerPressed` (sticky-tool placement + deselect + the
+  `_lastClickedPage/_lastClickedPoint` paste anchor) instead of inking.
+- **Overlay data registry** (`_overlayData: Dictionary<Grid,object>`) —
+  the annotation payload behind a container (`StickyNoteAnnotation`
+  today); `GetOverlayData`/`SetOverlayData`/`GetOverlayContainers` back the
+  Core `IAnnotationContainerHost` implementation the undo actions replay.
+- **Sticky notes** — `AddStickyNote(StickyNoteAnnotation)` builds the
+  36-DIP marker `Grid` on `ImageOverlayCanvas` (below ink), clamps it into
+  page bounds (`GetStickyPageSize`/`ClampStickyNotePosition`), syncs
+  `note.X/Y` on quiet moves, and wires marker pointer events:
+  left-drag → `StickyNoteMoved` (old/new position for the editor's
+  `StickyNoteMovedAction`), activation (tap/double-tap) →
+  `StickyNoteActivated` (editor opens the editor popup), context menu
+  (`BuildStickyNoteContextMenu`, localized via
+  `RefreshStickyNoteContextMenuLocalization`) →
+  `StickyNoteDeleteRequested`. `SetStickyNotePositionQuiet`/
+  `SetStickyNoteTextQuiet` are the undo replay setters.
+- **Text containers** — text boxes live on `TextOverlayCanvas` (editor-
+  built `Grid`s: chrome + TextBox + 8 `TextResizeHandle` squares). The page
+  supplies `GetContainerRect`, `SetTextAutoSize`/`IsTextAnnotationAutoWidth`/
+  `IsTextAnnotationAutoHeight` (persist-as-auto flags ride attached DPs
+  `TextAnnotationAutoWidth/HeightProperty` ON THE ELEMENT — WPF attached-
+  property parity, so cross-page moves keep them), `GetTextData()`/
+  `TryGetTextAnnotation(container)` (live `TextAnnotation` collectors —
+  WPF `CollectAnnotations`/clipboard parity) and
+  `GetStickyNoteData()`.
+- **Quiet mutators** — `RemoveTextContainerQuiet`/`AddTextContainerQuiet`
+  work on both overlay layers (container is re-parented to whichever
+  canvas hosts it: sticky → `ImageOverlayCanvas`, text → `TextOverlayCanvas`);
+  `SetTextContainerPositionQuiet`/`SetTextContainerBoundsQuiet`/
+  `SetTextContentQuiet`/`SetTextStyleQuiet`/`SetTextFormatQuiet` replay
+  undo state without firing user events. `IAnnotationContainerHost`
+  explicit impls adapt `object` containers → `Grid`.
+- **Selection participation** — `SelectedTextContainers`; marquee/lasso
+  hit-testing, Ctrl-click toggling, per-item outline chrome and the
+  move/scale/rotate transforms all treat text+sticky containers as
+  first-class items (`MoveItemsDirectly`/`ScaleItemsDirectly`/
+  `RotateItemsDirectly` take both legs; `ReadAnnotationRotation`/
+  `ApplyAnnotationRotation` persist `RotationDegrees`).
+- `AnnotationSelectionChangedEventArgs` /
+  `SelectionMoveCompletedEventArgs` / `SelectionResizeCompletedEventArgs` /
+  `SelectionRotateCompletedEventArgs` carry the selected containers so the
+  editor can push ONE mixed `Annotation*Action` per gesture.
+
 ## Important Notes / NEVER Change
 - The ink layer sits UNDER `ShapePreviewCanvas`/`TextOverlayCanvas` — strokes must
   not swallow overlay input.
@@ -119,4 +168,6 @@
 ## Open Threads / Resume Context
 - **Status:** GREEN — Phase A ink (pen/highlighter/eraser, pressure, scribble
   shape recognition, undo seams) + Phase B (select/lasso/transforms, shapes,
-  hidden ink, laser, ruler bridge) live; renders BGRA pages.
+  hidden ink, laser, ruler bridge) + Task 8 Phase A (text/sticky overlay
+  surface, quiet mutators, `IAnnotationContainerHost`) live; renders BGRA
+  pages. Image annotations + persistent PDF text selection remain Phase B.

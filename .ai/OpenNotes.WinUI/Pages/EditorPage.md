@@ -222,9 +222,12 @@ the save/history pipeline remain deferred to T8–T9.
 ## Open Threads / Resume Context
 - **Status:** GREEN — `tools/winui-editor-smoke.ps1` 60/60; Task 7 Phase A
   ink engine + Phase B (select/lasso/transforms incl. cross-page, shape
-  tools, hidden ink, laser, ruler, mixed undo) live; WinUI build 0 err/0
-  warn, headless `CoreInkPhaseBTests` 45/45.
-- **Deferred (stubbed, by design):** text/sticky/image overlays +
-  persistent PDF text selection visuals (T8); save/autosave/dirty-close +
-  version history + settings (`CollectAnnotations`, inert SavePdfButton)
-  (T9).
+  tools, hidden ink, laser, ruler, mixed undo) + Task 8 Phase A (text
+  boxes, sticky notes, inline toolbar, mixed-selection undo, clipboard,
+  collectors) live; WinUI build 0 err/0 warn, headless
+  `CoreInkPhaseBTests` 45/45 + `CoreAnnotationUndoTests`/
+  `EditorTextStickySourceTests` 23/23.
+- **Deferred (stubbed, by design):** image annotations + persistent PDF
+  text selection visuals (T8 Phase B); save/autosave/dirty-close +
+  version history + settings (`CollectAnnotations` ready but unwired,
+  SavePdfButton still inert) (T9).

@@ -7,6 +7,7 @@ using Caelum.Models;
 using Caelum.Services;
 using Microsoft.UI.Input;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
@@ -44,52 +45,78 @@ namespace Caelum.Controls
         public Rect Bounds { get; }
     }
 
-    /// <summary>A completed selection move gesture (strokes only — no containers in Phase B).</summary>
+    /// <summary>A completed selection move gesture (strokes + text/sticky containers).</summary>
     public sealed class SelectionMoveCompletedEventArgs : EventArgs
     {
         public SelectionMoveCompletedEventArgs(
-            double deltaX, double deltaY, IReadOnlyList<InkStrokeData> strokes)
+            double deltaX, double deltaY, IReadOnlyList<InkStrokeData> strokes,
+            IReadOnlyList<Grid> containers = null)
         {
             DeltaX = deltaX;
             DeltaY = deltaY;
             Strokes = strokes ?? Array.Empty<InkStrokeData>();
+            SelectedTextContainers = containers ?? Array.Empty<Grid>();
         }
 
         public double DeltaX { get; }
         public double DeltaY { get; }
         public IReadOnlyList<InkStrokeData> Strokes { get; }
+
+        /// <summary>Text/sticky containers moved with the selection (WPF parity).</summary>
+        public IReadOnlyList<Grid> SelectedTextContainers { get; }
     }
 
     /// <summary>A completed selection resize gesture (uniform scale + anchor).</summary>
     public sealed class SelectionResizeCompletedEventArgs : EventArgs
     {
         public SelectionResizeCompletedEventArgs(
-            double totalScale, PointD anchor, IReadOnlyList<InkStrokeData> strokes)
+            double totalScale, PointD anchor, IReadOnlyList<InkStrokeData> strokes,
+            IReadOnlyList<Grid> containers = null)
         {
             TotalScale = totalScale;
             Anchor = anchor;
             Strokes = strokes ?? Array.Empty<InkStrokeData>();
+            SelectedTextContainers = containers ?? Array.Empty<Grid>();
         }
 
         public double TotalScale { get; }
         public PointD Anchor { get; }
         public IReadOnlyList<InkStrokeData> Strokes { get; }
+        public IReadOnlyList<Grid> SelectedTextContainers { get; }
     }
 
     /// <summary>A completed selection rotate gesture (total degrees + centre).</summary>
     public sealed class SelectionRotateCompletedEventArgs : EventArgs
     {
         public SelectionRotateCompletedEventArgs(
-            double totalDegrees, PointD center, IReadOnlyList<InkStrokeData> strokes)
+            double totalDegrees, PointD center, IReadOnlyList<InkStrokeData> strokes,
+            IReadOnlyList<Grid> containers = null)
         {
             TotalDegrees = totalDegrees;
             Center = center;
             Strokes = strokes ?? Array.Empty<InkStrokeData>();
+            SelectedTextContainers = containers ?? Array.Empty<Grid>();
         }
 
         public double TotalDegrees { get; }
         public PointD Center { get; }
         public IReadOnlyList<InkStrokeData> Strokes { get; }
+        public IReadOnlyList<Grid> SelectedTextContainers { get; }
+    }
+
+    /// <summary>A sticky-note marker finished a move (drag or keyboard nudge).</summary>
+    public sealed class StickyNoteMovedEventArgs : EventArgs
+    {
+        public StickyNoteMovedEventArgs(Grid container, PointD oldPosition, PointD newPosition)
+        {
+            Container = container;
+            OldPosition = oldPosition;
+            NewPosition = newPosition;
+        }
+
+        public Grid Container { get; }
+        public PointD OldPosition { get; }
+        public PointD NewPosition { get; }
     }
 
     /// <summary>
@@ -110,15 +137,27 @@ namespace Caelum.Controls
         public IReadOnlyList<HiddenInkAnnotation> Annotations { get; }
     }
 
+    /// <summary>Pre-gesture geometry for one selected container (WPF SelectionContainerSnapshot).</summary>
+    internal sealed class SelectionContainerSnapshot
+    {
+        public Grid Container;
+        public PointD Position;
+        public double Width;
+        public double Height;
+        public double FontSize;
+        public double RotationDegrees;
+    }
+
     /// <summary>
-    /// Per-selection-gesture stroke snapshot so a cancelled gesture (capture
-    /// lost / Escape / tool switch) restores the exact pre-gesture geometry —
-    /// WPF SelectionInteractionSnapshot parity, strokes only.
+    /// Per-selection-gesture stroke/container snapshot so a cancelled gesture
+    /// (capture lost / Escape / tool switch) restores the exact pre-gesture
+    /// geometry — WPF SelectionInteractionSnapshot parity.
     /// </summary>
     internal sealed class SelectionInteractionSnapshot
     {
         public readonly Dictionary<InkStrokeData, (List<InkPointData> Points, double Size)> Strokes =
             new(ReferenceEqualityComparer.Instance);
+        public readonly List<SelectionContainerSnapshot> Containers = new();
     }
 
     /// <summary>
@@ -134,12 +173,13 @@ namespace Caelum.Controls
     /// <item><c>SetBitmapScalingMode</c> — WPF toggled
     /// <c>RenderOptions.BitmapScalingMode</c>; WinUI always samples full
     /// quality.</item>
-    /// <item>Text/sticky/image overlay selection — those annotation kinds are
-    /// Task 8; the selection engine is strokes-only for now and the
-    /// <see cref="SelectionFilter"/> keeps its TextOnly arm inert.</item>
+    /// <item>Image/markup/area-highlight overlay containers — Task 8 Phase B;
+    /// the overlay-data plumbing (<see cref="_overlayData"/>, tag checks,
+    /// quiet add/remove) is already generic so Phase B plugs into the same
+    /// slots.</item>
     /// </list>
     /// </summary>
-    public sealed partial class PdfPageControl : UserControl
+    public sealed partial class PdfPageControl : UserControl, IAnnotationContainerHost
     {
         private bool _hostActive = true;
         private bool _documentInputEnabled = true;
@@ -152,6 +192,7 @@ namespace Caelum.Controls
 
         // ── Selection state (Phase B — strokes only; containers are T8) ──
         private readonly List<InkStrokeData> _selectedStrokes = new();
+        private readonly List<Grid> _selectedTextContainers = new();
         private bool _isSelecting;
         private bool _isDraggingSelection;
         private bool _isResizingSelection;
@@ -205,6 +246,54 @@ namespace Caelum.Controls
         private readonly List<Polyline> _liveLaserPolylines = new();
         private readonly Dictionary<Polyline, DateTimeOffset> _laserCompletedAt = new();
         private DispatcherQueueTimer _laserFadeTimer;
+
+        // ── Overlay annotations (Task 8 Phase A: sticky notes; Phase B adds
+        //    image/markup/area containers to the same dictionary + tags) ───
+        private const string MarkupContainerTag = "textMarkup";
+        private const string AreaHighlightContainerTag = "areaHighlight";
+        private const string StickyNoteContainerTag = "stickyNote";
+
+        /// <summary>
+        /// Persist-as-auto flags ride the container element itself (WPF
+        /// attached DP parity) so a cross-page move keeps them without a
+        /// page-side dictionary lookup.
+        /// </summary>
+        public static readonly DependencyProperty TextAnnotationAutoWidthProperty =
+            DependencyProperty.RegisterAttached(
+                "TextAnnotationAutoWidth",
+                typeof(bool),
+                typeof(PdfPageControl),
+                new PropertyMetadata(false));
+
+        public static readonly DependencyProperty TextAnnotationAutoHeightProperty =
+            DependencyProperty.RegisterAttached(
+                "TextAnnotationAutoHeight",
+                typeof(bool),
+                typeof(PdfPageControl),
+                new PropertyMetadata(false));
+
+        public static bool GetTextAnnotationAutoWidth(DependencyObject element)
+            => element != null && (bool)element.GetValue(TextAnnotationAutoWidthProperty);
+
+        public static void SetTextAnnotationAutoWidth(DependencyObject element, bool value)
+            => element?.SetValue(TextAnnotationAutoWidthProperty, value);
+
+        public static bool GetTextAnnotationAutoHeight(DependencyObject element)
+            => element != null && (bool)element.GetValue(TextAnnotationAutoHeightProperty);
+
+        public static void SetTextAnnotationAutoHeight(DependencyObject element, bool value)
+            => element?.SetValue(TextAnnotationAutoHeightProperty, value);
+        private readonly Dictionary<Grid, object> _overlayData = new();
+
+        // ── Sticky-note marker drag state ────────────────────────────────
+        private const double StickyMarkerSize = 36.0;
+        private const double StickyDragThreshold = 3.0;
+        private Grid _stickyDragContainer;
+        private PointD _stickyDragStartPointer;
+        private PointD _stickyDragStartPosition;
+        private bool _stickyDragMoved;
+        private uint? _stickyDragPointerId;
+        private bool _suppressStickyCaptureCancellation;
 
         // ── Public configuration (EditorPage pushes these) ───────────────
 
@@ -289,6 +378,12 @@ namespace Caelum.Controls
             SelectionOverlayCanvas.PointerExited += SelectionOverlay_PointerExited;
             SelectionOverlayCanvas.DoubleTapped += SelectionOverlay_DoubleTapped;
             SelectionOverlayCanvas.RightTapped += SelectionOverlay_RightTapped;
+
+            // Task 8: text-overlay background presses (create/deselect) and
+            // page-background presses (sticky placement / deselect) — WPF
+            // TextOverlayCanvas_MouseDown + PageGrid_MouseDown parity.
+            TextOverlayCanvas.PointerPressed += TextOverlayCanvas_PointerPressed;
+            PageGrid.PointerPressed += PageGrid_PointerPressed;
 
             HiddenInkStore.Changed += (s, e) =>
             {
@@ -389,6 +484,32 @@ namespace Caelum.Controls
         /// <summary>Right-tap / double-tap on empty page — editor shows the page menu.</summary>
         public event EventHandler BlankContextRequested;
 
+        // ── Task 8 Phase A: text/sticky overlay events ───────────────────
+
+        /// <summary>
+        /// Press on the <see cref="TextOverlayCanvas"/> background while the
+        /// Text tool is armed — the editor creates/deselects a text box (WPF
+        /// TextOverlayPointerPressed). The event forwards the routed args so
+        /// the editor can mark <see cref="PointerRoutedEventArgs.Handled"/>.
+        /// </summary>
+        public event EventHandler<PointerRoutedEventArgs> TextOverlayPointerPressed;
+
+        /// <summary>
+        /// Press on the page background (not inside the text overlay) while
+        /// the ink surface idles — the editor uses it for sticky-note
+        /// placement and text deselection (WPF BackgroundPointerPressed).
+        /// </summary>
+        public event EventHandler<PointerRoutedEventArgs> BackgroundPointerPressed;
+
+        /// <summary>Sticky marker tapped or Enter/Space-activated — open the editor popup.</summary>
+        public event EventHandler<Grid> StickyNoteActivated;
+
+        /// <summary>Sticky marker finished a move (drag threshold crossed or keyboard nudge).</summary>
+        public event EventHandler<StickyNoteMovedEventArgs> StickyNoteMoved;
+
+        /// <summary>Delete requested via context menu or the Delete key.</summary>
+        public event EventHandler<Grid> StickyNoteDeleteRequested;
+
         /// <summary>
         /// The rasterized page bitmap. Assignment mirrors the WPF
         /// <c>PageSource</c> setter: replacing the source releases the old
@@ -449,11 +570,15 @@ namespace Caelum.Controls
         {
             var enabled = _hostActive && _documentInputEnabled;
             InkSurface.InputEnabled = enabled;
+            // WPF parity: in None mode the ink surface must not intercept
+            // presses — sticky-note markers live on the layer below it.
+            InkSurface.IsHitTestVisible = enabled && _currentMode != CustomInkInputProcessingMode.None;
             UpdateHiddenInkHitTesting();
             if (!enabled)
             {
                 InkSurface.CancelInteraction();
                 CancelSelectionInteraction(restoreSnapshot: true);
+                CancelStickyDrag();
                 // Hidden tabs keep no ticking ants (WPF SetHostActive parity).
                 StopSelectionDashTimer();
             }
@@ -484,11 +609,26 @@ namespace Caelum.Controls
         }
 
         /// <summary>
-        /// T8: refreshes localized sticky-note context menus on this page.
+        /// Refreshes marker automation labels + context-flyout item text
+        /// after a language change (WPF RefreshStickyNoteContextMenuLocalization).
         /// </summary>
         public void RefreshStickyNoteContextMenuLocalization()
         {
-            // T8.
+            foreach (var container in GetOverlayContainers().Where(IsStickyNoteContainer))
+            {
+                string stickyLabel = LocalizationService.Get("Editor.StickyNoteTooltip");
+                AutomationProperties.SetName(container, stickyLabel);
+                AutomationProperties.SetHelpText(container, stickyLabel);
+                var flyout = container.ContextFlyout as MenuFlyout
+                    ?? container.Children.OfType<Button>().FirstOrDefault()?.ContextFlyout as MenuFlyout;
+                if (flyout?.Items.OfType<MenuFlyoutItem>().FirstOrDefault() is not MenuFlyoutItem delete)
+                    continue;
+
+                string label = LocalizationService.Get("Editor.DeleteTooltip");
+                delete.Text = label;
+                AutomationProperties.SetName(delete, label);
+                AutomationProperties.SetHelpText(delete, label);
+            }
         }
 
         // ==================================================================
@@ -524,6 +664,11 @@ namespace Caelum.Controls
             };
 
             UpdateHiddenInkHitTesting();
+            // WPF parity: a passive ink surface is hit-test transparent so
+            // sticky markers / page background receive the press.
+            InkSurface.IsHitTestVisible =
+                _hostActive && _documentInputEnabled
+                && mode != CustomInkInputProcessingMode.None;
             if (mode != CustomInkInputProcessingMode.Shape)
                 ClearShapePreview();
             if (mode != CustomInkInputProcessingMode.Laser && _laserPolyline != null)
@@ -567,6 +712,7 @@ namespace Caelum.Controls
         public void ReleaseResources()
         {
             CancelInteraction();
+            CancelStickyDrag();
             StopAllHiddenInkRevealTimers();
             StopSelectionDashTimer();
             _laserFadeTimer?.Stop();
@@ -575,34 +721,71 @@ namespace Caelum.Controls
             _liveLaserPolylines.Clear();
             _laserCompletedAt.Clear();
             _laserPolyline = null;
+            _selectedTextContainers.Clear();
+            _overlayData.Clear();
         }
 
         // ==================================================================
-        // Selection (Phase B — strokes only)
+        // Selection (strokes + text/sticky overlay containers)
         // ==================================================================
 
-        /// <summary>True while any stroke is selected.</summary>
-        public bool HasSelection => _selectedStrokes.Count > 0;
+        /// <summary>The text overlay canvas — the editor's text containers live here (WPF TextOverlay).</summary>
+        public Canvas TextOverlay => TextOverlayCanvas;
+
+        /// <summary>
+        /// Text annotations are only directly interactive while the Text tool
+        /// is armed; every other mode lets input fall through to the
+        /// drawing/selection layers underneath (WPF SetMode).
+        /// </summary>
+        public void SetMode(bool isTextMode)
+        {
+            TextOverlayCanvas.IsHitTestVisible = isTextMode;
+            TextOverlayCanvas.Background = isTextMode
+                ? new SolidColorBrush(Color.FromArgb(0, 0, 0, 0))
+                : null;
+        }
+
+        /// <summary>True while any stroke or container is selected.</summary>
+        public bool HasSelection => _selectedStrokes.Count > 0 || _selectedTextContainers.Count > 0;
 
         /// <summary>The selected strokes (group-expanded) in z-order.</summary>
         public IReadOnlyList<InkStrokeData> SelectedStrokes => _selectedStrokes;
 
-        /// <summary>Union of the selected strokes' rendered bounds.</summary>
+        /// <summary>The selected text/sticky containers (WPF SelectedTextContainers).</summary>
+        public List<Grid> SelectedTextContainers => _selectedTextContainers;
+
+        /// <summary>Union of the selected items' rendered bounds (rotation-aware).</summary>
         public Rect GetSelectionBounds()
         {
-            var bounds = StrokeGeometry.GetSelectionBounds(_selectedStrokes);
-            if (_selectedStrokes.Count == 0)
+            if (_selectedStrokes.Count == 0 && _selectedTextContainers.Count == 0)
                 return Rect.Empty;
-            return new Rect(bounds.X, bounds.Y, bounds.Width, bounds.Height);
+
+            var bounds = Rect.Empty;
+            if (_selectedStrokes.Count > 0)
+            {
+                var strokeBounds = StrokeGeometry.GetSelectionBounds(_selectedStrokes);
+                bounds = new Rect(strokeBounds.X, strokeBounds.Y, strokeBounds.Width, strokeBounds.Height);
+            }
+
+            foreach (var container in _selectedTextContainers)
+            {
+                var rect = GetContainerAxisAlignedBounds(container);
+                if (bounds.IsEmpty)
+                    bounds = rect;
+                else
+                    bounds.Union(rect);
+            }
+            return bounds;
         }
 
         /// <summary>
         /// Bulk-select items (shape groups expanded). Empty input falls
         /// through to ClearSelection — WPF SelectItems parity.
         /// </summary>
-        public void SelectItems(IEnumerable<InkStrokeData> strokes)
+        public void SelectItems(IEnumerable<InkStrokeData> strokes, IEnumerable<Grid> containers = null)
         {
             _selectedStrokes.Clear();
+            _selectedTextContainers.Clear();
             if (strokes != null)
             {
                 foreach (var stroke in strokes)
@@ -616,16 +799,31 @@ namespace Caelum.Controls
                     }
                 }
             }
+            if (containers != null)
+            {
+                foreach (var container in containers)
+                {
+                    if (container != null && !_selectedTextContainers.Contains(container))
+                        _selectedTextContainers.Add(container);
+                }
+            }
             RefreshSelectionAfterToggle();
         }
 
-        /// <summary>Selects every ink stroke on the page (Ctrl+A).</summary>
-        public void SelectAllAnnotations() => SelectItems(InkSurface.Store.Strokes);
+        /// <summary>Selects every annotation on the page (Ctrl+A) — ink, text and overlay containers.</summary>
+        public void SelectAllAnnotations()
+        {
+            var containers = TextOverlayCanvas.Children.OfType<Grid>()
+                .Concat(GetOverlayContainers())
+                .ToList();
+            SelectItems(InkSurface.Store.Strokes, containers);
+        }
 
         /// <summary>Clears the selection and its overlay visuals.</summary>
         public void ClearSelection()
         {
             _selectedStrokes.Clear();
+            _selectedTextContainers.Clear();
             _isSelecting = false;
             _freeSelectionPath = null;
             _freeSelectionPoints = null;
@@ -683,6 +881,25 @@ namespace Caelum.Controls
                     continue;
                 snapshot.Strokes[stroke] = (new List<InkPointData>(stroke.Points), stroke.Size);
             }
+            foreach (var container in _selectedTextContainers)
+            {
+                if (container == null)
+                    continue;
+                var left = Canvas.GetLeft(container);
+                var top = Canvas.GetTop(container);
+                snapshot.Containers.Add(new SelectionContainerSnapshot
+                {
+                    Container = container,
+                    Position = new PointD(
+                        double.IsNaN(left) ? 0 : left,
+                        double.IsNaN(top) ? 0 : top),
+                    Width = double.IsNaN(container.Width) ? double.NaN : container.Width,
+                    Height = double.IsNaN(container.Height) ? double.NaN : container.Height,
+                    FontSize = container.Children.OfType<TextBox>().FirstOrDefault()?.FontSize
+                        ?? double.NaN,
+                    RotationDegrees = ReadAnnotationRotation(container),
+                });
+            }
             _selectionInteractionSnapshot = snapshot;
         }
 
@@ -701,7 +918,32 @@ namespace Caelum.Controls
                 stroke.Size = pair.Value.Size;
                 restored.Add(stroke);
             }
-            InkSurface.Store.NotifyGeometryChanged(restored);
+            if (restored.Count > 0)
+                InkSurface.Store.NotifyGeometryChanged(restored);
+
+            foreach (var item in snapshot.Containers)
+            {
+                var container = item.Container;
+                if (container == null)
+                    continue;
+
+                if (IsStickyNoteContainer(container))
+                    SetStickyNotePositionQuiet(container, item.Position);
+                else
+                {
+                    Canvas.SetLeft(container, item.Position.X);
+                    Canvas.SetTop(container, item.Position.Y);
+                }
+
+                if (!double.IsNaN(item.Width) && item.Width > 0)
+                    container.Width = item.Width;
+                if (!double.IsNaN(item.Height) && item.Height > 0)
+                    container.Height = item.Height;
+                var textBox = container.Children.OfType<TextBox>().FirstOrDefault();
+                if (textBox != null && !double.IsNaN(item.FontSize) && item.FontSize > 0)
+                    textBox.FontSize = item.FontSize;
+                ApplyAnnotationRotation(container, item.RotationDegrees);
+            }
         }
 
         private void CancelSelectionInteraction(bool restoreSnapshot)
@@ -773,7 +1015,8 @@ namespace Caelum.Controls
 
             if (HasSelection)
             {
-                var bounds = StrokeGeometry.GetSelectionBounds(_selectedStrokes);
+                var unionBounds = GetSelectionBounds();
+                var bounds = new RectD(unionBounds.X, unionBounds.Y, unionBounds.Width, unionBounds.Height);
                 var rotateHandle = StrokeGeometry.GetRotateHandlePoint(bounds);
                 if (new RectD(rotateHandle.X - 10, rotateHandle.Y - 10, 20, 20).Contains(pos))
                 {
@@ -899,7 +1142,7 @@ namespace Caelum.Controls
                 double delta = total - _lastRotationDegrees;
                 _lastRotationDegrees = total;
                 _totalRotationDegrees = total;
-                RotateItemsDirectly(_selectedStrokes, delta, _rotateCenter);
+                RotateItemsDirectly(_selectedStrokes, _selectedTextContainers, delta, _rotateCenter);
             }
             else if (_isDraggingSelection)
             {
@@ -907,7 +1150,7 @@ namespace Caelum.Controls
                 var deltaY = pos.Y - _dragStartPoint.Y;
                 _totalDragDeltaX += deltaX;
                 _totalDragDeltaY += deltaY;
-                MoveItemsDirectly(_selectedStrokes, deltaX, deltaY);
+                MoveItemsDirectly(_selectedStrokes, _selectedTextContainers, deltaX, deltaY);
                 _dragStartPoint = pos;
             }
             else if (_isSelecting)
@@ -998,7 +1241,8 @@ namespace Caelum.Controls
                 _isResizingSelection = false;
                 if (Math.Abs(_lastResizeScale - 1.0) > 0.001)
                     SelectionResizeCompleted?.Invoke(this, new SelectionResizeCompletedEventArgs(
-                        _lastResizeScale, _resizeAnchorPoint, _selectedStrokes.ToList()));
+                        _lastResizeScale, _resizeAnchorPoint,
+                        _selectedStrokes.ToList(), _selectedTextContainers.ToList()));
                 _lastResizeScale = 1.0;
                 _selectionInteractionSnapshot = null;
                 return;
@@ -1009,7 +1253,8 @@ namespace Caelum.Controls
                 _isRotatingSelection = false;
                 if (Math.Abs(_totalRotationDegrees) > 0.5)
                     SelectionRotateCompleted?.Invoke(this, new SelectionRotateCompletedEventArgs(
-                        _totalRotationDegrees, _rotateCenter, _selectedStrokes.ToList()));
+                        _totalRotationDegrees, _rotateCenter,
+                        _selectedStrokes.ToList(), _selectedTextContainers.ToList()));
                 _lastRotationDegrees = 0;
                 _totalRotationDegrees = 0;
                 _selectionInteractionSnapshot = null;
@@ -1021,7 +1266,8 @@ namespace Caelum.Controls
                 _isDraggingSelection = false;
                 if (Math.Abs(_totalDragDeltaX) > 0.5 || Math.Abs(_totalDragDeltaY) > 0.5)
                     SelectionMoveCompleted?.Invoke(this, new SelectionMoveCompletedEventArgs(
-                        _totalDragDeltaX, _totalDragDeltaY, _selectedStrokes.ToList()));
+                        _totalDragDeltaX, _totalDragDeltaY,
+                        _selectedStrokes.ToList(), _selectedTextContainers.ToList()));
                 _totalDragDeltaX = 0;
                 _totalDragDeltaY = 0;
                 _selectionInteractionSnapshot = null;
@@ -1033,6 +1279,7 @@ namespace Caelum.Controls
             _isSelecting = false;
 
             _selectedStrokes.Clear();
+            _selectedTextContainers.Clear();
             bool isClick = _selectionShape == SelectionShape.FreeForm
                 ? _freeSelectionPoints == null || _freeSelectionPoints.Count <= 2
                 : _selectionRect == null
@@ -1040,8 +1287,42 @@ namespace Caelum.Controls
 
             if (isClick)
             {
-                // Topmost-first point hit (WPF click parity).
-                if (_selectionFilter != SelectionFilter.TextOnly)
+                // Topmost-first point hit (WPF click parity): text containers
+                // sit above ink, overlay containers below ink but above the
+                // bitmap, so the probe order is text → overlay → strokes.
+                PointD clickPoint = _selectionStartPoint;
+                bool hitSomething = false;
+
+                if (_selectionFilter != SelectionFilter.DrawingsOnly)
+                {
+                    for (int i = TextOverlayCanvas.Children.Count - 1; i >= 0; i--)
+                    {
+                        if (TextOverlayCanvas.Children[i] is Grid container
+                            && HitTextContainer(container, clickPoint))
+                        {
+                            _selectedTextContainers.Add(container);
+                            hitSomething = true;
+                            break;
+                        }
+                    }
+
+                    if (!hitSomething)
+                    {
+                        for (int i = ImageOverlayCanvas.Children.Count - 1; i >= 0; i--)
+                        {
+                            if (ImageOverlayCanvas.Children[i] is Grid container
+                                && IsOverlayContainer(container)
+                                && HitTextContainer(container, clickPoint))
+                            {
+                                _selectedTextContainers.Add(container);
+                                hitSomething = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                if (!hitSomething && _selectionFilter != SelectionFilter.TextOnly)
                 {
                     for (int i = InkSurface.Store.Strokes.Count - 1; i >= 0; i--)
                     {
@@ -1069,6 +1350,23 @@ namespace Caelum.Controls
                         }
                     }
                 }
+
+                if (_selectionFilter != SelectionFilter.DrawingsOnly)
+                {
+                    foreach (var container in TextOverlayCanvas.Children.OfType<Grid>())
+                    {
+                        var containerRect = GetContainerRect(container);
+                        if (StrokeGeometry.IsContainerInsidePolygon(polygon, containerRect))
+                            _selectedTextContainers.Add(container);
+                    }
+                    foreach (var container in ImageOverlayCanvas.Children.OfType<Grid>()
+                        .Where(IsOverlayContainer))
+                    {
+                        var containerRect = GetContainerRect(container);
+                        if (StrokeGeometry.IsContainerInsidePolygon(polygon, containerRect))
+                            _selectedTextContainers.Add(container);
+                    }
+                }
             }
             else if (_selectionRect != null)
             {
@@ -1085,6 +1383,23 @@ namespace Caelum.Controls
                         {
                             _selectedStrokes.Add(stroke);
                         }
+                    }
+                }
+
+                if (_selectionFilter != SelectionFilter.DrawingsOnly)
+                {
+                    foreach (var container in TextOverlayCanvas.Children.OfType<Grid>())
+                    {
+                        var containerRect = GetContainerRect(container);
+                        if (selRect.Contains(containerRect))
+                            _selectedTextContainers.Add(container);
+                    }
+                    foreach (var container in ImageOverlayCanvas.Children.OfType<Grid>()
+                        .Where(IsOverlayContainer))
+                    {
+                        var containerRect = GetContainerRect(container);
+                        if (selRect.Contains(containerRect))
+                            _selectedTextContainers.Add(container);
                     }
                 }
             }
@@ -1104,7 +1419,7 @@ namespace Caelum.Controls
                 _selectedStrokes.AddRange(expanded);
             }
 
-            if (_selectedStrokes.Count == 0)
+            if (_selectedStrokes.Count == 0 && _selectedTextContainers.Count == 0)
             {
                 SelectionOverlayCanvas.Children.Clear();
                 StopSelectionDashTimer();
@@ -1115,8 +1430,51 @@ namespace Caelum.Controls
             }
         }
 
+        /// <summary>Container hit-test: axis-aligned rect contains the point (WPF HitTextContainer).</summary>
+        private static bool HitTextContainer(Grid container, PointD point)
+            => GetContainerRect(container).Contains(point);
+
+        /// <summary>Canvas-space rect for a container (ActualSize preferred over declared).</summary>
+        private static RectD GetContainerRect(FrameworkElement container)
+        {
+            var left = Canvas.GetLeft(container);
+            var top = Canvas.GetTop(container);
+            if (double.IsNaN(left)) left = 0;
+            if (double.IsNaN(top)) top = 0;
+            var width = container.ActualWidth > 0 ? container.ActualWidth
+                : (!double.IsNaN(container.Width) && container.Width > 0 ? container.Width : 0);
+            var height = container.ActualHeight > 0 ? container.ActualHeight
+                : (!double.IsNaN(container.Height) && container.Height > 0 ? container.Height : 0);
+            return new RectD(left, top, width, height);
+        }
+
         private void HandleCtrlClickToggle(PointD point)
         {
+            // Text containers sit above ink — topmost-first probe order
+            // (text → overlay → strokes), WPF HandleCtrlClickToggle parity.
+            if (_selectionFilter != SelectionFilter.DrawingsOnly)
+            {
+                for (int i = TextOverlayCanvas.Children.Count - 1; i >= 0; i--)
+                {
+                    if (TextOverlayCanvas.Children[i] is Grid container
+                        && HitTextContainer(container, point))
+                    {
+                        ToggleTextContainerSelection(container);
+                        return;
+                    }
+                }
+                for (int i = ImageOverlayCanvas.Children.Count - 1; i >= 0; i--)
+                {
+                    if (ImageOverlayCanvas.Children[i] is Grid container
+                        && IsOverlayContainer(container)
+                        && HitTextContainer(container, point))
+                    {
+                        ToggleTextContainerSelection(container);
+                        return;
+                    }
+                }
+            }
+
             if (_selectionFilter != SelectionFilter.TextOnly)
             {
                 for (int i = InkSurface.Store.Strokes.Count - 1; i >= 0; i--)
@@ -1130,6 +1488,20 @@ namespace Caelum.Controls
                 }
             }
             // Ctrl+click on empty space keeps the current selection.
+        }
+
+        private void ToggleTextContainerSelection(Grid container)
+        {
+            if (_selectedTextContainers.Contains(container))
+            {
+                _selectedTextContainers.Remove(container);
+                RefreshSelectionAfterToggle();
+            }
+            else
+            {
+                _selectedTextContainers.Add(container);
+                UpdateSelectionVisuals();
+            }
         }
 
         private void ToggleStrokeSelection(InkStrokeData stroke)
@@ -1164,39 +1536,190 @@ namespace Caelum.Controls
         //    undo actions replay the total delta through the same Core math) ──
 
         public void MoveSelection(double deltaX, double deltaY)
-            => MoveItemsDirectly(_selectedStrokes, deltaX, deltaY);
-
-        public void MoveItemsDirectly(IReadOnlyList<InkStrokeData> strokes, double deltaX, double deltaY)
         {
-            if (strokes == null || strokes.Count == 0)
+            if (_selectedStrokes.Count == 0 && _selectedTextContainers.Count == 0)
                 return;
-            foreach (var stroke in strokes)
-                StrokeGeometry.TranslateSpinePoints(stroke.Points, deltaX, deltaY);
-            InkSurface.Store.NotifyGeometryChanged(strokes);
+            MoveItemsDirectly(_selectedStrokes, _selectedTextContainers, deltaX, deltaY);
+        }
+
+        /// <summary>
+        /// WPF MoveItemsDirectly parity — strokes translate spines, sticky
+        /// markers move through the clamped quiet setter, other containers
+        /// move their canvas position; visuals + mutation event follow.
+        /// </summary>
+        public void MoveItemsDirectly(
+            IReadOnlyList<InkStrokeData> strokes, IReadOnlyList<Grid> containers,
+            double deltaX, double deltaY)
+        {
+            if ((strokes == null || strokes.Count == 0) && (containers == null || containers.Count == 0))
+                return;
+
+            if (strokes != null)
+            {
+                foreach (var stroke in strokes)
+                    StrokeGeometry.TranslateSpinePoints(stroke.Points, deltaX, deltaY);
+                InkSurface.Store.NotifyGeometryChanged(strokes);
+            }
+
+            if (containers != null)
+            {
+                foreach (var container in containers)
+                {
+                    if (container == null)
+                        continue;
+                    var left = Canvas.GetLeft(container);
+                    var top = Canvas.GetTop(container);
+                    if (IsStickyNoteContainer(container))
+                    {
+                        SetStickyNotePositionQuiet(container, new PointD(
+                            (double.IsNaN(left) ? 0 : left) + deltaX,
+                            (double.IsNaN(top) ? 0 : top) + deltaY));
+                    }
+                    else
+                    {
+                        Canvas.SetLeft(container, (double.IsNaN(left) ? 0 : left) + deltaX);
+                        Canvas.SetTop(container, (double.IsNaN(top) ? 0 : top) + deltaY);
+                    }
+                }
+            }
+
+            UpdateSelectionVisuals();
+            InkMutated?.Invoke(this, EventArgs.Empty);
         }
 
         public void ScaleSelection(double scaleFactor, PointD center)
-            => ScaleItemsDirectly(_selectedStrokes, scaleFactor, center);
-
-        public void ScaleItemsDirectly(IReadOnlyList<InkStrokeData> strokes, double scaleFactor, PointD center)
         {
-            if (strokes == null || strokes.Count == 0)
+            if (_selectedStrokes.Count == 0 && _selectedTextContainers.Count == 0)
                 return;
-            foreach (var stroke in strokes)
-            {
-                StrokeGeometry.ScaleSpinePoints(stroke.Points, scaleFactor, center);
-                stroke.Size *= scaleFactor;
-            }
-            InkSurface.Store.NotifyGeometryChanged(strokes);
+            ScaleItemsDirectly(_selectedStrokes, _selectedTextContainers, scaleFactor, center);
         }
 
-        public void RotateItemsDirectly(IReadOnlyList<InkStrokeData> strokes, double degrees, PointD center)
+        /// <summary>
+        /// WPF ScaleItemsDirectly parity — overlay containers scale their
+        /// explicit size (sticky syncs the model + reclamps); text containers
+        /// scale position and font size.
+        /// </summary>
+        public void ScaleItemsDirectly(
+            IReadOnlyList<InkStrokeData> strokes, IReadOnlyList<Grid> containers,
+            double scaleFactor, PointD center)
         {
-            if (strokes == null || strokes.Count == 0 || Math.Abs(degrees) < 0.001)
+            if ((strokes == null || strokes.Count == 0) && (containers == null || containers.Count == 0))
                 return;
-            foreach (var stroke in strokes)
-                StrokeGeometry.RotateSpinePoints(stroke.Points, degrees, center);
-            InkSurface.Store.NotifyGeometryChanged(strokes);
+
+            if (strokes != null)
+            {
+                foreach (var stroke in strokes)
+                {
+                    StrokeGeometry.ScaleSpinePoints(stroke.Points, scaleFactor, center);
+                    stroke.Size *= scaleFactor;
+                }
+                InkSurface.Store.NotifyGeometryChanged(strokes);
+            }
+
+            if (containers != null)
+            {
+                foreach (var container in containers)
+                {
+                    if (container == null)
+                        continue;
+                    var left = double.IsNaN(Canvas.GetLeft(container)) ? 0 : Canvas.GetLeft(container);
+                    var top = double.IsNaN(Canvas.GetTop(container)) ? 0 : Canvas.GetTop(container);
+                    var newLeft = center.X + (left - center.X) * scaleFactor;
+                    var newTop = center.Y + (top - center.Y) * scaleFactor;
+
+                    if (IsOverlayContainer(container))
+                    {
+                        // Overlay containers scale via explicit size; the
+                        // inner content follows automatically (sticky:
+                        // centred icon).
+                        container.Width = Math.Max(1.0, container.Width * scaleFactor);
+                        container.Height = Math.Max(1.0, container.Height * scaleFactor);
+                        if (IsStickyNoteContainer(container)
+                            && GetOverlayData(container) is StickyNoteAnnotation note)
+                        {
+                            note.Width = container.Width;
+                            note.Height = container.Height;
+                            // A selection resize is a real geometry edit —
+                            // keep the serialized DIP origin in sync and
+                            // reclamp against the new marker dimensions.
+                            SetStickyNotePositionQuiet(container, new PointD(newLeft, newTop));
+                        }
+                        else
+                        {
+                            Canvas.SetLeft(container, newLeft);
+                            Canvas.SetTop(container, newTop);
+                        }
+                    }
+                    else
+                    {
+                        Canvas.SetLeft(container, newLeft);
+                        Canvas.SetTop(container, newTop);
+                        var tb = container.Children.OfType<TextBox>().FirstOrDefault();
+                        if (tb != null)
+                            tb.FontSize *= scaleFactor;
+                    }
+                }
+            }
+
+            UpdateSelectionVisuals();
+            InkMutated?.Invoke(this, EventArgs.Empty);
+        }
+
+        /// <summary>
+        /// WPF RotateItemsDirectly parity — containers rotate their centre
+        /// about the selection centre and accumulate a RenderTransform
+        /// rotation; sticky notes sync <see cref="StickyNoteAnnotation.RotationDegrees"/>.
+        /// </summary>
+        public void RotateItemsDirectly(
+            IReadOnlyList<InkStrokeData> strokes, IReadOnlyList<Grid> containers,
+            double degrees, PointD center)
+        {
+            if ((strokes == null || strokes.Count == 0) && (containers == null || containers.Count == 0))
+                return;
+            if (Math.Abs(degrees) < 0.001)
+                return;
+
+            if (strokes != null)
+            {
+                foreach (var stroke in strokes)
+                    StrokeGeometry.RotateSpinePoints(stroke.Points, degrees, center);
+                InkSurface.Store.NotifyGeometryChanged(strokes);
+            }
+
+            if (containers != null)
+            {
+                foreach (var container in containers)
+                {
+                    if (container == null)
+                        continue;
+
+                    double width = container.ActualWidth > 0 ? container.ActualWidth
+                        : (!double.IsNaN(container.Width) && container.Width > 0 ? container.Width : 0);
+                    double height = container.ActualHeight > 0 ? container.ActualHeight
+                        : (!double.IsNaN(container.Height) && container.Height > 0 ? container.Height : 0);
+                    double left = double.IsNaN(Canvas.GetLeft(container)) ? 0 : Canvas.GetLeft(container);
+                    double top = double.IsNaN(Canvas.GetTop(container)) ? 0 : Canvas.GetTop(container);
+                    var itemCenter = new PointD(left + width / 2, top + height / 2);
+                    var rotatedCenter = AnnotationRotation.RotatePoint(itemCenter, center, degrees);
+                    var newLeft = rotatedCenter.X - width / 2;
+                    var newTop = rotatedCenter.Y - height / 2;
+
+                    if (IsStickyNoteContainer(container))
+                        SetStickyNotePositionQuiet(container, new PointD(newLeft, newTop));
+                    else
+                    {
+                        Canvas.SetLeft(container, newLeft);
+                        Canvas.SetTop(container, newTop);
+                    }
+
+                    ApplyAnnotationRotation(container, ReadAnnotationRotation(container) + degrees);
+                    if (GetOverlayData(container) is StickyNoteAnnotation note)
+                        note.RotationDegrees = ReadAnnotationRotation(container);
+                }
+            }
+
+            UpdateSelectionVisuals();
+            InkMutated?.Invoke(this, EventArgs.Empty);
         }
 
         // ── Selection visuals ────────────────────────────────────────────
@@ -1227,8 +1750,9 @@ namespace Caelum.Controls
         {
             // A synchronous rebuild also satisfies a queued request.
             _selectionVisualsDirty = false;
-            var boundsD = StrokeGeometry.GetSelectionBounds(_selectedStrokes);
-            if (_selectedStrokes.Count == 0)
+            var unionBounds = GetSelectionBounds();
+            var boundsD = new RectD(unionBounds.X, unionBounds.Y, unionBounds.Width, unionBounds.Height);
+            if (!HasSelection)
             {
                 StopSelectionDashTimer();
                 return;
@@ -1250,13 +1774,18 @@ namespace Caelum.Controls
             Canvas.SetTop(selectionBorder, boundsD.Y - 4);
             SelectionOverlayCanvas.Children.Add(selectionBorder);
 
-            // Per-item marching-ants outlines — each selected stroke keeps
-            // its own dashed rect (WPF Task-6 behavior).
+            // Per-item marching-ants outlines — each selected stroke and
+            // container keeps its own dashed rect (WPF Task-6 behavior).
             _perItemOutlines.Clear();
             foreach (var stroke in _selectedStrokes)
             {
                 var strokeBounds = StrokeGeometry.GetRenderedStrokeBounds(stroke).Inflated(3, 3);
                 AddPerItemOutline(strokeBounds);
+            }
+            foreach (var container in _selectedTextContainers)
+            {
+                var containerBounds = GetContainerRect(container).Inflated(3, 3);
+                AddPerItemOutline(containerBounds);
             }
             if (_perItemOutlines.Count > 0)
                 StartSelectionDashTimer();
@@ -1395,7 +1924,8 @@ namespace Caelum.Controls
 
         private void UpdateHoverCursor(PointD pos)
         {
-            var bounds = StrokeGeometry.GetSelectionBounds(_selectedStrokes);
+            var unionBounds = GetSelectionBounds();
+            var bounds = new RectD(unionBounds.X, unionBounds.Y, unionBounds.Width, unionBounds.Height);
             if (StrokeGeometry.TryGetResizeHandleIndex(bounds, pos, out int handleIndex))
             {
                 ProtectedCursor = InputSystemCursor.Create(handleIndex switch
@@ -1417,6 +1947,833 @@ namespace Caelum.Controls
                     ? InputSystemCursorShape.SizeAll
                     : InputSystemCursorShape.Cross);
         }
+
+        // ==================================================================
+        // Overlay containers + sticky notes (Task 8 Phase A)
+        // ==================================================================
+
+        /// <summary>
+        /// Containers on <see cref="ImageOverlayCanvas"/> that carry a
+        /// serialized annotation payload in <see cref="_overlayData"/> —
+        /// sticky notes now, markup/area highlights in Phase B (WPF
+        /// IsOverlayContainer).
+        /// </summary>
+        internal static bool IsOverlayContainer(Grid container)
+        {
+            if (container?.Tag is not string tag)
+                return false;
+            return tag == MarkupContainerTag
+                || tag == AreaHighlightContainerTag
+                || tag == StickyNoteContainerTag;
+        }
+
+        private bool IsStickyNoteContainer(Grid container)
+            => container != null && (container.Tag as string) == StickyNoteContainerTag;
+
+        /// <summary>The annotation payload stored behind a container (WPF GetOverlayData).</summary>
+        public object GetOverlayData(Grid container)
+            => container != null && _overlayData.TryGetValue(container, out var data) ? data : null;
+
+        /// <summary>Attach an annotation payload to a container (cross-page transfer).</summary>
+        public void SetOverlayData(Grid container, object data)
+        {
+            if (container == null)
+                return;
+            _overlayData[container] = data;
+        }
+
+        /// <summary>All overlay containers on the page (images excluded — Phase B).</summary>
+        public IReadOnlyList<Grid> GetOverlayContainers()
+        {
+            var result = new List<Grid>();
+            foreach (var child in ImageOverlayCanvas.Children)
+            {
+                if (child is Grid container && IsOverlayContainer(container))
+                    result.Add(container);
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// Removes a text/sticky container from whichever overlay layer hosts
+        /// it — the payload dictionaries keep their entries so a later re-add
+        /// (undo / move back) restores the item as-is (WPF
+        /// RemoveTextContainerQuiet).
+        /// </summary>
+        public bool RemoveTextContainerQuiet(Grid container)
+        {
+            if (container == null)
+                return false;
+
+            if (ReferenceEquals(container.Parent, ImageOverlayCanvas))
+            {
+                ImageOverlayCanvas.Children.Remove(container);
+                return true;
+            }
+            if (ReferenceEquals(container.Parent, TextOverlayCanvas))
+            {
+                TextOverlayCanvas.Children.Remove(container);
+                return true;
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Re-adds a container after the quiet remove — sticky markers go
+        /// back on <see cref="ImageOverlayCanvas"/> (below ink), text boxes on
+        /// <see cref="TextOverlayCanvas"/> (WPF AddTextContainerQuiet).
+        /// </summary>
+        public void AddTextContainerQuiet(Grid container)
+        {
+            if (container == null)
+                return;
+            if (IsStickyNoteContainer(container))
+            {
+                ImageOverlayCanvas.Children.Add(container);
+            }
+            else
+            {
+                TextOverlayCanvas.Children.Add(container);
+            }
+        }
+
+        /// <summary>Page-space size used for sticky clamping (WPF GetStickyPageSize).</summary>
+        private Size GetStickyPageSize()
+        {
+            double width = ActualWidth > 0 ? ActualWidth : Width;
+            double height = ActualHeight > 0 ? ActualHeight : Height;
+            if (width <= 0) width = RootGrid.ActualWidth > 0 ? RootGrid.ActualWidth : RootGrid.Width;
+            if (height <= 0) height = RootGrid.ActualHeight > 0 ? RootGrid.ActualHeight : RootGrid.Height;
+            if (width <= 0) width = 1584;
+            if (height <= 0) height = 2245;
+            return new Size(Math.Max(0, width), Math.Max(0, height));
+        }
+
+        /// <summary>Clamps a sticky marker inside the page bounds (WPF ClampStickyNotePosition).</summary>
+        public static PointD ClampStickyNotePosition(PointD position, Size pageSize, Size markerSize)
+        {
+            double maxX = Math.Max(0, pageSize.Width - markerSize.Width);
+            double maxY = Math.Max(0, pageSize.Height - markerSize.Height);
+            return new PointD(
+                Math.Clamp(position.X, 0, maxX),
+                Math.Clamp(position.Y, 0, maxY));
+        }
+
+        /// <summary>
+        /// Creates the sticky-note marker container on
+        /// <see cref="ImageOverlayCanvas"/> (below ink) — WPF AddStickyNote:
+        /// 36-DIP rounded icon with the note glyph, <c>StickyNote.{id}</c>
+        /// AutomationId, tooltip = note text, context flyout with Delete,
+        /// pointer drag + keyboard move/activate/delete.
+        /// </summary>
+        public Grid AddStickyNote(StickyNoteAnnotation note)
+        {
+            if (note == null)
+                return null;
+
+            EnsureStickyNoteIdentity(note);
+
+            double markerWidth = note.Width >= 32 && !double.IsNaN(note.Width)
+                ? note.Width
+                : StickyMarkerSize;
+            double markerHeight = note.Height >= 32 && !double.IsNaN(note.Height)
+                ? note.Height
+                : StickyMarkerSize;
+            note.Width = markerWidth;
+            note.Height = markerHeight;
+
+            var icon = new Border
+            {
+                Width = markerWidth,
+                Height = markerHeight,
+                CornerRadius = new CornerRadius(7),
+                Background = new SolidColorBrush(Color.FromArgb(255, note.R, note.G, note.B)),
+                BorderBrush = new SolidColorBrush(Color.FromArgb(255, 0xD4, 0xA7, 0x2C)),
+                BorderThickness = new Thickness(1),
+                Child = new Microsoft.UI.Xaml.Shapes.Path
+                {
+                    Width = 20,
+                    Height = 20,
+                    Stretch = Stretch.Uniform,
+                    Data = LucideIcon.ParseIconGeometry(
+                        "M4,3 L16,3 L20,7 L20,20 L4,20 Z M16,3 L16,8 L20,8 M7,12 L17,12 M7,16 L15,16"),
+                    Fill = new SolidColorBrush(Color.FromArgb(255, 0x7A, 0x5C, 0x0E)),
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    IsHitTestVisible = false,
+                },
+            };
+
+            // UiaGrid keeps the marker UIA-visible (plain Grid exposes no
+            // peer); the inner Button supplies focus/tab-stop/keyboard since
+            // Grid cannot take focus in WinUI.
+            var container = new UiaGrid
+            {
+                Width = markerWidth,
+                Height = markerHeight,
+                Tag = StickyNoteContainerTag,
+                Background = new SolidColorBrush(Color.FromArgb(0, 0, 0, 0)),
+                IsHitTestVisible = true,
+            };
+
+            var hitButton = new Button
+            {
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                VerticalAlignment = VerticalAlignment.Stretch,
+                HorizontalContentAlignment = HorizontalAlignment.Center,
+                VerticalContentAlignment = VerticalAlignment.Center,
+                Padding = new Thickness(0),
+                Background = new SolidColorBrush(Color.FromArgb(0, 0, 0, 0)),
+                BorderBrush = new SolidColorBrush(Color.FromArgb(0, 0, 0, 0)),
+                BorderThickness = new Thickness(0),
+                Content = icon,
+                IsTabStop = true,
+            };
+            hitButton.AddHandler(PointerPressedEvent,
+                new PointerEventHandler(StickyNote_PointerPressed), handledEventsToo: true);
+            hitButton.AddHandler(PointerReleasedEvent,
+                new PointerEventHandler(StickyNote_PointerReleased), handledEventsToo: true);
+            hitButton.PointerMoved += StickyNote_PointerMoved;
+            hitButton.PointerCaptureLost += StickyNote_PointerCaptureLost;
+            hitButton.PointerCanceled += StickyNote_PointerCanceled;
+            hitButton.KeyDown += StickyNote_KeyDown;
+            var flyout = BuildStickyNoteContextMenu(container);
+            hitButton.ContextFlyout = flyout;
+            // Deterministic right-tap path (WPF ContextMenu parity).
+            hitButton.RightTapped += (s, e) =>
+            {
+                e.Handled = true;
+                flyout.ShowAt(container);
+            };
+            container.Children.Add(hitButton);
+            container.ContextFlyout = flyout; // retrievable for localization refresh
+
+            AutomationProperties.SetAutomationId(container, $"StickyNote.{note.Id}");
+            string stickyLabel = LocalizationService.Get("Editor.StickyNoteTooltip");
+            AutomationProperties.SetName(container, stickyLabel);
+            AutomationProperties.SetHelpText(container, stickyLabel);
+            ToolTipService.SetToolTip(container, note.Text ?? string.Empty);
+
+            ImageOverlayCanvas.Children.Add(container);
+            _overlayData[container] = note;
+            SetStickyNotePositionQuiet(container, new PointD(note.X, note.Y));
+            ApplyAnnotationRotation(container, note.RotationDegrees);
+            InkMutated?.Invoke(this, EventArgs.Empty);
+            return container;
+        }
+
+        /// <summary>
+        /// PDF annotation names are page-local in the sidecar format, but a
+        /// malformed file can repeat or omit them. Repair only the identity;
+        /// text, geometry and colour remain untouched (WPF
+        /// EnsureStickyNoteIdentity).
+        /// </summary>
+        private void EnsureStickyNoteIdentity(StickyNoteAnnotation note)
+        {
+            string candidate = note.Id?.Trim();
+            bool used = !string.IsNullOrWhiteSpace(candidate)
+                && _overlayData.Values
+                    .OfType<StickyNoteAnnotation>()
+                    .Any(existing => string.Equals(existing.Id?.Trim(), candidate,
+                        StringComparison.OrdinalIgnoreCase));
+            if (string.IsNullOrWhiteSpace(candidate) || used)
+            {
+                do
+                    candidate = Guid.NewGuid().ToString("N");
+                while (_overlayData.Values
+                    .OfType<StickyNoteAnnotation>()
+                    .Any(existing => string.Equals(existing.Id, candidate,
+                        StringComparison.OrdinalIgnoreCase)));
+            }
+
+            note.Id = candidate;
+        }
+
+        private MenuFlyout BuildStickyNoteContextMenu(Grid container)
+        {
+            var flyout = new MenuFlyout();
+            var delete = new MenuFlyoutItem
+            {
+                Text = LocalizationService.Get("Editor.DeleteTooltip"),
+                Tag = "StickyNote.Delete",
+            };
+            AutomationProperties.SetAutomationId(delete, "Sticky.Delete.ContextMenu");
+            string deleteLabel = LocalizationService.Get("Editor.DeleteTooltip");
+            AutomationProperties.SetName(delete, deleteLabel);
+            AutomationProperties.SetHelpText(delete, deleteLabel);
+            delete.Click += (sender, args) =>
+            {
+                StickyNoteDeleteRequested?.Invoke(this, container);
+            };
+            flyout.Items.Add(delete);
+            return flyout;
+        }
+
+        /// <summary>Quietly moves a sticky marker (clamped + model-synced) — undo/keyboard path.</summary>
+        public bool SetStickyNotePositionQuiet(Grid container, PointD position)
+        {
+            if (container == null || !IsOverlayContainer(container)
+                || GetOverlayData(container) is not StickyNoteAnnotation note)
+            {
+                return false;
+            }
+
+            var clamped = ClampStickyNotePosition(
+                position,
+                GetStickyPageSize(),
+                new Size(container.Width > 0 ? container.Width : StickyMarkerSize,
+                    container.Height > 0 ? container.Height : StickyMarkerSize));
+            Canvas.SetLeft(container, clamped.X);
+            Canvas.SetTop(container, clamped.Y);
+            note.X = clamped.X;
+            note.Y = clamped.Y;
+            ToolTipService.SetToolTip(container, note.Text ?? string.Empty);
+            return true;
+        }
+
+        /// <summary>Quietly updates note text for an undo/redo action.</summary>
+        public bool SetStickyNoteTextQuiet(Grid container, string text)
+        {
+            if (container == null || !IsStickyNoteContainer(container)
+                || GetOverlayData(container) is not StickyNoteAnnotation note)
+            {
+                return false;
+            }
+
+            note.Text = text ?? string.Empty;
+            ToolTipService.SetToolTip(container, note.Text);
+            return true;
+        }
+
+        // ── Sticky marker pointer pipeline (WPF mouse+stylus unified) ─────
+
+        private void BeginStickyPointer(Grid container, PointD pointer, uint pointerId)
+        {
+            if (!IsStickyNoteContainer(container))
+                return;
+            if (!_hostActive || !_documentInputEnabled)
+                return;
+
+            if (_stickyDragContainer != null)
+                EndStickyPointer(_stickyDragContainer, canceled: true);
+
+            _stickyDragContainer = container;
+            _stickyDragPointerId = pointerId;
+            _stickyDragStartPointer = pointer;
+            var left = Canvas.GetLeft(container);
+            var top = Canvas.GetTop(container);
+            _stickyDragStartPosition = new PointD(
+                double.IsNaN(left) ? 0 : left,
+                double.IsNaN(top) ? 0 : top);
+            _stickyDragMoved = false;
+            container.Children.OfType<Button>().FirstOrDefault()
+                ?.Focus(FocusState.Pointer);
+        }
+
+        private void UpdateStickyPointer(Grid container, PointD pointer)
+        {
+            if (!ReferenceEquals(_stickyDragContainer, container))
+                return;
+
+            var dx = pointer.X - _stickyDragStartPointer.X;
+            var dy = pointer.Y - _stickyDragStartPointer.Y;
+            if (!_stickyDragMoved
+                && Math.Abs(dx) < StickyDragThreshold
+                && Math.Abs(dy) < StickyDragThreshold)
+            {
+                return;
+            }
+
+            _stickyDragMoved = true;
+            SetStickyNotePositionQuiet(container, new PointD(
+                _stickyDragStartPosition.X + dx,
+                _stickyDragStartPosition.Y + dy));
+        }
+
+        private void EndStickyPointer(Grid container, bool canceled)
+        {
+            if (!ReferenceEquals(_stickyDragContainer, container))
+                return;
+
+            _suppressStickyCaptureCancellation = true;
+            try
+            {
+                container.ReleasePointerCaptures();
+                container.Children.OfType<Button>().FirstOrDefault()
+                    ?.ReleasePointerCaptures();
+            }
+            finally
+            {
+                _suppressStickyCaptureCancellation = false;
+            }
+
+            bool moved = _stickyDragMoved;
+            var oldPosition = _stickyDragStartPosition;
+            var left = Canvas.GetLeft(container);
+            var top = Canvas.GetTop(container);
+            var newPosition = new PointD(
+                double.IsNaN(left) ? oldPosition.X : left,
+                double.IsNaN(top) ? oldPosition.Y : top);
+            _stickyDragContainer = null;
+            _stickyDragPointerId = null;
+            _stickyDragMoved = false;
+
+            if (canceled)
+            {
+                // Deactivation/unload can interrupt a captured gesture before
+                // release — never leave an unrecorded half-move in the model.
+                if (moved)
+                    SetStickyNotePositionQuiet(container, oldPosition);
+                return;
+            }
+            if (moved)
+            {
+                StickyNoteMoved?.Invoke(this,
+                    new StickyNoteMovedEventArgs(container, oldPosition, newPosition));
+            }
+            else
+            {
+                StickyNoteActivated?.Invoke(this, container);
+            }
+        }
+
+        /// <summary>Cancels an in-flight sticky drag (tool switch / teardown).</summary>
+        private void CancelStickyDrag()
+        {
+            if (_stickyDragContainer != null)
+                EndStickyPointer(_stickyDragContainer, canceled: true);
+        }
+
+        private void StickyNote_PointerPressed(object sender, PointerRoutedEventArgs e)
+        {
+            var container = sender is Button button ? button.Parent as Grid : sender as Grid;
+            var point = e.GetCurrentPoint(this);
+            if (!point.Properties.IsLeftButtonPressed)
+                return;
+            BeginStickyPointer(container, new PointD(point.Position.X, point.Position.Y),
+                e.Pointer.PointerId);
+            if (ReferenceEquals(_stickyDragContainer, container))
+            {
+                // Capture on the button — the element whose Moved/Released
+                // handlers drive the drag. Capturing on the parent container
+                // would route the stream past the button whenever ButtonBase
+                // skips its own internal capture (the press is marked
+                // handled), which would silently kill drag + activation.
+                (sender as UIElement)?.CapturePointer(e.Pointer);
+                e.Handled = true;
+            }
+        }
+
+        private void StickyNote_PointerMoved(object sender, PointerRoutedEventArgs e)
+        {
+            var container = sender is Button button ? button.Parent as Grid : sender as Grid;
+            if (_stickyDragContainer == null || !ReferenceEquals(_stickyDragContainer, container)
+                || e.Pointer.PointerId != _stickyDragPointerId)
+            {
+                return;
+            }
+            var point = e.GetCurrentPoint(this);
+            UpdateStickyPointer(container, new PointD(point.Position.X, point.Position.Y));
+            e.Handled = true;
+        }
+
+        private void StickyNote_PointerReleased(object sender, PointerRoutedEventArgs e)
+        {
+            var container = sender is Button button ? button.Parent as Grid : sender as Grid;
+            if (_stickyDragContainer == null || !ReferenceEquals(_stickyDragContainer, container)
+                || e.Pointer.PointerId != _stickyDragPointerId)
+            {
+                return;
+            }
+            EndStickyPointer(container, canceled: false);
+            e.Handled = true;
+        }
+
+        private void StickyNote_PointerCaptureLost(object sender, PointerRoutedEventArgs e)
+        {
+            var container = sender is Button button ? button.Parent as Grid : sender as Grid;
+            if (!_suppressStickyCaptureCancellation
+                && container != null
+                && ReferenceEquals(_stickyDragContainer, container))
+            {
+                EndStickyPointer(container, canceled: true);
+            }
+        }
+
+        private void StickyNote_PointerCanceled(object sender, PointerRoutedEventArgs e)
+        {
+            var container = sender is Button button ? button.Parent as Grid : sender as Grid;
+            if (container != null && ReferenceEquals(_stickyDragContainer, container))
+                EndStickyPointer(container, canceled: true);
+        }
+
+        private void StickyNote_KeyDown(object sender, KeyRoutedEventArgs e)
+        {
+            var container = sender is Button button ? button.Parent as Grid : sender as Grid;
+            if (!IsStickyNoteContainer(container)
+                || GetOverlayData(container) is not StickyNoteAnnotation note)
+            {
+                return;
+            }
+
+            if (e.Key == VirtualKey.Enter || e.Key == VirtualKey.Space)
+            {
+                StickyNoteActivated?.Invoke(this, container);
+                e.Handled = true;
+                return;
+            }
+
+            if (e.Key == VirtualKey.Delete)
+            {
+                StickyNoteDeleteRequested?.Invoke(this, container);
+                e.Handled = true;
+                return;
+            }
+
+            double step = InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Shift)
+                .HasFlag(Microsoft.UI.Input.VirtualKeyStates.Down) ? 16.0 : 4.0;
+            double dx = 0;
+            double dy = 0;
+            switch (e.Key)
+            {
+                case VirtualKey.Left: dx = -step; break;
+                case VirtualKey.Right: dx = step; break;
+                case VirtualKey.Up: dy = -step; break;
+                case VirtualKey.Down: dy = step; break;
+                default: return;
+            }
+
+            var oldPosition = new PointD(note.X, note.Y);
+            if (!SetStickyNotePositionQuiet(container,
+                    new PointD(oldPosition.X + dx, oldPosition.Y + dy)))
+            {
+                return;
+            }
+
+            var newPosition = new PointD(note.X, note.Y);
+            if (Math.Abs(newPosition.X - oldPosition.X) > 0.01
+                || Math.Abs(newPosition.Y - oldPosition.Y) > 0.01)
+            {
+                StickyNoteMoved?.Invoke(this,
+                    new StickyNoteMovedEventArgs(container, oldPosition, newPosition));
+            }
+            e.Handled = true;
+        }
+
+        // ── Annotation rotation helpers (WPF Apply/ReadAnnotationRotation) ─
+
+        /// <summary>Applies a normalized centre-origin RenderTransform rotation.</summary>
+        public static void ApplyAnnotationRotation(FrameworkElement element, double degrees)
+        {
+            if (element == null)
+                return;
+
+            element.RenderTransformOrigin = new Point(0.5, 0.5);
+            double normalized = AnnotationRotation.NormalizeDegrees(degrees);
+            element.RenderTransform = Math.Abs(normalized) < 0.01
+                ? null
+                : new RotateTransform { Angle = normalized };
+        }
+
+        /// <summary>Reads the normalized rotation from the element's RenderTransform.</summary>
+        public static double ReadAnnotationRotation(FrameworkElement element)
+        {
+            return element?.RenderTransform is RotateTransform rotate
+                ? AnnotationRotation.NormalizeDegrees(rotate.Angle)
+                : 0;
+        }
+
+        /// <summary>
+        /// Axis-aligned bounds of a container accounting for its rotation
+        /// (rotated corners projected back to an axis-aligned rect).
+        /// </summary>
+        private static Rect GetContainerAxisAlignedBounds(FrameworkElement container)
+        {
+            var rectD = GetContainerRect(container);
+            double rotation = ReadAnnotationRotation(container);
+            if (Math.Abs(rotation) < 0.01)
+                return new Rect(rectD.X, rectD.Y, rectD.Width, rectD.Height);
+
+            var center = new PointD(rectD.X + rectD.Width / 2, rectD.Y + rectD.Height / 2);
+            var corners = new[]
+            {
+                new PointD(rectD.X, rectD.Y),
+                new PointD(rectD.X + rectD.Width, rectD.Y),
+                new PointD(rectD.X + rectD.Width, rectD.Y + rectD.Height),
+                new PointD(rectD.X, rectD.Y + rectD.Height),
+            };
+            var rotated = corners.Select(c => AnnotationRotation.RotatePoint(c, center, rotation)).ToList();
+            double minX = rotated.Min(p => p.X), maxX = rotated.Max(p => p.X);
+            double minY = rotated.Min(p => p.Y), maxY = rotated.Max(p => p.Y);
+            return new Rect(minX, minY, maxX - minX, maxY - minY);
+        }
+
+        // ── Text-overlay / page-background press forwarding ──────────────
+
+        private void TextOverlayCanvas_PointerPressed(object sender, PointerRoutedEventArgs e)
+        {
+            // Only forward clicks directly on the canvas background, not on
+            // child elements like TextBoxes (WPF parity).
+            if (ReferenceEquals(e.OriginalSource, TextOverlayCanvas))
+                TextOverlayPointerPressed?.Invoke(this, e);
+        }
+
+        private void PageGrid_PointerPressed(object sender, PointerRoutedEventArgs e)
+        {
+            if (_currentMode != CustomInkInputProcessingMode.None
+                || !_hostActive || !_documentInputEnabled)
+            {
+                return;
+            }
+            if (e.OriginalSource is DependencyObject source
+                && IsDescendantOf(source, TextOverlayCanvas)
+                && !ReferenceEquals(source, TextOverlayCanvas))
+            {
+                return;
+            }
+            BackgroundPointerPressed?.Invoke(this, e);
+        }
+
+        private static bool IsDescendantOf(DependencyObject descendant, DependencyObject ancestor)
+        {
+            var current = descendant;
+            while (current != null)
+            {
+                if (ReferenceEquals(current, ancestor))
+                    return true;
+                current = VisualTreeHelper.GetParent(current);
+            }
+            return false;
+        }
+
+        // ── Text-container layout flags + collectors ─────────────────────
+
+        /// <summary>
+        /// Persist-as-auto flags for a text container — stored as attached
+        /// DPs on the element (WPF EditorPage attached-property parity) so
+        /// quiet remove/add and cross-page moves preserve them for free.
+        /// </summary>
+        public void SetTextAutoSize(Grid container, bool autoWidth, bool autoHeight)
+        {
+            if (container == null)
+                return;
+            SetTextAnnotationAutoWidth(container, autoWidth);
+            SetTextAnnotationAutoHeight(container, autoHeight);
+        }
+
+        public bool IsTextAnnotationAutoWidth(Grid container)
+            => GetTextAnnotationAutoWidth(container);
+
+        public bool IsTextAnnotationAutoHeight(Grid container)
+            => GetTextAnnotationAutoHeight(container);
+
+        /// <summary>
+        /// Live text-annotation collector (WPF CollectAnnotations parity):
+        /// rebuilds a TextAnnotation per container from the current TextBox
+        /// state — always in sync with what the user sees.
+        /// </summary>
+        public List<TextAnnotation> GetTextData()
+        {
+            var annotations = new List<TextAnnotation>();
+            foreach (var element in TextOverlayCanvas.Children)
+            {
+                if (element is Grid container
+                    && TryGetTextAnnotation(container) is TextAnnotation annotation)
+                {
+                    annotations.Add(annotation);
+                }
+            }
+            return annotations;
+        }
+
+        /// <summary>
+        /// Builds the live <see cref="TextAnnotation"/> for ONE container —
+        /// null when the container carries no editable TextBox (WPF
+        /// CopySelection's per-container snapshot path).
+        /// </summary>
+        public TextAnnotation TryGetTextAnnotation(Grid container)
+        {
+            var textBox = container?.Children.OfType<TextBox>().FirstOrDefault();
+            if (textBox == null)
+                return null;
+
+            var bounds = GetContainerRect(container);
+            var foreground = textBox.Foreground as SolidColorBrush;
+            return new TextAnnotation
+            {
+                X = bounds.X,
+                Y = bounds.Y,
+                Text = textBox.Text ?? string.Empty,
+                R = foreground?.Color.R ?? 0,
+                G = foreground?.Color.G ?? 0,
+                B = foreground?.Color.B ?? 0,
+                FontSize = textBox.FontSize,
+                Width = IsTextAnnotationAutoWidth(container) ? 0 : bounds.Width,
+                Height = IsTextAnnotationAutoHeight(container) ? 0 : bounds.Height,
+                Bold = textBox.FontWeight.Weight >= Microsoft.UI.Text.FontWeights.Bold.Weight,
+                Italic = textBox.FontStyle == Windows.UI.Text.FontStyle.Italic,
+                FontFamily = textBox.FontFamily?.Source ?? "Segoe UI",
+                Alignment = textBox.TextAlignment.ToString(),
+                RotationDegrees = ReadAnnotationRotation(container),
+            };
+        }
+
+        /// <summary>
+        /// Live sticky-note collector (WPF CollectAnnotations parity):
+        /// clones each marker's payload with the current container geometry.
+        /// </summary>
+        public List<StickyNoteAnnotation> GetStickyNoteData()
+        {
+            var notes = new List<StickyNoteAnnotation>();
+            foreach (var container in GetOverlayContainers())
+            {
+                if (GetOverlayData(container) is not StickyNoteAnnotation note)
+                    continue;
+                var left = Canvas.GetLeft(container);
+                var top = Canvas.GetTop(container);
+                notes.Add(new StickyNoteAnnotation
+                {
+                    Id = note.Id,
+                    X = double.IsNaN(left) ? note.X : left,
+                    Y = double.IsNaN(top) ? note.Y : top,
+                    Text = note.Text ?? string.Empty,
+                    Width = container.Width > 0 ? container.Width : note.Width,
+                    Height = container.Height > 0 ? container.Height : note.Height,
+                    R = note.R,
+                    G = note.G,
+                    B = note.B,
+                    RotationDegrees = ReadAnnotationRotation(container),
+                });
+            }
+            return notes;
+        }
+
+        // ── IAnnotationContainerHost (Core undo replay) ──────────────────
+
+        bool IAnnotationContainerHost.RemoveTextContainerQuiet(object container)
+            => RemoveTextContainerQuiet(container as Grid);
+
+        void IAnnotationContainerHost.AddTextContainerQuiet(object container)
+            => AddTextContainerQuiet(container as Grid);
+
+        object IAnnotationContainerHost.GetOverlayData(object container)
+            => GetOverlayData(container as Grid);
+
+        void IAnnotationContainerHost.SetOverlayData(object container, object data)
+            => SetOverlayData(container as Grid, data);
+
+        bool IAnnotationContainerHost.SetStickyNotePositionQuiet(object container, PointD position)
+            => SetStickyNotePositionQuiet(container as Grid, position);
+
+        bool IAnnotationContainerHost.SetStickyNoteTextQuiet(object container, string text)
+            => SetStickyNoteTextQuiet(container as Grid, text);
+
+        void IAnnotationContainerHost.SetTextContainerPositionQuiet(object container, PointD position)
+        {
+            if (container is not Grid grid)
+                return;
+            Canvas.SetLeft(grid, position.X);
+            Canvas.SetTop(grid, position.Y);
+        }
+
+        void IAnnotationContainerHost.SetTextContainerBoundsQuiet(
+            object container, TextBoxBounds bounds, bool? autoWidth, bool? autoHeight)
+        {
+            if (container is not Grid grid)
+                return;
+            ApplyTextContainerBoundsQuiet(grid, bounds, autoWidth, autoHeight);
+        }
+
+        /// <summary>
+        /// Normalizes + clamps bounds, stores auto-size flags and applies the
+        /// canvas geometry — the quiet counterpart of the editor's
+        /// ApplyTextContainerBounds (undo/redo path).
+        /// </summary>
+        private void ApplyTextContainerBoundsQuiet(
+            Grid container, TextBoxBounds bounds, bool? autoWidth, bool? autoHeight)
+        {
+            bounds = TextAnnotationGeometry.Normalize(bounds);
+            bool aw = autoWidth ?? IsTextAnnotationAutoWidth(container);
+            bool ah = autoHeight ?? IsTextAnnotationAutoHeight(container);
+            SetTextAutoSize(container, aw, ah);
+
+            Canvas.SetLeft(container, bounds.X);
+            Canvas.SetTop(container, bounds.Y);
+            // Auto-size legs stay NaN so the container keeps sizing to the
+            // TextBox content — the editor's live path does the same (a
+            // fixed restore would freeze an auto annotation forever).
+            container.Width = aw ? double.NaN : bounds.Width;
+            container.Height = ah ? double.NaN : bounds.Height;
+
+            var textBox = container.Children.OfType<TextBox>().FirstOrDefault();
+            if (textBox != null)
+            {
+                textBox.MaxWidth = double.PositiveInfinity;
+                textBox.Width = double.NaN;
+                textBox.Height = double.NaN;
+            }
+
+            container.InvalidateMeasure();
+        }
+
+        bool IAnnotationContainerHost.SetTextContentQuiet(object container, string text)
+        {
+            if (container is not Grid grid)
+                return false;
+            var textBox = grid.Children.OfType<TextBox>().FirstOrDefault();
+            if (textBox == null)
+                return false;
+            textBox.Text = text ?? string.Empty;
+            return true;
+        }
+
+        void IAnnotationContainerHost.SetTextStyleQuiet(
+            object container, double fontSize, byte r, byte g, byte b)
+        {
+            if (container is not Grid grid)
+                return;
+            var textBox = grid.Children.OfType<TextBox>().FirstOrDefault();
+            if (textBox == null)
+                return;
+            textBox.FontSize = fontSize;
+            textBox.Foreground = new SolidColorBrush(Color.FromArgb(255, r, g, b));
+        }
+
+        void IAnnotationContainerHost.SetTextFormatQuiet(object container, TextFormatSnapshot format)
+        {
+            if (container is not Grid grid)
+                return;
+            var textBox = grid.Children.OfType<TextBox>().FirstOrDefault();
+            if (textBox == null)
+                return;
+            textBox.FontWeight = format.Bold
+                ? Microsoft.UI.Text.FontWeights.Bold
+                : Microsoft.UI.Text.FontWeights.Normal;
+            textBox.FontStyle = format.Italic
+                ? Windows.UI.Text.FontStyle.Italic
+                : Windows.UI.Text.FontStyle.Normal;
+            if (!string.IsNullOrWhiteSpace(format.FontFamily))
+                textBox.FontFamily = new FontFamily(format.FontFamily);
+            if (Enum.TryParse(format.Alignment, out TextAlignment alignment))
+                textBox.TextAlignment = alignment;
+        }
+
+        void IAnnotationContainerHost.MoveItemsDirectly(
+            IReadOnlyList<InkStrokeData> strokes, IReadOnlyList<object> containers,
+            double deltaX, double deltaY)
+            => MoveItemsDirectly(strokes, containers?.OfType<Grid>().ToList(), deltaX, deltaY);
+
+        void IAnnotationContainerHost.ScaleItemsDirectly(
+            IReadOnlyList<InkStrokeData> strokes, IReadOnlyList<object> containers,
+            double scaleFactor, PointD center)
+            => ScaleItemsDirectly(strokes, containers?.OfType<Grid>().ToList(), scaleFactor, center);
+
+        void IAnnotationContainerHost.RotateItemsDirectly(
+            IReadOnlyList<InkStrokeData> strokes, IReadOnlyList<object> containers,
+            double degrees, PointD center)
+            => RotateItemsDirectly(strokes, containers?.OfType<Grid>().ToList(), degrees, center);
+
+        void IAnnotationContainerHost.ClearSelection() => ClearSelection();
 
         // ==================================================================
         // Shape tool (Phase B)

@@ -5,6 +5,7 @@ using System.ComponentModel;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices.WindowsRuntime;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Caelum.Controls;
@@ -25,6 +26,7 @@ using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Imaging;
 using Microsoft.UI.Xaml.Navigation;
+using Windows.ApplicationModel.DataTransfer;
 using Windows.Foundation;
 using Windows.Graphics.Imaging;
 using Windows.Storage.Pickers;
@@ -137,6 +139,85 @@ namespace Caelum.Pages
         // The page currently owning an annotation selection — set/cleared by
         // PageControl_SelectionChanged; used by Delete/Ctrl+A/Esc paths.
         private PdfPageControl _activeSelectionPage;
+        // Last page-background click — WPF _lastClickedPage/_lastClickedPoint;
+        // the paste anchor prefers it over the selection page.
+        private PdfPageControl _lastClickedPage;
+        private Point _lastClickedPoint;
+
+        // ── Task 8 Phase A: text boxes + sticky notes ─────────────────
+        // Session defaults for newly created text boxes (WPF fields; the
+        // inline toolbar syncs them from the selected box).
+        private Windows.UI.Color _textColor = Windows.UI.Color.FromArgb(255, 0, 0, 0);
+        private double _currentFontSize = 18.0;
+        private bool _textBold;
+        private bool _textItalic;
+        private string _textFontFamily = "Segoe UI";
+        private TextAlignment _textAlignment = TextAlignment.Left;
+        private static readonly double[] TextFontSizeSteps =
+            { 12d, 14d, 16d, 18d, 20d, 24d, 28d, 32d, 40d, 48d, 60d, 72d };
+
+        // The selected box and its chrome; GotFocus captures the original
+        // text so LostFocus can push ONE TextEditSessionAction on change
+        // (WPF _selectedTextBox / _textEditSessionTextBox parity).
+        private TextBox _selectedTextBox;
+        private TextBox _textEditSessionTextBox;
+        private string _textEditSessionOriginalText;
+
+        // Floating inline toolbar hosted on the page's TextOverlay canvas.
+        private Border _inlineTextBoxToolbar;
+        private PdfPageControl _toolbarHostPage;
+        private ToggleButton _textBoldButton;
+        private ToggleButton _textItalicButton;
+        private ComboBox _textFontFamilyCombo;
+        private ComboBox _textAlignmentCombo;
+        private Border _colorIndicator;
+        private Flyout _textColorFlyout;
+        private bool _isRefreshingTextAlignmentOptions;
+
+        // Border-band drag state (arm on press, start past 4 DIP, cross-page
+        // drop resolves on release — WPF _draggedContainer et al.).
+        private Grid _draggedContainer;
+        private PdfPageControl _draggedContainerPage;
+        private Point _dragPressPointOnCanvas;
+        private bool _dragArmed;
+        private bool _isDragging;
+        private double _dragStartX;
+        private double _dragStartY;
+        private bool _suppressTextCaptureCancellation;
+
+        // Eight-handle resize state.
+        private Grid _resizingTextContainer;
+        private PdfPageControl _resizingTextPage;
+        private TextResizeHandle _textResizeHandle;
+        private Point _textResizeStartPoint;
+        private TextBoxBounds _textResizeStartBounds;
+        private bool _textResizeStartAutoWidth;
+        private bool _textResizeStartAutoHeight;
+
+        // Sticky-note editor popup state (WPF _stickyNotePopup et al.).
+        private Popup _stickyNotePopup;
+        private TextBox _stickyNoteEditor;
+        private Border _stickyNoteDragHandle;
+        private TextBlock _stickyNoteTitleTextBlock;
+        private Button _stickyNoteSaveButton;
+        private Button _stickyNoteCancelButton;
+        private Button _stickyNoteDeleteButton;
+        private PdfPageControl _stickyNoteEditingPage;
+        private Grid _stickyNoteEditingContainer;
+        private StickyNoteAnnotation _stickyNoteEditingModel;
+        private string _stickyNoteEditingOriginalText;
+        private PointD _stickyNoteEditingOriginalPosition;
+        private int _stickyNoteEditingSessionId;
+        private bool _isDraggingStickyNotePopup;
+        private Point _stickyNotePopupDragStart;
+        private double _stickyNotePopupDragStartHorizontalOffset;
+        private double _stickyNotePopupDragStartVerticalOffset;
+
+        // Dirty mirror — the T9 save/autosave pipeline consumes this
+        // coordinator; Task 8 records edits through the same contract.
+        private readonly DocumentSaveCoordinator _documentSaveCoordinator = new();
+        private bool _isDirty;
+        internal bool IsDirty => _isDirty;
 
         private bool _isLoadingAnnotations;
         private readonly Stack<IUndoAction> _undoStack = new();
@@ -447,6 +528,18 @@ namespace Caelum.Pages
                 _activeSelectionPage.ClearSelection();
                 _activeSelectionPage = null;
             }
+            // WPF UpdateToolButtonStates parity: switching away from Text
+            // restores an in-flight resize and drops the text-box selection.
+            if (tool != ToolType.Text)
+            {
+                if (_resizingTextContainer != null)
+                    CancelTextResize(restoreBounds: true);
+                if (tool != _currentTool)
+                {
+                    CommitTextEditSession();
+                    DeselectTextBox();
+                }
+            }
             if (tool != _currentTool)
             {
                 _previousTool = _currentTool;
@@ -585,6 +678,13 @@ namespace Caelum.Pages
                 _pagesRenderedAtScale.Clear();
                 ReleaseThumbnailCache();
                 ClearUndoRedoHistory();
+                // Task 8: retire any live text/sticky edit session before the
+                // page controls are replaced — their containers die with the
+                // old document.
+                CancelStickyNoteEdit();
+                DeselectTextBox();
+                RemoveInlineTextBoxToolbar();
+                _lastClickedPage = null;
                 SidebarPageItems.Clear();
                 SidebarBookmarkItems.Clear();
                 _sidebarOutlineItems.Clear();
@@ -663,6 +763,14 @@ namespace Caelum.Pages
             pageControl.SelectionResizeCompleted += PageControl_SelectionResizeCompleted;
             pageControl.SelectionRotateCompleted += PageControl_SelectionRotateCompleted;
             pageControl.BlankContextRequested += PageControl_BlankContextRequested;
+            // Task 8 Phase A: text-box creation/deselection on the text
+            // overlay, sticky-note placement on the page background and the
+            // marker's activate/move/delete lifecycle.
+            pageControl.TextOverlayPointerPressed += PageControl_TextOverlayPointerPressed;
+            pageControl.BackgroundPointerPressed += PageControl_BackgroundPointerPressed;
+            pageControl.StickyNoteActivated += PageControl_StickyNoteActivated;
+            pageControl.StickyNoteMoved += PageControl_StickyNoteMoved;
+            pageControl.StickyNoteDeleteRequested += PageControl_StickyNoteDeleteRequested;
 
             // Task 22 parity: the page queries the active ruler edge at
             // stroke-collect/shape-commit time; the viewport→page transform
@@ -741,6 +849,35 @@ namespace Caelum.Pages
                     {
                         foreach (var mask in pageAnnotation.HiddenInks)
                             page.AddHiddenInk(mask);
+                    }
+                    // Task 8 Phase A: text boxes + sticky markers restore
+                    // quietly — CreateTextBox(select:false) pushes no undo
+                    // action and keeps the serialized auto-size sentinels.
+                    if (pageAnnotation.Texts != null)
+                    {
+                        foreach (var ta in pageAnnotation.Texts)
+                        {
+                            var color = Windows.UI.Color.FromArgb(255, ta.R, ta.G, ta.B);
+                            CreateTextBox(
+                                page,
+                                new Point(ta.X, ta.Y),
+                                color: color,
+                                fontSize: ta.FontSize,
+                                text: ta.Text,
+                                select: false,
+                                width: ta.Width > 0 ? ta.Width : null,
+                                height: ta.Height > 0 ? ta.Height : null,
+                                bold: ta.Bold,
+                                italic: ta.Italic,
+                                fontFamily: ta.FontFamily,
+                                alignment: ParseTextAlignment(ta.Alignment),
+                                rotationDegrees: ta.RotationDegrees);
+                        }
+                    }
+                    if (pageAnnotation.StickyNotes != null)
+                    {
+                        foreach (var note in pageAnnotation.StickyNotes)
+                            page.AddStickyNote(note);
                     }
                 }
             }
@@ -1012,6 +1149,11 @@ namespace Caelum.Pages
 
             UpdatePageNumberIndicator();
             UpdateBookmarkButton();
+
+            // Task 8: the floating text toolbar tracks the selected box —
+            // hide it while the box is scrolled out of the viewport and
+            // re-position it once visible again (WPF parity).
+            UpdateSelectedTextBoxPopupVisibility(false);
 
             if (!_isHostActive || _resourcesReleased)
                 return;
@@ -1552,6 +1694,19 @@ namespace Caelum.Pages
                 _activeSelectionPage = null;
             }
 
+            // WPF UpdateToolButtonStates parity: switching away from Text
+            // restores an in-flight resize and drops the text-box selection.
+            if (next != ToolType.Text)
+            {
+                if (_resizingTextContainer != null)
+                    CancelTextResize(restoreBounds: true);
+                if (next != _currentTool)
+                {
+                    CommitTextEditSession();
+                    DeselectTextBox();
+                }
+            }
+
             if (next != _currentTool)
             {
                 _previousTool = _currentTool;
@@ -1600,6 +1755,9 @@ namespace Caelum.Pages
                 page.SetSelectionMode(_currentTool == ToolType.Select);
                 page.SetSelectionFilter(_selectionFilter);
                 page.SetSelectionShape(_selectionShape);
+                // WPF SetMode: text containers only take direct input while
+                // the Text tool is armed.
+                page.SetMode(_currentTool == ToolType.Text);
 
                 switch (_currentTool)
                 {
@@ -1696,6 +1854,25 @@ namespace Caelum.Pages
             internal void SetCursor(InputSystemCursorShape shape) =>
                 ProtectedCursor = InputSystemCursor.Create(shape);
         }
+
+        /// <summary>
+        /// The eight-point text-resize handle square — WPF
+        /// <c>TextResizeHandleBorder</c> parity. A Grid subclass gives the
+        /// handle a UI Automation peer (plain panels have none in WinUI 3)
+        /// and a settable ProtectedCursor; the Tag carries the
+        /// <see cref="TextResizeHandle"/> role.
+        /// </summary>
+        private sealed class TextResizeHandleElement : Grid
+        {
+            internal void SetCursor(InputSystemCursorShape shape) =>
+                ProtectedCursor = InputSystemCursor.Create(shape);
+
+            protected override Microsoft.UI.Xaml.Automation.Peers.AutomationPeer OnCreateAutomationPeer()
+                => new Microsoft.UI.Xaml.Automation.Peers.FrameworkElementAutomationPeer(this);
+        }
+
+        /// <summary>Alignment combo row — label + <see cref="TextAlignment"/> value (WPF TextAlignmentOption).</summary>
+        private sealed record TextAlignmentOption(TextAlignment Value, string Label);
 
         /// <summary>Overlay toggle — the button is NOT in the exclusive tool set.</summary>
         private void RulerToolButton_Click(object sender, RoutedEventArgs e)
@@ -2173,6 +2350,8 @@ namespace Caelum.Pages
             // still-running gesture.
             foreach (var p in _pageControls)
                 p.CancelInteraction();
+            CancelTextBoxDrag(restoreBounds: false);
+            CancelTextResize(restoreBounds: false);
             var action = _undoStack.Peek();
             try
             {
@@ -2186,9 +2365,16 @@ namespace Caelum.Pages
                 if (action is InkSelectionCrossPageMoveAction crossPage
                     && !crossPage.LastOperationSucceeded)
                     return;
+                if (action is AnnotationSelectionCrossPageMoveAction annotationCrossPage
+                    && !annotationCrossPage.LastOperationSucceeded)
+                    return;
                 _undoStack.Pop();
                 _redoStack.Push(action);
                 UpdateUndoRedoButtons();
+                // WPF parity: an applied undo records a dirty generation so
+                // the T9 save pipeline persists the reverted state.
+                _documentSaveCoordinator.RecordChange(action.LeavesDocumentDirty);
+                SyncDirtyStateMirror();
             }
             catch (Exception ex)
             {
@@ -2203,6 +2389,8 @@ namespace Caelum.Pages
                 return;
             foreach (var p in _pageControls)
                 p.CancelInteraction();
+            CancelTextBoxDrag(restoreBounds: false);
+            CancelTextResize(restoreBounds: false);
             var action = _redoStack.Peek();
             try
             {
@@ -2212,9 +2400,14 @@ namespace Caelum.Pages
                 if (action is InkSelectionCrossPageMoveAction crossPage
                     && !crossPage.LastOperationSucceeded)
                     return;
+                if (action is AnnotationSelectionCrossPageMoveAction annotationCrossPage
+                    && !annotationCrossPage.LastOperationSucceeded)
+                    return;
                 _redoStack.Pop();
                 _undoStack.Push(action);
                 UpdateUndoRedoButtons();
+                _documentSaveCoordinator.RecordChange(action.LeavesDocumentDirty);
+                SyncDirtyStateMirror();
             }
             catch (Exception ex)
             {
@@ -2236,6 +2429,23 @@ namespace Caelum.Pages
             _undoStack.Clear();
             _redoStack.Clear();
             UpdateUndoRedoButtons();
+        }
+
+        /// <summary>
+        /// Records an annotation edit in the save coordinator — WPF
+        /// MarkDirty parity. The T9 pipeline consumes the generation when
+        /// autosave/manual-save arrives; until then the mirror exposes the
+        /// flag for tests and navigation guards.
+        /// </summary>
+        private void MarkDirty()
+        {
+            _documentSaveCoordinator.MarkDirty();
+            SyncDirtyStateMirror();
+        }
+
+        private void SyncDirtyStateMirror()
+        {
+            _isDirty = _documentSaveCoordinator.IsDirty;
         }
 
         // ── Page ink events ────────────────────────────────────────────────
@@ -2306,8 +2516,17 @@ namespace Caelum.Pages
             Rect bounds = page.GetSelectionBounds();
             if (bounds.IsEmpty)
             {
-                PushUndoAction(new InkSelectionMoveAction(
-                    page.Ink.Store, e.Strokes, e.DeltaX, e.DeltaY));
+                if (e.SelectedTextContainers.Count > 0)
+                {
+                    PushUndoAction(new AnnotationSelectionMoveAction(
+                        page, e.Strokes, e.SelectedTextContainers, e.DeltaX, e.DeltaY));
+                }
+                else
+                {
+                    PushUndoAction(new InkSelectionMoveAction(
+                        page.Ink.Store, e.Strokes, e.DeltaX, e.DeltaY));
+                }
+                MarkDirty();
                 return;
             }
 
@@ -2323,22 +2542,49 @@ namespace Caelum.Pages
 
                 page.ClearSelection();
 
-                var moveAction = new InkSelectionCrossPageMoveAction(
-                    page.Ink.Store,
-                    targetPage.Ink.Store,
-                    e.Strokes,
-                    e.DeltaX, e.DeltaY,
-                    adjustX, adjustY,
-                    e.Strokes.Select(s => page.Ink.Store.CaptureStrokePlacement(s)).ToList());
+                if (e.SelectedTextContainers.Count > 0)
+                {
+                    // Mixed selection crosses pages: containers ride along
+                    // through the host transfer (WPF SelectionCrossPageMove
+                    // with containers).
+                    var moveAction = new AnnotationSelectionCrossPageMoveAction(
+                        page.Ink.Store,
+                        targetPage.Ink.Store,
+                        page,
+                        targetPage,
+                        e.Strokes,
+                        e.SelectedTextContainers,
+                        e.DeltaX, e.DeltaY,
+                        adjustX, adjustY,
+                        e.Strokes.Select(s => page.Ink.Store.CaptureStrokePlacement(s)).ToList());
+                    if (moveAction.ExecuteInitialTransfer())
+                        PushUndoAction(moveAction);
+                }
+                else
+                {
+                    var moveAction = new InkSelectionCrossPageMoveAction(
+                        page.Ink.Store,
+                        targetPage.Ink.Store,
+                        e.Strokes,
+                        e.DeltaX, e.DeltaY,
+                        adjustX, adjustY,
+                        e.Strokes.Select(s => page.Ink.Store.CaptureStrokePlacement(s)).ToList());
 
-                if (moveAction.ExecuteInitialTransfer())
-                    PushUndoAction(moveAction);
+                    if (moveAction.ExecuteInitialTransfer())
+                        PushUndoAction(moveAction);
+                }
+            }
+            else if (e.SelectedTextContainers.Count > 0)
+            {
+                PushUndoAction(new AnnotationSelectionMoveAction(
+                    page, e.Strokes, e.SelectedTextContainers, e.DeltaX, e.DeltaY));
             }
             else
             {
                 PushUndoAction(new InkSelectionMoveAction(
                     page.Ink.Store, e.Strokes, e.DeltaX, e.DeltaY));
             }
+            MarkDirty();
         }
 
         /// <summary>
@@ -2369,16 +2615,34 @@ namespace Caelum.Pages
         {
             if (sender is not PdfPageControl page)
                 return;
-            PushUndoAction(new InkSelectionResizeAction(
-                page.Ink.Store, e.Strokes, e.TotalScale, e.Anchor));
+            if (e.SelectedTextContainers.Count > 0)
+            {
+                PushUndoAction(new AnnotationSelectionResizeAction(
+                    page, e.Strokes, e.SelectedTextContainers, e.TotalScale, e.Anchor));
+            }
+            else
+            {
+                PushUndoAction(new InkSelectionResizeAction(
+                    page.Ink.Store, e.Strokes, e.TotalScale, e.Anchor));
+            }
+            MarkDirty();
         }
 
         private void PageControl_SelectionRotateCompleted(object sender, SelectionRotateCompletedEventArgs e)
         {
             if (sender is not PdfPageControl page)
                 return;
-            PushUndoAction(new InkSelectionRotateAction(
-                page.Ink.Store, e.Strokes, e.TotalDegrees, e.Center));
+            if (e.SelectedTextContainers.Count > 0)
+            {
+                PushUndoAction(new AnnotationSelectionRotateAction(
+                    page, e.Strokes, e.SelectedTextContainers, e.TotalDegrees, e.Center));
+            }
+            else
+            {
+                PushUndoAction(new InkSelectionRotateAction(
+                    page.Ink.Store, e.Strokes, e.TotalDegrees, e.Center));
+            }
+            MarkDirty();
         }
 
         /// <summary>
@@ -2425,8 +2689,10 @@ namespace Caelum.Pages
         /// <summary>
         /// Delete-key selection removal: capture placements first so undo
         /// restores z-order, then quietly remove and push the batch action —
-        /// WPF DeleteSelection → ItemsRemovedAction parity (strokes only;
-        /// text containers are T8).
+        /// WPF DeleteSelection → ItemsRemovedAction parity. When the
+        /// selection holds text/sticky containers the combined
+        /// <see cref="AnnotationItemsRemovedAction"/> keeps strokes and
+        /// containers in ONE undo step.
         /// </summary>
         private void DeleteSelection()
         {
@@ -2438,27 +2704,366 @@ namespace Caelum.Pages
             // _activeSelectionPage, so post-clear dereferences would NRE.
             var page = _activeSelectionPage;
             var strokes = page.SelectedStrokes.ToList();
+            var containers = page.SelectedTextContainers.ToList();
             var placements = strokes
                 .Select(s => page.Ink.Store.CaptureStrokePlacement(s))
                 .ToList();
 
             foreach (var stroke in strokes)
                 page.Ink.Store.RemoveStrokeQuiet(stroke);
+            foreach (var container in containers)
+                page.RemoveTextContainerQuiet(container);
 
-            PushUndoAction(new InkStrokesRemovedAction(page.Ink.Store, placements));
+            if (containers.Count > 0)
+            {
+                PushUndoAction(new AnnotationItemsRemovedAction(
+                    page.Ink.Store, placements, page, containers));
+            }
+            else
+            {
+                PushUndoAction(new InkStrokesRemovedAction(page.Ink.Store, placements));
+            }
             page.ClearSelection();
             InvalidateThumbnail(page.PageIndex);
+            MarkDirty();
+        }
+
+        // ==================================================================
+        // Selection clipboard (WPF CopySelection/CutSelection/PasteSelection)
+        // ==================================================================
+
+        /// <summary>
+        /// Ctrl+X — copy then delete through the normal selection path so the
+        /// removal lands in undo history (WPF CutSelection parity).
+        /// </summary>
+        private void CutSelection()
+        {
+            if (_activeSelectionPage == null || !_activeSelectionPage.HasSelection)
+                return;
+
+            CopySelection();
+            DeleteSelection();
         }
 
         /// <summary>
-        /// WPF EnsureBlankContextMenu minus clipboard/save entries (T8/T9):
-        /// Select-all and Delete (visible only with a live selection).
+        /// Serializes the live selection — strokes, text boxes and sticky
+        /// notes — as AnnotationData JSON on the clipboard (WPF
+        /// CopySelection parity; image annotations join in Phase B).
+        /// </summary>
+        private void CopySelection()
+        {
+            if (_activeSelectionPage == null || !_activeSelectionPage.HasSelection)
+                return;
+
+            try
+            {
+                var annotationData = new AnnotationData();
+                var pageAnnotation = new PageAnnotation();
+
+                foreach (var stroke in _activeSelectionPage.SelectedStrokes)
+                    pageAnnotation.Strokes.Add(stroke.ToAnnotation());
+
+                foreach (var container in _activeSelectionPage.SelectedTextContainers)
+                {
+                    if (_activeSelectionPage.TryGetTextAnnotation(container) is TextAnnotation text)
+                    {
+                        pageAnnotation.Texts.Add(text);
+                    }
+                    else if (_activeSelectionPage.GetOverlayData(container) is StickyNoteAnnotation sticky)
+                    {
+                        double left = Canvas.GetLeft(container);
+                        double top = Canvas.GetTop(container);
+                        pageAnnotation.StickyNotes.Add(new StickyNoteAnnotation
+                        {
+                            Id = sticky.Id,
+                            X = double.IsNaN(left) ? sticky.X : left,
+                            Y = double.IsNaN(top) ? sticky.Y : top,
+                            Text = sticky.Text,
+                            Width = container.ActualWidth > 0 ? container.ActualWidth : container.Width,
+                            Height = container.ActualHeight > 0 ? container.ActualHeight : container.Height,
+                            R = sticky.R,
+                            G = sticky.G,
+                            B = sticky.B,
+                            RotationDegrees = PdfPageControl.ReadAnnotationRotation(container),
+                        });
+                    }
+                }
+
+                annotationData.Pages["0"] = pageAnnotation;
+                var json = JsonSerializer.Serialize(annotationData);
+
+                var package = new DataPackage();
+                package.SetText(json);
+                Clipboard.SetContent(package);
+                Clipboard.Flush();
+
+                GetMainWindow()?.ShowToast(
+                    LocalizationService.Get("Editor.SelectionCopied"), "\uE14D", 1500);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[CopySelection] Error: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Ctrl+V — rebuilds strokes + text boxes + sticky markers from
+        /// clipboard JSON on the anchor page, offset either to the last
+        /// clicked point or by (+20,+20), then pushes ONE
+        /// <see cref="AnnotationItemsAddedAction"/> and auto-selects the
+        /// pasted items (WPF PasteSelection parity). Sticky ids are
+        /// regenerated; shape groups remap to fresh group ids.
+        /// </summary>
+        private async void PasteSelection()
+        {
+            try
+            {
+                var content = Clipboard.GetContent();
+                if (content == null || !content.Contains(StandardDataFormats.Text))
+                    return;
+
+                var json = await content.GetTextAsync();
+                if (string.IsNullOrWhiteSpace(json))
+                    return;
+
+                var annotationData = JsonSerializer.Deserialize<AnnotationData>(json);
+                if (annotationData?.Pages == null || !annotationData.Pages.ContainsKey("0"))
+                    return;
+
+                var pageAnnotation = annotationData.Pages["0"];
+                if (pageAnnotation == null)
+                    return;
+
+                // The clicked anchor is only valid while that page is live —
+                // a reload swaps the controls out from under it.
+                var anchorPage = _lastClickedPage != null && _pageControls.Contains(_lastClickedPage)
+                    ? _lastClickedPage
+                    : null;
+                var targetPage = anchorPage ?? _activeSelectionPage
+                    ?? _pageControls.FirstOrDefault();
+                if (targetPage == null)
+                    return;
+
+                double pasteOffsetX = 20.0;
+                double pasteOffsetY = 20.0;
+
+                if (anchorPage == targetPage)
+                {
+                    double minX = double.MaxValue;
+                    double minY = double.MaxValue;
+                    bool hasBoundingBox = false;
+
+                    if (pageAnnotation.Strokes != null)
+                    {
+                        foreach (var stroke in pageAnnotation.Strokes)
+                        {
+                            foreach (var pt in stroke.Points)
+                            {
+                                hasBoundingBox = true;
+                                if (pt[0] < minX) minX = pt[0];
+                                if (pt[1] < minY) minY = pt[1];
+                            }
+                        }
+                    }
+                    if (pageAnnotation.Texts != null)
+                    {
+                        foreach (var text in pageAnnotation.Texts)
+                        {
+                            hasBoundingBox = true;
+                            if (text.X < minX) minX = text.X;
+                            if (text.Y < minY) minY = text.Y;
+                        }
+                    }
+                    if (pageAnnotation.StickyNotes != null)
+                    {
+                        foreach (var sticky in pageAnnotation.StickyNotes)
+                        {
+                            hasBoundingBox = true;
+                            if (sticky.X < minX) minX = sticky.X;
+                            if (sticky.Y < minY) minY = sticky.Y;
+                        }
+                    }
+                    if (hasBoundingBox)
+                    {
+                        pasteOffsetX = _lastClickedPoint.X - minX;
+                        pasteOffsetY = _lastClickedPoint.Y - minY;
+                    }
+                }
+
+                var pastedStrokes = new List<InkStrokeData>();
+                var pastedContainers = new List<Grid>();
+
+                if (pageAnnotation.Strokes != null)
+                {
+                    // Shape groups remap to one fresh group id per source
+                    // group so a paste never merges with the originals.
+                    var pastedShapeGroups = new Dictionary<string, string>(StringComparer.Ordinal);
+                    foreach (var strokeAnnotation in pageAnnotation.Strokes)
+                    {
+                        string pastedGroupId = string.Empty;
+                        if (!string.IsNullOrWhiteSpace(strokeAnnotation.ShapeGroupId))
+                        {
+                            if (!pastedShapeGroups.TryGetValue(strokeAnnotation.ShapeGroupId, out pastedGroupId))
+                            {
+                                pastedGroupId = Guid.NewGuid().ToString("N");
+                                pastedShapeGroups[strokeAnnotation.ShapeGroupId] = pastedGroupId;
+                            }
+                        }
+
+                        var offsetStroke = new StrokeAnnotation
+                        {
+                            R = strokeAnnotation.R,
+                            G = strokeAnnotation.G,
+                            B = strokeAnnotation.B,
+                            A = strokeAnnotation.A,
+                            Size = strokeAnnotation.Size,
+                            IsHighlighter = strokeAnnotation.IsHighlighter,
+                            FitToCurve = strokeAnnotation.FitToCurve,
+                            ShapeGroupId = pastedGroupId,
+                            ShapeKind = strokeAnnotation.ShapeKind,
+                            ShapePartIndex = strokeAnnotation.ShapePartIndex,
+                            IsDashedShape = strokeAnnotation.IsDashedShape,
+                            Points = new List<double[]>(),
+                        };
+                        foreach (var point in strokeAnnotation.Points)
+                            offsetStroke.Points.Add(new[] { point[0] + pasteOffsetX, point[1] + pasteOffsetY });
+
+                        var stroke = targetPage.AddStroke(offsetStroke);
+                        if (stroke != null)
+                            pastedStrokes.Add(stroke);
+                    }
+                }
+
+                if (pageAnnotation.Texts != null)
+                {
+                    foreach (var textAnnotation in pageAnnotation.Texts)
+                    {
+                        var color = Windows.UI.Color.FromArgb(255,
+                            textAnnotation.R, textAnnotation.G, textAnnotation.B);
+                        var container = CreateTextBox(
+                            targetPage,
+                            new Point(textAnnotation.X + pasteOffsetX,
+                                textAnnotation.Y + pasteOffsetY),
+                            color: color,
+                            fontSize: textAnnotation.FontSize,
+                            text: textAnnotation.Text,
+                            select: false,
+                            bold: textAnnotation.Bold,
+                            italic: textAnnotation.Italic,
+                            fontFamily: textAnnotation.FontFamily,
+                            alignment: ParseTextAlignment(textAnnotation.Alignment),
+                            width: textAnnotation.Width > 0 ? textAnnotation.Width : null,
+                            height: textAnnotation.Height > 0 ? textAnnotation.Height : null,
+                            rotationDegrees: textAnnotation.RotationDegrees);
+                        if (container != null)
+                            pastedContainers.Add(container);
+                    }
+                }
+
+                if (pageAnnotation.StickyNotes != null)
+                {
+                    foreach (var sticky in pageAnnotation.StickyNotes)
+                    {
+                        // Content, marker geometry and colour ride along —
+                        // only the position and identity change (WPF parity).
+                        var pasted = targetPage.AddStickyNote(new StickyNoteAnnotation
+                        {
+                            Id = Guid.NewGuid().ToString("N"),
+                            X = sticky.X + pasteOffsetX,
+                            Y = sticky.Y + pasteOffsetY,
+                            Text = sticky.Text,
+                            Width = sticky.Width,
+                            Height = sticky.Height,
+                            R = sticky.R,
+                            G = sticky.G,
+                            B = sticky.B,
+                            RotationDegrees = sticky.RotationDegrees,
+                        });
+                        if (pasted != null)
+                            pastedContainers.Add(pasted);
+                    }
+                }
+
+                if (pastedStrokes.Count > 0 || pastedContainers.Count > 0)
+                {
+                    // Undo state FIRST (selection is UI state, not undoable).
+                    var placements = pastedStrokes
+                        .Select(s => targetPage.Ink.Store.CaptureStrokePlacement(s))
+                        .ToList();
+                    PushUndoAction(new AnnotationItemsAddedAction(
+                        targetPage.Ink.Store, placements, targetPage, pastedContainers));
+
+                    // Auto-select the pasted content (WPF Task 8.2): a
+                    // selection lingering on another page clears first so
+                    // only the target page holds one.
+                    foreach (var page in _pageControls)
+                    {
+                        if (page != targetPage && page.HasSelection)
+                            page.ClearSelection();
+                    }
+                    targetPage.SelectItems(pastedStrokes, pastedContainers);
+                    InvalidateThumbnail(targetPage.PageIndex);
+                }
+
+                MarkDirty();
+                GetMainWindow()?.ShowToast(
+                    LocalizationService.Get("Editor.SelectionPasted"), "\uE14D", 1500);
+            }
+            catch (Exception ex)
+            {
+                // WPF parity: a malformed clipboard payload is ignored, it
+                // never takes the editor down.
+                System.Diagnostics.Debug.WriteLine($"[PasteSelection] Error: {ex.Message}");
+            }
+        }
+
+        /// <summary>Clipboard holds annotation JSON (or any text) — WPF HasPasteableClipboard.</summary>
+        private static bool HasPasteableClipboard()
+        {
+            try
+            {
+                return Clipboard.GetContent()?.Contains(StandardDataFormats.Text) == true;
+            }
+            catch (Exception)
+            {
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// WPF EnsureBlankContextMenu parity for the Phase A surface: Copy /
+        /// Paste / Select-all / Delete — copy+delete only with a live
+        /// selection, paste only when the clipboard carries text.
         /// </summary>
         private void ShowBlankContextMenu()
         {
             bool hasSelection = _activeSelectionPage != null && _activeSelectionPage.HasSelection;
+            bool canPaste = HasPasteableClipboard();
 
             var flyout = new MenuFlyout();
+
+            if (hasSelection)
+            {
+                var copyItem = new MenuFlyoutItem
+                {
+                    Text = LocalizationService.Get("Editor.Action.Copy"),
+                };
+                AutomationProperties.SetAutomationId(copyItem, "Editor.Action.Copy");
+                copyItem.Click += (_, __) => CopySelection();
+                flyout.Items.Add(copyItem);
+            }
+
+            if (canPaste)
+            {
+                var pasteItem = new MenuFlyoutItem
+                {
+                    Text = LocalizationService.Get("Editor.Action.Paste"),
+                };
+                AutomationProperties.SetAutomationId(pasteItem, "Editor.Action.Paste");
+                pasteItem.Click += (_, __) => PasteSelection();
+                flyout.Items.Add(pasteItem);
+            }
+
             var selectAll = new MenuFlyoutItem
             {
                 Text = LocalizationService.Get("Editor.Action.SelectAll"),
@@ -2534,6 +3139,2168 @@ namespace Caelum.Pages
                 stroke => (stroke.R, stroke.G, stroke.B, stroke.A, stroke.Size));
             page.Ink.Store.NotifyGeometryChanged(strokes);
             PushUndoAction(new InkStrokesStyleChangedAction(page.Ink.Store, before, after));
+        }
+
+        // ==================================================================
+        // Task 8 Phase A — text annotation boxes (WPF CreateTextBox et al.)
+        // ==================================================================
+
+        /// <summary>
+        /// Press on the TextOverlay background while the Text tool is armed —
+        /// a click outside any container deselects the current box, an empty
+        /// spot creates a new one (WPF PageControl_TextOverlayPointerPressed).
+        /// </summary>
+        private void PageControl_TextOverlayPointerPressed(object sender, PointerRoutedEventArgs e)
+        {
+            if (_currentTool != ToolType.Text || sender is not PdfPageControl page)
+                return;
+
+            var point = e.GetCurrentPoint(page.TextOverlay).Position;
+            if (_selectedTextBox != null)
+            {
+                DeselectTextBox();
+                e.Handled = true;
+                return;
+            }
+
+            CreateTextBox(page, point, alignToPointer: true);
+            e.Handled = true;
+        }
+
+        /// <summary>
+        /// Creates a text-annotation container on the page's TextOverlay:
+        /// transparent Grid + decorative chrome Border + wrapped TextBox +
+        /// eight <see cref="TextResizeHandleElement"/> squares (WPF
+        /// CreateTextBox parity, pointer events in place of Mouse/Stylus).
+        /// <paramref name="select"/> is false for sidecar loads and pastes —
+        /// those paths must not push a TextBoxAddedAction or mark dirty.
+        /// </summary>
+        private Grid CreateTextBox(
+            PdfPageControl page,
+            Point position,
+            Windows.UI.Color? color = null,
+            double? fontSize = null,
+            string text = null,
+            bool select = true,
+            bool alignToPointer = false,
+            bool? bold = null,
+            bool? italic = null,
+            string fontFamily = null,
+            TextAlignment? alignment = null,
+            double? width = null,
+            double? height = null,
+            double rotationDegrees = 0)
+        {
+            var textPadding = new Thickness(10, 8, 10, 8);
+            bool useDefaultSize = text == null
+                && (!width.HasValue || width.Value <= 0)
+                && (!height.HasValue || height.Value <= 0);
+            double? initialWidth = width.HasValue && width.Value > 0
+                ? width.Value
+                : useDefaultSize ? TextAnnotationGeometry.DefaultWidth : null;
+            double? initialHeight = height.HasValue && height.Value > 0
+                ? height.Value
+                : useDefaultSize ? TextAnnotationGeometry.DefaultHeight : null;
+
+            var container = new CursorGrid
+            {
+                Background = new SolidColorBrush(Color.FromArgb(0, 0, 0, 0)),
+                Tag = "text-annotation",
+            };
+            container.SetCursor(InputSystemCursorShape.SizeAll);
+            bool autoWidth = !width.HasValue || width.Value <= 0;
+            bool autoHeight = !height.HasValue || height.Value <= 0;
+            if (useDefaultSize)
+            {
+                // Newly created boxes use the product default rectangle; the
+                // persist-as-auto sentinel is reserved for loaded annotations
+                // that explicitly carried zero dimensions (WPF parity).
+                autoWidth = false;
+                autoHeight = false;
+            }
+            page.SetTextAutoSize(container, autoWidth, autoHeight);
+            if (initialWidth.HasValue || initialHeight.HasValue)
+            {
+                var initialBounds = TextAnnotationGeometry.Normalize(new TextBoxBounds(
+                    position.X,
+                    position.Y,
+                    initialWidth ?? TextAnnotationGeometry.DefaultWidth,
+                    initialHeight ?? TextAnnotationGeometry.DefaultHeight));
+                if (initialWidth.HasValue)
+                    container.Width = initialBounds.Width;
+                if (initialHeight.HasValue)
+                    container.Height = initialBounds.Height;
+            }
+
+            container.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+            // Visual chrome border spanning both columns (hit-test
+            // transparent; shown only while the box is selected).
+            var chrome = new Border
+            {
+                CornerRadius = new CornerRadius(8),
+                BorderThickness = new Thickness(select ? 1.5 : 0),
+                BorderBrush = select
+                    ? ResolveThemeBrush("ThemeFocusBrush", Color.FromArgb(0xFF, 0x25, 0x63, 0xEB))
+                    : new SolidColorBrush(Color.FromArgb(0, 0, 0, 0)),
+                Background = new SolidColorBrush(Color.FromArgb(0, 0, 0, 0)),
+                IsHitTestVisible = false,
+                Tag = "chrome",
+            };
+            AutomationProperties.SetAutomationId(chrome, "TextAnnotationMoveBorder");
+            AutomationProperties.SetName(chrome, LocalizationService.Get("Editor.MoveTextBox"));
+
+            double availableWidth = page.ActualWidth - Math.Max(0, position.X);
+            double maxTextBoxWidth = Math.Max(100, availableWidth - textPadding.Left - textPadding.Right - 40);
+
+            var textBox = new TextBox
+            {
+                Text = text ?? LocalizationService.Get("Editor.ModeText"),
+                AcceptsReturn = true,
+                TextWrapping = TextWrapping.Wrap,
+                MinWidth = 100,
+                MaxWidth = double.IsNaN(container.Width) ? maxTextBoxWidth : double.PositiveInfinity,
+                MinHeight = 30,
+                BorderThickness = new Thickness(0),
+                Background = new SolidColorBrush(Color.FromArgb(0, 0, 0, 0)),
+                FontSize = fontSize ?? _currentFontSize,
+                Foreground = new SolidColorBrush(color ?? _textColor),
+                FontWeight = (bold ?? _textBold)
+                    ? Microsoft.UI.Text.FontWeights.Bold
+                    : Microsoft.UI.Text.FontWeights.Normal,
+                FontStyle = (italic ?? _textItalic)
+                    ? Windows.UI.Text.FontStyle.Italic
+                    : Windows.UI.Text.FontStyle.Normal,
+                FontFamily = new FontFamily(
+                    string.IsNullOrWhiteSpace(fontFamily) ? _textFontFamily : fontFamily),
+                TextAlignment = alignment ?? _textAlignment,
+                IsReadOnly = !select,
+                Padding = textPadding,
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                VerticalAlignment = VerticalAlignment.Stretch,
+            };
+
+            page.SizeChanged += (s, e) =>
+            {
+                if (textBox.Parent is Grid containerGrid && double.IsNaN(containerGrid.Width))
+                {
+                    double newAvailableWidth = page.ActualWidth - Canvas.GetLeft(containerGrid);
+                    textBox.MaxWidth = Math.Max(
+                        100, newAvailableWidth - textPadding.Left - textPadding.Right - 40);
+                }
+            };
+
+            Grid.SetColumn(textBox, 0);
+
+            container.Children.Add(chrome);
+            container.Children.Add(textBox);
+
+            var resizeHandleDefinitions = new[]
+            {
+                (TextResizeHandle.TopLeft, HorizontalAlignment.Left, VerticalAlignment.Top, InputSystemCursorShape.SizeNorthwestSoutheast),
+                (TextResizeHandle.Top, HorizontalAlignment.Center, VerticalAlignment.Top, InputSystemCursorShape.SizeNorthSouth),
+                (TextResizeHandle.TopRight, HorizontalAlignment.Right, VerticalAlignment.Top, InputSystemCursorShape.SizeNortheastSouthwest),
+                (TextResizeHandle.Left, HorizontalAlignment.Left, VerticalAlignment.Center, InputSystemCursorShape.SizeWestEast),
+                (TextResizeHandle.Right, HorizontalAlignment.Right, VerticalAlignment.Center, InputSystemCursorShape.SizeWestEast),
+                (TextResizeHandle.BottomLeft, HorizontalAlignment.Left, VerticalAlignment.Bottom, InputSystemCursorShape.SizeNortheastSouthwest),
+                (TextResizeHandle.Bottom, HorizontalAlignment.Center, VerticalAlignment.Bottom, InputSystemCursorShape.SizeNorthSouth),
+                (TextResizeHandle.BottomRight, HorizontalAlignment.Right, VerticalAlignment.Bottom, InputSystemCursorShape.SizeNorthwestSoutheast),
+            };
+
+            foreach (var definition in resizeHandleDefinitions)
+            {
+                var resizeHandle = new TextResizeHandleElement
+                {
+                    Width = 10,
+                    Height = 10,
+                    Margin = new Thickness(-5),
+                    HorizontalAlignment = definition.Item2,
+                    VerticalAlignment = definition.Item3,
+                    Visibility = select ? Visibility.Visible : Visibility.Collapsed,
+                    Tag = definition.Item1,
+                    IsTabStop = true,
+                };
+                resizeHandle.SetCursor(definition.Item4);
+                // Visual square: accent fill + focus ring inside a 10 DIP
+                // transparent host (the 5 DIP negative margin keeps the WPF
+                // grab zone centered on the container edge).
+                resizeHandle.Children.Add(new Border
+                {
+                    Background = ResolveThemeBrush("ThemeAccentBrush", Color.FromArgb(0xFF, 0x25, 0x63, 0xEB)),
+                    BorderBrush = ResolveThemeBrush("ThemeFocusBrush", Color.FromArgb(0xFF, 0x25, 0x63, 0xEB)),
+                    BorderThickness = new Thickness(1),
+                    CornerRadius = new CornerRadius(5),
+                    IsHitTestVisible = false,
+                });
+                string resizeLabel = LocalizationService.Get("Editor.ResizeTextBox");
+                ToolTipService.SetToolTip(resizeHandle, resizeLabel);
+                AutomationProperties.SetAutomationId(
+                    resizeHandle,
+                    TextAnnotationGeometry.GetResizeHandleAutomationId(definition.Item1));
+                AutomationProperties.SetName(resizeHandle, resizeLabel);
+                AutomationProperties.SetHelpText(resizeHandle, resizeLabel);
+                Canvas.SetZIndex(resizeHandle, 20);
+                resizeHandle.PointerPressed += TextResizeHandle_PointerPressed;
+                resizeHandle.PointerMoved += TextResizeHandle_PointerMoved;
+                resizeHandle.PointerReleased += TextResizeHandle_PointerReleased;
+                resizeHandle.PointerCanceled += TextResizeHandle_PointerCanceled;
+                resizeHandle.PointerCaptureLost += TextResizeHandle_PointerCaptureLost;
+                resizeHandle.KeyDown += TextResizeHandle_KeyDown;
+                container.Children.Add(resizeHandle);
+            }
+
+            var initialLeft = position.X;
+            var initialTop = position.Y;
+            if (alignToPointer)
+            {
+                initialLeft -= textPadding.Left;
+                initialTop -= textPadding.Top;
+            }
+
+            Canvas.SetLeft(container, Math.Max(0, initialLeft));
+            Canvas.SetTop(container, Math.Max(0, initialTop));
+            PdfPageControl.ApplyAnnotationRotation(container, rotationDegrees);
+            Canvas.SetZIndex(container, 1000);
+
+            // Border-band drag: handledEventsToo mirrors WPF's Preview*
+            // tunneling — the TextBox child marks its presses handled, yet
+            // the 8 DIP move-border band inside its padding must still arm
+            // the container drag.
+            container.AddHandler(
+                UIElement.PointerPressedEvent,
+                new PointerEventHandler(TextContainerBorder_PointerPressed),
+                handledEventsToo: true);
+            container.AddHandler(
+                UIElement.PointerMovedEvent,
+                new PointerEventHandler(TextContainerBorder_PointerMoved),
+                handledEventsToo: true);
+            container.AddHandler(
+                UIElement.PointerReleasedEvent,
+                new PointerEventHandler(TextContainerBorder_PointerReleased),
+                handledEventsToo: true);
+            container.PointerCanceled += TextContainerBorder_PointerCanceled;
+            container.PointerCaptureLost += TextContainerBorder_PointerCaptureLost;
+
+            textBox.TextChanged += (s, e) => MarkDirty();
+            textBox.AddHandler(
+                UIElement.PointerPressedEvent,
+                new PointerEventHandler((s, e) =>
+                {
+                    // WPF PreviewStylusDown parity: pen presses on a text box
+                    // belong to the ink surface — drop focus to the scroller
+                    // and swallow the event instead of placing the caret.
+                    if (e.Pointer.PointerDeviceType == PointerDeviceType.Pen)
+                    {
+                        PdfScrollViewer.Focus(FocusState.Programmatic);
+                        e.Handled = true;
+                        return;
+                    }
+                    // Let the native TextBox click logic place the caret; only
+                    // the selection/read-only state switches first (WPF
+                    // PreviewMouseLeftButtonDown parity).
+                    SelectTextBox((TextBox)s, focusTextBox: false);
+                }),
+                handledEventsToo: true);
+            textBox.GotFocus += (s, e) =>
+            {
+                BeginTextEditSession((TextBox)s);
+                SelectTextBox((TextBox)s);
+            };
+            textBox.LostFocus += (s, e) => CommitTextEditSession();
+
+            page.TextOverlay.Children.Add(container);
+
+            if (select)
+            {
+                SelectTextBox(textBox);
+                textBox.SelectAll();
+                textBox.Focus(FocusState.Programmatic);
+                // Only user-created boxes push an undo action here; loads and
+                // pastes take their own batch path (WPF parity).
+                PushUndoAction(new TextBoxAddedAction(page, container));
+                MarkDirty();
+            }
+
+            return container;
+        }
+
+        private static TextBoxBounds GetTextContainerBounds(Grid container)
+        {
+            if (container == null)
+            {
+                return new TextBoxBounds(
+                    0, 0,
+                    TextAnnotationGeometry.DefaultWidth,
+                    TextAnnotationGeometry.DefaultHeight);
+            }
+
+            double left = Canvas.GetLeft(container);
+            double top = Canvas.GetTop(container);
+            double width = !double.IsNaN(container.Width) && container.Width > 0
+                ? container.Width
+                : container.ActualWidth > 0 ? container.ActualWidth : container.RenderSize.Width;
+            double height = !double.IsNaN(container.Height) && container.Height > 0
+                ? container.Height
+                : container.ActualHeight > 0 ? container.ActualHeight : container.RenderSize.Height;
+
+            if (double.IsNaN(left)) left = 0;
+            if (double.IsNaN(top)) top = 0;
+            return TextAnnotationGeometry.Normalize(new TextBoxBounds(left, top, width, height));
+        }
+
+        private static double GetPersistedTextWidth(PdfPageControl page, Grid container)
+            => page.IsTextAnnotationAutoWidth(container) ? 0 : GetTextContainerBounds(container).Width;
+
+        private static double GetPersistedTextHeight(PdfPageControl page, Grid container)
+            => page.IsTextAnnotationAutoHeight(container) ? 0 : GetTextContainerBounds(container).Height;
+
+        /// <summary>
+        /// Applies normalized bounds + auto-size flags to a text container —
+        /// the interactive counterpart of the page's quiet bounds setter
+        /// (WPF ApplyTextContainerBounds).
+        /// </summary>
+        private void ApplyTextContainerBounds(
+            Grid container,
+            TextBoxBounds bounds,
+            bool? autoWidth = null,
+            bool? autoHeight = null)
+        {
+            if (container == null)
+                return;
+
+            var page = GetPageByTextContainer(container);
+            var normalized = TextAnnotationGeometry.Normalize(bounds);
+            bool aw = autoWidth ?? page?.IsTextAnnotationAutoWidth(container) == true;
+            bool ah = autoHeight ?? page?.IsTextAnnotationAutoHeight(container) == true;
+            page?.SetTextAutoSize(container, aw, ah);
+
+            Canvas.SetLeft(container, normalized.X);
+            Canvas.SetTop(container, normalized.Y);
+            container.Width = aw ? double.NaN : normalized.Width;
+            container.Height = ah ? double.NaN : normalized.Height;
+
+            if (container.Children.OfType<TextBox>().FirstOrDefault() is TextBox textBox)
+            {
+                // The first grid column is star-sized, so the editor fills
+                // the resized rectangle while retaining padding + wrapping.
+                textBox.MaxWidth = double.PositiveInfinity;
+                textBox.Width = double.NaN;
+                textBox.Height = double.NaN;
+            }
+
+            container.InvalidateMeasure();
+            container.UpdateLayout();
+        }
+
+        // ── Eight-handle resize ────────────────────────────────────────────
+
+        private void TextResizeHandle_PointerPressed(object sender, PointerRoutedEventArgs e)
+        {
+            if (_currentTool != ToolType.Text
+                || sender is not TextResizeHandleElement handle
+                || handle.Tag is not TextResizeHandle resizeHandle
+                || !e.GetCurrentPoint(handle).Properties.IsLeftButtonPressed)
+            {
+                return;
+            }
+
+            var container = handle.Parent as Grid;
+            var page = GetPageByTextContainer(container);
+            if (container == null || page == null)
+                return;
+
+            BeginTextResize(handle, container, page, resizeHandle, e.GetCurrentPoint(page).Position);
+            handle.CapturePointer(e.Pointer);
+            e.Handled = true;
+        }
+
+        private void TextResizeHandle_KeyDown(object sender, KeyRoutedEventArgs e)
+        {
+            bool ctrl = InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Control)
+                .HasFlag(Microsoft.UI.Input.VirtualKeyStates.Down);
+            bool alt = InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Menu)
+                .HasFlag(Microsoft.UI.Input.VirtualKeyStates.Down);
+            bool shift = InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Shift)
+                .HasFlag(Microsoft.UI.Input.VirtualKeyStates.Down);
+            if (_currentTool != ToolType.Text
+                || sender is not TextResizeHandleElement handle
+                || handle.Tag is not TextResizeHandle resizeHandle
+                || !TryGetTextBoxNudge(e.Key, out double nudgeX, out double nudgeY)
+                || ctrl || alt)
+            {
+                return;
+            }
+
+            var container = handle.Parent as Grid;
+            var page = GetPageByTextContainer(container);
+            if (container == null || page == null)
+                return;
+
+            double step = shift ? 10 : 1;
+            var before = GetTextContainerBounds(container);
+            var after = TextAnnotationGeometry.Resize(
+                before,
+                resizeHandle,
+                nudgeX * step,
+                nudgeY * step);
+            double pageWidth = page.TextOverlay.ActualWidth > 0
+                ? page.TextOverlay.ActualWidth
+                : page.ActualWidth;
+            double pageHeight = page.TextOverlay.ActualHeight > 0
+                ? page.TextOverlay.ActualHeight
+                : page.ActualHeight;
+            after = TextAnnotationGeometry.ClampToPage(after, pageWidth, pageHeight);
+
+            bool geometryChanged = Math.Abs(before.X - after.X) > 0.5
+                || Math.Abs(before.Y - after.Y) > 0.5
+                || Math.Abs(before.Width - after.Width) > 0.5
+                || Math.Abs(before.Height - after.Height) > 0.5;
+            if (!geometryChanged)
+                return;
+
+            bool beforeAutoWidth = page.IsTextAnnotationAutoWidth(container);
+            bool beforeAutoHeight = page.IsTextAnnotationAutoHeight(container);
+            ApplyTextContainerBounds(container, after, autoWidth: false, autoHeight: false);
+            PushUndoAction(new TextBoxResizedAction(
+                page,
+                container,
+                before,
+                after,
+                beforeAutoWidth,
+                beforeAutoHeight,
+                afterAutoWidth: false,
+                afterAutoHeight: false));
+            MarkDirty();
+            PositionInlineTextBoxToolbar(container);
+            e.Handled = true;
+        }
+
+        private void BeginTextResize(
+            TextResizeHandleElement handle,
+            Grid container,
+            PdfPageControl page,
+            TextResizeHandle resizeHandle,
+            Point startPoint)
+        {
+            if (container.Children.OfType<TextBox>().FirstOrDefault() is TextBox textBox)
+                SelectTextBox(textBox, focusTextBox: false);
+
+            handle.Focus(FocusState.Programmatic);
+
+            _resizingTextContainer = container;
+            _resizingTextPage = page;
+            _textResizeHandle = resizeHandle;
+            _textResizeStartPoint = startPoint;
+            _textResizeStartBounds = GetTextContainerBounds(container);
+            _textResizeStartAutoWidth = page.IsTextAnnotationAutoWidth(container);
+            _textResizeStartAutoHeight = page.IsTextAnnotationAutoHeight(container);
+        }
+
+        private void TextResizeHandle_PointerMoved(object sender, PointerRoutedEventArgs e)
+        {
+            if (_resizingTextContainer == null || _resizingTextPage == null)
+                return;
+
+            UpdateTextResize(e.GetCurrentPoint(_resizingTextPage).Position);
+            e.Handled = true;
+        }
+
+        private void UpdateTextResize(Point point)
+        {
+            if (_resizingTextContainer == null || _resizingTextPage == null)
+                return;
+
+            var resized = TextAnnotationGeometry.Resize(
+                _textResizeStartBounds,
+                _textResizeHandle,
+                point.X - _textResizeStartPoint.X,
+                point.Y - _textResizeStartPoint.Y);
+            double pageWidth = _resizingTextPage.TextOverlay.ActualWidth > 0
+                ? _resizingTextPage.TextOverlay.ActualWidth
+                : _resizingTextPage.ActualWidth;
+            double pageHeight = _resizingTextPage.TextOverlay.ActualHeight > 0
+                ? _resizingTextPage.TextOverlay.ActualHeight
+                : _resizingTextPage.ActualHeight;
+            resized = TextAnnotationGeometry.ClampToPage(resized, pageWidth, pageHeight);
+            ApplyTextContainerBounds(_resizingTextContainer, resized, autoWidth: false, autoHeight: false);
+        }
+
+        private void TextResizeHandle_PointerReleased(object sender, PointerRoutedEventArgs e)
+        {
+            if (_resizingTextContainer == null)
+                return;
+
+            _suppressTextCaptureCancellation = true;
+            try
+            {
+                if (sender is UIElement handle)
+                    handle.ReleasePointerCaptures();
+                CompleteTextResize();
+            }
+            finally
+            {
+                _suppressTextCaptureCancellation = false;
+            }
+            e.Handled = true;
+        }
+
+        private void TextResizeHandle_PointerCanceled(object sender, PointerRoutedEventArgs e)
+        {
+            if (_resizingTextContainer != null)
+                CancelTextResize(restoreBounds: true);
+        }
+
+        private void TextResizeHandle_PointerCaptureLost(object sender, PointerRoutedEventArgs e)
+        {
+            if (!_suppressTextCaptureCancellation)
+                CancelTextResize(restoreBounds: true);
+        }
+
+        private void CompleteTextResize()
+        {
+            var resizedContainer = _resizingTextContainer;
+            if (resizedContainer == null || _resizingTextPage == null)
+                return;
+
+            var page = _resizingTextPage;
+            var before = _textResizeStartBounds;
+            var after = GetTextContainerBounds(resizedContainer);
+            bool afterAutoWidth = page.IsTextAnnotationAutoWidth(resizedContainer);
+            bool afterAutoHeight = page.IsTextAnnotationAutoHeight(resizedContainer);
+            _resizingTextContainer = null;
+            _resizingTextPage = null;
+            _textResizeHandle = default;
+
+            bool geometryChanged = Math.Abs(before.X - after.X) > 0.5
+                || Math.Abs(before.Y - after.Y) > 0.5
+                || Math.Abs(before.Width - after.Width) > 0.5
+                || Math.Abs(before.Height - after.Height) > 0.5;
+            bool layoutModeChanged = _textResizeStartAutoWidth != afterAutoWidth
+                || _textResizeStartAutoHeight != afterAutoHeight;
+
+            if (!geometryChanged && layoutModeChanged)
+            {
+                // A click or sub-pixel jitter must not silently convert an
+                // automatic-size annotation into a fixed box (WPF parity).
+                ApplyTextContainerBounds(
+                    resizedContainer,
+                    before,
+                    _textResizeStartAutoWidth,
+                    _textResizeStartAutoHeight);
+            }
+            else if (geometryChanged || layoutModeChanged)
+            {
+                PushUndoAction(new TextBoxResizedAction(
+                    page,
+                    resizedContainer,
+                    before,
+                    after,
+                    _textResizeStartAutoWidth,
+                    _textResizeStartAutoHeight,
+                    afterAutoWidth,
+                    afterAutoHeight));
+                MarkDirty();
+            }
+        }
+
+        private void CancelTextResize(bool restoreBounds)
+        {
+            var resizingContainer = _resizingTextContainer;
+            if (resizingContainer == null)
+                return;
+
+            _suppressTextCaptureCancellation = true;
+            try
+            {
+                if (restoreBounds)
+                {
+                    ApplyTextContainerBounds(
+                        resizingContainer,
+                        _textResizeStartBounds,
+                        _textResizeStartAutoWidth,
+                        _textResizeStartAutoHeight);
+                }
+                resizingContainer.ReleasePointerCaptures();
+            }
+            finally
+            {
+                _suppressTextCaptureCancellation = false;
+                _resizingTextContainer = null;
+                _resizingTextPage = null;
+                _textResizeHandle = default;
+                _textResizeStartBounds = default;
+            }
+        }
+
+        // ── Border-band drag ───────────────────────────────────────────────
+
+        private static bool IsTextContainerBorderGesture(
+            Grid container, Point point, object originalSource)
+        {
+            return FindAncestor<TextResizeHandleElement>(originalSource as DependencyObject) == null
+                && TextAnnotationGeometry.IsMoveBorderHit(
+                    point.X,
+                    point.Y,
+                    container.ActualWidth,
+                    container.ActualHeight);
+        }
+
+        private void TextContainerBorder_PointerPressed(object sender, PointerRoutedEventArgs e)
+        {
+            if (_currentTool != ToolType.Text
+                || sender is not Grid container
+                || container.Parent is not Canvas canvas
+                || !e.GetCurrentPoint(container).Properties.IsLeftButtonPressed
+                || !IsTextContainerBorderGesture(
+                    container, e.GetCurrentPoint(container).Position, e.OriginalSource))
+            {
+                return;
+            }
+
+            BeginTextBoxDrag(container, e.GetCurrentPoint(canvas).Position);
+            e.Handled = true;
+        }
+
+        private void TextContainerBorder_PointerMoved(object sender, PointerRoutedEventArgs e)
+        {
+            if (_draggedContainer?.Parent is Canvas canvas)
+            {
+                UpdateTextBoxDrag(
+                    e.GetCurrentPoint(canvas).Position,
+                    () => _draggedContainer.CapturePointer(e.Pointer));
+            }
+            e.Handled = _isDragging || _dragArmed;
+        }
+
+        private void TextContainerBorder_PointerReleased(object sender, PointerRoutedEventArgs e)
+        {
+            var container = sender as Grid;
+            _suppressTextCaptureCancellation = true;
+            bool wasDragging;
+            try
+            {
+                container?.ReleasePointerCaptures();
+                wasDragging = CompleteTextBoxDrag();
+            }
+            finally
+            {
+                _suppressTextCaptureCancellation = false;
+            }
+            e.Handled = wasDragging;
+        }
+
+        private void TextContainerBorder_PointerCanceled(object sender, PointerRoutedEventArgs e)
+        {
+            if (!_suppressTextCaptureCancellation)
+                CancelTextBoxDrag(restoreBounds: true);
+        }
+
+        private void TextContainerBorder_PointerCaptureLost(object sender, PointerRoutedEventArgs e)
+        {
+            if (!_suppressTextCaptureCancellation)
+                CancelTextBoxDrag(restoreBounds: true);
+        }
+
+        private void BeginTextBoxDrag(Grid container, Point pressPoint)
+        {
+            if (_currentTool != ToolType.Text || container == null)
+                return;
+
+            if (container.Children.OfType<TextBox>().FirstOrDefault() is TextBox textBox)
+                SelectTextBox(textBox, focusTextBox: false);
+
+            _dragArmed = true;
+            _draggedContainer = container;
+            _dragPressPointOnCanvas = pressPoint;
+            _draggedContainerPage = GetPageByTextContainer(container);
+            _dragStartX = Canvas.GetLeft(container);
+            _dragStartY = Canvas.GetTop(container);
+        }
+
+        private void UpdateTextBoxDrag(Point currentPoint, Action capture)
+        {
+            if ((!_isDragging && !_dragArmed) || _draggedContainer == null)
+                return;
+
+            if (_dragArmed && !_isDragging)
+            {
+                var dx = currentPoint.X - _dragPressPointOnCanvas.X;
+                var dy = currentPoint.Y - _dragPressPointOnCanvas.Y;
+                if (Math.Abs(dx) > 4 || Math.Abs(dy) > 4)
+                {
+                    _isDragging = true;
+                    _dragArmed = false;
+                    capture?.Invoke();
+                    if (_inlineTextBoxToolbar != null)
+                        _inlineTextBoxToolbar.Visibility = Visibility.Collapsed;
+                }
+            }
+
+            if (_isDragging)
+            {
+                var dx = currentPoint.X - _dragPressPointOnCanvas.X;
+                var dy = currentPoint.Y - _dragPressPointOnCanvas.Y;
+                // No clamping while dragging — the container follows the
+                // pointer beyond the source page so a cross-page drop can be
+                // detected on release (WPF Task 9 parity).
+                Canvas.SetLeft(_draggedContainer, _dragStartX + dx);
+                Canvas.SetTop(_draggedContainer, _dragStartY + dy);
+            }
+        }
+
+        private bool CompleteTextBoxDrag()
+        {
+            if (!_isDragging && !_dragArmed)
+                return false;
+
+            var wasDragging = _isDragging;
+            _dragArmed = false;
+            _isDragging = false;
+
+            if (_draggedContainer != null)
+            {
+                var endX = Canvas.GetLeft(_draggedContainer);
+                var endY = Canvas.GetTop(_draggedContainer);
+                if (Math.Abs(endX - _dragStartX) > 0.5 || Math.Abs(endY - _dragStartY) > 0.5)
+                {
+                    var sourcePage = _draggedContainerPage ?? GetPageByTextContainer(_draggedContainer);
+                    var targetPage = sourcePage != null
+                        ? FindPageAtContainerPoint(sourcePage, new PointD(
+                            endX + _draggedContainer.ActualWidth / 2,
+                            endY + _draggedContainer.ActualHeight / 2))
+                        : null;
+
+                    if (sourcePage != null && targetPage != null && targetPage != sourcePage)
+                    {
+                        // Cross-page drop — the selection cross-page
+                        // mechanism with a single text container and no
+                        // strokes (WPF parity).
+                        Point targetOriginInSource = targetPage.TransformToVisual(sourcePage)
+                            .TransformPoint(new Point(0, 0));
+                        var moveAction = new AnnotationSelectionCrossPageMoveAction(
+                            sourcePage.Ink.Store,
+                            targetPage.Ink.Store,
+                            sourcePage,
+                            targetPage,
+                            Array.Empty<InkStrokeData>(),
+                            new List<Grid> { _draggedContainer },
+                            endX - _dragStartX,
+                            endY - _dragStartY,
+                            -targetOriginInSource.X,
+                            -targetOriginInSource.Y,
+                            new List<InkStrokePlacement>());
+
+                        if (sourcePage.HasSelection
+                            && sourcePage.SelectedTextContainers.Contains(_draggedContainer))
+                        {
+                            sourcePage.ClearSelection();
+                        }
+
+                        if (moveAction.ExecuteInitialTransfer())
+                            PushUndoAction(moveAction);
+                    }
+                    else
+                    {
+                        // Same page or a miss into a gap: clamp back into the
+                        // source page bounds and record a same-page move.
+                        if (sourcePage != null && _draggedContainer.Parent is Canvas canvas)
+                        {
+                            endX = Math.Max(0, Math.Min(
+                                endX, Math.Max(0, canvas.ActualWidth - _draggedContainer.ActualWidth)));
+                            endY = Math.Max(0, Math.Min(
+                                endY, Math.Max(0, canvas.ActualHeight - _draggedContainer.ActualHeight)));
+                            Canvas.SetLeft(_draggedContainer, endX);
+                            Canvas.SetTop(_draggedContainer, endY);
+                        }
+                        if (sourcePage != null)
+                        {
+                            PushUndoAction(new TextBoxMovedAction(
+                                sourcePage,
+                                _draggedContainer,
+                                new PointD(_dragStartX, _dragStartY),
+                                new PointD(endX, endY)));
+                        }
+                    }
+                    MarkDirty();
+                }
+                if (wasDragging)
+                {
+                    var tb = _draggedContainer.Children.OfType<TextBox>().FirstOrDefault();
+                    if (tb != null)
+                    {
+                        PositionInlineTextBoxToolbar(_draggedContainer);
+                        tb.Focus(FocusState.Programmatic);
+                    }
+                }
+            }
+            _draggedContainer = null;
+            _draggedContainerPage = null;
+            _dragStartX = 0;
+            _dragStartY = 0;
+            return wasDragging;
+        }
+
+        private void CancelTextBoxDrag(bool restoreBounds)
+        {
+            var container = _draggedContainer;
+            bool active = container != null || _dragArmed || _isDragging;
+            if (!active)
+                return;
+
+            _suppressTextCaptureCancellation = true;
+            try
+            {
+                if (restoreBounds && container != null)
+                {
+                    Canvas.SetLeft(container, _dragStartX);
+                    Canvas.SetTop(container, _dragStartY);
+                }
+                container?.ReleasePointerCaptures();
+            }
+            finally
+            {
+                _suppressTextCaptureCancellation = false;
+                _isDragging = false;
+                _dragArmed = false;
+                _draggedContainer = null;
+                _draggedContainerPage = null;
+                _dragStartX = 0;
+                _dragStartY = 0;
+            }
+        }
+
+        /// <summary>
+        /// Press on the page background (outside the text overlay) — the
+        /// Text tool deselects; the StickyNote tool places a marker and opens
+        /// its editor (WPF PageControl_BackgroundPointerPressed parity).
+        /// </summary>
+        private void PageControl_BackgroundPointerPressed(object sender, PointerRoutedEventArgs e)
+        {
+            if (_selectedTextBox != null)
+                DeselectTextBox();
+
+            // WPF tracks the click so Ctrl+V anchors the paste offset at the
+            // clicked point rather than a fixed (+20,+20) nudge.
+            if (sender is PdfPageControl clickedPage)
+            {
+                _lastClickedPage = clickedPage;
+                _lastClickedPoint = e.GetCurrentPoint(clickedPage).Position;
+            }
+
+            if (_currentTool == ToolType.StickyNote && sender is PdfPageControl page)
+            {
+                var pos = e.GetCurrentPoint(page).Position;
+                var note = new StickyNoteAnnotation
+                {
+                    X = pos.X,
+                    Y = pos.Y,
+                    Text = string.Empty,
+                };
+                var container = page.AddStickyNote(note);
+                if (container != null)
+                {
+                    PushUndoAction(new StickyNoteAddedAction(page, container));
+                    MarkDirty();
+                    OpenStickyNoteEditor(page, container, note);
+                }
+                e.Handled = true;
+            }
+        }
+
+        // ── Text-box selection / focus-session undo ───────────────────────
+
+        private void SelectTextBox(TextBox textBox, bool focusTextBox = true)
+        {
+            if (textBox == null || _currentTool != ToolType.Text)
+                return;
+
+            bool selectionChanged = !ReferenceEquals(_selectedTextBox, textBox);
+
+            if (_selectedTextBox != null && selectionChanged)
+            {
+                ApplyTextBoxChrome(_selectedTextBox, isSelected: false);
+                _selectedTextBox.IsReadOnly = true;
+            }
+
+            _selectedTextBox = textBox;
+            textBox.IsReadOnly = false;
+            ApplyTextBoxChrome(textBox, isSelected: true);
+            SyncPopupToSelectedTextBox();
+            PositionInlineTextBoxToolbar(textBox.Parent as UIElement ?? textBox);
+
+            if (focusTextBox && textBox.FocusState == FocusState.Unfocused)
+                textBox.Focus(FocusState.Programmatic);
+        }
+
+        private void DeselectTextBox()
+        {
+            if (_selectedTextBox == null)
+                return;
+            ApplyTextBoxChrome(_selectedTextBox, isSelected: false);
+            _selectedTextBox.IsReadOnly = true;
+            _selectedTextBox = null;
+            RemoveInlineTextBoxToolbar();
+        }
+
+        /// <summary>
+        /// Toggles the selected chrome + resize handles around a text box
+        /// (WPF ApplyTextBoxChrome).
+        /// </summary>
+        private void ApplyTextBoxChrome(TextBox textBox, bool isSelected)
+        {
+            textBox.BorderThickness = new Thickness(0);
+            textBox.Background = new SolidColorBrush(Color.FromArgb(0, 0, 0, 0));
+
+            if (textBox.Parent is not Grid container)
+                return;
+
+            foreach (var child in container.Children)
+            {
+                if (child is Border chrome && !chrome.IsHitTestVisible
+                    && chrome.Tag is string tag && tag == "chrome")
+                {
+                    chrome.BorderThickness = new Thickness(isSelected ? 1.5 : 0);
+                    chrome.BorderBrush = isSelected
+                        ? ResolveThemeBrush("ThemeFocusBrush", Color.FromArgb(0xFF, 0x25, 0x63, 0xEB))
+                        : new SolidColorBrush(Color.FromArgb(0, 0, 0, 0));
+                    chrome.Background = new SolidColorBrush(Color.FromArgb(0, 0, 0, 0));
+                }
+                else if (child is TextResizeHandleElement handle && handle.Tag is TextResizeHandle)
+                {
+                    handle.Visibility = isSelected ? Visibility.Visible : Visibility.Collapsed;
+                }
+            }
+        }
+
+        private void DeleteSelectedTextBox()
+        {
+            if (_selectedTextBox == null)
+                return;
+            var tb = _selectedTextBox;
+            DeselectTextBox();
+
+            if (tb.Parent is Grid container && container.Parent is Panel panel)
+            {
+                // Resolve the page BEFORE detaching — Parent is null after
+                // the remove (WPF looked it up afterwards and silently
+                // skipped the undo push).
+                var page = GetPageByTextContainer(container);
+                panel.Children.Remove(container);
+                if (page != null)
+                    PushUndoAction(new TextBoxDeletedAction(page, container));
+                MarkDirty();
+            }
+            else if (tb.Parent is Panel orphanPanel)
+            {
+                orphanPanel.Children.Remove(tb);
+                MarkDirty();
+            }
+        }
+
+        /// <summary>
+        /// The page whose TextOverlay hosts the container (WPF
+        /// GetPageByTextContainer) — null while the container is detached.
+        /// </summary>
+        private PdfPageControl GetPageByTextContainer(Grid container)
+        {
+            if (container?.Parent is Canvas canvas)
+                return _pageControls.FirstOrDefault(p => ReferenceEquals(p.TextOverlay, canvas));
+            return null;
+        }
+
+        private static bool TryGetTextBoxNudge(VirtualKey key, out double deltaX, out double deltaY)
+        {
+            deltaX = 0;
+            deltaY = 0;
+            switch (key)
+            {
+                case VirtualKey.Left:
+                    deltaX = -1;
+                    return true;
+                case VirtualKey.Right:
+                    deltaX = 1;
+                    return true;
+                case VirtualKey.Up:
+                    deltaY = -1;
+                    return true;
+                case VirtualKey.Down:
+                    deltaY = 1;
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        private void NudgeSelectedTextBox(double deltaX, double deltaY)
+        {
+            var container = _selectedTextBox?.Parent as Grid;
+            var page = GetPageByTextContainer(container);
+            if (container == null || page == null)
+                return;
+
+            var before = GetTextContainerBounds(container);
+            double pageWidth = page.TextOverlay.ActualWidth > 0
+                ? page.TextOverlay.ActualWidth
+                : page.ActualWidth;
+            double pageHeight = page.TextOverlay.ActualHeight > 0
+                ? page.TextOverlay.ActualHeight
+                : page.ActualHeight;
+            var after = TextAnnotationGeometry.ClampToPage(
+                before with { X = before.X + deltaX, Y = before.Y + deltaY },
+                pageWidth,
+                pageHeight);
+
+            if (Math.Abs(before.X - after.X) <= 0.5
+                && Math.Abs(before.Y - after.Y) <= 0.5)
+            {
+                return;
+            }
+
+            ApplyTextContainerBounds(
+                container,
+                after,
+                autoWidth: page.IsTextAnnotationAutoWidth(container),
+                autoHeight: page.IsTextAnnotationAutoHeight(container));
+            PushUndoAction(new TextBoxMovedAction(
+                page,
+                container,
+                new PointD(before.X, before.Y),
+                new PointD(after.X, after.Y)));
+            MarkDirty();
+            PositionInlineTextBoxToolbar(container);
+        }
+
+        private void BeginTextEditSession(TextBox textBox)
+        {
+            _textEditSessionTextBox = textBox;
+            _textEditSessionOriginalText = textBox.Text;
+        }
+
+        /// <summary>
+        /// Commits the open focus session — one TextEditSessionAction per
+        /// net change, never for no-op sessions (WPF CommitTextEditSession).
+        /// </summary>
+        private void CommitTextEditSession()
+        {
+            var textBox = _textEditSessionTextBox;
+            if (textBox == null)
+                return;
+            _textEditSessionTextBox = null;
+
+            string beforeText = _textEditSessionOriginalText;
+            string afterText = textBox.Text;
+            if (string.Equals(beforeText, afterText))
+                return;
+
+            var container = textBox.Parent as Grid;
+            var page = GetPageByTextContainer(container);
+            if (page == null || container == null)
+                return;
+
+            PushUndoAction(new TextEditSessionAction(page, container, beforeText, afterText));
+            MarkDirty();
+        }
+
+        // ── Inline text toolbar ────────────────────────────────────────────
+
+        /// <summary>
+        /// Builds the floating text toolbar once (WPF InitializeTextBoxPopup):
+        /// delete | font −/+ | colour palette | B I | family | alignment.
+        /// Hosted on the page's TextOverlay canvas above the selected box.
+        /// </summary>
+        private void EnsureInlineTextBoxToolbar()
+        {
+            if (_inlineTextBoxToolbar != null)
+                return;
+
+            var panel = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(4) };
+            var border = new Border
+            {
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(16),
+                Child = panel,
+                Background = ResolveThemeBrush("ThemeSurfaceBrush", Color.FromArgb(0xFF, 0xFF, 0xFF, 0xFF)),
+                BorderBrush = ResolveThemeBrush("ThemeBorderBrush", Color.FromArgb(0xFF, 0xC9, 0xCE, 0xD6)),
+                Visibility = Visibility.Collapsed,
+            };
+
+            var deleteButton = new Button
+            {
+                Width = 32,
+                Height = 32,
+                Padding = new Thickness(0),
+                Background = new SolidColorBrush(Color.FromArgb(0, 0, 0, 0)),
+                BorderThickness = new Thickness(0),
+                Margin = new Thickness(0),
+                Content = new Microsoft.UI.Xaml.Shapes.Path
+                {
+                    Width = 16,
+                    Height = 16,
+                    Stretch = Stretch.Uniform,
+                    Fill = new SolidColorBrush(Color.FromArgb(0, 0, 0, 0)),
+                    StrokeThickness = 1.6,
+                    StrokeStartLineCap = PenLineCap.Round,
+                    StrokeEndLineCap = PenLineCap.Round,
+                    StrokeLineJoin = PenLineJoin.Round,
+                    Stroke = ResolveThemeBrush("ThemeMarginBrush", Color.FromArgb(0xFF, 0x6B, 0x72, 0x80)),
+                    Data = LucideIcon.ParseIconGeometry(
+                        "M5,5 L19,5 M8,5 L8,3 L16,3 L16,5 M7,7 L8,19 L16,19 L17,7"),
+                },
+            };
+            string deleteLabel = LocalizationService.Get("Editor.DeleteTooltip");
+            ToolTipService.SetToolTip(deleteButton, deleteLabel);
+            AutomationProperties.SetAutomationId(deleteButton, "Editor.TextToolbar.Delete");
+            AutomationProperties.SetName(deleteButton, deleteLabel);
+            deleteButton.Click += (s, e) => DeleteSelectedTextBox();
+
+            var decreaseFontButton = new Button
+            {
+                Width = 32,
+                Height = 32,
+                Padding = new Thickness(0),
+                Margin = new Thickness(0),
+                Background = new SolidColorBrush(Color.FromArgb(0, 0, 0, 0)),
+                BorderThickness = new Thickness(0),
+                Content = CreateTextSizeButtonContent(increase: false),
+            };
+            string smallerLabel = LocalizationService.Get("Editor.SmallerText");
+            ToolTipService.SetToolTip(decreaseFontButton, smallerLabel);
+            AutomationProperties.SetAutomationId(decreaseFontButton, "Editor.TextToolbar.FontSizeDown");
+            AutomationProperties.SetName(decreaseFontButton, smallerLabel);
+            decreaseFontButton.Click += (s, e) => AdjustSelectedTextBoxFontSize(increase: false);
+
+            var increaseFontButton = new Button
+            {
+                Width = 32,
+                Height = 32,
+                Padding = new Thickness(0),
+                Margin = new Thickness(0),
+                Background = new SolidColorBrush(Color.FromArgb(0, 0, 0, 0)),
+                BorderThickness = new Thickness(0),
+                Content = CreateTextSizeButtonContent(increase: true),
+            };
+            string biggerLabel = LocalizationService.Get("Editor.BiggerText");
+            ToolTipService.SetToolTip(increaseFontButton, biggerLabel);
+            AutomationProperties.SetAutomationId(increaseFontButton, "Editor.TextToolbar.FontSizeUp");
+            AutomationProperties.SetName(increaseFontButton, biggerLabel);
+            increaseFontButton.Click += (s, e) => AdjustSelectedTextBoxFontSize(increase: true);
+
+            var fontButtonGroup = new Border
+            {
+                CornerRadius = new CornerRadius(10),
+                Padding = new Thickness(2, 0, 2, 0),
+                Background = ResolveThemeBrush("ThemeSurfaceAltBrush", Color.FromArgb(0xFF, 0xF2, 0xF5, 0xF7)),
+                Child = new StackPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    Children =
+                    {
+                        decreaseFontButton,
+                        new Border
+                        {
+                            Width = 1,
+                            Height = 16,
+                            Margin = new Thickness(1, 0, 1, 0),
+                            VerticalAlignment = VerticalAlignment.Center,
+                            Background = ResolveThemeBrush("ThemeBorderBrush", Color.FromArgb(0xFF, 0xC9, 0xCE, 0xD6)),
+                        },
+                        increaseFontButton,
+                    },
+                },
+            };
+
+            _colorIndicator = new Border
+            {
+                Width = 14,
+                Height = 14,
+                CornerRadius = new CornerRadius(7),
+                Background = new SolidColorBrush(_textColor),
+                BorderThickness = new Thickness(1),
+                BorderBrush = ResolveThemeBrush("ThemeBorderBrush", Color.FromArgb(0xFF, 0xC9, 0xCE, 0xD6)),
+            };
+            var colorButton = new Button
+            {
+                Content = _colorIndicator,
+                Width = 32,
+                Height = 32,
+                Padding = new Thickness(0),
+                Background = new SolidColorBrush(Color.FromArgb(0, 0, 0, 0)),
+                BorderThickness = new Thickness(0),
+                Margin = new Thickness(0),
+            };
+            string colorLabel = LocalizationService.Get("Editor.TextColorTooltip");
+            if (string.IsNullOrWhiteSpace(colorLabel))
+                colorLabel = LocalizationService.Get("Editor.ColorTooltip");
+            ToolTipService.SetToolTip(colorButton, colorLabel);
+            AutomationProperties.SetAutomationId(colorButton, "Editor.TextToolbar.Color");
+            AutomationProperties.SetName(colorButton, colorLabel);
+            _textColorFlyout = new Flyout { Content = BuildColorPalette(_textColor, ApplyTextColor) };
+            colorButton.Flyout = _textColorFlyout;
+
+            _textBoldButton = new ToggleButton
+            {
+                Content = "B",
+                Width = 32,
+                Height = 32,
+                MinWidth = 32,
+                MinHeight = 32,
+                FontWeight = Microsoft.UI.Text.FontWeights.Bold,
+            };
+            string boldLabel = LocalizationService.Get("Editor.BoldTooltip");
+            ToolTipService.SetToolTip(_textBoldButton, boldLabel);
+            AutomationProperties.SetAutomationId(_textBoldButton, "Editor.TextToolbar.Bold");
+            AutomationProperties.SetName(_textBoldButton, boldLabel);
+            _textItalicButton = new ToggleButton
+            {
+                Content = "I",
+                Width = 32,
+                Height = 32,
+                MinWidth = 32,
+                MinHeight = 32,
+                FontStyle = Windows.UI.Text.FontStyle.Italic,
+            };
+            string italicLabel = LocalizationService.Get("Editor.ItalicTooltip");
+            ToolTipService.SetToolTip(_textItalicButton, italicLabel);
+            AutomationProperties.SetAutomationId(_textItalicButton, "Editor.TextToolbar.Italic");
+            AutomationProperties.SetName(_textItalicButton, italicLabel);
+            _textBoldButton.Click += (_, __) => ApplySelectedTextFormat(tb =>
+                tb.FontWeight = _textBoldButton.IsChecked == true
+                    ? Microsoft.UI.Text.FontWeights.Bold
+                    : Microsoft.UI.Text.FontWeights.Normal);
+            _textItalicButton.Click += (_, __) => ApplySelectedTextFormat(tb =>
+                tb.FontStyle = _textItalicButton.IsChecked == true
+                    ? Windows.UI.Text.FontStyle.Italic
+                    : Windows.UI.Text.FontStyle.Normal);
+
+            _textFontFamilyCombo = new ComboBox
+            {
+                Width = 104,
+                Height = 32,
+                Margin = new Thickness(4, 0, 0, 0),
+                ItemsSource = new[] { "Segoe UI", "Arial", "Times New Roman", "Consolas" },
+            };
+            string familyLabel = LocalizationService.Get("Editor.FontFamilyTooltip");
+            ToolTipService.SetToolTip(_textFontFamilyCombo, familyLabel);
+            AutomationProperties.SetAutomationId(_textFontFamilyCombo, "Editor.TextToolbar.FontFamily");
+            AutomationProperties.SetName(_textFontFamilyCombo, familyLabel);
+            _textFontFamilyCombo.SelectionChanged += (_, __) =>
+            {
+                if (_textFontFamilyCombo.SelectedItem is string family)
+                    ApplySelectedTextFormat(tb => tb.FontFamily = new FontFamily(family));
+            };
+
+            _textAlignmentCombo = new ComboBox
+            {
+                Width = 86,
+                Height = 32,
+                MinHeight = 32,
+                Margin = new Thickness(4, 0, 0, 0),
+                ItemsSource = BuildTextAlignmentOptions(),
+                DisplayMemberPath = nameof(TextAlignmentOption.Label),
+                SelectedValuePath = nameof(TextAlignmentOption.Value),
+                SelectedValue = _textAlignment,
+            };
+            string alignmentLabel = LocalizationService.Get("Editor.AlignmentTooltip");
+            ToolTipService.SetToolTip(_textAlignmentCombo, alignmentLabel);
+            AutomationProperties.SetAutomationId(_textAlignmentCombo, "Editor.TextToolbar.Alignment");
+            AutomationProperties.SetName(_textAlignmentCombo, alignmentLabel);
+            _textAlignmentCombo.SelectionChanged += (_, __) =>
+            {
+                if (_isRefreshingTextAlignmentOptions)
+                    return;
+                if (_textAlignmentCombo.SelectedItem is TextAlignmentOption alignment)
+                {
+                    _textAlignment = alignment.Value;
+                    ApplySelectedTextFormat(tb => tb.TextAlignment = alignment.Value);
+                }
+            };
+
+            panel.Children.Add(deleteButton);
+            panel.Children.Add(new Border
+            {
+                Width = 1,
+                Height = 18,
+                Margin = new Thickness(6, 5, 6, 5),
+                VerticalAlignment = VerticalAlignment.Center,
+                Background = ResolveThemeBrush("ThemeBorderBrush", Color.FromArgb(0xFF, 0xC9, 0xCE, 0xD6)),
+            });
+            panel.Children.Add(fontButtonGroup);
+            panel.Children.Add(new Border
+            {
+                Width = 1,
+                Height = 18,
+                Margin = new Thickness(6, 5, 6, 5),
+                VerticalAlignment = VerticalAlignment.Center,
+                Background = ResolveThemeBrush("ThemeBorderBrush", Color.FromArgb(0xFF, 0xC9, 0xCE, 0xD6)),
+            });
+            panel.Children.Add(colorButton);
+            panel.Children.Add(new Border
+            {
+                Width = 1,
+                Height = 18,
+                Margin = new Thickness(6, 5, 6, 5),
+                VerticalAlignment = VerticalAlignment.Center,
+                Background = ResolveThemeBrush("ThemeBorderBrush", Color.FromArgb(0xFF, 0xC9, 0xCE, 0xD6)),
+            });
+            panel.Children.Add(_textBoldButton);
+            panel.Children.Add(_textItalicButton);
+            panel.Children.Add(_textFontFamilyCombo);
+            panel.Children.Add(_textAlignmentCombo);
+
+            _inlineTextBoxToolbar = border;
+        }
+
+        private static IReadOnlyList<TextAlignmentOption> BuildTextAlignmentOptions()
+        {
+            return new[]
+            {
+                new TextAlignmentOption(TextAlignment.Left, LocalizationService.Get("Editor.AlignmentLeft")),
+                new TextAlignmentOption(TextAlignment.Center, LocalizationService.Get("Editor.AlignmentCenter")),
+                new TextAlignmentOption(TextAlignment.Right, LocalizationService.Get("Editor.AlignmentRight")),
+            };
+        }
+
+        /// <summary>
+        /// Re-applies localized tooltips/UIA names on the live inline text
+        /// toolbar after a language change — matched by AutomationId so the
+        /// local-only buttons (delete/font −/+/colour) refresh too.
+        /// </summary>
+        private void ApplyInlineTextBoxToolbarLocalization()
+        {
+            if (_inlineTextBoxToolbar == null)
+                return;
+
+            ApplyToolbarDescendantLabel("Editor.TextToolbar.Delete",
+                LocalizationService.Get("Editor.DeleteTooltip"));
+            ApplyToolbarDescendantLabel("Editor.TextToolbar.FontSizeDown",
+                LocalizationService.Get("Editor.SmallerText"));
+            ApplyToolbarDescendantLabel("Editor.TextToolbar.FontSizeUp",
+                LocalizationService.Get("Editor.BiggerText"));
+            string colorLabel = LocalizationService.Get("Editor.TextColorTooltip");
+            if (string.IsNullOrWhiteSpace(colorLabel))
+                colorLabel = LocalizationService.Get("Editor.ColorTooltip");
+            ApplyToolbarDescendantLabel("Editor.TextToolbar.Color", colorLabel);
+            ApplyToolbarDescendantLabel("Editor.TextToolbar.Bold",
+                LocalizationService.Get("Editor.BoldTooltip"));
+            ApplyToolbarDescendantLabel("Editor.TextToolbar.Italic",
+                LocalizationService.Get("Editor.ItalicTooltip"));
+            ApplyToolbarDescendantLabel("Editor.TextToolbar.FontFamily",
+                LocalizationService.Get("Editor.FontFamilyTooltip"));
+            ApplyToolbarDescendantLabel("Editor.TextToolbar.Alignment",
+                LocalizationService.Get("Editor.AlignmentTooltip"));
+        }
+
+        private void ApplyToolbarDescendantLabel(string automationId, string label)
+        {
+            var element = FindDescendantByAutomationId(_inlineTextBoxToolbar, automationId);
+            if (element == null)
+                return;
+
+            ToolTipService.SetToolTip(element, label);
+            AutomationProperties.SetName(element, label);
+            AutomationProperties.SetHelpText(element, label);
+        }
+
+        private static DependencyObject FindDescendantByAutomationId(DependencyObject root, string automationId)
+        {
+            if (root == null)
+                return null;
+
+            int count = VisualTreeHelper.GetChildrenCount(root);
+            for (int i = 0; i < count; i++)
+            {
+                var child = VisualTreeHelper.GetChild(root, i);
+                if (AutomationProperties.GetAutomationId(child) == automationId)
+                    return child;
+                var found = FindDescendantByAutomationId(child, automationId);
+                if (found != null)
+                    return found;
+            }
+            return null;
+        }
+
+        private void RefreshTextAlignmentOptions()
+        {
+            if (_textAlignmentCombo == null)
+                return;
+
+            var selectedAlignment = _textAlignmentCombo.SelectedItem is TextAlignmentOption selected
+                ? selected.Value
+                : _selectedTextBox?.TextAlignment ?? _textAlignment;
+
+            _isRefreshingTextAlignmentOptions = true;
+            try
+            {
+                _textAlignmentCombo.ItemsSource = BuildTextAlignmentOptions();
+                _textAlignmentCombo.SelectedValue = selectedAlignment;
+            }
+            finally
+            {
+                _isRefreshingTextAlignmentOptions = false;
+            }
+        }
+
+        /// <summary>
+        /// Palette cell commit — foreground change on the selected box with
+        /// a TextStyleChangedAction (WPF ApplyTextColor parity).
+        /// </summary>
+        private void ApplyTextColor(Windows.UI.Color picked)
+        {
+            if (_selectedTextBox != null)
+            {
+                var beforeBrush = _selectedTextBox.Foreground;
+                var beforeFontSize = _selectedTextBox.FontSize;
+                var container = _selectedTextBox.Parent as Grid;
+                var page = GetPageByTextContainer(container);
+
+                _selectedTextBox.Foreground = new SolidColorBrush(picked);
+                _textColor = picked;
+                if (_colorIndicator != null)
+                    _colorIndicator.Background = new SolidColorBrush(picked);
+                if (page != null && container != null)
+                {
+                    var before = (beforeBrush as SolidColorBrush)?.Color
+                        ?? Windows.UI.Color.FromArgb(255, 0, 0, 0);
+                    PushUndoAction(new TextStyleChangedAction(
+                        page,
+                        container,
+                        new TextStyleSnapshot(beforeFontSize, before.R, before.G, before.B),
+                        new TextStyleSnapshot(_selectedTextBox.FontSize, picked.R, picked.G, picked.B)));
+                }
+                MarkDirty();
+            }
+            _textColorFlyout?.Hide();
+        }
+
+        /// <summary>
+        /// Bold/italic/family/alignment change on the selected box as one
+        /// TextFormatChangedAction (WPF ApplySelectedTextFormat parity).
+        /// </summary>
+        private void ApplySelectedTextFormat(Action<TextBox> apply)
+        {
+            var textBox = _selectedTextBox;
+            if (textBox == null || apply == null)
+                return;
+
+            var beforeWeight = textBox.FontWeight;
+            var beforeStyle = textBox.FontStyle;
+            var beforeFamily = textBox.FontFamily;
+            var beforeAlignment = textBox.TextAlignment;
+
+            apply(textBox);
+
+            bool changed = beforeWeight.Weight != textBox.FontWeight.Weight
+                || beforeStyle != textBox.FontStyle
+                || !string.Equals(beforeFamily?.Source, textBox.FontFamily?.Source, StringComparison.OrdinalIgnoreCase)
+                || beforeAlignment != textBox.TextAlignment;
+            if (!changed)
+                return;
+
+            var container = textBox.Parent as Grid;
+            var page = GetPageByTextContainer(container);
+            if (page != null && container != null)
+            {
+                PushUndoAction(new TextFormatChangedAction(
+                    page,
+                    container,
+                    new TextFormatSnapshot(
+                        beforeWeight.Weight >= Microsoft.UI.Text.FontWeights.Bold.Weight,
+                        beforeStyle == Windows.UI.Text.FontStyle.Italic,
+                        beforeFamily?.Source ?? "Segoe UI",
+                        beforeAlignment.ToString()),
+                    new TextFormatSnapshot(
+                        textBox.FontWeight.Weight >= Microsoft.UI.Text.FontWeights.Bold.Weight,
+                        textBox.FontStyle == Windows.UI.Text.FontStyle.Italic,
+                        textBox.FontFamily?.Source ?? "Segoe UI",
+                        textBox.TextAlignment.ToString())));
+            }
+
+            _textBold = textBox.FontWeight.Weight >= Microsoft.UI.Text.FontWeights.Bold.Weight;
+            _textItalic = textBox.FontStyle == Windows.UI.Text.FontStyle.Italic;
+            _textFontFamily = textBox.FontFamily?.Source ?? "Segoe UI";
+            _textAlignment = textBox.TextAlignment;
+            SyncPopupToSelectedTextBox();
+            MarkDirty();
+        }
+
+        private void AdjustSelectedTextBoxFontSize(bool increase)
+        {
+            if (_selectedTextBox == null)
+                return;
+
+            double currentSize = _selectedTextBox.FontSize;
+            double nextSize = GetSteppedFontSize(currentSize, increase);
+            if (Math.Abs(nextSize - currentSize) < 0.01)
+                return;
+
+            var beforeBrush = _selectedTextBox.Foreground;
+            var container = _selectedTextBox.Parent as Grid;
+            var page = GetPageByTextContainer(container);
+
+            _selectedTextBox.FontSize = nextSize;
+            _currentFontSize = nextSize;
+            if (page != null && container != null)
+            {
+                var beforeColor = (beforeBrush as SolidColorBrush)?.Color
+                    ?? Windows.UI.Color.FromArgb(255, 0, 0, 0);
+                var afterColor = (_selectedTextBox.Foreground as SolidColorBrush)?.Color
+                    ?? beforeColor;
+                PushUndoAction(new TextStyleChangedAction(
+                    page,
+                    container,
+                    new TextStyleSnapshot(currentSize, beforeColor.R, beforeColor.G, beforeColor.B),
+                    new TextStyleSnapshot(nextSize, afterColor.R, afterColor.G, afterColor.B)));
+            }
+            MarkDirty();
+            PositionInlineTextBoxToolbar(_selectedTextBox.Parent as UIElement ?? _selectedTextBox);
+            _selectedTextBox.Focus(FocusState.Programmatic);
+        }
+
+        private static double GetSteppedFontSize(double currentSize, bool increase)
+        {
+            if (TextFontSizeSteps.Length == 0)
+                return currentSize;
+
+            if (increase)
+            {
+                foreach (double size in TextFontSizeSteps)
+                {
+                    if (size > currentSize + 0.1)
+                        return size;
+                }
+                return TextFontSizeSteps[^1];
+            }
+
+            for (int i = TextFontSizeSteps.Length - 1; i >= 0; i--)
+            {
+                if (TextFontSizeSteps[i] < currentSize - 0.1)
+                    return TextFontSizeSteps[i];
+            }
+            return TextFontSizeSteps[0];
+        }
+
+        private static UIElement CreateTextSizeButtonContent(bool increase)
+        {
+            var sizeGlyph = new TextBlock
+            {
+                Text = "A",
+                FontSize = increase ? 15 : 13,
+                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                VerticalAlignment = VerticalAlignment.Center,
+                Foreground = ResolveThemeBrush("ThemeForegroundBrush", Color.FromArgb(0xFF, 0x1F, 0x24, 0x2B)),
+            };
+            var directionGlyph = new TextBlock
+            {
+                Text = increase ? "^" : "v",
+                FontSize = 8,
+                Margin = new Thickness(1, 0, 0, 0),
+                VerticalAlignment = increase ? VerticalAlignment.Top : VerticalAlignment.Bottom,
+                Foreground = ResolveThemeBrush("ThemeSubtleTextBrush", Color.FromArgb(0xFF, 0x6B, 0x72, 0x80)),
+            };
+            return new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+                Children = { sizeGlyph, directionGlyph },
+            };
+        }
+
+        private void SyncPopupToSelectedTextBox()
+        {
+            if (_selectedTextBox == null)
+                return;
+
+            _currentFontSize = _selectedTextBox.FontSize;
+            var current = (_selectedTextBox.Foreground as SolidColorBrush)?.Color
+                ?? Windows.UI.Color.FromArgb(255, 0, 0, 0);
+            if (_colorIndicator != null)
+                _colorIndicator.Background = new SolidColorBrush(current);
+            if (_textBoldButton != null)
+            {
+                _textBoldButton.IsChecked =
+                    _selectedTextBox.FontWeight.Weight >= Microsoft.UI.Text.FontWeights.Bold.Weight;
+            }
+            if (_textItalicButton != null)
+            {
+                _textItalicButton.IsChecked =
+                    _selectedTextBox.FontStyle == Windows.UI.Text.FontStyle.Italic;
+            }
+            if (_textFontFamilyCombo != null)
+            {
+                _textFontFamilyCombo.SelectedItem =
+                    _selectedTextBox.FontFamily?.Source ?? "Segoe UI";
+            }
+            if (_textAlignmentCombo != null)
+            {
+                _textAlignment = _selectedTextBox.TextAlignment;
+                _textAlignmentCombo.SelectedValue = _selectedTextBox.TextAlignment;
+            }
+        }
+
+        private void UpdateSelectedTextBoxPopupVisibility(bool forceRefresh)
+        {
+            if (_selectedTextBox == null)
+                return;
+
+            var placementTarget = _selectedTextBox.Parent as UIElement ?? _selectedTextBox;
+            if (!IsElementVisibleInPdfViewport(placementTarget))
+            {
+                if (_inlineTextBoxToolbar != null)
+                    _inlineTextBoxToolbar.Visibility = Visibility.Collapsed;
+                return;
+            }
+
+            PositionInlineTextBoxToolbar(placementTarget);
+        }
+
+        private bool IsElementVisibleInPdfViewport(UIElement element)
+        {
+            if (element == null || PdfScrollViewer == null)
+                return false;
+
+            double viewportWidth = PdfScrollViewer.ViewportWidth > 0
+                ? PdfScrollViewer.ViewportWidth
+                : PdfScrollViewer.ActualWidth;
+            double viewportHeight = PdfScrollViewer.ViewportHeight > 0
+                ? PdfScrollViewer.ViewportHeight
+                : PdfScrollViewer.ActualHeight;
+            if (viewportWidth <= 0 || viewportHeight <= 0
+                || element.RenderSize.Width <= 0 || element.RenderSize.Height <= 0)
+            {
+                return false;
+            }
+
+            try
+            {
+                var bounds = element.TransformToVisual(PdfScrollViewer)
+                    .TransformBounds(new Rect(new Point(0, 0), element.RenderSize));
+                var viewportBounds = new Rect(0, 0, viewportWidth, viewportHeight);
+                return bounds.Left <= viewportBounds.Right
+                    && bounds.Right >= viewportBounds.Left
+                    && bounds.Top <= viewportBounds.Bottom
+                    && bounds.Bottom >= viewportBounds.Top;
+            }
+            catch (Exception)
+            {
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Positions the floating toolbar on the host page's TextOverlay
+        /// directly above the selected container (WPF
+        /// PositionInlineTextBoxToolbar parity).
+        /// </summary>
+        private void PositionInlineTextBoxToolbar(UIElement placementTarget)
+        {
+            EnsureInlineTextBoxToolbar();
+            if (_inlineTextBoxToolbar == null || _selectedTextBox == null)
+                return;
+
+            if (placementTarget is not Grid container)
+                return;
+
+            if (container.Parent is not Canvas canvas)
+                return;
+
+            if (_toolbarHostPage != null && !ReferenceEquals(_toolbarHostPage.TextOverlay, canvas))
+                RemoveInlineTextBoxToolbar();
+
+            _toolbarHostPage = _pageControls.FirstOrDefault(p => ReferenceEquals(p.TextOverlay, canvas));
+            if (_toolbarHostPage == null)
+                return;
+
+            _inlineTextBoxToolbar.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+
+            double containerLeft = Canvas.GetLeft(container);
+            double containerTop = Canvas.GetTop(container);
+
+            double toolbarLeft = containerLeft;
+            double toolbarHeight = _inlineTextBoxToolbar.DesiredSize.Height > 0
+                ? _inlineTextBoxToolbar.DesiredSize.Height
+                : 42;
+            double toolbarTop = containerTop - toolbarHeight;
+            if (toolbarTop < 0)
+                toolbarTop = 0;
+
+            Canvas.SetLeft(_inlineTextBoxToolbar, toolbarLeft);
+            Canvas.SetTop(_inlineTextBoxToolbar, toolbarTop);
+            Canvas.SetZIndex(_inlineTextBoxToolbar, 2000);
+
+            if (_inlineTextBoxToolbar.Parent == null)
+                canvas.Children.Add(_inlineTextBoxToolbar);
+
+            _inlineTextBoxToolbar.Visibility = Visibility.Visible;
+        }
+
+        private void RemoveInlineTextBoxToolbar()
+        {
+            if (_inlineTextBoxToolbar == null)
+                return;
+
+            _inlineTextBoxToolbar.Visibility = Visibility.Collapsed;
+
+            if (_inlineTextBoxToolbar.Parent is Canvas canvas)
+                canvas.Children.Remove(_inlineTextBoxToolbar);
+
+            _toolbarHostPage = null;
+        }
+
+        // ==================================================================
+        // Task 8 Phase A — sticky-note editor popup + marker events
+        // ==================================================================
+
+        private void PageControl_StickyNoteActivated(object sender, Grid container)
+        {
+            if (sender is not PdfPageControl page || container == null)
+                return;
+
+            if (IsLiveStickyContainer(page, container)
+                && page.GetOverlayData(container) is StickyNoteAnnotation note)
+            {
+                OpenStickyNoteEditor(page, container, note);
+            }
+        }
+
+        private void PageControl_StickyNoteMoved(object sender, StickyNoteMovedEventArgs e)
+        {
+            if (_isLoadingAnnotations || e?.Container == null || sender is not PdfPageControl page
+                || !IsLiveStickyContainer(page, e.Container))
+            {
+                return;
+            }
+
+            PushUndoAction(new StickyNoteMovedAction(
+                page,
+                e.Container,
+                e.OldPosition,
+                e.NewPosition));
+            MarkDirty();
+        }
+
+        private void PageControl_StickyNoteDeleteRequested(object sender, Grid container)
+        {
+            if (_isLoadingAnnotations || container == null || sender is not PdfPageControl page
+                || !IsLiveStickyContainer(page, container)
+                || page.GetOverlayData(container) is not StickyNoteAnnotation)
+            {
+                return;
+            }
+
+            // A marker-level Delete always wins over an open editor bubble —
+            // same reversible action as the popup's delete button (WPF).
+            if (ReferenceEquals(_stickyNoteEditingContainer, container))
+                CancelStickyNoteEdit();
+
+            if (page.RemoveTextContainerQuiet(container))
+            {
+                PushUndoAction(new StickyNoteDeletedAction(page, container));
+                MarkDirty();
+            }
+        }
+
+        /// <summary>
+        /// Opens the sticky-note editor bubble under the marker — a
+        /// light-dismiss <see cref="Popup"/> carrying a wrapped TextBox,
+        /// Save/Cancel/Delete actions and a draggable grip header (WPF
+        /// OpenStickyNoteEditor parity; Popup replaces the WPF placement
+        /// popup with explicit root-space offsets).
+        /// </summary>
+        private void OpenStickyNoteEditor(PdfPageControl page, Grid container, StickyNoteAnnotation note)
+        {
+            CancelStickyNoteEdit();
+
+            _stickyNoteEditingPage = page;
+            _stickyNoteEditingContainer = container;
+            _stickyNoteEditingModel = note;
+            _stickyNoteEditingOriginalText = note.Text ?? string.Empty;
+            _stickyNoteEditingOriginalPosition = new PointD(note.X, note.Y);
+            _stickyNoteEditingSessionId = _loadSessionId;
+            _stickyNoteEditor = new TextBox
+            {
+                Text = _stickyNoteEditingOriginalText,
+                AcceptsReturn = true,
+                TextWrapping = TextWrapping.Wrap,
+                MinWidth = 220,
+                MaxWidth = 320,
+                MinHeight = 76,
+                MaxHeight = 180,
+                FontSize = 14,
+                Margin = new Thickness(0, 0, 0, 10),
+                Padding = new Thickness(10, 8, 10, 8),
+                BorderThickness = new Thickness(1),
+                Background = ResolveThemeBrush("ThemeControlBrush", Color.FromArgb(0xFF, 0xFF, 0xFF, 0xFF)),
+                Foreground = ResolveThemeBrush("ThemeForegroundBrush", Color.FromArgb(0xFF, 0x1F, 0x24, 0x2B)),
+                BorderBrush = ResolveThemeBrush("ThemeBorderBrush", Color.FromArgb(0xFF, 0xC9, 0xCE, 0xD6)),
+            };
+            ScrollViewer.SetVerticalScrollBarVisibility(_stickyNoteEditor, ScrollBarVisibility.Auto);
+
+            var saveButton = new Button { MinWidth = 84, MinHeight = 34, Margin = new Thickness(8, 0, 0, 0) };
+            _stickyNoteSaveButton = saveButton;
+            ApplyStickyNoteButtonMetadata(saveButton, LocalizationService.Get("Common.Save"), "Sticky.Save");
+
+            var cancelButton = new Button { MinWidth = 84, MinHeight = 34 };
+            _stickyNoteCancelButton = cancelButton;
+            ApplyStickyNoteButtonMetadata(cancelButton, LocalizationService.Get("Common.Cancel"), "Sticky.Cancel");
+
+            var deleteButton = new Button
+            {
+                MinWidth = 76,
+                MinHeight = 34,
+                Foreground = ResolveThemeBrush("ThemeDangerBrush", Color.FromArgb(0xFF, 0xC4, 0x2B, 0x1C)),
+            };
+            _stickyNoteDeleteButton = deleteButton;
+            ApplyStickyNoteButtonMetadata(deleteButton, LocalizationService.Get("Editor.DeleteTooltip"), "Sticky.Delete");
+
+            _stickyNoteTitleTextBlock = new TextBlock
+            {
+                Text = LocalizationService.Get("Editor.StickyNoteTooltip"),
+                FontSize = 13,
+                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                VerticalAlignment = VerticalAlignment.Center,
+                Foreground = ResolveThemeBrush("ThemeForegroundBrush", Color.FromArgb(0xFF, 0x1F, 0x24, 0x2B)),
+            };
+            var gripIcon = new LucideIcon
+            {
+                Kind = "GripVertical",
+                Width = 16,
+                Height = 16,
+                Margin = new Thickness(0, 0, 8, 0),
+                Stroke = ResolveThemeBrush("ThemeSubtleTextBrush", Color.FromArgb(0xFF, 0x6B, 0x72, 0x80)),
+            };
+            var dragHeaderContent = new StackPanel { Orientation = Orientation.Horizontal };
+            dragHeaderContent.Children.Add(gripIcon);
+            dragHeaderContent.Children.Add(_stickyNoteTitleTextBlock);
+            _stickyNoteDragHandle = new Border
+            {
+                Background = new SolidColorBrush(Color.FromArgb(0, 0, 0, 0)),
+                CornerRadius = new CornerRadius(8),
+                Padding = new Thickness(8, 6, 8, 6),
+                Margin = new Thickness(-4, -4, -4, 10),
+                Child = dragHeaderContent,
+            };
+            AutomationProperties.SetAutomationId(_stickyNoteDragHandle, "Sticky.Editor.DragHandle");
+            ApplyStickyNoteDragHandleMetadata();
+            _stickyNoteDragHandle.PointerPressed += StickyNoteDragHandle_PointerPressed;
+            _stickyNoteDragHandle.PointerMoved += StickyNoteDragHandle_PointerMoved;
+            _stickyNoteDragHandle.PointerReleased += StickyNoteDragHandle_PointerReleased;
+            _stickyNoteDragHandle.PointerCaptureLost += StickyNoteDragHandle_PointerCaptureLost;
+
+            var panel = new StackPanel { Margin = new Thickness(14) };
+            panel.Children.Add(_stickyNoteDragHandle);
+            panel.Children.Add(_stickyNoteEditor);
+            var actionRow = new Grid { Margin = new Thickness(0, 2, 0, 0) };
+            actionRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            actionRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            Grid.SetColumn(deleteButton, 0);
+            actionRow.Children.Add(deleteButton);
+            var confirmActions = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                HorizontalAlignment = HorizontalAlignment.Right,
+            };
+            confirmActions.Children.Add(cancelButton);
+            confirmActions.Children.Add(saveButton);
+            Grid.SetColumn(confirmActions, 1);
+            actionRow.Children.Add(confirmActions);
+            panel.Children.Add(actionRow);
+
+            var border = new Border
+            {
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(14),
+                Padding = new Thickness(2),
+                Child = panel,
+                Background = ResolveThemeBrush("ThemeSurfaceBrush", Color.FromArgb(0xFF, 0xFF, 0xFF, 0xFF)),
+                BorderBrush = ResolveThemeBrush("ThemeBorderBrush", Color.FromArgb(0xFF, 0xC9, 0xCE, 0xD6)),
+            };
+            AutomationProperties.SetAutomationId(border, $"Sticky.Editor.{note.Id}");
+
+            // WPF Placement=Bottom under the marker → explicit root-space
+            // offsets (the drag handle then adjusts them).
+            _stickyNotePopup = new Popup
+            {
+                XamlRoot = XamlRoot,
+                IsLightDismissEnabled = true,
+                Child = border,
+            };
+            double markerHeight = container.ActualHeight > 0
+                ? container.ActualHeight
+                : container.Height > 0 ? container.Height : 36;
+            var anchor = container.TransformToVisual(null)
+                .TransformPoint(new Point(0, markerHeight + 6));
+            _stickyNotePopup.HorizontalOffset = anchor.X;
+            _stickyNotePopup.VerticalOffset = anchor.Y;
+
+            _stickyNotePopup.Closed += StickyNotePopup_Closed;
+            saveButton.Click += (_, __) => SaveStickyNoteEdit();
+            cancelButton.Click += (_, __) => CancelStickyNoteEdit();
+            deleteButton.Click += (_, __) => DeleteStickyNoteEdit();
+            _stickyNotePopup.IsOpen = true;
+            _stickyNoteEditor.Focus(FocusState.Programmatic);
+            _stickyNoteEditor.SelectAll();
+        }
+
+        private void StickyNotePopup_Closed(object sender, object e)
+        {
+            // Clicking outside, Escape and teardown all follow the explicit
+            // Cancel contract; only the Save button commits (WPF parity).
+            CancelStickyNoteEdit();
+        }
+
+        private void CloseStickyNotePopup(Popup popup)
+        {
+            if (popup == null)
+                return;
+
+            EndStickyNotePopupDrag();
+            popup.Closed -= StickyNotePopup_Closed;
+            if (popup.IsOpen)
+                popup.IsOpen = false;
+        }
+
+        private void ResetStickyNoteEditorState()
+        {
+            _stickyNotePopup = null;
+            _stickyNoteEditor = null;
+            _stickyNoteSaveButton = null;
+            _stickyNoteCancelButton = null;
+            _stickyNoteDeleteButton = null;
+            _stickyNoteDragHandle = null;
+            _stickyNoteTitleTextBlock = null;
+            _isDraggingStickyNotePopup = false;
+            _stickyNoteEditingModel = null;
+            _stickyNoteEditingContainer = null;
+            _stickyNoteEditingPage = null;
+            _stickyNoteEditingOriginalText = null;
+            _stickyNoteEditingOriginalPosition = default;
+            _stickyNoteEditingSessionId = 0;
+        }
+
+        private static void ApplyStickyNoteButtonMetadata(Button button, string label, string automationId)
+        {
+            if (button == null)
+                return;
+
+            button.Content = label;
+            ToolTipService.SetToolTip(button, label);
+            AutomationProperties.SetAutomationId(button, automationId);
+            AutomationProperties.SetName(button, label);
+            AutomationProperties.SetHelpText(button, label);
+            button.IsTabStop = true;
+            if (button.MinHeight < 32)
+                button.MinHeight = 32;
+        }
+
+        private void ApplyStickyNoteDragHandleMetadata()
+        {
+            if (_stickyNoteDragHandle == null)
+                return;
+
+            string label = LocalizationService.Get("Editor.MoveStickyNoteEditor");
+            ToolTipService.SetToolTip(_stickyNoteDragHandle, label);
+            AutomationProperties.SetName(_stickyNoteDragHandle, label);
+            AutomationProperties.SetHelpText(_stickyNoteDragHandle, label);
+            if (_stickyNoteTitleTextBlock != null)
+                _stickyNoteTitleTextBlock.Text = LocalizationService.Get("Editor.StickyNoteTooltip");
+        }
+
+        private void StickyNoteDragHandle_PointerPressed(object sender, PointerRoutedEventArgs e)
+        {
+            if (!e.GetCurrentPoint(_stickyNoteDragHandle).Properties.IsLeftButtonPressed
+                || _stickyNotePopup == null)
+            {
+                return;
+            }
+
+            BeginStickyNotePopupDrag(e.GetCurrentPoint(this).Position);
+            _stickyNoteDragHandle?.CapturePointer(e.Pointer);
+            e.Handled = true;
+        }
+
+        private void StickyNoteDragHandle_PointerMoved(object sender, PointerRoutedEventArgs e)
+        {
+            if (_isDraggingStickyNotePopup
+                && e.GetCurrentPoint(_stickyNoteDragHandle).Properties.IsLeftButtonPressed)
+            {
+                UpdateStickyNotePopupDrag(e.GetCurrentPoint(this).Position);
+                e.Handled = true;
+            }
+        }
+
+        private void StickyNoteDragHandle_PointerReleased(object sender, PointerRoutedEventArgs e)
+        {
+            if (_isDraggingStickyNotePopup)
+            {
+                EndStickyNotePopupDrag();
+                e.Handled = true;
+            }
+        }
+
+        private void StickyNoteDragHandle_PointerCaptureLost(object sender, PointerRoutedEventArgs e)
+        {
+            EndStickyNotePopupDrag();
+        }
+
+        private void BeginStickyNotePopupDrag(Point pointerPosition)
+        {
+            if (_stickyNotePopup == null)
+                return;
+
+            _isDraggingStickyNotePopup = true;
+            _stickyNotePopupDragStart = pointerPosition;
+            _stickyNotePopupDragStartHorizontalOffset = _stickyNotePopup.HorizontalOffset;
+            _stickyNotePopupDragStartVerticalOffset = _stickyNotePopup.VerticalOffset;
+        }
+
+        private void UpdateStickyNotePopupDrag(Point pointerPosition)
+        {
+            if (!_isDraggingStickyNotePopup || _stickyNotePopup == null)
+                return;
+
+            double deltaX = pointerPosition.X - _stickyNotePopupDragStart.X;
+            double deltaY = pointerPosition.Y - _stickyNotePopupDragStart.Y;
+            _stickyNotePopup.HorizontalOffset = _stickyNotePopupDragStartHorizontalOffset + deltaX;
+            _stickyNotePopup.VerticalOffset = _stickyNotePopupDragStartVerticalOffset + deltaY;
+        }
+
+        private void EndStickyNotePopupDrag()
+        {
+            if (!_isDraggingStickyNotePopup)
+                return;
+
+            _isDraggingStickyNotePopup = false;
+            _stickyNoteDragHandle?.ReleasePointerCaptures();
+        }
+
+        private bool IsLiveStickyNoteEdit(
+            PdfPageControl page,
+            Grid container,
+            StickyNoteAnnotation note,
+            int sessionId)
+        {
+            return sessionId == _loadSessionId && IsLiveStickyContainer(page, container, note);
+        }
+
+        private bool IsLiveStickyContainer(
+            PdfPageControl page,
+            Grid container,
+            StickyNoteAnnotation note = null)
+        {
+            return page != null
+                && _pageControls.Contains(page)
+                && container != null
+                && page.GetOverlayContainers().Contains(container)
+                && (note == null || ReferenceEquals(page.GetOverlayData(container), note));
+        }
+
+        private void SaveStickyNoteEdit()
+        {
+            if (_stickyNotePopup == null)
+                return;
+
+            var popup = _stickyNotePopup;
+            var page = _stickyNoteEditingPage;
+            var container = _stickyNoteEditingContainer;
+            var note = _stickyNoteEditingModel;
+            var sessionId = _stickyNoteEditingSessionId;
+            var before = _stickyNoteEditingOriginalText ?? string.Empty;
+            var after = _stickyNoteEditor?.Text ?? string.Empty;
+            CloseStickyNotePopup(popup);
+            if (IsLiveStickyNoteEdit(page, container, note, sessionId)
+                && !string.Equals(before, after, StringComparison.Ordinal))
+            {
+                if (page.SetStickyNoteTextQuiet(container, after))
+                {
+                    PushUndoAction(new StickyNoteEditAction(page, container, note, before, after));
+                    MarkDirty();
+                }
+            }
+            ResetStickyNoteEditorState();
+        }
+
+        private void CancelStickyNoteEdit()
+        {
+            if (_stickyNotePopup == null)
+                return;
+
+            var popup = _stickyNotePopup;
+            var page = _stickyNoteEditingPage;
+            var container = _stickyNoteEditingContainer;
+            var note = _stickyNoteEditingModel;
+            var sessionId = _stickyNoteEditingSessionId;
+            var originalText = _stickyNoteEditingOriginalText ?? string.Empty;
+            var originalPosition = _stickyNoteEditingOriginalPosition;
+            CloseStickyNotePopup(popup);
+            if (IsLiveStickyNoteEdit(page, container, note, sessionId))
+            {
+                page.SetStickyNoteTextQuiet(container, originalText);
+                page.SetStickyNotePositionQuiet(container, originalPosition);
+            }
+            ResetStickyNoteEditorState();
+        }
+
+        private void DeleteStickyNoteEdit()
+        {
+            if (_stickyNotePopup == null)
+                return;
+
+            var popup = _stickyNotePopup;
+            var page = _stickyNoteEditingPage;
+            var container = _stickyNoteEditingContainer;
+            var note = _stickyNoteEditingModel;
+            var sessionId = _stickyNoteEditingSessionId;
+            CloseStickyNotePopup(popup);
+            ResetStickyNoteEditorState();
+            if (IsLiveStickyNoteEdit(page, container, note, sessionId)
+                && page.RemoveTextContainerQuiet(container))
+            {
+                PushUndoAction(new StickyNoteDeletedAction(page, container));
+                MarkDirty();
+            }
+        }
+
+        // Compatibility shim for the close/save barriers the T9 pipeline
+        // adds — WPF CommitStickyNoteEdit → SaveStickyNoteEdit.
+        private void CommitStickyNoteEdit()
+        {
+            SaveStickyNoteEdit();
+        }
+
+        private static TextAlignment ParseTextAlignment(string value)
+        {
+            return Enum.TryParse<TextAlignment>(value, true, out var alignment)
+                ? alignment
+                : TextAlignment.Left;
+        }
+
+        /// <summary>
+        /// Live annotation collector for the T9 save pipeline — rebuilds
+        /// <see cref="PageAnnotation"/> per page from the current container
+        /// state so a save always reflects what the user sees (WPF
+        /// CollectAnnotations parity for the Phase A annotation kinds).
+        /// </summary>
+        internal Dictionary<int, PageAnnotation> CollectAnnotations()
+        {
+            var annotations = new Dictionary<int, PageAnnotation>();
+            foreach (var page in _pageControls)
+            {
+                var pa = new PageAnnotation
+                {
+                    Strokes = page.Ink.Store.Strokes.Select(s => s.ToAnnotation()).ToList(),
+                    HiddenInks = page.GetHiddenInkData(),
+                    Texts = page.GetTextData(),
+                    StickyNotes = page.GetStickyNoteData(),
+                };
+
+                if (pa.Strokes.Count > 0 || pa.Texts.Count > 0
+                    || pa.StickyNotes.Count > 0 || pa.HiddenInks.Count > 0)
+                {
+                    annotations[page.PageIndex] = pa;
+                }
+            }
+            return annotations;
         }
 
         // ── Tool flyouts (WPF popups → WinUI Flyout) ────────────────────
@@ -4318,16 +7085,28 @@ namespace Caelum.Pages
 
         private void EditorPage_PreviewKeyDown(object sender, KeyRoutedEventArgs e)
         {
-            // Text inputs own their keys (page jump box, search box, zoom box).
-            if (FocusManager.GetFocusedElement(XamlRoot) is TextBox)
+            // WPF guards each branch with !IsEditableTextInputFocused instead
+            // of returning early — the Escape-resize and Delete/Back branches
+            // below intentionally run regardless of focus.
+            bool textInputFocused = FocusManager.GetFocusedElement(XamlRoot) is TextBox;
+
+            // WPF: Escape restores an in-flight text resize before any other
+            // branch (including while the embedded TextBox owns focus).
+            if (e.Key == VirtualKey.Escape && _resizingTextContainer != null)
+            {
+                CancelTextResize(restoreBounds: true);
+                e.Handled = true;
                 return;
+            }
 
             bool ctrl = InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Control)
                 .HasFlag(Microsoft.UI.Input.VirtualKeyStates.Down);
             bool shift = InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Shift)
                 .HasFlag(Microsoft.UI.Input.VirtualKeyStates.Down);
+            bool alt = InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Menu)
+                .HasFlag(Microsoft.UI.Input.VirtualKeyStates.Down);
 
-            if (ctrl)
+            if (ctrl && !textInputFocused)
             {
                 switch (e.Key)
                 {
@@ -4355,6 +7134,27 @@ namespace Caelum.Pages
                         }
                         e.Handled = true;
                         return;
+                    case VirtualKey.C:
+                        // WPF Ctrl+C: selection serializes to clipboard JSON.
+                        if (_activeSelectionPage != null && _activeSelectionPage.HasSelection)
+                        {
+                            CopySelection();
+                            e.Handled = true;
+                        }
+                        return;
+                    case VirtualKey.X:
+                        if (_activeSelectionPage != null && _activeSelectionPage.HasSelection)
+                        {
+                            CutSelection();
+                            e.Handled = true;
+                        }
+                        return;
+                    case VirtualKey.V:
+                        // WPF Task 19 puts a bitmap first — the image branch
+                        // lands in Phase B; annotation JSON is handled here.
+                        PasteSelection();
+                        e.Handled = true;
+                        return;
                     case VirtualKey.Add:
 
                         AdjustZoom(ZoomStep);
@@ -4373,6 +7173,76 @@ namespace Caelum.Pages
                 }
                 return;
             }
+            if (ctrl)
+                return;
+
+            // WPF: the resize handles own their arrow-key contract — the
+            // focused handle receives the event instead of the same arrow
+            // becoming a text-box nudge.
+            if (e.OriginalSource is TextResizeHandleElement
+                || FocusManager.GetFocusedElement(XamlRoot) is TextResizeHandleElement)
+            {
+                return;
+            }
+
+            // WPF text-tool nudge: arrows move the selected box 1 DIP (Shift
+            // ×10); while the embedded TextBox owns focus only Alt+Arrow
+            // still nudges (plain arrows move the caret).
+            if (_currentTool == ToolType.Text
+                && _selectedTextBox != null
+                && TryGetTextBoxNudge(e.Key, out double nudgeX, out double nudgeY)
+                && (!shift || !alt))
+            {
+                bool allowNudge = !textInputFocused || (alt && !shift);
+                if (allowNudge)
+                {
+                    double step = shift ? 10 : 1;
+                    NudgeSelectedTextBox(nudgeX * step, nudgeY * step);
+                    e.Handled = true;
+                    return;
+                }
+            }
+
+            // WPF: Escape closes the search panel even while its TextBox
+            // owns focus.
+            if (e.Key == VirtualKey.Escape && PdfSearchPanel.Visibility == Visibility.Visible)
+            {
+                ClosePdfSearch();
+                e.Handled = true;
+                return;
+            }
+
+            // WPF Delete/Back branch — unguarded by focus: an empty selected
+            // box is deleted even while its TextBox holds the caret, and the
+            // Select-tool branch removes the live selection.
+            if (e.Key == VirtualKey.Delete || e.Key == VirtualKey.Back)
+            {
+                if (_currentTool == ToolType.Select && _activeSelectionPage != null
+                    && _activeSelectionPage.HasSelection)
+                {
+                    DeleteSelection();
+                    e.Handled = true;
+                    return;
+                }
+                if (_currentTool == ToolType.Text && _selectedTextBox != null)
+                {
+                    if (string.IsNullOrEmpty(_selectedTextBox.Text) && e.Key == VirtualKey.Back)
+                    {
+                        DeleteSelectedTextBox();
+                        e.Handled = true;
+                        return;
+                    }
+                    if (_selectedTextBox.FocusState == FocusState.Unfocused)
+                    {
+                        DeleteSelectedTextBox();
+                        e.Handled = true;
+                        return;
+                    }
+                }
+            }
+
+            if (textInputFocused)
+                return;
 
             switch (e.Key)
             {
@@ -4401,28 +7271,11 @@ namespace Caelum.Pages
                     e.Handled = true;
                     break;
                 case VirtualKey.Escape:
-                    if (PdfSearchPanel.Visibility == Visibility.Visible)
-                    {
-                        ClosePdfSearch();
-                        e.Handled = true;
-                    }
-                    else
-                    {
-                        // WPF Esc parity: dismiss the active tool back to
-                        // None (which also drops any live selection).
-                        ActivateTool(ToolType.None);
-                        e.Handled = true;
-                    }
-                    break;
-                case VirtualKey.Delete:
-                case VirtualKey.Back:
-                    if (_currentTool == ToolType.Select
-                        && _activeSelectionPage != null
-                        && _activeSelectionPage.HasSelection)
-                    {
-                        DeleteSelection();
-                        e.Handled = true;
-                    }
+                    // WPF Esc parity: dismiss the active tool back to
+                    // None (which also drops any live selection). The
+                    // search-panel case was handled above the focus bail.
+                    ActivateTool(ToolType.None);
+                    e.Handled = true;
                     break;
             }
         }
@@ -4462,6 +7315,23 @@ namespace Caelum.Pages
             ApplyLocalizedSearchStatus();
             ApplyToolbarAccessibilityMetadata();
             RefreshLocalizedDocumentSidebar();
+
+            // Task 8: text toolbar + sticky-note chrome re-localize live.
+            RefreshTextAlignmentOptions();
+            foreach (var page in _pageControls)
+                page.RefreshStickyNoteContextMenuLocalization();
+            if (_stickyNotePopup != null)
+            {
+                ApplyStickyNoteDragHandleMetadata();
+                ApplyStickyNoteButtonMetadata(_stickyNoteSaveButton,
+                    LocalizationService.Get("Common.Save"), "Sticky.Save");
+                ApplyStickyNoteButtonMetadata(_stickyNoteCancelButton,
+                    LocalizationService.Get("Common.Cancel"), "Sticky.Cancel");
+                ApplyStickyNoteButtonMetadata(_stickyNoteDeleteButton,
+                    LocalizationService.Get("Editor.DeleteTooltip"), "Sticky.Delete");
+            }
+            if (_inlineTextBoxToolbar != null)
+                ApplyInlineTextBoxToolbarLocalization();
         }
 
         /// <summary>
@@ -4755,6 +7625,15 @@ namespace Caelum.Pages
 
             _penService?.Dispose();
             _penService = null;
+
+            // Task 8: close the sticky bubble + drop the text selection
+            // chrome/toolbar before the pages tear down — a late layout pass
+            // against a detached container throws.
+            CancelStickyNoteEdit();
+            DeselectTextBox();
+            CancelTextBoxDrag(restoreBounds: false);
+            CancelTextResize(restoreBounds: false);
+            RemoveInlineTextBoxToolbar();
 
             foreach (var page in _pageControls)
             {
