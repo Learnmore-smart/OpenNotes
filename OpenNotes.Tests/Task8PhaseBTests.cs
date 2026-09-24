@@ -377,6 +377,79 @@ public sealed class Task8PhaseBTests
         Assert.That(to.Containers, Does.Contain(container));
     }
 
+    [Test]
+    public async Task MixedOperationChain_UndoUnwindsInLifoOrder()
+    {
+        // highlight → move → delete on one undo stack: unwinding must
+        // replay the heterogeneous actions strictly LIFO — the delete's
+        // re-add lands while the container is still at the moved position,
+        // then the move's −delta restores the origin, then the highlight
+        // comes off the list (WPF mixed-operation undo ordering parity).
+        var host = new FakeImageHost();
+        var container = new object();
+        host.Containers.Add(container);
+        host.Positions[container] = new PointD(50, 60);
+        var highlight = new HighlightAnnotation { R = 255, G = 235, B = 59, A = 120 };
+        var store = new InkStrokeStore();
+        var undo = new Stack<IUndoAction>();
+
+        // 1. Commit: text-highlight gesture → model on the list + action.
+        host.AddHighlight(highlight);
+        undo.Push(new HighlightAddedAction(host, highlight));
+
+        // 2. Commit: container drag +40/+15 → live position moved + action.
+        host.MoveItemsDirectly(Array.Empty<InkStrokeData>(), new[] { container }, 40, 15);
+        undo.Push(new AnnotationSelectionMoveAction(
+            host, Array.Empty<InkStrokeData>(), new[] { container }, 40, 15));
+
+        // 3. Commit: Delete → quiet detach + action.
+        Assert.That(AnnotationContainerTransfer.Remove(host, container), Is.True);
+        undo.Push(new AnnotationItemsRemovedAction(
+            store, new List<InkStrokePlacement>(), host, new[] { container }));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(host.Containers, Does.Not.Contain(container));
+            Assert.That(host.Positions[container], Is.EqualTo(new PointD(90, 75)));
+            Assert.That(host.Highlights, Does.Contain(highlight));
+        });
+
+        // Undo 3: the delete restores the container at its moved position.
+        await undo.Pop().UndoAsync();
+        Assert.Multiple(() =>
+        {
+            Assert.That(host.Containers, Does.Contain(container));
+            Assert.That(host.Positions[container], Is.EqualTo(new PointD(90, 75)));
+            Assert.That(host.Highlights, Does.Contain(highlight));
+        });
+
+        // Undo 2: the move replays −40/−15 — container back at the origin.
+        await undo.Pop().UndoAsync();
+        Assert.Multiple(() =>
+        {
+            Assert.That(host.Containers, Does.Contain(container));
+            Assert.That(host.Positions[container], Is.EqualTo(new PointD(50, 60)));
+        });
+
+        // Undo 1: the highlight comes off the host's list.
+        await undo.Pop().UndoAsync();
+        Assert.That(host.Highlights, Is.Empty);
+        Assert.That(undo, Is.Empty);
+
+        // Redo replays the chain in commit order — highlight, move, delete.
+        await new HighlightAddedAction(host, highlight).RedoAsync();
+        await new AnnotationSelectionMoveAction(
+            host, Array.Empty<InkStrokeData>(), new[] { container }, 40, 15).RedoAsync();
+        await new AnnotationItemsRemovedAction(
+            store, new List<InkStrokePlacement>(), host, new[] { container }).RedoAsync();
+        Assert.Multiple(() =>
+        {
+            Assert.That(host.Highlights, Does.Contain(highlight));
+            Assert.That(host.Positions[container], Is.EqualTo(new PointD(90, 75)));
+            Assert.That(host.Containers, Does.Not.Contain(container));
+        });
+    }
+
     // ------------------------------------------------------------------
     // WinUI source contract — pins the Phase-B wiring in the port.
     // ------------------------------------------------------------------
@@ -591,10 +664,17 @@ public sealed class Task8PhaseBTests
         public Dictionary<object, byte[]> Images { get; } = new();
         public List<HighlightAnnotation> Highlights { get; } = new();
 
+        /// <summary>
+        /// Live container positions — a detached container keeps its
+        /// coordinates exactly like a Grid keeps its Canvas.Left/Top, so
+        /// move-undo after a delete-undo still sees the moved position.
+        /// </summary>
+        public Dictionary<object, PointD> Positions { get; } = new();
+
         public bool RemoveTextContainerQuiet(object container) => Containers.Remove(container);
         public void AddTextContainerQuiet(object container) => Containers.Add(container);
         public bool ContainsTextContainer(object container) => Containers.Contains(container);
-        public object GetOverlayData(object container) => null!;
+        public object GetOverlayData(object container) => null;
         public void SetOverlayData(object container, object data) { }
         public byte[] GetImageData(object container)
             => Images.TryGetValue(container, out var data) ? data : null;
@@ -611,7 +691,16 @@ public sealed class Task8PhaseBTests
         public void SetTextFormatQuiet(object container, TextFormatSnapshot format) { }
         public void MoveItemsDirectly(
             IReadOnlyList<InkStrokeData> strokes, IReadOnlyList<object> containers,
-            double deltaX, double deltaY) { }
+            double deltaX, double deltaY)
+        {
+            foreach (var stroke in strokes ?? Array.Empty<InkStrokeData>())
+                StrokeGeometry.TranslateSpinePoints(stroke.Points, deltaX, deltaY);
+            foreach (var container in containers ?? Array.Empty<object>())
+            {
+                if (Positions.TryGetValue(container, out var pos))
+                    Positions[container] = new PointD(pos.X + deltaX, pos.Y + deltaY);
+            }
+        }
         public void ScaleItemsDirectly(
             IReadOnlyList<InkStrokeData> strokes, IReadOnlyList<object> containers,
             double scaleFactor, PointD center) { }
@@ -628,7 +717,7 @@ public sealed class Task8PhaseBTests
         public bool RemoveTextContainerQuiet(object container) => Containers.Remove(container);
         public void AddTextContainerQuiet(object container) => Containers.Add(container);
         public bool ContainsTextContainer(object container) => Containers.Contains(container);
-        public object GetOverlayData(object container) => null!;
+        public object GetOverlayData(object container) => null;
         public void SetOverlayData(object container, object data) { }
         public bool SetStickyNotePositionQuiet(object container, PointD position) => false;
         public bool SetStickyNoteTextQuiet(object container, string text) => false;

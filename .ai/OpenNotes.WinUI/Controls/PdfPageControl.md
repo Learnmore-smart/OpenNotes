@@ -233,6 +233,11 @@
 - **`CancelInteraction`/`ReleaseResources` sweep the new state** — in-flight
   area-highlight drag, the text-selection pointer capture, `_imageDataById`,
   `_highlights`, both selection canvases.
+- **`SelectAllAnnotations` (Ctrl+A) selects image containers too** — the
+  concat is `TextOverlayCanvas` grids + `ImageOverlayCanvas` grids filtered
+  by `IsOverlayContainer` (WPF parity); `GetOverlayContainers()` must NOT
+  be used there because it deliberately excludes `IsImageContainer`
+  (marquee/lasso/Ctrl+click already used the unfiltered tag check).
 
 ## Important Notes / NEVER Change
 - The ink layer sits UNDER `ShapePreviewCanvas`/`TextOverlayCanvas` — strokes must

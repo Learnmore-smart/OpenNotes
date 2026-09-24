@@ -8512,6 +8512,10 @@ namespace Caelum.Pages
                         }
                         else if (TryCopySelectedPdfTextToClipboard())
                         {
+                            // WPF: a successful pdf-text copy confirms with
+                            // the "Text copied" toast.
+                            GetMainWindow()?.ShowToast(
+                                LocalizationService.Get("Editor.TextCopied"), "\uE8C8", 1500);
                             e.Handled = true;
                         }
                         return;

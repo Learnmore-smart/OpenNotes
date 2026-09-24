@@ -1048,8 +1048,12 @@ namespace Caelum.Controls
         /// <summary>Selects every annotation on the page (Ctrl+A) — ink, text and overlay containers.</summary>
         public void SelectAllAnnotations()
         {
+            // WPF SelectAllAnnotations parity — the ImageOverlayCanvas
+            // IsOverlayContainer filter includes images, markups, area
+            // highlights and sticky notes (GetOverlayContainers excludes
+            // image containers, so it cannot be used here).
             var containers = TextOverlayCanvas.Children.OfType<Grid>()
-                .Concat(GetOverlayContainers())
+                .Concat(ImageOverlayCanvas.Children.OfType<Grid>().Where(IsOverlayContainer))
                 .ToList();
             SelectItems(InkSurface.Store.Strokes, containers);
         }

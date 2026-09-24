@@ -290,7 +290,9 @@ the save/history pipeline remain deferred to T8–T9.
   `TryGetCachedPageTextInfo`/`GetPageTextInfoAsync`, drag threshold 4 DIP,
   `UpdatePdfTextSelectionVisuals` repaints merged quads + refreshes
   `_selectedPdfText`; Ctrl+C copies it when no annotation selection is
-  live (`TryCopySelectedPdfTextToClipboard`); Escape/tool-switch/lease
+  live (`TryCopySelectedPdfTextToClipboard` — a successful copy toasts
+  `Editor.TextCopied` + `\uE8C8`/1500 ms via `GetMainWindow().ShowToast`,
+  WPF parity); Escape/tool-switch/lease
   loss → `ClearPdfTextSelection` (`_pdfTextSelectionRequestId` races
   in-flight loads). Release under `TextHighlight` commits a persistent
   `HighlightAnnotation` (`AddHighlightAnnotation` + `HighlightAddedAction`)

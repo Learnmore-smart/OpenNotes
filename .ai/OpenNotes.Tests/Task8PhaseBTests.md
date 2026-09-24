@@ -26,6 +26,11 @@ port plus the WinUI source contract that pins the wiring.
 - **Highlight undo actions**: `HighlightAddedAction` undo-removes /
   redo-restores; `HighlightRemovedAction` is the mirror (the list starts
   empty — the action models an already-removed highlight).
+- **Mixed-op undo chain**: highlight→move→delete committed on one stack
+  unwinds strictly LIFO (delete-undo re-adds at the moved position,
+  move-undo replays −delta to the origin, highlight-undo delists), then
+  redo replays commit order — `FakeImageHost.Positions` keeps a detached
+  container's coordinates like a real Grid keeps Canvas.Left/Top.
 - **WinUI source contract** (reads `OpenNotes.WinUI` files as text —
   `ReadWinUi` anchors on the dir containing `OpenNotes.WinUI.csproj`):
   `PdfPageControl.xaml.cs` keeps `AddImageAsync`/`_imageDataById`/
@@ -47,7 +52,8 @@ port plus the WinUI source contract that pins the wiring.
 ## Notes
 
 - `FakeImageHost`/`MinimalHost` implement `IAnnotationContainerHost` — the
-  former tracks image payloads + a highlight list like the real
-  `PdfPageControl`; the latter exercises the Phase-B default members.
-- All 29 tests are headless (no UI thread) except nothing — run with the
-  standard suite.
+  former tracks image payloads + a highlight list + `Positions` (so
+  `MoveItemsDirectly` mutates container coords the way the real
+  `PdfPageControl` moves Grids); the latter exercises the Phase-B default
+  members.
+- All 30 tests are headless (no UI thread) — run with the standard suite.
