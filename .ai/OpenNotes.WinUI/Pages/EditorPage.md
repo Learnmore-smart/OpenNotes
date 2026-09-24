@@ -169,7 +169,7 @@ the save/history pipeline remain deferred to T8–T9.
   `ShapeColor`/`ShapeStrokeSize`), `.Laser`, `.None` (Select/Text/etc.);
   then `CancelInteraction`.
 - `AddPdfPage` wires every Phase-B event: `ShapeCommittedUndoable`,
-  `HiddenInkCreated`/`HiddenInkRemoved`/`HiddenInksRemoved`,
+  `HiddenInkCreated`/`HiddenInksRemoved`,
   `SelectionChanged` (tracks `_activeSelectionPage`),
   `SelectionMoveCompleted` (cross-page detection via
   `FindPageAtContainerPoint` → `InkSelectionCrossPageMoveAction` with
@@ -177,7 +177,11 @@ the save/history pipeline remain deferred to T8–T9.
   `SelectionResizeCompleted`/`SelectionRotateCompleted`,
   `BlankContextRequested` → `ShowBlankContextMenu`; plus per-page
   `GetRulerGeometryInPageCoords` (viewport→page `TransformToVisual` on
-  every query — scroll/zoom/drag can never serve stale edges).
+  every query — scroll/zoom/drag can never serve stale edges); and the
+  host-active gate pair `SetHostActive`/`SetDocumentInputEnabled` is
+  propagated with `_isHostActive` BEFORE the control joins
+  `_pageControls` — a doc loading while its tab is hidden must not come
+  up input-enabled.
 - **Ruler overlay** (`RulerOverlayCanvas`, outside the ScrollViewer so it is
   viewport-anchored): `EnsureRulerVisual` builds a `CursorGrid` 360×56
   (semi-transparent themed body, tick canvas every 10 DIP with 50-DIP

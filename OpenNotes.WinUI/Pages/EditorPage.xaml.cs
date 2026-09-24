@@ -686,6 +686,12 @@ namespace Caelum.Pages
                     Map(geometry.Value.BottomB));
             };
 
+            // Late-loading docs must inherit the tab's host-active gate —
+            // a page created while the tab is hidden must not come up
+            // input-enabled (same pair SetHostActive propagates).
+            pageControl.SetHostActive(_isHostActive);
+            pageControl.SetDocumentInputEnabled(_isHostActive);
+
             _pageTopOffsets.Add(currentTop);
             _pageHeights.Add(size.Height);
 
