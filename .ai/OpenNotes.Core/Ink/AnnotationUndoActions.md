@@ -15,7 +15,11 @@ opaque `object`s — the actions only compare identity.
 
 - `IAnnotationContainerHost` — quiet container mutations the actions replay:
   `RemoveTextContainerQuiet`/`AddTextContainerQuiet` (no user events, no
-  undo recursion; normal mutation notifications SHOULD still fire),
+  undo recursion; normal mutation notifications SHOULD still fire — the
+  WinUI host raises `InkMutated` from every quiet mutator so thumbnails
+  refresh through undo/redo and load),
+  `ContainsTextContainer` (host-membership probe used by the guarded
+  transfer legs),
   `GetOverlayData`/`SetOverlayData` (annotation payload behind a container —
   the sticky model travels with its marker on cross-page moves),
   `SetStickyNotePositionQuiet`/`SetStickyNoteTextQuiet` (page-bounds clamp
@@ -26,6 +30,11 @@ opaque `object`s — the actions only compare identity.
   `MoveItemsDirectly`/`ScaleItemsDirectly`/`RotateItemsDirectly` (mixed
   strokes+containers legs), `ClearSelection()` (paste-undo drops the
   auto-selected pasted items first).
+- `AnnotationContainerTransfer` — internal guarded-transfer helper:
+  `Remove`/`Add`/`Move` verify the quiet remove detached, wrap the add
+  (a hosted container throws on re-parent in WinUI), probe membership
+  afterwards, and roll a failed move back onto the source so a container
+  never ends up unhosted.
 - `TextFormatSnapshot` / `TextStyleSnapshot` — readonly record structs
   (bold/italic/family/alignment and fontSize+RGB) for before/after captures.
 - **Text lifecycle:** `TextBoxAddedAction` (undo removes, redo re-adds),
@@ -58,7 +67,16 @@ opaque `object`s — the actions only compare identity.
   and transfers containers + their overlay payloads to the target host
   (idempotent; false → skip the undo push); undo/redo replay ±(dx+adjust)
   and move containers back/forth, `LastOperationSucceeded` flags a dead
-  stroke the editor then keeps on the stack as a no-op.
+  stroke the editor then keeps on the stack as a no-op. **Quality pass
+  (2026-09-23):** every container leg now rides
+  `AnnotationContainerTransfer` — a container the source no longer hosts
+  (or the target rejects) is skipped instead of throwing mid-gesture or
+  splitting state; `ExecuteInitialTransfer` itself is try/catch-wrapped
+  (returns whether anything moved so partial transfers stay undoable);
+  the coordinate adjust applies only to containers that actually moved;
+  `AnnotationItemsAdded/RemovedAction` gained the same
+  `LastOperationSucceeded` contract and the editor checks it on both
+  stacks.
 
 ## Constraints / NEVER Change
 

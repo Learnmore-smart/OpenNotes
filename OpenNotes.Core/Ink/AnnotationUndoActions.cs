@@ -37,6 +37,9 @@ public interface IAnnotationContainerHost
     /// <summary>Re-add a container removed through the quiet path.</summary>
     void AddTextContainerQuiet(object container);
 
+    /// <summary>True while the container is hosted on the page's overlay canvas.</summary>
+    bool ContainsTextContainer(object container);
+
     /// <summary>The annotation payload stored behind the container (sticky note model etc).</summary>
     object GetOverlayData(object container);
 
@@ -91,6 +94,95 @@ public interface IAnnotationContainerHost
     /// (WPF ItemsAddedAction.UndoAsync → page.ClearSelection).
     /// </summary>
     void ClearSelection();
+}
+
+/// <summary>
+/// Guarded container transfers shared by the annotation undo actions.
+/// Every leg verifies the remove actually detached the container, wraps
+/// the add (a hosted container throws on re-parent in WinUI), and checks
+/// membership afterwards — a failed leg rolls the container back onto the
+/// source so it never ends up unhosted (WPF guarded-transfer parity).
+/// </summary>
+internal static class AnnotationContainerTransfer
+{
+    /// <summary>Quiet remove; false when the host no longer owns the container.</summary>
+    public static bool Remove(IAnnotationContainerHost host, object container)
+    {
+        if (host == null || container == null)
+            return false;
+        try
+        {
+            return host.RemoveTextContainerQuiet(container);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Quiet add + membership verification; false when the host rejected
+    /// the container (already parented elsewhere, detached canvas, …).
+    /// </summary>
+    public static bool Add(IAnnotationContainerHost host, object container)
+    {
+        if (host == null || container == null)
+            return false;
+        try
+        {
+            host.AddTextContainerQuiet(container);
+        }
+        catch
+        {
+            return false;
+        }
+        return host.ContainsTextContainer(container);
+    }
+
+    /// <summary>
+    /// Moves one container between hosts carrying its overlay payload —
+    /// sticky-note models follow the marker (WPF TransferOverlayData).
+    /// False legs roll the container back onto the source host.
+    /// </summary>
+    public static bool Move(
+        IAnnotationContainerHost from, IAnnotationContainerHost to, object container)
+    {
+        if (from == null || to == null || container == null)
+            return false;
+
+        object data;
+        try
+        {
+            data = from.GetOverlayData(container);
+        }
+        catch
+        {
+            data = null;
+        }
+
+        if (!Remove(from, container))
+            return false;
+        if (!Add(to, container))
+        {
+            // Roll the container back onto the source — partial transfers
+            // must not leave it unhosted.
+            Remove(to, container);
+            Add(from, container);
+            return false;
+        }
+        if (data != null)
+        {
+            try
+            {
+                to.SetOverlayData(container, data);
+            }
+            catch
+            {
+                // Payload loss is non-fatal: the container landed.
+            }
+        }
+        return true;
+    }
 }
 
 /// <summary>Immutable bold/italic/family/alignment snapshot (WPF TextFormatChangedAction before/after).</summary>
@@ -658,13 +750,22 @@ public sealed class AnnotationItemsAddedAction : IUndoAction
     public string Description => "Add items";
     public bool LeavesDocumentDirty => true;
 
+    /// <summary>
+    /// False when a container leg no-opped (host no longer owns the
+    /// container) — the editor keeps the action on the stack for a retry,
+    /// same contract as the cross-page move actions.
+    /// </summary>
+    public bool LastOperationSucceeded { get; private set; } = true;
+
     public Task UndoAsync()
     {
         _host.ClearSelection();
         foreach (var placement in _placements.OrderByDescending(p => p.Index))
             _store.RemoveStrokeQuiet(placement);
+        bool ok = true;
         foreach (var container in _containers)
-            _host.RemoveTextContainerQuiet(container);
+            ok &= AnnotationContainerTransfer.Remove(_host, container);
+        LastOperationSucceeded = ok;
         return Task.CompletedTask;
     }
 
@@ -672,8 +773,10 @@ public sealed class AnnotationItemsAddedAction : IUndoAction
     {
         foreach (var placement in _placements.OrderBy(p => p.Index))
             _store.AddStrokeQuiet(placement.ForOwner(_store, placement.Index));
+        bool ok = true;
         foreach (var container in _containers)
-            _host.AddTextContainerQuiet(container);
+            ok &= AnnotationContainerTransfer.Add(_host, container);
+        LastOperationSucceeded = ok;
         return Task.CompletedTask;
     }
 }
@@ -706,6 +809,9 @@ public sealed class AnnotationItemsRemovedAction : IUndoAction
     public string Description => "Remove items";
     public bool LeavesDocumentDirty => true;
 
+    /// <summary>False when a container leg no-opped — see <see cref="AnnotationItemsAddedAction"/>.</summary>
+    public bool LastOperationSucceeded { get; private set; } = true;
+
     public Task UndoAsync()
     {
         var restored = new List<InkStrokeData>(_placements.Count);
@@ -715,10 +821,12 @@ public sealed class AnnotationItemsRemovedAction : IUndoAction
             if (placement.Stroke != null)
                 restored.Add(placement.Stroke);
         }
+        bool ok = true;
         foreach (var container in _containers)
-            _host.AddTextContainerQuiet(container);
+            ok &= AnnotationContainerTransfer.Add(_host, container);
         if (restored.Count > 0)
             _store.NotifyGeometryChanged(restored);
+        LastOperationSucceeded = ok;
         return Task.CompletedTask;
     }
 
@@ -726,8 +834,10 @@ public sealed class AnnotationItemsRemovedAction : IUndoAction
     {
         foreach (var placement in _placements.OrderByDescending(p => p.Index))
             _store.RemoveStrokeQuiet(placement);
+        bool ok = true;
         foreach (var container in _containers)
-            _host.RemoveTextContainerQuiet(container);
+            ok &= AnnotationContainerTransfer.Remove(_host, container);
+        LastOperationSucceeded = ok;
         return Task.CompletedTask;
     }
 }
@@ -800,40 +910,55 @@ public sealed class AnnotationSelectionCrossPageMoveAction : IUndoAction
         if (TargetIndices.Count > 0 || _containersTransferred)
             return true;
 
-        // Strokes: translate BEFORE the add so the target's Added mutation
-        // builds the visual at the final coordinates (same contract as
-        // InkSelectionCrossPageMoveAction).
-        var sorted = _strokes
-            .OrderBy(s => _sourceStore.IndexOf(s))
-            .Where(s => _sourceStore.IndexOf(s) >= 0)
-            .ToList();
-        foreach (var stroke in sorted)
+        try
         {
-            _sourceStore.RemoveStrokeQuiet(stroke);
-            StrokeGeometry.TranslateSpinePoints(stroke.Points, _adjustX, _adjustY);
-            _targetStore.AddStrokeQuiet(stroke);
-            TargetIndices.Add(_targetStore.IndexOf(stroke));
-        }
-        if (sorted.Count > 0)
-            _targetStore.NotifyGeometryChanged(sorted);
+            // Strokes: translate BEFORE the add so the target's Added mutation
+            // builds the visual at the final coordinates (same contract as
+            // InkSelectionCrossPageMoveAction).
+            var sorted = _strokes
+                .OrderBy(s => _sourceStore.IndexOf(s))
+                .Where(s => _sourceStore.IndexOf(s) >= 0)
+                .ToList();
+            foreach (var stroke in sorted)
+            {
+                _sourceStore.RemoveStrokeQuiet(stroke);
+                StrokeGeometry.TranslateSpinePoints(stroke.Points, _adjustX, _adjustY);
+                _targetStore.AddStrokeQuiet(stroke);
+                TargetIndices.Add(_targetStore.IndexOf(stroke));
+            }
+            if (sorted.Count > 0)
+                _targetStore.NotifyGeometryChanged(sorted);
 
-        // Containers: move to the target host, carrying the payload model
-        // (sticky note data travels with its marker — WPF TransferOverlayData).
-        foreach (var container in _containers)
+            // Containers: guarded transfer — a container the source no
+            // longer hosts (or the target rejects) is skipped instead of
+            // splitting the gesture's state mid-flight.
+            foreach (var container in _containers)
+            {
+                if (AnnotationContainerTransfer.Move(_sourceHost, _targetHost, container))
+                    _containersTransferred = true;
+                else
+                    LastOperationSucceeded = false;
+            }
+
+            // The container→page coordinate adjust applies to the containers
+            // here (strokes were pre-adjusted above). WPF replays the same
+            // adjust through MoveItemsDirectly for both legs.
+            if (_containersTransferred)
+            {
+                var moved = _containers
+                    .Where(c => _targetHost.ContainsTextContainer(c))
+                    .ToList();
+                if (moved.Count > 0)
+                    _targetHost.MoveItemsDirectly(NoStrokes, moved, _adjustX, _adjustY);
+            }
+        }
+        catch
         {
-            var data = _sourceHost.GetOverlayData(container);
-            _sourceHost.RemoveTextContainerQuiet(container);
-            _targetHost.AddTextContainerQuiet(container);
-            if (data != null)
-                _targetHost.SetOverlayData(container, data);
-            _containersTransferred = true;
+            // A host failure mid-gesture must not corrupt the editor path —
+            // report whatever actually transferred so the caller can still
+            // push an undo for the completed leg.
+            LastOperationSucceeded = false;
         }
-
-        // The container→page coordinate adjust applies to the containers
-        // here (strokes were pre-adjusted above). WPF replays the same
-        // adjust through MoveItemsDirectly for both legs.
-        if (_containers.Count > 0)
-            _targetHost.MoveItemsDirectly(NoStrokes, _containers, _adjustX, _adjustY);
 
         return TargetIndices.Count > 0 || _containersTransferred;
     }
@@ -854,24 +979,23 @@ public sealed class AnnotationSelectionCrossPageMoveAction : IUndoAction
         foreach (var placement in _sourcePlacements.OrderBy(p => p.Index))
             _sourceStore.AddStrokeQuiet(placement.ForOwner(_sourceStore, placement.Index));
 
+        bool containersOk = true;
         foreach (var container in _containers)
-        {
-            var data = _targetHost.GetOverlayData(container);
-            _targetHost.RemoveTextContainerQuiet(container);
-            _sourceHost.AddTextContainerQuiet(container);
-            if (data != null)
-                _sourceHost.SetOverlayData(container, data);
-        }
+            containersOk &= AnnotationContainerTransfer.Move(_targetHost, _sourceHost, container);
 
         double totalDx = _dx + _adjustX, totalDy = _dy + _adjustY;
         foreach (var stroke in _strokes)
             StrokeGeometry.TranslateSpinePoints(stroke.Points, -totalDx, -totalDy);
         if (_strokes.Count > 0)
             _sourceStore.NotifyGeometryChanged(_strokes);
-        if (_containers.Count > 0)
-            _sourceHost.MoveItemsDirectly(NoStrokes, _containers, -totalDx, -totalDy);
+        // Adjust only the containers that actually made it back.
+        var movedBack = _containers
+            .Where(c => _sourceHost.ContainsTextContainer(c))
+            .ToList();
+        if (movedBack.Count > 0)
+            _sourceHost.MoveItemsDirectly(NoStrokes, movedBack, -totalDx, -totalDy);
 
-        LastOperationSucceeded = true;
+        LastOperationSucceeded = containersOk;
         return Task.CompletedTask;
     }
 
@@ -894,18 +1018,16 @@ public sealed class AnnotationSelectionCrossPageMoveAction : IUndoAction
         if (_strokes.Count > 0)
             _targetStore.NotifyGeometryChanged(_strokes);
 
+        bool containersOk = true;
         foreach (var container in _containers)
-        {
-            var data = _sourceHost.GetOverlayData(container);
-            _sourceHost.RemoveTextContainerQuiet(container);
-            _targetHost.AddTextContainerQuiet(container);
-            if (data != null)
-                _targetHost.SetOverlayData(container, data);
-        }
-        if (_containers.Count > 0)
-            _targetHost.MoveItemsDirectly(NoStrokes, _containers, totalDx, totalDy);
+            containersOk &= AnnotationContainerTransfer.Move(_sourceHost, _targetHost, container);
+        var moved = _containers
+            .Where(c => _targetHost.ContainsTextContainer(c))
+            .ToList();
+        if (moved.Count > 0)
+            _targetHost.MoveItemsDirectly(NoStrokes, moved, totalDx, totalDy);
 
-        LastOperationSucceeded = true;
+        LastOperationSucceeded = containersOk;
         return Task.CompletedTask;
     }
 }

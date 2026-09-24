@@ -3,7 +3,7 @@
 
 ## Purpose
 
-Source-contract NUnit fixture for Task 8 Phase A (`Caelum.Tests`, 3
+Source-contract NUnit fixture for Task 8 Phase A (`Caelum.Tests`, 4
 tests) — pins the WinUI text/sticky wiring so a later refactor cannot
 silently drop pieces the WPF editor relies on. Unlike the older source
 tests (which anchor on the WPF `OpenNotes.csproj` tree), this fixture
@@ -59,6 +59,27 @@ source contract on the port itself.
   `_isHostActive == isActive` no-op guard; `ReleaseResources` shares the
   sweep via `CloseTransientUi("release")`; page `CancelInteraction()`
   must cancel the sticky drag before `ClearShapePreview()`.
+- `SpecFixContract_ToolbarFocusCaptureOwnershipAndGestureGuards`
+  (quality pass, 2026-09-23) — pins the whole fix batch positionally:
+  `IsInteractiveEditorChrome` (ancestor walk over `_inlineTextBoxToolbar`
+  + `ButtonBase`/`ComboBox`/`SelectorItem`/`Slider`/`MenuFlyoutItem` +
+  non-selected `TextBox`) must precede the nudge and Delete/Back branches
+  in `PreviewKeyDown`; the resize capture releases
+  `_resizingTextHandleElement` (not the container) in `CancelTextResize`;
+  `CancelSelectionInteraction` releases `SelectionOverlayCanvas`
+  captures; the per-box `SizeChanged` hook is Loaded/Unloaded-owned;
+  Core has `AnnotationContainerTransfer` + `ContainsTextContainer` (with
+  the `PdfPageControl` explicit impl); undo/redo restore-bounds cancels;
+  `ActivateTool` cancels the live drag when leaving Text; `_dragPointerId`/
+  `_textResizePointerId`/`_stickyDragPointerId` guards exist; the
+  cross-page drop folds `clamped` into `effDx`/`effDy` and
+  `PasteSelection` clamps via `TextAnnotationGeometry.ClampToPage`;
+  `ApplyTextContainerBounds` carries no synchronous layout call;
+  `MoveItemsDirectly` coalesces through `QueueSelectionVisualsUpdate`
+  while `CompleteSelectionGesture` rebuilds synchronously; the sticky
+  flyout keeps one path (`flyout.ShowAt`, no `hitButton.ContextFlyout`);
+  quiet mutators raise `InkMutated`; `CommitTextEditSession` gates on
+  `sessionId != _loadSessionId` + `!ReferenceEquals(page, sessionPage)`.
 
 ## Constraints
 

@@ -162,6 +162,21 @@
   whenever `ButtonBase` skips its internal capture on a handled press.
   `ApplyTextContainerBoundsQuiet` restores auto-size legs as `NaN` like
   the live path — a fixed restore would freeze an auto annotation.
+- **Quality pass (2026-09-23):** `CancelSelectionInteraction` releases
+  `SelectionOverlayCanvas` pointer captures while clearing state — a
+  programmatic cancel (undo, teardown, tool switch) no longer leaves the
+  pointer routed to a dead gesture. Sticky `PointerCanceled` checks the
+  tracked `_stickyDragPointerId` like Moved/Released. `MoveItemsDirectly`
+  coalesces live-drag chrome through `QueueSelectionVisualsUpdate()`
+  (dispatcher queue); `CompleteSelectionGesture` runs a synchronous
+  `UpdateSelectionVisuals()` after each completion event. The sticky
+  marker keeps exactly ONE flyout path — explicit `ShowAt` on RightTapped
+  (`e.Handled` suppresses the container's retrieval-anchor flyout); the
+  button's own `ContextFlyout` is NOT set so the framework can't
+  auto-open a second copy. `IAnnotationContainerHost` gained
+  `ContainsTextContainer` (parent-probe on both overlay canvases) and
+  every quiet mutator raises `InkMutated` so thumbnail/dirty observers
+  refresh through undo/redo and quiet loads.
 
 ## Important Notes / NEVER Change
 - The ink layer sits UNDER `ShapePreviewCanvas`/`TextOverlayCanvas` — strokes must

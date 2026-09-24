@@ -162,6 +162,8 @@ namespace Caelum.Pages
         private TextBox _selectedTextBox;
         private TextBox _textEditSessionTextBox;
         private string _textEditSessionOriginalText;
+        private PdfPageControl _textEditSessionPage;
+        private int _textEditSessionId;
 
         // Floating inline toolbar hosted on the page's TextOverlay canvas.
         private Border _inlineTextBoxToolbar;
@@ -186,12 +188,15 @@ namespace Caelum.Pages
         private bool _isDragging;
         private double _dragStartX;
         private double _dragStartY;
+        private uint? _dragPointerId;
         private bool _suppressTextCaptureCancellation;
 
         // Eight-handle resize state.
         private Grid _resizingTextContainer;
         private PdfPageControl _resizingTextPage;
         private TextResizeHandle _textResizeHandle;
+        private TextResizeHandleElement _resizingTextHandleElement;
+        private uint? _textResizePointerId;
         private Point _textResizeStartPoint;
         private TextBoxBounds _textResizeStartBounds;
         private bool _textResizeStartAutoWidth;
@@ -532,9 +537,12 @@ namespace Caelum.Pages
                 _activeSelectionPage = null;
             }
             // WPF UpdateToolButtonStates parity: switching away from Text
-            // restores an in-flight resize and drops the text-box selection.
+            // restores in-flight drag/resize and drops the text-box
+            // selection. The drag half was missing — a pointer captured on
+            // a container could outlive the Text tool.
             if (tool != ToolType.Text)
             {
+                CancelTextBoxDrag(restoreBounds: true);
                 if (_resizingTextContainer != null)
                     CancelTextResize(restoreBounds: true);
                 if (tool != _currentTool)
@@ -2353,8 +2361,10 @@ namespace Caelum.Pages
             // still-running gesture.
             foreach (var p in _pageControls)
                 p.CancelInteraction();
-            CancelTextBoxDrag(restoreBounds: false);
-            CancelTextResize(restoreBounds: false);
+            // Restore in-flight geometry first — an uncommitted drag/resize
+            // must not survive as phantom layout over the restored state.
+            CancelTextBoxDrag(restoreBounds: true);
+            CancelTextResize(restoreBounds: true);
             var action = _undoStack.Peek();
             try
             {
@@ -2370,6 +2380,12 @@ namespace Caelum.Pages
                     return;
                 if (action is AnnotationSelectionCrossPageMoveAction annotationCrossPage
                     && !annotationCrossPage.LastOperationSucceeded)
+                    return;
+                if (action is AnnotationItemsAddedAction itemsAdded
+                    && !itemsAdded.LastOperationSucceeded)
+                    return;
+                if (action is AnnotationItemsRemovedAction itemsRemoved
+                    && !itemsRemoved.LastOperationSucceeded)
                     return;
                 _undoStack.Pop();
                 _redoStack.Push(action);
@@ -2392,8 +2408,8 @@ namespace Caelum.Pages
                 return;
             foreach (var p in _pageControls)
                 p.CancelInteraction();
-            CancelTextBoxDrag(restoreBounds: false);
-            CancelTextResize(restoreBounds: false);
+            CancelTextBoxDrag(restoreBounds: true);
+            CancelTextResize(restoreBounds: true);
             var action = _redoStack.Peek();
             try
             {
@@ -2405,6 +2421,12 @@ namespace Caelum.Pages
                     return;
                 if (action is AnnotationSelectionCrossPageMoveAction annotationCrossPage
                     && !annotationCrossPage.LastOperationSucceeded)
+                    return;
+                if (action is AnnotationItemsAddedAction itemsAdded
+                    && !itemsAdded.LastOperationSucceeded)
+                    return;
+                if (action is AnnotationItemsRemovedAction itemsRemoved
+                    && !itemsRemoved.LastOperationSucceeded)
                     return;
                 _redoStack.Pop();
                 _undoStack.Push(action);
@@ -2560,7 +2582,19 @@ namespace Caelum.Pages
                         e.DeltaX, e.DeltaY,
                         adjustX, adjustY,
                         e.Strokes.Select(s => page.Ink.Store.CaptureStrokePlacement(s)).ToList());
-                    if (moveAction.ExecuteInitialTransfer())
+                    bool transferred;
+                    try
+                    {
+                        transferred = moveAction.ExecuteInitialTransfer();
+                    }
+                    catch
+                    {
+                        // A host failure mid-gesture must not corrupt the
+                        // editor — the action guards its own legs, this is
+                        // the last-resort net.
+                        transferred = false;
+                    }
+                    if (transferred)
                         PushUndoAction(moveAction);
                 }
                 else
@@ -2939,14 +2973,31 @@ namespace Caelum.Pages
 
                 if (pageAnnotation.Texts != null)
                 {
+                    // Paste lands inside the TARGET page bounds — the same
+                    // clamp the drag path applies on release (P3s.8).
+                    double pasteW = targetPage.TextOverlay.ActualWidth > 0
+                        ? targetPage.TextOverlay.ActualWidth : targetPage.ActualWidth;
+                    double pasteH = targetPage.TextOverlay.ActualHeight > 0
+                        ? targetPage.TextOverlay.ActualHeight : targetPage.ActualHeight;
                     foreach (var textAnnotation in pageAnnotation.Texts)
                     {
                         var color = Windows.UI.Color.FromArgb(255,
                             textAnnotation.R, textAnnotation.G, textAnnotation.B);
+                        var pastedBounds = TextAnnotationGeometry.ClampToPage(
+                            new TextBoxBounds(
+                                textAnnotation.X + pasteOffsetX,
+                                textAnnotation.Y + pasteOffsetY,
+                                textAnnotation.Width > 0
+                                    ? textAnnotation.Width
+                                    : TextAnnotationGeometry.DefaultWidth,
+                                textAnnotation.Height > 0
+                                    ? textAnnotation.Height
+                                    : TextAnnotationGeometry.DefaultHeight),
+                            pasteW,
+                            pasteH);
                         var container = CreateTextBox(
                             targetPage,
-                            new Point(textAnnotation.X + pasteOffsetX,
-                                textAnnotation.Y + pasteOffsetY),
+                            new Point(pastedBounds.X, pastedBounds.Y),
                             color: color,
                             fontSize: textAnnotation.FontSize,
                             text: textAnnotation.Text,
@@ -3284,15 +3335,46 @@ namespace Caelum.Pages
                 VerticalAlignment = VerticalAlignment.Stretch,
             };
 
-            page.SizeChanged += (s, e) =>
+            // Auto-width tracking follows the hosting page. The handler is
+            // owned by the container's Loaded/Unloaded lifecycle so EVERY
+            // removal path (delete, undo/redo, cross-page transfer,
+            // clipboard, page teardown) unsubscribes — and reparenting
+            // re-binds to the new page instead of leaking the old one.
+            PdfPageControl sizeTrackingPage = null;
+            SizeChangedEventHandler sizeTrackingHandler = null;
+            sizeTrackingHandler = (s, e) =>
             {
                 if (textBox.Parent is Grid containerGrid && double.IsNaN(containerGrid.Width))
                 {
-                    double newAvailableWidth = page.ActualWidth - Canvas.GetLeft(containerGrid);
+                    var hostPage = GetPageByTextContainer(containerGrid) ?? sizeTrackingPage;
+                    if (hostPage == null)
+                        return;
+                    double newAvailableWidth = hostPage.ActualWidth - Canvas.GetLeft(containerGrid);
                     textBox.MaxWidth = Math.Max(
                         100, newAvailableWidth - textPadding.Left - textPadding.Right - 40);
                 }
             };
+            void SubscribeSizeTracking(PdfPageControl hostPage)
+            {
+                if (hostPage != null && !ReferenceEquals(sizeTrackingPage, hostPage))
+                {
+                    if (sizeTrackingPage != null)
+                        sizeTrackingPage.SizeChanged -= sizeTrackingHandler;
+                    hostPage.SizeChanged += sizeTrackingHandler;
+                    sizeTrackingPage = hostPage;
+                }
+            }
+            void UnsubscribeSizeTracking()
+            {
+                if (sizeTrackingPage != null)
+                {
+                    sizeTrackingPage.SizeChanged -= sizeTrackingHandler;
+                    sizeTrackingPage = null;
+                }
+            }
+            container.Loaded += (s, e) => SubscribeSizeTracking(GetPageByTextContainer(container));
+            container.Unloaded += (s, e) => UnsubscribeSizeTracking();
+            SubscribeSizeTracking(page);
 
             Grid.SetColumn(textBox, 0);
 
@@ -3496,8 +3578,11 @@ namespace Caelum.Pages
                 textBox.Height = double.NaN;
             }
 
+            // InvalidateMeasure only — the resize handles live INSIDE the
+            // container and track its size on the next layout pass, so a
+            // synchronous layout pass per pointer packet would only burn
+            // frames (the quiet setter relies on the same pass).
             container.InvalidateMeasure();
-            container.UpdateLayout();
         }
 
         // ── Eight-handle resize ────────────────────────────────────────────
@@ -3519,6 +3604,7 @@ namespace Caelum.Pages
 
             BeginTextResize(handle, container, page, resizeHandle, e.GetCurrentPoint(page).Position);
             handle.CapturePointer(e.Pointer);
+            _textResizePointerId = e.Pointer.PointerId;
             e.Handled = true;
         }
 
@@ -3598,6 +3684,9 @@ namespace Caelum.Pages
             _resizingTextContainer = container;
             _resizingTextPage = page;
             _textResizeHandle = resizeHandle;
+            // The handle element OWNS the pointer capture — cancel paths
+            // must release it, not the container (P2s.1).
+            _resizingTextHandleElement = handle;
             _textResizeStartPoint = startPoint;
             _textResizeStartBounds = GetTextContainerBounds(container);
             _textResizeStartAutoWidth = page.IsTextAnnotationAutoWidth(container);
@@ -3607,6 +3696,8 @@ namespace Caelum.Pages
         private void TextResizeHandle_PointerMoved(object sender, PointerRoutedEventArgs e)
         {
             if (_resizingTextContainer == null || _resizingTextPage == null)
+                return;
+            if (_textResizePointerId != null && e.Pointer.PointerId != _textResizePointerId.Value)
                 return;
 
             UpdateTextResize(e.GetCurrentPoint(_resizingTextPage).Position);
@@ -3637,6 +3728,8 @@ namespace Caelum.Pages
         {
             if (_resizingTextContainer == null)
                 return;
+            if (_textResizePointerId != null && e.Pointer.PointerId != _textResizePointerId.Value)
+                return;
 
             _suppressTextCaptureCancellation = true;
             try
@@ -3654,14 +3747,22 @@ namespace Caelum.Pages
 
         private void TextResizeHandle_PointerCanceled(object sender, PointerRoutedEventArgs e)
         {
-            if (_resizingTextContainer != null)
+            if (_resizingTextContainer != null
+                && (_textResizePointerId == null
+                    || e.Pointer.PointerId == _textResizePointerId.Value))
+            {
                 CancelTextResize(restoreBounds: true);
+            }
         }
 
         private void TextResizeHandle_PointerCaptureLost(object sender, PointerRoutedEventArgs e)
         {
-            if (!_suppressTextCaptureCancellation)
+            if (!_suppressTextCaptureCancellation
+                && (_textResizePointerId == null
+                    || e.Pointer.PointerId == _textResizePointerId.Value))
+            {
                 CancelTextResize(restoreBounds: true);
+            }
         }
 
         private void CompleteTextResize()
@@ -3678,6 +3779,9 @@ namespace Caelum.Pages
             _resizingTextContainer = null;
             _resizingTextPage = null;
             _textResizeHandle = default;
+
+            _resizingTextHandleElement = null;
+            _textResizePointerId = null;
 
             bool geometryChanged = Math.Abs(before.X - after.X) > 0.5
                 || Math.Abs(before.Y - after.Y) > 0.5
@@ -3728,7 +3832,10 @@ namespace Caelum.Pages
                         _textResizeStartAutoWidth,
                         _textResizeStartAutoHeight);
                 }
-                resizingContainer.ReleasePointerCaptures();
+                // The capture lives on the handle element, not the
+                // container — releasing the container left the dead
+                // gesture holding the pointer.
+                _resizingTextHandleElement?.ReleasePointerCaptures();
             }
             finally
             {
@@ -3736,6 +3843,8 @@ namespace Caelum.Pages
                 _resizingTextContainer = null;
                 _resizingTextPage = null;
                 _textResizeHandle = default;
+                _resizingTextHandleElement = null;
+                _textResizePointerId = null;
                 _textResizeStartBounds = default;
             }
         }
@@ -3766,11 +3875,14 @@ namespace Caelum.Pages
             }
 
             BeginTextBoxDrag(container, e.GetCurrentPoint(canvas).Position);
+            _dragPointerId = e.Pointer.PointerId;
             e.Handled = true;
         }
 
         private void TextContainerBorder_PointerMoved(object sender, PointerRoutedEventArgs e)
         {
+            if (_dragPointerId != null && e.Pointer.PointerId != _dragPointerId.Value)
+                return;
             if (_draggedContainer?.Parent is Canvas canvas)
             {
                 UpdateTextBoxDrag(
@@ -3782,6 +3894,8 @@ namespace Caelum.Pages
 
         private void TextContainerBorder_PointerReleased(object sender, PointerRoutedEventArgs e)
         {
+            if (_dragPointerId != null && e.Pointer.PointerId != _dragPointerId.Value)
+                return;
             var container = sender as Grid;
             _suppressTextCaptureCancellation = true;
             bool wasDragging;
@@ -3799,13 +3913,19 @@ namespace Caelum.Pages
 
         private void TextContainerBorder_PointerCanceled(object sender, PointerRoutedEventArgs e)
         {
-            if (!_suppressTextCaptureCancellation)
+            if (!_suppressTextCaptureCancellation
+                && (_dragPointerId == null
+                    || e.Pointer.PointerId == _dragPointerId.Value))
+            {
                 CancelTextBoxDrag(restoreBounds: true);
+            }
         }
 
         private void TextContainerBorder_PointerCaptureLost(object sender, PointerRoutedEventArgs e)
         {
-            if (!_suppressTextCaptureCancellation)
+            if (!_suppressTextCaptureCancellation
+                && (_dragPointerId == null
+                    || e.Pointer.PointerId == _dragPointerId.Value))
                 CancelTextBoxDrag(restoreBounds: true);
         }
 
@@ -3885,6 +4005,26 @@ namespace Caelum.Pages
                         // strokes (WPF parity).
                         Point targetOriginInSource = targetPage.TransformToVisual(sourcePage)
                             .TransformPoint(new Point(0, 0));
+                        double adjustX = -targetOriginInSource.X;
+                        double adjustY = -targetOriginInSource.Y;
+
+                        // Clamp the landing point into the TARGET page — a
+                        // drop near the edge must not strand the box
+                        // off-canvas. The clamp is folded into the action's
+                        // delta so initial transfer AND redo land the same.
+                        var landing = new TextBoxBounds(
+                            endX + adjustX, endY + adjustY,
+                            _draggedContainer.ActualWidth,
+                            _draggedContainer.ActualHeight);
+                        double targetW = targetPage.TextOverlay.ActualWidth > 0
+                            ? targetPage.TextOverlay.ActualWidth : targetPage.ActualWidth;
+                        double targetH = targetPage.TextOverlay.ActualHeight > 0
+                            ? targetPage.TextOverlay.ActualHeight : targetPage.ActualHeight;
+                        var clamped = TextAnnotationGeometry.ClampToPage(
+                            landing, targetW, targetH);
+                        double effDx = clamped.X - _dragStartX - adjustX;
+                        double effDy = clamped.Y - _dragStartY - adjustY;
+
                         var moveAction = new AnnotationSelectionCrossPageMoveAction(
                             sourcePage.Ink.Store,
                             targetPage.Ink.Store,
@@ -3892,10 +4032,10 @@ namespace Caelum.Pages
                             targetPage,
                             Array.Empty<InkStrokeData>(),
                             new List<Grid> { _draggedContainer },
-                            endX - _dragStartX,
-                            endY - _dragStartY,
-                            -targetOriginInSource.X,
-                            -targetOriginInSource.Y,
+                            effDx,
+                            effDy,
+                            adjustX,
+                            adjustY,
                             new List<InkStrokePlacement>());
 
                         if (sourcePage.HasSelection
@@ -3904,7 +4044,16 @@ namespace Caelum.Pages
                             sourcePage.ClearSelection();
                         }
 
-                        if (moveAction.ExecuteInitialTransfer())
+                        bool transferred;
+                        try
+                        {
+                            transferred = moveAction.ExecuteInitialTransfer();
+                        }
+                        catch
+                        {
+                            transferred = false;
+                        }
+                        if (transferred)
                             PushUndoAction(moveAction);
                     }
                     else
@@ -3945,6 +4094,7 @@ namespace Caelum.Pages
             _draggedContainerPage = null;
             _dragStartX = 0;
             _dragStartY = 0;
+            _dragPointerId = null;
             return wasDragging;
         }
 
@@ -3974,6 +4124,7 @@ namespace Caelum.Pages
                 _draggedContainerPage = null;
                 _dragStartX = 0;
                 _dragStartY = 0;
+                _dragPointerId = null;
             }
         }
 
@@ -4116,6 +4267,41 @@ namespace Caelum.Pages
             return null;
         }
 
+        /// <summary>
+        /// True when focus sits inside interactive editor chrome — the
+        /// inline text toolbar or any control that owns a keyboard contract
+        /// (buttons, combo boxes, sliders, list/menu items, other TextBoxes,
+        /// the sticky marker button). The selected annotation TextBox is
+        /// the only TextBox allowed to fall through so its caret keys stay
+        /// native while the unfocused nudge/Delete branches still apply.
+        /// Plain panels, canvases and the page controls themselves are NOT
+        /// chrome — selection shortcuts keep working while they hold focus.
+        /// </summary>
+        private bool IsInteractiveEditorChrome(DependencyObject focused)
+        {
+            for (var current = focused; current != null;
+                 current = VisualTreeHelper.GetParent(current))
+            {
+                if (ReferenceEquals(current, _inlineTextBoxToolbar))
+                    return true;
+                switch (current)
+                {
+                    case ButtonBase:
+                    case ComboBox:
+                    case SelectorItem:
+                    case Slider:
+                    case MenuFlyoutItem:
+                        return true;
+                    case TextBox textBox when !ReferenceEquals(textBox, _selectedTextBox):
+                        // Search/zoom/page-jump/sticky-editor boxes own
+                        // their keys; the annotation box is carved out so
+                        // unfocused Delete/Back + Alt-nudge still work.
+                        return true;
+                }
+            }
+            return false;
+        }
+
         private static bool TryGetTextBoxNudge(VirtualKey key, out double deltaX, out double deltaY)
         {
             deltaX = 0;
@@ -4182,6 +4368,11 @@ namespace Caelum.Pages
         {
             _textEditSessionTextBox = textBox;
             _textEditSessionOriginalText = textBox.Text;
+            // Liveness anchors (WPF sticky-session parity): the hosting
+            // page + load generation are captured so a stale LostFocus
+            // can't mutate a dead or reparented container.
+            _textEditSessionPage = GetPageByTextContainer(textBox?.Parent as Grid);
+            _textEditSessionId = _loadSessionId;
         }
 
         /// <summary>
@@ -4193,17 +4384,29 @@ namespace Caelum.Pages
             var textBox = _textEditSessionTextBox;
             if (textBox == null)
                 return;
+            var sessionPage = _textEditSessionPage;
+            int sessionId = _textEditSessionId;
             _textEditSessionTextBox = null;
+            _textEditSessionPage = null;
+            _textEditSessionId = 0;
 
             string beforeText = _textEditSessionOriginalText;
             string afterText = textBox.Text;
             if (string.Equals(beforeText, afterText))
                 return;
 
+            // Stale-session guard: the container was removed, reparented
+            // across pages (GetPageByTextContainer then reports the NEW
+            // page), or the document reloaded mid-session — skip the action
+            // instead of recording an undo for a dead/gone box.
             var container = textBox.Parent as Grid;
             var page = GetPageByTextContainer(container);
-            if (page == null || container == null)
+            if (page == null || container == null
+                || sessionId != _loadSessionId
+                || !ReferenceEquals(page, sessionPage))
+            {
                 return;
+            }
 
             PushUndoAction(new TextEditSessionAction(page, container, beforeText, afterText));
             MarkDirty();
@@ -7205,6 +7408,20 @@ namespace Caelum.Pages
             // becoming a text-box nudge.
             if (e.OriginalSource is TextResizeHandleElement
                 || FocusManager.GetFocusedElement(XamlRoot) is TextResizeHandleElement)
+            {
+                return;
+            }
+
+            // PreviewKeyDown TUNNELS — it fires before the focused control's
+            // own KeyDown. Interactive chrome (inline toolbar buttons/combo,
+            // sticky marker button, the sticky editor TextBox, sidebar
+            // lists) must own its keys: arrows navigate, Delete deletes
+            // characters — the nudge/delete branches below would otherwise
+            // also move the box or kill the annotation. Only the selected
+            // annotation TextBox itself (or a non-control page element)
+            // falls through.
+            if (FocusManager.GetFocusedElement(XamlRoot) is DependencyObject focusedElement
+                && IsInteractiveEditorChrome(focusedElement))
             {
                 return;
             }

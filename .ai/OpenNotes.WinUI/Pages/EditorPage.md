@@ -1,5 +1,5 @@
 # OpenNotes.WinUI/Pages/EditorPage.xaml(.cs)
-> Last updated: 2026-09-23 (V6 Task 7 Phase A — custom ink engine) | Protection: STANDARD
+> Last updated: 2026-09-23 (V6 Task 8 Phase A — text/sticky annotations + quality pass) | Protection: STANDARD
 
 ## Purpose
 `Caelum.Pages.EditorPage : Page` — the WinUI editor shell port of the WPF
@@ -234,6 +234,37 @@ the save/history pipeline remain deferred to T8–T9.
   (`CloseTransientUi("release")`). Text-resize handles carry a
   transparent `Background` — panels only hit-test through a non-null
   Background.
+
+- **Quality pass (2026-09-23 — focus, capture ownership, gesture
+  guards):** `IsInteractiveEditorChrome` walks visual ancestors in
+  `PreviewKeyDown` — focus inside `_inlineTextBoxToolbar`, any
+  `ButtonBase`/`ComboBox`/`SelectorItem`/`Slider`/`MenuFlyoutItem`, or a
+  non-selected `TextBox` owns its keys (arrows navigate combos, Delete
+  edits characters); only the selected annotation `TextBox` or plain page
+  elements fall through to nudge/Delete. Resize capture is owned by the
+  `TextResizeHandleElement` (`_resizingTextHandleElement` +
+  `_textResizePointerId`) — `CancelTextResize` releases THAT element, not
+  the container, across tool-switch/Escape/undo/teardown/capture-loss.
+  `_dragPointerId` mirrors it for border-band drags (set on press,
+  equality-checked in Moved/Released/Canceled/CaptureLost, cleared on
+  complete/cancel). The per-box `page.SizeChanged` auto-width hook is
+  lifecycle-owned: `container.Loaded`/`Unloaded` subscribe/unsubscribe a
+  named handler so EVERY detach (delete, undo/redo, cross-page transfer,
+  clipboard, teardown) releases it — and reparenting re-binds to the NEW
+  page. `PerformUndoAsync`/`PerformRedoAsync` cancel live drag/resize
+  with `restoreBounds: true` so uncommitted geometry never survives as
+  phantom layout; `ActivateTool` cancels `_draggedContainer` when leaving
+  Text, not just `_resizingTextContainer`. Both `ExecuteInitialTransfer`
+  call sites are try/catch-guarded and the undo/redo loops also honor
+  `LastOperationSucceeded` on `AnnotationItemsAdded/RemovedAction`.
+  Cross-page text drops fold a `TextAnnotationGeometry.ClampToPage`
+  target-page clamp into the action delta (initial transfer AND redo land
+  identically); `PasteSelection` clamps text boxes the same way.
+  `ApplyTextContainerBounds` drops the per-packet synchronous layout —
+  `InvalidateMeasure` alone reschedules handles (they're container
+  children). The text edit session carries `_textEditSessionPage` +
+  `_textEditSessionId` anchors so a stale `LostFocus` can't push an undo
+  for a removed/reparented/reloaded container.
 
 ## Open Threads / Resume Context
 - **Status:** GREEN — `tools/winui-editor-smoke.ps1` 60/60; Task 7 Phase A

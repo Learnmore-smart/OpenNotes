@@ -81,7 +81,7 @@ public sealed class CoreAnnotationUndoTests
     {
         var host = new FakeHost();
         var container = new object();
-        host.Containers.Add(container);
+        host.MarkText(container);
         var action = new TextEditSessionAction(host, container, "before", "after");
 
         await action.UndoAsync();
@@ -498,6 +498,103 @@ public sealed class CoreAnnotationUndoTests
         Assert.That(action.ExecuteInitialTransfer(), Is.False);
     }
 
+    [Test]
+    public void CrossPageMove_InitialTransferSkipsUnhostedContainer()
+    {
+        var source = new InkStrokeStore();
+        var target = new InkStrokeStore();
+        var sourceHost = new FakeHost();
+        var targetHost = new FakeHost();
+        var hosted = new object();
+        var ghost = new object(); // never hosted on the source
+        sourceHost.MarkText(hosted);
+
+        var action = new AnnotationSelectionCrossPageMoveAction(
+            source, target, sourceHost, targetHost,
+            Array.Empty<InkStrokeData>(), new object[] { hosted, ghost },
+            dx: 0, dy: 0, adjustX: 0, adjustY: 0,
+            sourcePlacements: new List<InkStrokePlacement>());
+
+        Assert.Multiple(() =>
+        {
+            // The hosted leg still transfers — one ghost must not split
+            // the gesture's state.
+            Assert.That(action.ExecuteInitialTransfer(), Is.True);
+            Assert.That(action.LastOperationSucceeded, Is.False);
+            Assert.That(targetHost.Containers, Does.Contain(hosted));
+            Assert.That(targetHost.Containers, Does.Not.Contain(ghost));
+            Assert.That(sourceHost.Containers, Does.Not.Contain(hosted));
+        });
+    }
+
+    [Test]
+    public async Task CrossPageMove_UndoFlagsVanishedContainer()
+    {
+        var source = new InkStrokeStore();
+        var target = new InkStrokeStore();
+        var sourceHost = new FakeHost();
+        var targetHost = new FakeHost();
+        var container = new object();
+        sourceHost.MarkText(container);
+
+        var action = new AnnotationSelectionCrossPageMoveAction(
+            source, target, sourceHost, targetHost,
+            Array.Empty<InkStrokeData>(), new[] { container },
+            dx: 0, dy: 0, adjustX: 0, adjustY: 0,
+            sourcePlacements: new List<InkStrokePlacement>());
+
+        Assert.That(action.ExecuteInitialTransfer(), Is.True);
+        // The container was torn down on the target before undo ran.
+        targetHost.Containers.Remove(container);
+
+        await action.UndoAsync();
+        Assert.Multiple(() =>
+        {
+            Assert.That(action.LastOperationSucceeded, Is.False);
+            // No phantom re-add: the failed leg skips safely.
+            Assert.That(sourceHost.Containers, Does.Not.Contain(container));
+        });
+    }
+
+    [Test]
+    public async Task ItemsAdded_UndoFlagsContainerTheHostDoesNotOwn()
+    {
+        var host = new FakeHost();
+        var container = new object();
+        host.MarkText(container);
+        var action = new AnnotationItemsAddedAction(
+            new InkStrokeStore(), new List<InkStrokePlacement>(),
+            host, new[] { container });
+
+        host.Containers.Remove(container); // torn down behind the action
+        await action.UndoAsync();
+        Assert.That(action.LastOperationSucceeded, Is.False);
+    }
+
+    [Test]
+    public async Task ItemsRemoved_UndoReaddsContainers_RedoRemoves()
+    {
+        var host = new FakeHost();
+        var container = new object();
+        var action = new AnnotationItemsRemovedAction(
+            new InkStrokeStore(), new List<InkStrokePlacement>(),
+            host, new[] { container });
+
+        await action.UndoAsync();
+        Assert.Multiple(() =>
+        {
+            Assert.That(host.Containers, Does.Contain(container));
+            Assert.That(action.LastOperationSucceeded, Is.True);
+        });
+
+        await action.RedoAsync();
+        Assert.Multiple(() =>
+        {
+            Assert.That(host.Containers, Does.Not.Contain(container));
+            Assert.That(action.LastOperationSucceeded, Is.True);
+        });
+    }
+
     // ------------------------------------------------------------------
     // Fake host — mirrors the WinUI PdfPageControl quiet-mutation contract.
     // ------------------------------------------------------------------
@@ -505,6 +602,7 @@ public sealed class CoreAnnotationUndoTests
     private sealed class FakeHost : IAnnotationContainerHost
     {
         private readonly HashSet<object> _sticky = new();
+        private readonly HashSet<object> _text = new();
 
         public HashSet<object> Containers { get; } = new();
         public Dictionary<object, object> OverlayData { get; } = new();
@@ -526,9 +624,17 @@ public sealed class CoreAnnotationUndoTests
             Containers.Add(container);
         }
 
+        public void MarkText(object container)
+        {
+            _text.Add(container);
+            Containers.Add(container);
+        }
+
         public bool RemoveTextContainerQuiet(object container) => Containers.Remove(container);
 
         public void AddTextContainerQuiet(object container) => Containers.Add(container);
+
+        public bool ContainsTextContainer(object container) => Containers.Contains(container);
 
         public object GetOverlayData(object container)
             => OverlayData.TryGetValue(container, out var data) ? data : null!;
@@ -568,7 +674,11 @@ public sealed class CoreAnnotationUndoTests
 
         public bool SetTextContentQuiet(object container, string text)
         {
-            if (!Containers.Contains(container))
+            // WPF/real-host parity: the gate is the PAYLOAD (a TextBox
+            // child), not canvas membership — a detached text container
+            // still accepts content. _text is the fake's payload marker
+            // and likewise survives RemoveTextContainerQuiet.
+            if (!_text.Contains(container))
                 return false;
             Texts[container] = text;
             return true;

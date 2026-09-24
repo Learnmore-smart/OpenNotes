@@ -40,6 +40,17 @@ cross-page transfer contract without any UI types.
   strokes to captured source placements + applies −(dx+adjust), redo
   mirrors; `LastOperationSucceeded=false` when the live stroke vanished
   (the editor keeps the action on the stack as a no-op — WPF contract).
+- **Guarded container legs (quality pass, 2026-09-23)** —
+  `CrossPageMove_InitialTransferSkipsUnhostedContainer` (ghost container
+  skipped, hosted leg still moves, flag set),
+  `CrossPageMove_UndoFlagsVanishedContainer` (container torn down on the
+  target → flag, no phantom re-add),
+  `ItemsAdded_UndoFlagsContainerTheHostDoesNotOwn` +
+  `ItemsRemoved_UndoReaddsContainers_RedoRemoves` (the new
+  `LastOperationSucceeded` surface on the batch actions). `FakeHost`
+  gained `ContainsTextContainer` + `MarkText`; `SetTextContentQuiet`
+  gates on the `_text` payload marker (real-host parity — payload
+  presence, not canvas membership, survives detach).
 
 ## Constraints
 

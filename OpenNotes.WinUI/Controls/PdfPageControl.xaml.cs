@@ -965,6 +965,11 @@ namespace Caelum.Controls
             _isResizingSelection = false;
             _isRotatingSelection = false;
             _selectionPointerId = null;
+            // Programmatic cancels must drop the pointer capture too — a
+            // captured overlay keeps routing the stream to a dead gesture
+            // (PointerCaptureLost re-entry is a no-op: the id is already
+            // null by this point).
+            SelectionOverlayCanvas.ReleasePointerCaptures();
             _lastResizeScale = 1.0;
             _lastRotationDegrees = 0;
             _totalRotationDegrees = 0;
@@ -1248,6 +1253,9 @@ namespace Caelum.Controls
                         _selectedStrokes.ToList(), _selectedTextContainers.ToList()));
                 _lastResizeScale = 1.0;
                 _selectionInteractionSnapshot = null;
+                // Live packets coalesced through QueueSelectionVisualsUpdate
+                // — pointer release commits a synchronous final rebuild.
+                UpdateSelectionVisuals();
                 return;
             }
 
@@ -1261,6 +1269,7 @@ namespace Caelum.Controls
                 _lastRotationDegrees = 0;
                 _totalRotationDegrees = 0;
                 _selectionInteractionSnapshot = null;
+                UpdateSelectionVisuals();
                 return;
             }
 
@@ -1274,6 +1283,7 @@ namespace Caelum.Controls
                 _totalDragDeltaX = 0;
                 _totalDragDeltaY = 0;
                 _selectionInteractionSnapshot = null;
+                UpdateSelectionVisuals();
                 return;
             }
 
@@ -1586,7 +1596,10 @@ namespace Caelum.Controls
                 }
             }
 
-            UpdateSelectionVisuals();
+            // Live drag packets coalesce through the dispatcher queue — the
+            // pointer-release path calls UpdateSelectionVisuals()
+            // synchronously for the final chrome rebuild.
+            QueueSelectionVisualsUpdate();
             InkMutated?.Invoke(this, EventArgs.Empty);
         }
 
@@ -2008,17 +2021,27 @@ namespace Caelum.Controls
             if (container == null)
                 return false;
 
+            bool removed;
             if (ReferenceEquals(container.Parent, ImageOverlayCanvas))
             {
                 ImageOverlayCanvas.Children.Remove(container);
-                return true;
+                removed = true;
             }
-            if (ReferenceEquals(container.Parent, TextOverlayCanvas))
+            else if (ReferenceEquals(container.Parent, TextOverlayCanvas))
             {
                 TextOverlayCanvas.Children.Remove(container);
-                return true;
+                removed = true;
             }
-            return false;
+            else
+            {
+                removed = false;
+            }
+            // Quiet mutators still notify thumbnail/dirty observers — the
+            // host contract calls for visual notifications, just no undo
+            // recursion.
+            if (removed)
+                InkMutated?.Invoke(this, EventArgs.Empty);
+            return removed;
         }
 
         /// <summary>
@@ -2038,6 +2061,7 @@ namespace Caelum.Controls
             {
                 TextOverlayCanvas.Children.Add(container);
             }
+            InkMutated?.Invoke(this, EventArgs.Empty);
         }
 
         /// <summary>Page-space size used for sticky clamping (WPF GetStickyPageSize).</summary>
@@ -2141,8 +2165,11 @@ namespace Caelum.Controls
             hitButton.PointerCanceled += StickyNote_PointerCanceled;
             hitButton.KeyDown += StickyNote_KeyDown;
             var flyout = BuildStickyNoteContextMenu(container);
-            hitButton.ContextFlyout = flyout;
-            // Deterministic right-tap path (WPF ContextMenu parity).
+            // Deterministic right-tap path (WPF ContextMenu parity): the
+            // button's own ContextFlyout is NOT set — the framework would
+            // auto-open it and race this explicit ShowAt into a double
+            // open. e.Handled suppresses the container's retrieval anchor
+            // from auto-opening on the bubbled tap.
             hitButton.RightTapped += (s, e) =>
             {
                 e.Handled = true;
@@ -2231,6 +2258,7 @@ namespace Caelum.Controls
             note.X = clamped.X;
             note.Y = clamped.Y;
             ToolTipService.SetToolTip(container, note.Text ?? string.Empty);
+            InkMutated?.Invoke(this, EventArgs.Empty);
             return true;
         }
 
@@ -2245,6 +2273,7 @@ namespace Caelum.Controls
 
             note.Text = text ?? string.Empty;
             ToolTipService.SetToolTip(container, note.Text);
+            InkMutated?.Invoke(this, EventArgs.Empty);
             return true;
         }
 
@@ -2406,8 +2435,13 @@ namespace Caelum.Controls
         private void StickyNote_PointerCanceled(object sender, PointerRoutedEventArgs e)
         {
             var container = sender is Button button ? button.Parent as Grid : sender as Grid;
-            if (container != null && ReferenceEquals(_stickyDragContainer, container))
+            if (container != null
+                && ReferenceEquals(_stickyDragContainer, container)
+                && (_stickyDragPointerId == null
+                    || e.Pointer.PointerId == _stickyDragPointerId.Value))
+            {
                 EndStickyPointer(container, canceled: true);
+            }
         }
 
         private void StickyNote_KeyDown(object sender, KeyRoutedEventArgs e)
@@ -2659,6 +2693,11 @@ namespace Caelum.Controls
         void IAnnotationContainerHost.AddTextContainerQuiet(object container)
             => AddTextContainerQuiet(container as Grid);
 
+        bool IAnnotationContainerHost.ContainsTextContainer(object container)
+            => container is Grid grid
+                && (ReferenceEquals(grid.Parent, ImageOverlayCanvas)
+                    || ReferenceEquals(grid.Parent, TextOverlayCanvas));
+
         object IAnnotationContainerHost.GetOverlayData(object container)
             => GetOverlayData(container as Grid);
 
@@ -2677,6 +2716,7 @@ namespace Caelum.Controls
                 return;
             Canvas.SetLeft(grid, position.X);
             Canvas.SetTop(grid, position.Y);
+            InkMutated?.Invoke(this, EventArgs.Empty);
         }
 
         void IAnnotationContainerHost.SetTextContainerBoundsQuiet(
@@ -2717,6 +2757,7 @@ namespace Caelum.Controls
             }
 
             container.InvalidateMeasure();
+            InkMutated?.Invoke(this, EventArgs.Empty);
         }
 
         bool IAnnotationContainerHost.SetTextContentQuiet(object container, string text)
@@ -2727,6 +2768,7 @@ namespace Caelum.Controls
             if (textBox == null)
                 return false;
             textBox.Text = text ?? string.Empty;
+            InkMutated?.Invoke(this, EventArgs.Empty);
             return true;
         }
 
@@ -2740,6 +2782,7 @@ namespace Caelum.Controls
                 return;
             textBox.FontSize = fontSize;
             textBox.Foreground = new SolidColorBrush(Color.FromArgb(255, r, g, b));
+            InkMutated?.Invoke(this, EventArgs.Empty);
         }
 
         void IAnnotationContainerHost.SetTextFormatQuiet(object container, TextFormatSnapshot format)
@@ -2759,6 +2802,7 @@ namespace Caelum.Controls
                 textBox.FontFamily = new FontFamily(format.FontFamily);
             if (Enum.TryParse(format.Alignment, out TextAlignment alignment))
                 textBox.TextAlignment = alignment;
+            InkMutated?.Invoke(this, EventArgs.Empty);
         }
 
         void IAnnotationContainerHost.MoveItemsDirectly(
