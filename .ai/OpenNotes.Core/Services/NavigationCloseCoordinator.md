@@ -1,5 +1,5 @@
-# Services/NavigationCloseCoordinator.cs
-> Last updated: 2026-08-23（Wave 2 stale-journal cancellation GREEN）| Protection: STANDARD
+# OpenNotes.Core/Services/NavigationCloseCoordinator.cs
+> Last updated: 2026-09-24（moved to Core for the WinUI Task 9-A close protocol）| Protection: STANDARD
 
 ## Purpose
 

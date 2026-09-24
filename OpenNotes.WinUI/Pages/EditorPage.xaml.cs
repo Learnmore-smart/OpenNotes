@@ -253,11 +253,26 @@ namespace Caelum.Pages
         private double _stickyNotePopupDragStartHorizontalOffset;
         private double _stickyNotePopupDragStartVerticalOffset;
 
-        // Dirty mirror — the T9 save/autosave pipeline consumes this
-        // coordinator; Task 8 records edits through the same contract.
+        // ── T9 save/autosave + close/dirty protocol (WPF parity) ──────────
+        // DocumentSaveCoordinator coalesces manual/auto saves into one
+        // in-flight task and tracks dirty generations; DocumentEditAdmission
+        // and DocumentReleaseState bound the close/navigation protocol. All
+        // three live in Core, byte-identical to the WPF implementation.
         private readonly DocumentSaveCoordinator _documentSaveCoordinator = new();
+        private readonly DocumentEditAdmission _editAdmission = new();
+        private readonly DocumentReleaseState _releaseState = new();
+        private readonly object _lifecycleGate = new();
+        private readonly object _saveGate = new();
+        private Task<bool> _navigationPreparationInFlight;
+        private Task<bool> _closePreparationInFlight;
+        private Task<bool> _releaseResourcesInFlight;
+        private Task<DocumentSaveResult> _autoSaveInFlight;
+        private bool _documentInteractionBlocked;
         private bool _isDirty;
-        internal bool IsDirty => _isDirty;
+        private long _dirtyGeneration;
+        private Microsoft.UI.Dispatching.DispatcherQueueTimer _autoSaveTimer;
+        private int _autoSaveTimerRunning;
+        internal bool IsDirty => _documentSaveCoordinator.IsDirty;
 
         private bool _isLoadingAnnotations;
         private readonly Stack<IUndoAction> _undoStack = new();
@@ -371,6 +386,10 @@ namespace Caelum.Pages
             UpdateZoomLabel();
             Loaded += EditorPage_Loaded;
             Unloaded += EditorPage_Unloaded;
+            // WPF ctor tail: the autosave timer is armed immediately — the
+            // tick itself gates on dirty/host-active so an idle editor
+            // costs nothing but a no-op callback.
+            EnsureAutoSaveTimer();
 #if DEBUG
             InstallDebugNarrowLayoutToggle();
 #endif
@@ -470,6 +489,7 @@ namespace Caelum.Pages
             AutoCollapseSidebarForNarrowLayout();
             if (_completedLoadSessionId != 0 && _pageControls.Count > 0)
                 KickViewportRender();
+            EnsureAutoSaveTimer();
         }
 
         /// <summary>
@@ -733,6 +753,12 @@ namespace Caelum.Pages
                 _pagesRenderedAtScale.Clear();
                 ReleaseThumbnailCache();
                 ClearUndoRedoHistory();
+                // WPF LoadPdfAsync parity: a new document starts a fresh
+                // generation space. Reset() throws if a save is in flight —
+                // every mutating boundary (close/tab/doc-op) flushes or
+                // blocks before it can reach a reload.
+                _documentSaveCoordinator.Reset();
+                SyncDirtyStateMirror();
                 // Task 8: retire any live text/sticky edit session before the
                 // page controls are replaced — their containers die with the
                 // old document.
@@ -2487,15 +2513,33 @@ namespace Caelum.Pages
         {
             if (action == null)
                 return;
-            _undoStack.Push(action);
-            _redoStack.Clear();
-            UpdateUndoRedoButtons();
+
+            if (!TryBeginDocumentEdit(out var editLease))
+            {
+                // The underlying event can arrive after it has already
+                // changed the model. Retain that generation for the close
+                // save loop instead of silently dropping it (WPF parity —
+                // the caller's MarkDirty() keeps the coordinator contract).
+                return;
+            }
+
+            using (editLease)
+            {
+                _undoStack.Push(action);
+                _redoStack.Clear();
+                UpdateUndoRedoButtons();
+            }
         }
 
         private async Task PerformUndoAsync()
         {
             if (_undoStack.Count == 0)
                 return;
+            // T9: an undo is a document mutation — hold an admission lease
+            // so close/navigation quiescence covers the in-flight action.
+            if (!TryBeginDocumentEdit(out var editLease))
+                return;
+            using var _ = editLease;
             // Cancel live gestures first (ApplyToolToAllPages contract):
             // a selection-drag snapshot restore would re-apply the undone
             // transform, and an erase undo would insert duplicates over the
@@ -2547,6 +2591,9 @@ namespace Caelum.Pages
         {
             if (_redoStack.Count == 0)
                 return;
+            if (!TryBeginDocumentEdit(out var editLease))
+                return;
+            using var _ = editLease;
             foreach (var p in _pageControls)
                 p.CancelInteraction();
             CancelTextBoxDrag(restoreBounds: true);
@@ -2612,6 +2659,7 @@ namespace Caelum.Pages
         private void SyncDirtyStateMirror()
         {
             _isDirty = _documentSaveCoordinator.IsDirty;
+            _dirtyGeneration = _documentSaveCoordinator.DirtyGeneration;
         }
 
         // ── Page ink events ────────────────────────────────────────────────
@@ -8374,6 +8422,12 @@ namespace Caelum.Pages
             string successMessage,
             DocumentOperationLease operationLease = null)
         {
+            // T9: a structural document op is a mutation — hold the edit
+            // admission lease so close/navigation quiescence covers it.
+            if (!TryBeginDocumentEdit(out var editLease))
+                return;
+            using (editLease)
+            {
             bool ownsLease = operationLease == null;
             DocumentOperationLease currentLease = operationLease ?? CaptureDocumentOperationLease(_pdfService);
             try
@@ -8381,6 +8435,12 @@ namespace Caelum.Pages
                 if (string.IsNullOrWhiteSpace(_currentPdfPath) || !ValidateDocumentOperationLease(currentLease))
                     return;
                 string filePath = _currentPdfPath;
+                // A dirty document must hit disk BEFORE the binary PDF is
+                // rewritten — otherwise the insert bakes a stale base and
+                // the pending annotations are lost (WPF parity).
+                if (_documentSaveCoordinator.IsDirty &&
+                    (!await AutoSaveAsync(currentLease) || !ValidateDocumentOperationLease(currentLease)))
+                    return;
                 await operation();
                 if (!ValidateDocumentOperationLease(currentLease))
                     return;
@@ -8409,6 +8469,7 @@ namespace Caelum.Pages
                 if (ownsLease)
                     currentLease?.Dispose();
             }
+            }
         }
 
         private async void RotateCurrentPage_Click(object sender, RoutedEventArgs e)
@@ -8417,10 +8478,19 @@ namespace Caelum.Pages
             if (!ValidateDocumentOperationLease(operationLease) ||
                 string.IsNullOrWhiteSpace(_currentPdfPath) || _pageControls.Count == 0)
                 return;
+            // T9: hold the admission lease across the rewrite + flush a
+            // dirty document first, or the rotated PDF bakes a stale base
+            // and pending annotations are lost (WPF parity).
+            if (!TryBeginDocumentEdit(out var editLease))
+                return;
+            using var _ = editLease;
             string filePath = _currentPdfPath;
             int pageIndex = GetCurrentPageIndex();
             try
             {
+                if (_documentSaveCoordinator.IsDirty &&
+                    (!await AutoSaveAsync(operationLease) || !ValidateDocumentOperationLease(operationLease)))
+                    return;
                 await _pdfService.RotatePageAsync(filePath, pageIndex, 1);
                 if (!ValidateDocumentOperationLease(operationLease))
                     return;
@@ -8445,6 +8515,15 @@ namespace Caelum.Pages
 
         private void EditorPage_PreviewKeyDown(object sender, KeyRoutedEventArgs e)
         {
+            // T9: the interaction block swallows every shortcut — the
+            // close/navigate protocol already committed and flushed any
+            // open edit session before blocking input.
+            if (_documentInteractionBlocked || _resourcesReleased)
+            {
+                e.Handled = true;
+                return;
+            }
+
             // WPF guards each branch with !IsEditableTextInputFocused instead
             // of returning early — the Escape-resize and Delete/Back branches
             // below intentionally run regardless of focus.
@@ -8478,6 +8557,15 @@ namespace Caelum.Pages
                 .HasFlag(Microsoft.UI.Input.VirtualKeyStates.Down);
             bool alt = InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Menu)
                 .HasFlag(Microsoft.UI.Input.VirtualKeyStates.Down);
+
+            // WPF Ctrl+S runs ahead of the text-focus gate — a save while a
+            // TextBox is focused commits the live edit session first.
+            if (ctrl && e.Key == VirtualKey.S)
+            {
+                e.Handled = true;
+                _ = SaveAnnotationsToPdfAsync();
+                return;
+            }
 
             if (ctrl && !textInputFocused)
             {
@@ -8940,13 +9028,17 @@ namespace Caelum.Pages
             if (!isActive)
                 CloseTransientUi("inactive editor");
 
-            if (_resourcesReleased || _isHostActive == isActive)
+            // A releasing/failed editor stays non-interactive — the T9
+            // close protocol owns its input state until a retry succeeds.
+            if (_resourcesReleased ||
+                (isActive && !_releaseState.CanResumeInteraction) ||
+                _isHostActive == isActive)
                 return;
             _isHostActive = isActive;
             foreach (var page in _pageControls)
             {
                 page.SetHostActive(isActive);
-                page.SetDocumentInputEnabled(isActive);
+                page.SetDocumentInputEnabled(isActive && !_documentInteractionBlocked);
             }
 
             // The sweep hid the text chrome — re-show it over the still-
@@ -9038,12 +9130,820 @@ namespace Caelum.Pages
             return window == null ? IntPtr.Zero : WinRT.Interop.WindowNative.GetWindowHandle(window);
         }
 
+        // ── T9 save/autosave pipeline + close/dirty protocol (WPF parity) ────
+
+        /// <summary>
+        /// Reloads persisted settings and re-arms the autosave interval
+        /// (WPF ApplySettings parity; the settings window itself is T9-B,
+        /// this entry point is what it will call).
+        /// </summary>
+        public void ApplySettings()
+        {
+            _applicationSettings = AppSettingsService.Load();
+            ApplySettingsToToolState();
+            ApplyToolToAllPages();
+            if (_autoSaveTimer != null)
+            {
+                _autoSaveTimer.Interval = TimeSpan.FromSeconds(
+                    Math.Max(15, _applicationSettings.AutoSaveIntervalSeconds));
+            }
+        }
+
+        private void EnsureAutoSaveTimer()
+        {
+            // A released/releasing editor is inert — never re-arm its timers.
+            if (_resourcesReleased || !_releaseState.CanResumeInteraction)
+                return;
+
+            if (_autoSaveTimer == null)
+            {
+                _autoSaveTimer = DispatcherQueue.CreateTimer();
+                _autoSaveTimer.IsRepeating = true;
+                _autoSaveTimer.Tick += AutoSaveTimer_Tick;
+            }
+
+            // WPF parity: the stored value is sanitized to {15,30,60,120};
+            // the Math.Max keeps the floor for hand-edited settings files.
+            _autoSaveTimer.Interval = TimeSpan.FromSeconds(
+                Math.Max(15, _applicationSettings?.AutoSaveIntervalSeconds ?? 60));
+            _autoSaveTimer.Start();
+        }
+
+        private async void AutoSaveTimer_Tick(
+            Microsoft.UI.Dispatching.DispatcherQueueTimer sender, object args)
+        {
+            // DispatcherQueueTimer callbacks are async void. Guard the
+            // callback itself as well as AutoSaveAsync's shared task so an
+            // interval tick cannot re-enter while the previous save is
+            // awaiting disk.
+            if (Interlocked.Exchange(ref _autoSaveTimerRunning, 1) != 0)
+                return;
+
+            try
+            {
+                // Host-active gate: in WPF a hidden tab's session is
+                // cancelled outright so its tick dies at lease validation;
+                // WinUI keeps hidden sessions alive for fast re-activation,
+                // so the gate lives on the tick. Close/guard paths call
+                // AutoSaveAsync directly and bypass this gate.
+                if (!_isHostActive || _resourcesReleased || !_releaseState.CanResumeInteraction)
+                    return;
+                using var operationLease = CaptureDocumentOperationLease(_pdfService);
+                if (!ValidateDocumentOperationLease(operationLease))
+                    return;
+                var saved = await AutoSaveAsync(operationLease);
+                if (saved && ValidateDocumentOperationLease(operationLease))
+                {
+                    GetMainWindow()?.ShowToast(
+                        LocalizationService.Get("Editor.AutoSaved"), "", 1500);
+                }
+            }
+            finally
+            {
+                Volatile.Write(ref _autoSaveTimerRunning, 0);
+            }
+        }
+
+        /// <summary>
+        /// One autosave attempt for the current generation. Returns false on
+        /// a stale lease, cancellation or save failure; failures surface the
+        /// localized toast and the timer stays armed for the next interval.
+        /// </summary>
+        public async Task<bool> AutoSaveAsync(DocumentOperationLease operationLease = null)
+        {
+            bool ownsLease = operationLease == null;
+            operationLease ??= CaptureDocumentOperationLease(_pdfService);
+            // Do not short-circuit on IsDirty: a successful callback clears
+            // the flag before its in-flight task finishes — the shared task
+            // must still be joined during that completion window.
+            try
+            {
+                if (string.IsNullOrEmpty(_currentPdfPath) ||
+                    !ValidateDocumentOperationLease(operationLease))
+                    return false;
+                return await SaveCurrentDocumentWithLeaseAsync(operationLease).ConfigureAwait(true) &&
+                    ValidateDocumentOperationLease(operationLease);
+            }
+            catch (OperationCanceledException)
+            {
+                return false;
+            }
+            catch (Exception ex)
+            {
+                if (ValidateDocumentOperationLease(operationLease))
+                {
+                    System.Diagnostics.Debug.WriteLine($"[AutoSave] Failed: {ex}");
+                    GetMainWindow()?.ShowToast(
+                        LocalizationService.Format("Editor.AutoSaveFailed", ex.Message), "", 3500);
+                }
+                return false;
+            }
+            finally
+            {
+                if (ownsLease)
+                    operationLease.Dispose();
+            }
+        }
+
+        /// <summary>
+        /// Returns the one current save task for this editor. Manual and
+        /// automatic callers intentionally share this boundary; a later
+        /// timer tick retries if the task observed a newer dirty generation.
+        /// </summary>
+        private async Task<bool> SaveCurrentDocumentWithLeaseAsync(DocumentOperationLease operationLease = null)
+        {
+            bool ownsLease = operationLease == null;
+            operationLease ??= CaptureDocumentOperationLease(_pdfService);
+            if (_resourcesReleased || !_releaseState.CanResumeInteraction)
+            {
+                if (ownsLease)
+                    operationLease.Dispose();
+                return false;
+            }
+            if (!ValidateDocumentOperationLease(operationLease))
+            {
+                if (ownsLease)
+                    operationLease.Dispose();
+                return false;
+            }
+
+            // Capture/commit the active text session before SaveAsync
+            // captures its generation — committing inside the persistence
+            // callback would make the first save appear stale and force an
+            // unnecessary second PDF/version write.
+            CommitTextEditSession();
+
+            Task<DocumentSaveResult> saveTask;
+            lock (_saveGate)
+            {
+                saveTask = _autoSaveInFlight;
+                if (saveTask == null)
+                {
+                    saveTask = _documentSaveCoordinator.SaveAsync(
+                        generation => SaveCurrentDocumentCoreAsync(generation, operationLease));
+                    _autoSaveInFlight = saveTask;
+                }
+            }
+
+            try
+            {
+                var result = await saveTask.ConfigureAwait(true);
+                if (!ValidateDocumentOperationLease(operationLease))
+                    return false;
+                SyncDirtyStateMirror();
+                return result.Succeeded && result.GenerationIsCurrent;
+            }
+            finally
+            {
+                lock (_saveGate)
+                {
+                    if (ReferenceEquals(_autoSaveInFlight, saveTask))
+                        _autoSaveInFlight = null;
+                }
+                if (ownsLease)
+                    operationLease.Dispose();
+            }
+        }
+
+        private async Task SaveCurrentDocumentCoreAsync(
+            long saveGeneration,
+            DocumentOperationLease operationLease = null)
+        {
+            bool ownsLease = operationLease == null;
+            operationLease ??= CaptureDocumentOperationLease(_pdfService);
+            if (!ValidateDocumentOperationLease(operationLease))
+            {
+                if (ownsLease)
+                    operationLease.Dispose();
+                throw new OperationCanceledException(operationLease.Token);
+            }
+            // DocumentSaveCoordinator deliberately does not capture a UI
+            // synchronization context. A generation mismatch can therefore
+            // retry its persistence callback on a thread-pool continuation;
+            // collect the live DependencyObjects only on this page's
+            // dispatcher, while the PDF/version I/O remains asynchronous.
+            var dispatcherQueue = DispatcherQueue;
+            if (dispatcherQueue != null && !dispatcherQueue.HasThreadAccess)
+            {
+                var completion = new TaskCompletionSource<bool>(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+                if (!dispatcherQueue.TryEnqueue(async () =>
+                {
+                    try
+                    {
+                        await SaveCurrentDocumentCoreAsync(saveGeneration, operationLease)
+                            .ConfigureAwait(true);
+                        completion.TrySetResult(true);
+                    }
+                    catch (Exception ex)
+                    {
+                        completion.TrySetException(ex);
+                    }
+                }))
+                {
+                    if (ownsLease)
+                        operationLease.Dispose();
+                    throw new OperationCanceledException(operationLease.Token);
+                }
+                await completion.Task.ConfigureAwait(false);
+                if (!ValidateDocumentOperationLease(operationLease))
+                {
+                    if (ownsLease)
+                        operationLease.Dispose();
+                    throw new OperationCanceledException(operationLease.Token);
+                }
+                if (ownsLease)
+                    operationLease.Dispose();
+                return;
+            }
+
+            var annotations = CollectAnnotations();
+            if (!ValidateDocumentOperationLease(operationLease))
+            {
+                if (ownsLease)
+                    operationLease.Dispose();
+                throw new OperationCanceledException(operationLease.Token);
+            }
+            string filePath = _currentPdfPath;
+
+            // The PDF is the source of truth. Only create a history sidecar
+            // after the atomic PDF save succeeds, otherwise a failed save
+            // would leave a misleading "ghost" version behind.
+            await _pdfService.SaveAnnotationsToPdfAsync(_currentPdfPath, annotations);
+            if (!ValidateDocumentOperationLease(operationLease))
+            {
+                if (ownsLease)
+                    operationLease.Dispose();
+                throw new OperationCanceledException(operationLease.Token);
+            }
+            await VersionControlService.SaveVersionAsync(filePath, annotations, operationLease.Token);
+            if (!ValidateDocumentOperationLease(operationLease))
+            {
+                if (ownsLease)
+                    operationLease.Dispose();
+                throw new OperationCanceledException(operationLease.Token);
+            }
+            // DocumentSaveCoordinator compares saveGeneration with the
+            // latest generation atomically after this callback returns.
+            SyncDirtyStateMirror();
+            if (ownsLease)
+                operationLease.Dispose();
+        }
+
+        private async void SavePdf_Click(object sender, RoutedEventArgs e)
+        {
+            await SaveAnnotationsToPdfAsync();
+        }
+
+        /// <summary>
+        /// Manual save (toolbar + Ctrl+S). Joins an in-flight autosave, so
+        /// Ctrl+S cannot race the timer or write a second annotation
+        /// snapshot (WPF SaveAnnotationsToPdfAsync parity).
+        /// </summary>
+        private async Task SaveAnnotationsToPdfAsync()
+        {
+            if (string.IsNullOrEmpty(_currentPdfPath))
+            {
+                GetMainWindow()?.ShowToast(LocalizationService.Get("Editor.NoDocumentLoaded"), "");
+                return;
+            }
+
+            using var operationLease = CaptureDocumentOperationLease(_pdfService);
+            if (!ValidateDocumentOperationLease(operationLease))
+                return;
+            try
+            {
+                if (await SaveCurrentDocumentWithLeaseAsync(operationLease).ConfigureAwait(true) &&
+                    ValidateDocumentOperationLease(operationLease))
+                    GetMainWindow()?.ShowToast(LocalizationService.Get("Editor.SavedSuccessfully"));
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            catch (Exception ex)
+            {
+                if (!ValidateDocumentOperationLease(operationLease))
+                    return;
+                await WinUiDialogService.ShowErrorAsync(
+                    XamlRoot ?? GetMainWindow()?.Content?.XamlRoot,
+                    LocalizationService.Get("Common.Error"),
+                    LocalizationService.Format("Editor.SaveFailed", ex.Message));
+            }
+        }
+
+        // ── Edit admission / interaction block (WPF parity) ─────────────
+
+        private bool TryBeginDocumentEdit(out IDisposable lease)
+        {
+            lease = null;
+            if (_resourcesReleased || _documentInteractionBlocked || !_releaseState.CanResumeInteraction)
+                return false;
+
+            return _editAdmission.TryEnter(out lease);
+        }
+
+        private void SetDocumentInteractionBlocked(bool blocked)
+        {
+            bool effectiveBlocked = blocked || !_releaseState.CanResumeInteraction;
+            _documentInteractionBlocked = effectiveBlocked;
+            // Disable the complete editor command/input subtree, not only
+            // the page controls — toolbar commands and routed keyboard
+            // handlers could otherwise still mutate the model while
+            // close/navigation waits for the final persistence barrier.
+            IsEnabled = !effectiveBlocked;
+            foreach (var page in _pageControls)
+                page.SetDocumentInputEnabled(!effectiveBlocked && _isHostActive && !_resourcesReleased);
+        }
+
+        private async Task BeginDocumentInteractionBlockAsync(
+            CancellationToken cancellationToken,
+            DocumentOperationLease operationLease = null)
+        {
+            if (operationLease != null && !ValidateDocumentOperationLease(operationLease))
+                throw new OperationCanceledException(operationLease.Token);
+
+            _editAdmission.BeginClose();
+            SetDocumentInteractionBlocked(true);
+            await _editAdmission.WaitForQuiescenceAsync(cancellationToken)
+                .ConfigureAwait(true);
+            if (operationLease != null && !ValidateDocumentOperationLease(operationLease))
+                throw new OperationCanceledException(operationLease.Token);
+
+            // Input routed before IsEnabled flipped can still sit in the
+            // dispatcher queue and mutate the live model before its event
+            // callback calls MarkDirty/PushUndoAction. Let already-queued
+            // input callbacks drain before the final generation check —
+            // an async dispatcher barrier, never a UI-thread wait.
+            await DispatcherQueueBarrierAsync(cancellationToken).ConfigureAwait(true);
+            if (operationLease != null && !ValidateDocumentOperationLease(operationLease))
+                throw new OperationCanceledException(operationLease.Token);
+        }
+
+        /// <summary>
+        /// Drains already-queued input work — the WinUI stand-in for WPF's
+        /// <c>Dispatcher.InvokeAsync(() => {}, DispatcherPriority.Input)</c>.
+        /// DispatcherQueue input callbacks run at Normal priority, so a
+        /// Normal-priority enqueue lands behind everything already queued.
+        /// </summary>
+        private Task DispatcherQueueBarrierAsync(CancellationToken cancellationToken)
+        {
+            var completion = new TaskCompletionSource<bool>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var queue = DispatcherQueue;
+            if (queue == null ||
+                !queue.TryEnqueue(
+                    Microsoft.UI.Dispatching.DispatcherQueuePriority.Normal,
+                    () => completion.TrySetResult(true)))
+            {
+                completion.TrySetResult(false);
+            }
+            return completion.Task.WaitAsync(cancellationToken);
+        }
+
+        /// <summary>
+        /// Reopens a document that was safely persisted for navigation and
+        /// is now the active frame again. Navigation preparation deliberately
+        /// leaves the editor blocked while it is in the back stack;
+        /// rendering activation alone must not silently reopen model
+        /// mutations (WPF ResumeDocumentInteraction parity — kept for the
+        /// re-activation paths that survive a torn-down frame).
+        /// </summary>
+        public void ResumeDocumentInteraction()
+        {
+            if (_resourcesReleased || !_releaseState.CanResumeInteraction)
+                return;
+
+            // Navigation uses the same final-generation close state as tab
+            // closing. Reopen both state machines when the editor becomes
+            // active again; otherwise the coordinator would keep
+            // _closeCompleted and silently discard the first edit.
+            _documentSaveCoordinator.CancelCloseRequest();
+            _editAdmission.CancelClose();
+            SetDocumentInteractionBlocked(false);
+            EnsureAutoSaveTimer();
+        }
+
+        /// <summary>Resume editing after a failed/non-destructive close attempt.</summary>
+        public void CancelClosePreparation()
+        {
+            if (!_releaseState.CanResumeInteraction)
+            {
+                // A timed-out/failed native release owns the editor until
+                // its tracked task settles and a retry succeeds. Re-entry
+                // must not detach/rebind events or admit late mutations.
+                SetDocumentInteractionBlocked(true);
+                return;
+            }
+
+            _documentSaveCoordinator.CancelCloseRequest();
+            _editAdmission.CancelClose();
+            SetDocumentInteractionBlocked(false);
+            SyncDirtyStateMirror();
+            EnsureAutoSaveTimer();
+        }
+
+        // ── Close/navigation protocol (WPF PrepareFor*/ReleaseResourcesAsync) ──
+
+        /// <summary>
+        /// Persists the newest generation before a navigation transition. A
+        /// failed save keeps the editor alive and restarts its timer.
+        /// </summary>
+        public Task<bool> PrepareForNavigationAsync(CancellationToken cancellationToken = default)
+        {
+            lock (_lifecycleGate)
+            {
+                if (_resourcesReleased)
+                    return Task.FromResult(true);
+                if (!_releaseState.CanResumeInteraction)
+                    return Task.FromResult(false);
+                if (_closePreparationInFlight != null)
+                    return Task.FromResult(false);
+                if (_navigationPreparationInFlight != null)
+                    return _navigationPreparationInFlight;
+
+                var task = PrepareForNavigationCoreAsync(cancellationToken);
+                _navigationPreparationInFlight = task;
+                if (task.IsCompleted)
+                    _navigationPreparationInFlight = null;
+                return task;
+            }
+        }
+
+        private async Task<bool> PrepareForNavigationCoreAsync(CancellationToken cancellationToken)
+        {
+            using var operationLease = CaptureDocumentOperationLease(_pdfService);
+            bool succeeded = false;
+            try
+            {
+                if (!ValidateDocumentOperationLease(operationLease))
+                    return false;
+                // TextBox.TextChanged mutates the live model before the
+                // focus event commits its undo action — flush that session
+                // before the coordinator captures a generation.
+                CommitTextEditSession();
+                CloseTransientUi("navigation");
+                // Sticky-note editing lives in a Popup and therefore is not
+                // covered by disabling the EditorPage subtree.
+                CommitStickyNoteEdit();
+                await BeginDocumentInteractionBlockAsync(cancellationToken, operationLease)
+                    .ConfigureAwait(true);
+                if (!ValidateDocumentOperationLease(operationLease))
+                    return false;
+                // A queued Popup activation can run at the dispatcher
+                // barrier after the first flush — close/cancel once more.
+                CloseTransientUi("navigation barrier");
+                CommitStickyNoteEdit();
+                _autoSaveTimer?.Stop();
+
+                cancellationToken.ThrowIfCancellationRequested();
+                await _documentSaveCoordinator.SaveUntilCleanAsync(
+                    generation => SaveCurrentDocumentCoreAsync(generation, operationLease),
+                    // Navigation has the same atomic admission requirement
+                    // as final close: a queued model callback must either be
+                    // retained for a retry or be rejected after the clean
+                    // generation is completed.
+                    finalClose: true,
+                    cancellationToken).ConfigureAwait(true);
+                if (!ValidateDocumentOperationLease(operationLease))
+                    return false;
+                SyncDirtyStateMirror();
+                succeeded = !_documentSaveCoordinator.IsDirty;
+                return succeeded;
+            }
+            catch (OperationCanceledException ex)
+            {
+                if (!ValidateDocumentOperationLease(operationLease))
+                    return false;
+                SyncDirtyStateMirror();
+                GetMainWindow()?.ShowToast(
+                    LocalizationService.Format("Editor.AutoSaveFailed", ex.Message),
+                    "",
+                    3500);
+                return false;
+            }
+            catch (Exception ex)
+            {
+                if (!ValidateDocumentOperationLease(operationLease))
+                    return false;
+                SyncDirtyStateMirror();
+                GetMainWindow()?.ShowToast(
+                    LocalizationService.Format("Editor.AutoSaveFailed", ex.Message),
+                    "",
+                    3500);
+                return false;
+            }
+            finally
+            {
+                if (!succeeded && ValidateDocumentOperationLease(operationLease))
+                {
+                    _editAdmission.CancelClose();
+                    SetDocumentInteractionBlocked(false);
+                    EnsureAutoSaveTimer();
+                }
+
+                lock (_lifecycleGate)
+                {
+                    _navigationPreparationInFlight = null;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Final close protocol: stop the timer, join/coalesce any active
+        /// save, retry a generation mismatch, and only report success once
+        /// the newest snapshot is persisted. Callers must not release
+        /// resources or remove a tab when this returns false.
+        /// </summary>
+        public Task<bool> PrepareForCloseAsync(CancellationToken cancellationToken = default)
+        {
+            lock (_lifecycleGate)
+            {
+                if (_resourcesReleased)
+                    return Task.FromResult(true);
+                if (!_releaseState.CanResumeInteraction
+                    && !_releaseState.IsReleaseInFlight
+                    && !_releaseState.HasFailed)
+                    return Task.FromResult(false);
+                if (_closePreparationInFlight != null)
+                    return _closePreparationInFlight;
+                if (_navigationPreparationInFlight != null)
+                    return Task.FromResult(false);
+
+                var task = PrepareForCloseCoreAsync(cancellationToken);
+                _closePreparationInFlight = task;
+                if (task.IsCompleted)
+                    _closePreparationInFlight = null;
+                return task;
+            }
+        }
+
+        private async Task<bool> PrepareForCloseCoreAsync(CancellationToken cancellationToken)
+        {
+            using var operationLease = CaptureDocumentOperationLease(_pdfService);
+            bool succeeded = false;
+            try
+            {
+                if (!ValidateDocumentOperationLease(operationLease))
+                    return false;
+                CommitTextEditSession();
+                CloseTransientUi("release");
+                // Popup content does not inherit the page's IsEnabled state;
+                // keep the historical compatibility call after cancellation.
+                CommitStickyNoteEdit();
+                await BeginDocumentInteractionBlockAsync(cancellationToken, operationLease)
+                    .ConfigureAwait(true);
+                if (!ValidateDocumentOperationLease(operationLease))
+                    return false;
+                // The input barrier may have delivered a queued activation;
+                // close/cancel any Popup created by that callback too.
+                CloseTransientUi("release barrier");
+                CommitStickyNoteEdit();
+                _autoSaveTimer?.Stop();
+                await _documentSaveCoordinator.SaveUntilCleanAsync(
+                    generation => SaveCurrentDocumentCoreAsync(generation, operationLease),
+                    finalClose: true,
+                    cancellationToken).ConfigureAwait(true);
+                if (!ValidateDocumentOperationLease(operationLease))
+                    return false;
+                SyncDirtyStateMirror();
+                succeeded = !_documentSaveCoordinator.IsDirty;
+                if (succeeded)
+                    _editAdmission.CompleteClose();
+                return succeeded;
+            }
+            catch (OperationCanceledException ex)
+            {
+                if (!ValidateDocumentOperationLease(operationLease))
+                    return false;
+                SyncDirtyStateMirror();
+                GetMainWindow()?.ShowToast(
+                    LocalizationService.Format("Editor.AutoSaveFailed", ex.Message),
+                    "",
+                    3500);
+                return false;
+            }
+            catch (Exception ex)
+            {
+                if (!ValidateDocumentOperationLease(operationLease))
+                    return false;
+                SyncDirtyStateMirror();
+                await WinUiDialogService.ShowErrorAsync(
+                    XamlRoot ?? GetMainWindow()?.Content?.XamlRoot,
+                    LocalizationService.Get("Common.Error"),
+                    LocalizationService.Format("Editor.SaveFailed", ex.Message));
+                return false;
+            }
+            finally
+            {
+                if (!succeeded && _releaseState.CanResumeInteraction)
+                {
+                    if (ValidateDocumentOperationLease(operationLease))
+                    {
+                        _documentSaveCoordinator.CancelCloseRequest();
+                        _editAdmission.CancelClose();
+                        SetDocumentInteractionBlocked(false);
+                        EnsureAutoSaveTimer();
+                    }
+                }
+
+                lock (_lifecycleGate)
+                {
+                    _closePreparationInFlight = null;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Final tab-close cleanup for timers, hooks, bitmaps and the native
+        /// PDF document. Returns an already-running release task to
+        /// concurrent callers instead of disposing twice (WPF parity).
+        /// </summary>
+        public Task<bool> ReleaseResourcesAsync()
+        {
+            lock (_lifecycleGate)
+            {
+                if (_resourcesReleased)
+                    return Task.FromResult(true);
+                if (_releaseResourcesInFlight != null)
+                    return _releaseResourcesInFlight;
+                if (!_releaseState.TryBeginRelease())
+                    return Task.FromResult(false);
+
+                var task = ReleaseResourcesCoreAsync();
+                _releaseResourcesInFlight = task;
+                if (task.IsCompleted)
+                    _releaseResourcesInFlight = null;
+                return task;
+            }
+        }
+
+        private async Task<bool> ReleaseResourcesCoreAsync()
+        {
+            bool cleanupStarted = false;
+            try
+            {
+                CloseTransientUi("release");
+                if (!await PrepareForCloseAsync().ConfigureAwait(true))
+                {
+                    _releaseState.ResetAfterPreReleaseFailure();
+                    CancelClosePreparation();
+                    return false;
+                }
+
+                _releaseState.MarkCleanupStarted();
+                cleanupStarted = true;
+                SetHostActive(false);
+                _loadCts?.Cancel();
+                _reRenderCts?.Cancel();
+                _scrollReRenderCts?.Cancel();
+                _thumbnailLoadCts?.Cancel();
+                _pdfSearchCts?.Cancel();
+                // CancelActiveLoad parity: invalidate every outstanding
+                // lease so late continuations cannot touch dead pages.
+                _documentOperationSession.Cancel();
+
+                _autoSaveTimer?.Stop();
+                if (_autoSaveTimer != null)
+                    _autoSaveTimer.Tick -= AutoSaveTimer_Tick;
+                _autoSaveTimer = null;
+
+                _zoomRenderDebounceTimer.Stop();
+                _scrollRenderDebounceTimer.Stop();
+
+                if (_languageChangedSubscribed)
+                {
+                    LocalizationService.LanguageChanged -= EditorPage_LanguageChanged;
+                    _languageChangedSubscribed = false;
+                }
+
+                _penService?.Dispose();
+                _penService = null;
+
+                DeselectTextBox();
+                ClearPdfTextSelection();
+                foreach (var page in _pageControls)
+                    page.ReleaseResources();
+                ReleaseThumbnailCache();
+                _pageControls.Clear();
+
+                // PdfService owns the rasterizer/document — await the async
+                // dispose so a release failure can still be reported (and
+                // retried) instead of escaping as a fire-and-forget fault.
+                await _pdfService.DisposeAsync().AsTask().ConfigureAwait(true);
+
+                // Mark released only after every resource owner has
+                // completed. A failure leaves the editor/tab recoverable
+                // for a retry.
+                _resourcesReleased = true;
+                _releaseState.MarkSucceeded();
+                SetDocumentInteractionBlocked(true);
+                return true;
+            }
+            catch
+            {
+                _resourcesReleased = false;
+                if (cleanupStarted)
+                {
+                    // Keep the editor non-interactive until a later explicit
+                    // retry completes — a timeout/catch must not make
+                    // ActivateTab resume a service whose native owners were
+                    // only partially released.
+                    _releaseState.MarkFailed();
+                    SetDocumentInteractionBlocked(true);
+                }
+                else
+                {
+                    _releaseState.ResetAfterPreReleaseFailure();
+                    CancelClosePreparation();
+                }
+                throw;
+            }
+            finally
+            {
+                lock (_lifecycleGate)
+                {
+                    _releaseResourcesInFlight = null;
+                }
+            }
+        }
+
+        /// <summary>
+        /// When the page leaves the tree mid-prepare (a Frame removal the
+        /// workflow gates did not own), finish the pending save first, then
+        /// run the protocol teardown — never wipe the annotation collectors
+        /// under a pending final save.
+        /// </summary>
+        private async Task DeferredTeardownAsync()
+        {
+            Task pending;
+            lock (_lifecycleGate)
+            {
+                pending = _releaseResourcesInFlight
+                    ?? (Task)_closePreparationInFlight
+                    ?? _navigationPreparationInFlight;
+            }
+            if (pending != null)
+            {
+                try
+                {
+                    await pending.ConfigureAwait(true);
+                }
+                catch
+                {
+                    // The owning workflow reports the failure; teardown
+                    // still has to run.
+                }
+            }
+            try
+            {
+                await ReleaseResourcesAsync().ConfigureAwait(true);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[EditorPage] Deferred release failed: {ex}");
+            }
+        }
+
         // ── Lifecycle ───────────────────────────────────────────────────────
 
         private void ReleaseResources()
         {
             if (_resourcesReleased)
                 return;
+            // Once the async protocol owns the lifecycle, a forced unload
+            // must not clear the annotation collectors under a pending save
+            // or race a tracked native release — let the protocol finish.
+            if (_releaseResourcesInFlight != null ||
+                _closePreparationInFlight != null ||
+                _navigationPreparationInFlight != null ||
+                _releaseState.IsReleaseInFlight)
+            {
+                _ = DeferredTeardownAsync();
+                return;
+            }
+            if (!_releaseState.TryBeginRelease())
+                return;
+            try
+            {
+                _releaseState.MarkCleanupStarted();
+                ReleaseCoreResources();
+                _releaseState.MarkSucceeded();
+            }
+            catch
+            {
+                _releaseState.MarkFailed();
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// Synchronous teardown — the Unloaded/OnNavigatedFrom path when no
+        /// close protocol is in flight (e.g. a navigation that already ran
+        /// its save preparation, or a clean editor). The async protocol uses
+        /// <see cref="ReleaseResourcesCoreAsync"/> instead.
+        /// </summary>
+        private void ReleaseCoreResources()
+        {
             _resourcesReleased = true;
             _isHostActive = false;
 
@@ -9058,6 +9958,12 @@ namespace Caelum.Pages
             _scrollReRenderCts?.Cancel();
             _thumbnailLoadCts?.Cancel();
             _pdfSearchCts?.Cancel();
+            if (_autoSaveTimer != null)
+            {
+                _autoSaveTimer.Stop();
+                _autoSaveTimer.Tick -= AutoSaveTimer_Tick;
+                _autoSaveTimer = null;
+            }
             _zoomRenderDebounceTimer.Stop();
             _scrollRenderDebounceTimer.Stop();
             _documentOperationSession.Cancel();
@@ -9096,6 +10002,7 @@ namespace Caelum.Pages
 
             ReleaseThumbnailCache();
             _pageControls.Clear();
+            _documentInteractionBlocked = true;
         }
     }
 

@@ -1,5 +1,5 @@
 # OpenNotes.WinUI/Pages/EditorPage.xaml(.cs)
-> Last updated: 2026-09-24 (V6 Task 8 Phase B — images/highlights/markups/area highlights/PDF text selection) | Protection: STANDARD
+> Last updated: 2026-09-24 (V6 Task 9 Phase A — save/autosave pipeline + close/dirty protocol) | Protection: STANDARD
 
 ## Purpose
 `Caelum.Pages.EditorPage : Page` — the WinUI editor shell port of the WPF
@@ -11,7 +11,7 @@ page-jump navigator, `PdfSearchPanel`, page context `MenuFlyout`, loading
 overlay. Phase-A ink (pen/highlighter/eraser + pressure + undo) is live;
 Phase-B ink tools (select/transforms incl. cross-page moves, shapes,
 hidden ink, laser, ruler) are live too — text/sticky/image overlays and
-the save/history pipeline remain deferred to T8–T9.
+the Task 9 Phase A save/autosave + close/dirty protocol is live (T9-B defers settings window, version-history UI, Save-As picker).
 
 ## What It Does
 - **Load/render:** `PdfService.LoadPdfAsync(filePath, CancellationToken)` on
@@ -209,8 +209,9 @@ the save/history pipeline remain deferred to T8–T9.
   commits the live edit session).
 - Hidden-ink load: `LoadAnnotationsIntoPages` feeds
   `pageAnnotation.HiddenInks` quietly under `_isLoadingAnnotations` (no
-  undo entries, WPF loader parity); save-side `HiddenInks` writers already
-  live in Core `PdfService` — `CollectAnnotations` lands with T9.
+  undo entries, WPF loader parity); save-side `HiddenInks` writers live in
+  Core `PdfService` — T9-A wires `CollectAnnotations` →
+  `SaveAnnotationsToPdfAsync` so hidden masks persist through saves.
 - WPF `SetResourceReference` has no WinUI equivalent — transient overlay
   brushes resolve once via `TryFindBrush` (rebuilt on next selection).
 
@@ -324,16 +325,53 @@ the save/history pipeline remain deferred to T8–T9.
   `AnnotationItemsAddedAction` via `PageControl_AreaHighlightCreated`;
   `PageControl_ImagesChanged` marks dirty outside loads.
 
+- **T9 save/autosave + close/dirty protocol (Phase A, 2026-09-24):**
+  `DocumentSaveCoordinator` + `DocumentEditAdmission` + `DocumentReleaseState`
+  (Core, WPF-identical) now drive the editor lifecycle. `_autoSaveTimer`
+  (`DispatcherQueueTimer`, repeating, `Math.Max(15, AutoSaveIntervalSeconds)`)
+  arms in ctor/`EditorPage_Loaded`/`EnsureAutoSaveTimer`/`ApplySettings()`;
+  `AutoSaveTimer_Tick` re-entry-guards via `Interlocked.Exchange` and gates on
+  `_isHostActive`/`_resourcesReleased`/`CanResumeInteraction` + lease —
+  **WinUI keeps hidden-tab sessions alive** (WPF cancelled them on
+  deactivate) so the host-active check lives on the tick; close/guard paths
+  call `AutoSaveAsync` directly. `SaveCurrentDocumentWithLeaseAsync` shares
+  ONE `_autoSaveInFlight` task under `_saveGate` (manual save joins an
+  in-flight autosave); `SaveCurrentDocumentCoreAsync` collects
+  `CollectAnnotations()` on the UI dispatcher only (thread-pool
+  continuations `TryEnqueue` back), awaits `SaveAnnotationsToPdfAsync`
+  (atomic replace via `PdfSaveCoordinator`+`PdfAtomicFile`), THEN writes the
+  version sidecar (no ghost versions on failure), revalidating the
+  `DocumentOperationLease` at every boundary. Manual save:
+  `SavePdf_Click`/`Ctrl+S` → `SaveAnnotationsToPdfAsync` (NoDocumentLoaded /
+  SavedSuccessfully toasts, SaveFailed `ContentDialog` via
+  `WinUiDialogService` — XamlRoot falls back to the window content root).
+  Close protocol: `PrepareForNavigationAsync`/`PrepareForCloseAsync`
+  (shared in-flight tasks under `_lifecycleGate`) → commit text/sticky
+  sessions → `BeginDocumentInteractionBlockAsync` (`_editAdmission.BeginClose`
+  → `IsEnabled=false` subtree block → `WaitForQuiescenceAsync` →
+  `DispatcherQueueBarrierAsync` Normal-priority drain) →
+  `SaveUntilCleanAsync(finalClose:true)` → `CompleteClose`.
+  `ReleaseResourcesAsync` joins `_releaseResourcesInFlight`, runs
+  `MarkCleanupStarted`/`MarkSucceeded`/`MarkFailed`/`ResetAfterPreReleaseFailure`,
+  cancels the operation session, unsubscribes the timer, awaits
+  `_pdfService.DisposeAsync`. `CancelClosePreparation`/`ResumeDocumentInteraction`
+  reopen admission+coordinator (`CancelCloseRequest`+`CancelClose`) only when
+  `CanResumeInteraction`. `ReleaseResources` (Unloaded/`OnNavigatedFrom`/
+  `ShutdownEditor`) defers to `DeferredTeardownAsync` while any protocol task
+  is in flight, else runs `ReleaseCoreResources` synchronously.
+  `TryBeginDocumentEdit` leases guard `PushUndoAction`, undo/redo,
+  `InsertExternalDocumentAsync`, `RotateCurrentPage_Click`; both doc-ops
+  flush a dirty doc via `AutoSaveAsync` before rewriting the binary PDF.
+  `_documentSaveCoordinator.Reset()` runs on each document load;
+  `EditorPage_PreviewKeyDown` swallows all shortcuts while
+  `_documentInteractionBlocked`.
+
 ## Open Threads / Resume Context
-- **Status:** GREEN — `tools/winui-editor-smoke.ps1` 60/60; Task 7 Phase A
-  ink engine + Phase B (select/lasso/transforms incl. cross-page, shape
-  tools, hidden ink, laser, ruler, mixed undo) + Task 8 Phase A (text
-  boxes, sticky notes, inline toolbar, mixed-selection undo, clipboard,
-  collectors) + Task 8 Phase B (images, persistent highlights, text
-  markups, area highlights, real PDF text selection) live; WinUI build
-  0 err/0 warn, headless `CoreInkPhaseBTests` 45/45 +
-  `CoreAnnotationUndoTests`/`EditorTextStickySourceTests` 23/23 +
-  `Task8PhaseBTests` 29/29.
-- **Deferred (stubbed, by design):** save/autosave/dirty-close +
-  version history + settings (`CollectAnnotations` ready but unwired,
-  SavePdfButton still inert) (T9).
+- **Status:** GREEN — `tools/winui-editor-smoke.ps1` 60/60; Tasks 7A/7B/
+  8A/8B + Task 9 Phase A (save/autosave + close/dirty protocol) live;
+  WinUI build 0 err/0 warn, headless suite 685/685 incl.
+  `WinUiSavePipelineSourceTests` 6/6 + `DocumentSaveCoordinatorTests`
+  (incl. `NavigationCloseCoordinator` behavioral) 17/17.
+- **Deferred (by design):** `SettingsWindow`/page-template dialogs,
+  `VersionControlService` UI, dormant `promptSaveAsAfterLoad` draft
+  flow (no WPF caller), update-check UI (T9-B+).

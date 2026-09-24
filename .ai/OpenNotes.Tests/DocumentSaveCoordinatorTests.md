@@ -1,5 +1,5 @@
 # OpenNotes.Tests/DocumentSaveCoordinatorTests.cs
-> Last updated: 2026-08-23（Wave 2 final review GREEN: close-safe autosave/manual behavior）| Protection: STANDARD
+> Last updated: 2026-09-24（Task 9 Phase A — NavigationCloseCoordinator success/failure paths）| Protection: STANDARD
 
 ## Purpose
 
@@ -7,7 +7,7 @@ Exercise the production save state machine without WPF: one in-flight task for m
 
 ## Open Threads / Resume Context
 
-- **Status:** ready_for_next — 14 executable production-state tests pass; no WPF window or user directory is required.
+- **Status:** ready_for_next — 17 executable production-state tests pass (incl. three `NavigationCloseCoordinator` behavioral cases: stale-journal cancel, live-journal navigate, prepare-failure no-op); no WPF window or user directory is required.
 - Tests use deterministic `TaskCompletionSource` gates and in-memory generation lists; no user directory or desktop pointer is required.
 
 ## Important Notes / NEVER Change
@@ -23,6 +23,7 @@ Exercise the production save state machine without WPF: one in-flight task for m
 | Date | Change | Author |
 |---|---|---|
 | 2026-08-23 | Added Wave 2 revision RED contracts for autosave/manual/close behavior. | Codex |
+| 2026-09-24 | Added `NavigationPrepareSuccessWithLiveJournalNavigates` + `NavigationPrepareFailureCancelsWithoutNavigatingOrCancelling` for the shared Core `NavigationCloseCoordinator` (moved out of the WPF tree for the WinUI Task 9-A close protocol). | Devin |
 | 2026-08-23 | Implemented `DocumentSaveCoordinator` and verified coalescing, edit-during-save retry, final-close latest persistence, and failure recovery GREEN. | Codex |
 | 2026-08-23 | Added cancellation recovery coverage: a cancelled final-close releases its close request, joins the underlying save, and allows later edits. | Codex |
 | 2026-08-23 | Added executable late-model-edit, clean/in-flight completion-window, and `DocumentEditAdmission` lease/cancel/navigation-resume/quiescence tests; 11/11 pass. | Codex |

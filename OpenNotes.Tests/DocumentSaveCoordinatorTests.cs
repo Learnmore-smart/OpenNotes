@@ -424,6 +424,57 @@ public sealed class DocumentSaveCoordinatorTests
         });
     }
 
+    [Test]
+    public async Task NavigationPrepareSuccessWithLiveJournalNavigates()
+    {
+        bool cancelled = false;
+        bool navigated = false;
+
+        bool result = await NavigationCloseCoordinator.TryNavigateBackAsync(
+            () => Task.FromResult(true),
+            () => true,
+            () => cancelled = true,
+            () =>
+            {
+                navigated = true;
+                return Task.CompletedTask;
+            });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result, Is.True);
+            Assert.That(cancelled, Is.False);
+            Assert.That(navigated, Is.True);
+        });
+    }
+
+    [Test]
+    public async Task NavigationPrepareFailureCancelsWithoutNavigatingOrCancelling()
+    {
+        bool cancelled = false;
+        bool navigated = false;
+
+        // A failed save preparation already reopened the editor's own
+        // admission/close state — the coordinator must not run the stale-
+        // journal cancellation a second time, and must not navigate.
+        bool result = await NavigationCloseCoordinator.TryNavigateBackAsync(
+            () => Task.FromResult(false),
+            () => true,
+            () => cancelled = true,
+            () =>
+            {
+                navigated = true;
+                return Task.CompletedTask;
+            });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result, Is.False);
+            Assert.That(cancelled, Is.False);
+            Assert.That(navigated, Is.False);
+        });
+    }
+
     private static TaskCompletionSource<bool> NewSignal() =>
         new(TaskCreationOptions.RunContinuationsAsynchronously);
 

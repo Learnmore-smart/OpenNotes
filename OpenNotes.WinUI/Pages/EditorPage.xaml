@@ -485,10 +485,10 @@
                                                  Stroke="{ThemeResource ThemeForegroundBrush}"/>
                         </ToggleButton>
 
-                        <!-- Save (T9: save pipeline not ported yet — disabled) -->
-                        <Button x:Name="SavePdfButton"
+                        <!-- Save (T9 Phase A: wired to the shared save task) -->
+                        <Button x:Name="SavePdfButton" Click="SavePdf_Click"
                                 Style="{StaticResource ToolbarButtonStyle}"
-                                Width="36" Height="36" Margin="1,0" IsEnabled="False"
+                                Width="36" Height="36" Margin="1,0"
                                 AutomationProperties.AutomationId="Editor.SavePdfButton">
                             <controls:LucideIcon Kind="Save" Width="18" Height="18"
                                                  Stroke="{ThemeResource ThemeForegroundBrush}"/>
