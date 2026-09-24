@@ -17,7 +17,12 @@ namespace Caelum.Rendering;
 /// DrawingAttributes. Highlighter strokes differ only in their RGBA alpha
 /// (the caller stores the 140-alpha colour on the stroke), matching WPF
 /// where IsHighlighter changes blend mode but the payload is the colour.
-/// Dashed shape strokes are a Phase-B concern; they render solid here.
+/// Dashed shape strokes (<see cref="InkStrokeData.IsDashedShape"/>) render as
+/// real dashes: the spine is re-segmented by
+/// <see cref="StrokeGeometry.BuildDashedPolyline"/> under the persisted
+/// shape-tool pattern and each dash becomes its own figure — the same look
+/// WPF produces by storing one stroke per dash (re-dashing a stored dash is
+/// idempotent, so WPF-loaded documents keep their exact outlines).
 /// </summary>
 public static class StrokeRenderer
 {
@@ -49,7 +54,9 @@ public static class StrokeRenderer
 
     /// <summary>
     /// The fill geometry for a stroke — a single closed figure over the
-    /// outline polygon. Empty/degenerate strokes produce an empty geometry.
+    /// outline polygon, or one figure per dash segment for
+    /// <see cref="InkStrokeData.IsDashedShape"/> strokes. Empty/degenerate
+    /// strokes produce an empty geometry.
     /// </summary>
     public static PathGeometry BuildGeometry(InkStrokeData stroke)
     {
@@ -57,10 +64,28 @@ public static class StrokeRenderer
         if (stroke == null)
             return geometry;
 
-        var outline = StrokeOutline.BuildFillOutline(
-            stroke.Points, stroke.Size, stroke.IgnorePressure, stroke.FitToCurve);
-        if (outline.Count < 3)
+        if (stroke.IsDashedShape)
+        {
+            var dashOutlines = StrokeOutline.BuildDashedFillOutlines(stroke);
+            foreach (var outline in dashOutlines)
+                AddOutlineFigure(geometry, outline);
+            // A degenerate dashed spine (e.g. a lone tap) still draws its dot.
+            if (geometry.Figures.Count == 0)
+                AddOutlineFigure(geometry, StrokeOutline.BuildFillOutline(
+                    stroke.Points, stroke.Size, stroke.IgnorePressure, stroke.FitToCurve));
             return geometry;
+        }
+
+        AddOutlineFigure(geometry, StrokeOutline.BuildFillOutline(
+            stroke.Points, stroke.Size, stroke.IgnorePressure, stroke.FitToCurve));
+        return geometry;
+    }
+
+    /// <summary>Adds one closed polygon figure; sub-triangle outlines are skipped.</summary>
+    private static void AddOutlineFigure(PathGeometry geometry, IReadOnlyList<PointD> outline)
+    {
+        if (outline == null || outline.Count < 3)
+            return;
 
         var figure = new PathFigure
         {
@@ -73,7 +98,6 @@ public static class StrokeRenderer
             segment.Points.Add(new Point(outline[i].X, outline[i].Y));
         figure.Segments.Add(segment);
         geometry.Figures.Add(figure);
-        return geometry;
     }
 
     /// <summary>Stroke's RGBA payload → WinUI colour.</summary>

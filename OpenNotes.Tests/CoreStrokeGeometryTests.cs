@@ -455,6 +455,97 @@ public sealed class CoreStrokeGeometryTests
         });
     }
 
+    [Test]
+    public void GetShapeDashPattern_MatchesWpfCommitFormula()
+    {
+        // WPF CommitShape: dash = max(size·4, 10), gap = max(size·2.5, 6).
+        StrokeGeometry.GetShapeDashPattern(2.0, out double dash2, out double gap2);
+        StrokeGeometry.GetShapeDashPattern(4.0, out double dash4, out double gap4);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(dash2, Is.EqualTo(10.0), "size·4 = 8 < 10 floor");
+            Assert.That(gap2, Is.EqualTo(6.0), "size·2.5 = 5 < 6 floor");
+            Assert.That(dash4, Is.EqualTo(16.0));
+            Assert.That(gap4, Is.EqualTo(10.0));
+        });
+    }
+
+    [Test]
+    public void BuildDashedFillOutlines_FullSpine_ProducesGappedDashes()
+    {
+        // A 100-DIP dashed line at size 2 → 10/6 pattern → dashes with real
+        // empty gaps between their fill outlines (the renderer emits one
+        // PathFigure per entry).
+        var stroke = new InkStrokeData
+        {
+            Points = Spine((0, 0), (100, 0)),
+            Size = 2.0,
+            FitToCurve = false,
+            IgnorePressure = true,
+            ShapeGroupId = "g",
+            ShapeKind = "DashedLine",
+            IsDashedShape = true,
+        };
+
+        var outlines = StrokeOutline.BuildDashedFillOutlines(stroke);
+
+        Assert.That(outlines.Count, Is.GreaterThanOrEqualTo(5));
+        for (int i = 1; i < outlines.Count; i++)
+        {
+            double prevRight = outlines[i - 1].Max(p => p.X);
+            double nextLeft = outlines[i].Min(p => p.X);
+            Assert.That(nextLeft, Is.GreaterThan(prevRight),
+                $"dash {i - 1}→{i} must be separated by a real gap");
+        }
+        // Stroke-width sanity: each dash capsule is ~size tall (half=1).
+        Assert.That(outlines[0].Max(p => p.Y) - outlines[0].Min(p => p.Y),
+            Is.EqualTo(2.0).Within(0.01));
+    }
+
+    [Test]
+    public void BuildDashedFillOutlines_AlreadySegmentedDash_IsIdempotent()
+    {
+        // A WPF-persisted dashed stroke already carries a single dash piece
+        // as its spine; re-dashing must reproduce it whole (drawing phase
+        // starts first), not re-gap it.
+        var storedDash = new InkStrokeData
+        {
+            Points = Spine((0, 0), (10, 0)),   // exactly one dashLength @size2
+            Size = 2.0,
+            FitToCurve = false,
+            IgnorePressure = true,
+            IsDashedShape = true,
+        };
+
+        var outlines = StrokeOutline.BuildDashedFillOutlines(storedDash);
+        Assert.That(outlines, Has.Count.EqualTo(1));
+        // Same extents as the solid fill outline — caps included.
+        var solid = StrokeOutline.BuildFillOutline(
+            storedDash.Points, storedDash.Size, true, false);
+        Assert.Multiple(() =>
+        {
+            Assert.That(outlines[0].Min(p => p.X), Is.EqualTo(solid.Min(p => p.X)).Within(1e-9));
+            Assert.That(outlines[0].Max(p => p.X), Is.EqualTo(solid.Max(p => p.X)).Within(1e-9));
+        });
+    }
+
+    [Test]
+    public void BuildDashedFillOutlines_DegenerateInput_IsEmpty()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(StrokeOutline.BuildDashedFillOutlines(null), Is.Empty);
+            Assert.That(StrokeOutline.BuildDashedFillOutlines(new InkStrokeData()), Is.Empty);
+            Assert.That(StrokeOutline.BuildDashedFillOutlines(new InkStrokeData
+            {
+                Points = Spine((5, 5)),
+                Size = 2.0,
+                IsDashedShape = true,
+            }), Is.Empty, "a one-point dashed stroke yields no dashes — the renderer falls back to the solid dot");
+        });
+    }
+
     // ------------------------------------------------------------------
     // Scribble shape recognition
     // ------------------------------------------------------------------

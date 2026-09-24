@@ -123,18 +123,27 @@ namespace Caelum.Services
                 return;
             }
 
-            RegisterHotKey(_hwnd, HOTKEY_ID_WIN_F19, MOD_WIN | MOD_NOREPEAT, VK_F19);
-            RegisterHotKey(_hwnd, HOTKEY_ID_WIN_F20, MOD_WIN | MOD_NOREPEAT, VK_F20);
+            bool f19 = RegisterHotKey(_hwnd, HOTKEY_ID_WIN_F19, MOD_WIN | MOD_NOREPEAT, VK_F19);
+            if (!f19)
+                Log($"RegisterHotKey Win+F19 failed: {Marshal.GetLastWin32Error()}");
+            bool f20 = RegisterHotKey(_hwnd, HOTKEY_ID_WIN_F20, MOD_WIN | MOD_NOREPEAT, VK_F20);
+            if (!f20)
+                Log($"RegisterHotKey Win+F20 failed: {Marshal.GetLastWin32Error()}");
 
             _subclassProc = SubclassWndProc;
             if (!SetWindowSubclass(_hwnd, _subclassProc, SUBCLASS_ID, UIntPtr.Zero))
             {
                 Log($"SetWindowSubclass failed: {Marshal.GetLastWin32Error()}");
                 _subclassProc = null;
+                // Without the WndProc hook nothing can observe WM_HOTKEY —
+                // release both registrations so the hotkeys aren't dead-owned
+                // (and the pen-side keys still reach their real consumers).
+                UnregisterHotKey(_hwnd, HOTKEY_ID_WIN_F19);
+                UnregisterHotKey(_hwnd, HOTKEY_ID_WIN_F20);
             }
 
             _isInitialized = true;
-            Log($"Initialized – HWND=0x{_hwnd:X}");
+            Log($"Initialized – HWND=0x{_hwnd:X} hotkeys F19={(f19 ? "ok" : "FAILED")} F20={(f20 ? "ok" : "FAILED")} subclass={_subclassProc != null}");
         }
 
         // ── Pen packet probing ───────────────────────────────────────────
@@ -193,10 +202,16 @@ namespace Caelum.Services
         public void NoteBarrelButton() => Capabilities.HasBarrelButton = true;
 
         // ── Pressure helpers (ported unchanged — pure math) ─────────────
+        // Reserved API: nothing calls these in Phase A — WinUI strokes
+        // carry per-point pressure and the renderer applies the WPF width
+        // law directly. Kept public for the Phase-B feature surface
+        // (calligraphy/tilt rendering) so the ported WPF formulas don't
+        // have to be re-derived; do not delete on "unused" alone.
 
         /// <summary>
         /// Maps normalized pressure (0.0–1.0) to a pen width multiplier with
         /// a mild γ=0.7 power curve — same formula as the WPF service.
+        /// Reserved for Phase B; no Phase-A caller.
         /// </summary>
         public static double PressureToWidthMultiplier(
             double pressureFactor,
@@ -208,7 +223,7 @@ namespace Caelum.Services
             return minMultiplier + curved * (maxMultiplier - minMultiplier);
         }
 
-        /// <summary>Pressure → highlighter opacity multiplier (WPF port).</summary>
+        /// <summary>Pressure → highlighter opacity multiplier (WPF port). Reserved for Phase B; no Phase-A caller.</summary>
         public static double PressureToHighlighterOpacity(
             double pressureFactor,
             double minOpacity = 0.3,
@@ -218,11 +233,11 @@ namespace Caelum.Services
             return minOpacity + p * (maxOpacity - minOpacity);
         }
 
-        /// <summary>Tilt magnitude (degrees, 0 = perpendicular).</summary>
+        /// <summary>Tilt magnitude (degrees, 0 = perpendicular). Reserved for Phase B; no Phase-A caller.</summary>
         public static double ComputeTiltAngle(double xTilt, double yTilt)
             => Math.Sqrt(xTilt * xTilt + yTilt * yTilt);
 
-        /// <summary>Tilt → width multiplier (calligraphy effect).</summary>
+        /// <summary>Tilt → width multiplier (calligraphy effect). Reserved for Phase B; no Phase-A caller.</summary>
         public static double TiltToWidthMultiplier(
             double tiltAngle,
             double maxTilt = 90.0,

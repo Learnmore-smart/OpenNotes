@@ -94,6 +94,47 @@ public static class StrokeOutline
     }
 
     /// <summary>
+    /// Dashed-shape rendering: splits the spine into real dash segments via
+    /// <see cref="StrokeGeometry.BuildDashedPolyline"/> under the persisted
+    /// shape-tool dash pattern (<see cref="StrokeGeometry.GetShapeDashPattern"/>)
+    /// and returns one closed fill outline per dash — the same geometry WPF
+    /// produces by committing each dash as its own solid stroke.
+    /// Re-dashing an already-segmented persisted dash is idempotent (a stored
+    /// dash is never longer than the pattern's dash length, so the drawing
+    /// phase re-emits it whole), which keeps WPF-loaded documents correct
+    /// while also covering single-spine dashed strokes.
+    /// Dash pieces render uniform-width: the synthesized spine carries the
+    /// 0.5 pressure the shape tool writes, and the stroke's own
+    /// <see cref="InkStrokeData.IgnorePressure"/> flag is honoured. Returns an
+    /// empty list for degenerate input — callers fall back to the solid
+    /// outline so a one-point "dash" still renders its dot.
+    /// </summary>
+    public static List<List<PointD>> BuildDashedFillOutlines(InkStrokeData stroke)
+    {
+        var outlines = new List<List<PointD>>();
+        if (stroke?.Points == null || stroke.Points.Count == 0 || stroke.Size <= 0.0)
+            return outlines;
+
+        StrokeGeometry.GetShapeDashPattern(stroke.Size, out double dashLength, out double gapLength);
+        var spine = new List<PointD>(stroke.Points.Count);
+        foreach (var point in stroke.Points)
+            spine.Add(new PointD(point.X, point.Y));
+
+        var dashes = StrokeGeometry.BuildDashedPolyline(spine, dashLength, gapLength);
+        foreach (var dash in dashes)
+        {
+            var dashSpine = new List<InkPointData>(dash.Count);
+            foreach (var point in dash)
+                dashSpine.Add(new InkPointData(point.X, point.Y, 0.5f));
+
+            var outline = BuildFillOutline(dashSpine, stroke.Size, stroke.IgnorePressure, fitToCurve: false);
+            if (outline.Count >= 3)
+                outlines.Add(outline);
+        }
+        return outlines;
+    }
+
+    /// <summary>
     /// Unit normal at spine vertex i: the perpendicular of the averaged
     /// adjacent edge directions. Endpoints take their single edge's normal.
     /// Zero-length edges contribute nothing; a fully degenerate neighbourhood

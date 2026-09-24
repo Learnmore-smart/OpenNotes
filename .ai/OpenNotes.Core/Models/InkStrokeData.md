@@ -16,7 +16,7 @@ UI-free in-memory stroke payload mirroring `StrokeAnnotation` semantics 1:1 for 
 - `GetShapeIdentity()` / `ApplyShapeIdentity(ShapeStrokeIdentity)`: read or copy the logical-shape identity in one step.
 - `Clone()`: deep copy (new point list).
 - `ToAnnotation()` / `FromAnnotation(StrokeAnnotation)`: sidecar conversion.
-- `CaptureSnapshot(token, side)` / `FromSnapshot(StrokeReplacementSnapshot)`: replacement-ledger conversion.
+- `CaptureSnapshot(token, side)` / `FromSnapshot(StrokeReplacementSnapshot)`: replacement-ledger conversion — carries the shape identity too (`FromSnapshot` restores via `ApplyShapeIdentity`).
 
 ## Pressure format decision (Task 7 Phase A)
 
@@ -29,7 +29,7 @@ UI-free in-memory stroke payload mirroring `StrokeAnnotation` semantics 1:1 for 
 ## Constraints
 
 - Shape metadata semantics must stay identical to the WPF extended-property keys (`ShapeStrokeMetadataKeys`).
-- `StrokeReplacementSnapshot` carries no shape fields (WPF parity) — a replacement round-trip drops shape identity; acceptable until Phase-B shape tools.
+- `StrokeReplacementSnapshot` carries the four shape fields (added 2026-09-23 — previously a round-trip silently dropped shape identity and re-saved it as plain ink). `InkSurface.AddStroke` also re-derives `IgnorePressure=true` for any stroke with a non-empty `ShapeGroupId` (WPF `PdfPageControl.AddStroke` parity — the flag never serializes).
 
 ## Verification
 

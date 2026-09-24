@@ -166,8 +166,10 @@ public sealed class InkStrokeData
     /// <summary>
     /// Captures an immutable snapshot under <paramref name="token"/>/
     /// <paramref name="side"/>. The snapshot stores this stroke's
-    /// <see cref="IgnorePressure"/> flag so a replacement round-trip
-    /// reproduces the rendered stroke exactly.
+    /// <see cref="IgnorePressure"/> flag and its logical-shape identity
+    /// (group/kind/part/dashed) so a replacement round-trip reproduces the
+    /// stroke exactly — without them an erase→undo or recognition swap would
+    /// demote a grouped/dashed shape to plain ink on the next save.
     /// </summary>
     public StrokeReplacementSnapshot CaptureSnapshot(Guid token, StrokeReplacementSide side)
         => new(
@@ -178,7 +180,11 @@ public sealed class InkStrokeData
             Size, Size,
             IsHighlighter,
             FitToCurve,
-            IgnorePressure);
+            IgnorePressure,
+            ShapeGroupId,
+            ShapeKind,
+            ShapePartIndex,
+            IsDashedShape);
 
     /// <summary>Rebuilds a live stroke from a replacement snapshot.</summary>
     public static InkStrokeData FromSnapshot(StrokeReplacementSnapshot snapshot)
@@ -186,7 +192,7 @@ public sealed class InkStrokeData
         if (snapshot == null)
             throw new ArgumentNullException(nameof(snapshot));
 
-        return new InkStrokeData
+        var stroke = new InkStrokeData
         {
             Points = snapshot.Points
                 .Select(p => new InkPointData(p.X, p.Y, p.PressureFactor))
@@ -200,5 +206,7 @@ public sealed class InkStrokeData
             FitToCurve = snapshot.FitToCurve,
             IgnorePressure = snapshot.IgnorePressure,
         };
+        stroke.ApplyShapeIdentity(snapshot.GetShapeIdentity());
+        return stroke;
     }
 }

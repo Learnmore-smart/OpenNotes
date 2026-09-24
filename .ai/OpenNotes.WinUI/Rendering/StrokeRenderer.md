@@ -9,14 +9,14 @@ Converts `InkStrokeData` into WinUI `Path` fill geometry (`Caelum.Rendering`, Ta
 
 - `CreateStrokePath(InkStrokeData)` → `Path` — `Fill = SolidColorBrush(ToColor(stroke))`, `Data = BuildGeometry(stroke)`, `IsHitTestVisible = false` (hit-testing lives in `StrokeGeometry` math, not XAML). The path is NOT parented — the caller adds it to the surface's `Children`.
 - `UpdateStrokePath(Path, InkStrokeData)` — rebuilds `path.Data` in place; the live-stroke fast path (one `Path` per in-flight pointer, updated per move event).
-- `BuildGeometry(InkStrokeData)` → `PathGeometry` — a single closed `PathFigure` (`IsClosed=true`, `IsFilled=true`) holding one `PolyLineSegment` over the outline polygon; empty/degenerate strokes produce an empty geometry.
+- `BuildGeometry(InkStrokeData)` → `PathGeometry` — normally a single closed `PathFigure` (`IsClosed=true`, `IsFilled=true`) holding one `PolyLineSegment` over the outline polygon; empty/degenerate strokes produce an empty geometry.
 - `ToColor(InkStrokeData)` → `Windows.UI.Color` straight from the stroke's RGBA channels.
 
 ## Behaviour notes
 
 - Coordinates are already page DIP — no zoom/raster scaling here (the layer scales with the page control).
 - Highlighter alpha lives in the stroke's `A` channel (WPF parity: the 140-alpha translucency is baked into the colour, NOT a separate opacity knob).
-- Dashed shape strokes render solid here — a Phase-B concern.
+- **Dashed shape strokes render as real dashes** (fixed 2026-09-23 — was "render solid, Phase-B concern"): when `stroke.IsDashedShape`, `BuildGeometry` re-segments the spine via `StrokeOutline.BuildDashedFillOutlines` (Core `BuildDashedPolyline` under `GetShapeDashPattern` = the WPF commit-time `dash = max(size·4,10)` / `gap = max(size·2.5,6)` formula) and emits one `PathFigure` per dash. This matches WPF's persisted-ink look — WPF commits each dash as its own solid stroke — and re-dashing a stored dash piece is idempotent (stored dashes are never longer than `dashLength`, so they re-emit whole). If the dash split yields nothing (a lone tap), the geometry falls back to the solid outline so the dot still draws.
 
 ## Constraints
 

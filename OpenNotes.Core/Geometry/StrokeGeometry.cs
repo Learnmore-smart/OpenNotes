@@ -457,9 +457,25 @@ public static class StrokeGeometry
         bool strokeIgnoresPressure,
         IReadOnlyList<PointD> eraserPath,
         double eraserSize)
+        => EraserHitsStroke(
+            strokePoints, strokeSize, strokeIgnoresPressure,
+            BuildEraserFootprint(eraserPath, eraserSize));
+
+    /// <summary>
+    /// <see cref="EraserHitsStroke"/> with a prebuilt footprint — the batch
+    /// path. Callers erasing many strokes along one eraser path (the ink
+    /// surface evaluates every candidate per pointer update) build the
+    /// pieces once via <see cref="BuildEraserFootprint"/> instead of paying
+    /// the stamp+hull construction per stroke.
+    /// </summary>
+    public static bool EraserHitsStroke(
+        IReadOnlyList<InkPointData> strokePoints,
+        double strokeSize,
+        bool strokeIgnoresPressure,
+        IReadOnlyList<IReadOnlyList<PointD>> footprintPieces)
     {
-        var pieces = BuildEraserFootprint(eraserPath, eraserSize);
-        if (strokePoints == null || strokePoints.Count == 0 || pieces.Count == 0)
+        var pieces = footprintPieces;
+        if (strokePoints == null || strokePoints.Count == 0 || pieces == null || pieces.Count == 0)
             return false;
 
         if (strokePoints.Count == 1)
@@ -516,13 +532,28 @@ public static class StrokeGeometry
         bool strokeIgnoresPressure,
         IReadOnlyList<PointD> eraserPath,
         double eraserSize)
+        => SplitStrokeAtEraser(
+            strokePoints, strokeSize, strokeIgnoresPressure,
+            BuildEraserFootprint(eraserPath, eraserSize));
+
+    /// <summary>
+    /// <see cref="SplitStrokeAtEraser"/> with a prebuilt footprint — the
+    /// batch path for callers splitting many strokes along one eraser path
+    /// (the ink surface evaluates every candidate per pointer update); build
+    /// the pieces once via <see cref="BuildEraserFootprint"/>.
+    /// </summary>
+    public static List<List<InkPointData>> SplitStrokeAtEraser(
+        IReadOnlyList<InkPointData> strokePoints,
+        double strokeSize,
+        bool strokeIgnoresPressure,
+        IReadOnlyList<IReadOnlyList<PointD>> footprintPieces)
     {
         var fragments = new List<List<InkPointData>>();
         if (strokePoints == null || strokePoints.Count == 0)
             return fragments;
 
-        var pieces = BuildEraserFootprint(eraserPath, eraserSize);
-        if (pieces.Count == 0)
+        var pieces = footprintPieces;
+        if (pieces == null || pieces.Count == 0)
         {
             fragments.Add(new List<InkPointData>(strokePoints));
             return fragments;
@@ -662,9 +693,12 @@ public static class StrokeGeometry
     /// Builds the eraser footprint as a list of convex polygons: one square
     /// stamp per path point plus the convex hull of each adjacent stamp pair
     /// (the swept connector — a hexagon for off-axis motion, a rectangle for
-    /// axis-aligned motion).
+    /// axis-aligned motion). Public so callers evaluating many strokes
+    /// against one eraser path can hoist the construction out of the
+    /// per-stroke loop (<see cref="EraserHitsStroke"/>/
+    /// <see cref="SplitStrokeAtEraser"/> piece-taking overloads).
     /// </summary>
-    private static List<IReadOnlyList<PointD>> BuildEraserFootprint(
+    public static List<IReadOnlyList<PointD>> BuildEraserFootprint(
         IReadOnlyList<PointD> eraserPath,
         double eraserSize)
     {
@@ -1367,6 +1401,25 @@ public static class StrokeGeometry
         double dashLength,
         double gapLength) =>
         BuildDashedPolyline(new[] { start, end }, dashLength, gapLength);
+
+    /// <summary>
+    /// The persisted-ink dash pattern — the same lengths the WPF shape tool
+    /// bakes into committed dashed strokes
+    /// (<c>dashLength = max(size·4, 10)</c>, <c>gapLength = max(size·2.5, 6)</c>
+    /// in <c>PdfPageControl.CommitShape</c>). Renderers that re-dash an
+    /// <see cref="InkStrokeData.IsDashedShape"/> spine must use this pattern
+    /// so the on-screen look matches what WPF committed. (The WPF drag
+    /// PREVIEW uses a relative <c>StrokeDashArray {4, 2}</c> instead — close,
+    /// but not identical; persisted ink is the contract.)
+    /// </summary>
+    public static void GetShapeDashPattern(
+        double strokeSize,
+        out double dashLength,
+        out double gapLength)
+    {
+        dashLength = Math.Max(strokeSize * 4.0, 10.0);
+        gapLength = Math.Max(strokeSize * 2.5, 6.0);
+    }
 
     /// <summary>
     /// Splits a polyline into dash segments separated by empty gaps, carrying

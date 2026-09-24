@@ -8,6 +8,7 @@ Tessellates an `InkStrokeData` spine into a closed fill outline — the pressure
 ## API
 
 - `BuildFillOutline(spine, size, ignorePressure, fitToCurve)` / `BuildFillOutline(stroke)` → `List<PointD>` closed polygon (first point not repeated); empty list for degenerate input.
+- `BuildDashedFillOutlines(stroke)` → `List<List<PointD>>` — one closed outline per dash segment: splits the spine via `StrokeGeometry.BuildDashedPolyline` under `GetShapeDashPattern` (the WPF committed-stroke pattern `dash = max(size·4,10)` / `gap = max(size·2.5,6)`), then builds a uniform-width fill outline per dash (synthesized 0.5-pressure spine, `fitToCurve=false`). Re-dashing an already-segmented persisted dash is idempotent — a stored dash is never longer than `dashLength`, so the drawing phase re-emits it whole (WPF-loaded docs keep their exact outlines). Empty list for degenerate input — callers fall back to the solid outline so a one-point "dash" still draws its dot.
 - `ResampleCatmullRom(spine)` — public for tests; endpoint-duplicated uniform Catmull-Rom, 4 subdivisions/segment, pressure lerped (clamped 0–1).
 
 ## Behaviour

@@ -615,4 +615,182 @@ public sealed class CoreInkEngineTests
                 "a failed recognition leaves the store untouched");
         });
     }
+
+    // ------------------------------------------------------------------
+    // Snapshot shape identity (erase→undo / recognition round-trips)
+    // ------------------------------------------------------------------
+
+    private static InkStrokeData GroupedDashedStroke() => new()
+    {
+        Points = SpineP((10, 10, 0.5f), (60, 10, 0.5f), (60, 60, 0.5f)),
+        R = 40, G = 80, B = 120, A = 255,
+        Size = 2.5,
+        FitToCurve = false,
+        IgnorePressure = true,
+        ShapeGroupId = "grp-7",
+        ShapeKind = "Rectangle",
+        ShapePartIndex = 2,
+        IsDashedShape = true,
+    };
+
+    [Test]
+    public void Snapshot_RoundTrip_PreservesShapeIdentity()
+    {
+        var stroke = GroupedDashedStroke();
+        var snapshot = stroke.CaptureSnapshot(Guid.NewGuid(), StrokeReplacementSide.Original);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(snapshot.ShapeGroupId, Is.EqualTo("grp-7"));
+            Assert.That(snapshot.ShapeKind, Is.EqualTo("Rectangle"));
+            Assert.That(snapshot.ShapePartIndex, Is.EqualTo(2));
+            Assert.That(snapshot.IsDashedShape, Is.True);
+        });
+
+        var restored = InkStrokeData.FromSnapshot(snapshot);
+        Assert.Multiple(() =>
+        {
+            Assert.That(restored.ShapeGroupId, Is.EqualTo("grp-7"));
+            Assert.That(restored.ShapeKind, Is.EqualTo("Rectangle"));
+            Assert.That(restored.ShapePartIndex, Is.EqualTo(2));
+            Assert.That(restored.IsDashedShape, Is.True);
+            Assert.That(restored.IgnorePressure, Is.True);
+        });
+
+        // The restored stroke still serializes as a grouped/dashed shape —
+        // not demoted to plain ink.
+        var annotation = restored.ToAnnotation();
+        Assert.Multiple(() =>
+        {
+            Assert.That(annotation.ShapeGroupId, Is.EqualTo("grp-7"));
+            Assert.That(annotation.ShapeKind, Is.EqualTo("Rectangle"));
+            Assert.That(annotation.ShapePartIndex, Is.EqualTo(2));
+            Assert.That(annotation.IsDashedShape, Is.True);
+        });
+        var reloaded = InkStrokeData.FromAnnotation(annotation);
+        Assert.Multiple(() =>
+        {
+            Assert.That(reloaded.ShapeGroupId, Is.EqualTo("grp-7"));
+            Assert.That(reloaded.IsDashedShape, Is.True);
+        });
+    }
+
+    [Test]
+    public void Snapshot_Withers_PreserveShapeIdentity()
+    {
+        var snapshot = GroupedDashedStroke()
+            .CaptureSnapshot(Guid.NewGuid(), StrokeReplacementSide.Original);
+
+        var flipped = snapshot.WithSide(StrokeReplacementSide.Ideal);
+        var pressured = snapshot.WithIgnorePressure(false);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(flipped.ShapeGroupId, Is.EqualTo("grp-7"));
+            Assert.That(flipped.IsDashedShape, Is.True);
+            Assert.That(flipped.Side, Is.EqualTo(StrokeReplacementSide.Ideal));
+            Assert.That(pressured.ShapeKind, Is.EqualTo("Rectangle"));
+            Assert.That(pressured.ShapePartIndex, Is.EqualTo(2));
+            Assert.That(pressured.IgnorePressure, Is.False);
+        });
+    }
+
+    [Test]
+    public void Snapshot_Equality_IncludesShapeIdentity()
+    {
+        var token = Guid.NewGuid();
+        var plain = GroupedDashedStroke();
+        plain.ShapeGroupId = string.Empty;
+        plain.ShapeKind = string.Empty;
+        plain.ShapePartIndex = 0;
+        plain.IsDashedShape = false;
+
+        var grouped = GroupedDashedStroke();
+        var a = plain.CaptureSnapshot(token, StrokeReplacementSide.Original);
+        var b = grouped.CaptureSnapshot(token, StrokeReplacementSide.Original);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(a.Equals(b), Is.False, "identity fields are part of snapshot equality");
+            Assert.That(a.Equals(a.WithSide(StrokeReplacementSide.Original)), Is.True);
+            Assert.That(a.GetHashCode(), Is.Not.EqualTo(b.GetHashCode()));
+        });
+    }
+
+    [Test]
+    public async Task EraseUndo_OnGroupedStroke_PreservesShapeIdentity()
+    {
+        // Simulates load → erase-split → Ctrl+Z: the restored original must
+        // keep its shape identity so the next save serializes it as a shape.
+        var store = new InkStrokeStore();
+        var original = GroupedDashedStroke();
+        store.AddStrokeQuiet(original);
+
+        var fragments = StrokeGeometry.SplitStrokeAtEraser(
+            original.Points, original.Size, original.IgnorePressure,
+            new List<PointD> { new(60, 35) }, 20);
+        Assert.That(fragments, Has.Count.EqualTo(2), "the test stroke must actually split");
+
+        var removedPlacement = store.CaptureStrokePlacement(original);
+        store.RemoveStrokeQuiet(original);
+        var addedPlacements = new List<InkStrokePlacement>();
+        foreach (var frag in fragments)
+        {
+            var clone = original.Clone();
+            clone.Points = frag;
+            addedPlacements.Add(store.AddStrokeQuiet(clone));
+        }
+
+        var action = new InkStrokesErasedAction(
+            store, new List<InkStrokePlacement> { removedPlacement }, addedPlacements);
+        await action.UndoAsync();
+
+        Assert.That(action.LastOperationSucceeded, Is.True);
+        Assert.That(store.Count, Is.EqualTo(1));
+        var restored = store.Strokes[0];
+        Assert.Multiple(() =>
+        {
+            Assert.That(restored.ShapeGroupId, Is.EqualTo("grp-7"));
+            Assert.That(restored.ShapeKind, Is.EqualTo("Rectangle"));
+            Assert.That(restored.ShapePartIndex, Is.EqualTo(2));
+            Assert.That(restored.IsDashedShape, Is.True);
+            Assert.That(restored.ToAnnotation().IsDashedShape, Is.True,
+                "the restored stroke serializes as a dashed shape, not plain ink");
+        });
+    }
+
+    [Test]
+    public void ReplaceStrokeQuiet_RebuiltStroke_PreservesShapeIdentity()
+    {
+        // The FromSnapshot path — e.g. a recognition undo/redo landing on a
+        // grouped stroke — must rebuild the live stroke with its identity.
+        var store = new InkStrokeStore();
+        var grouped = GroupedDashedStroke();
+        store.AddStrokeQuiet(grouped);
+        var token = store.EnsureStrokeToken(grouped);
+        var snapshot = grouped.CaptureSnapshot(token, StrokeReplacementSide.Original);
+
+        var alternate = grouped.Clone();
+        alternate.Points = Spine((0, 0), (10, 10));
+        var alternateSnapshot = alternate.CaptureSnapshot(token, StrokeReplacementSide.Ideal);
+
+        Assert.That(store.TryReplaceStrokeQuiet(
+            token, StrokeReplacementSide.Original, alternateSnapshot, out _), Is.True);
+        var live = store.Strokes[0];
+        Assert.Multiple(() =>
+        {
+            Assert.That(live, Is.Not.SameAs(grouped), "the live stroke is rebuilt from the snapshot");
+            Assert.That(live.ShapeGroupId, Is.EqualTo("grp-7"));
+            Assert.That(live.ShapeKind, Is.EqualTo("Rectangle"));
+            Assert.That(live.ShapePartIndex, Is.EqualTo(2));
+            Assert.That(live.IsDashedShape, Is.True);
+        });
+
+        // And the replacement snapshot itself carries the identity so a
+        // swap back restores it too.
+        Assert.That(alternateSnapshot.IsDashedShape, Is.True);
+        Assert.That(store.TryReplaceStrokeQuiet(
+            token, StrokeReplacementSide.Ideal, snapshot, out _), Is.True);
+        Assert.That(store.Strokes[0].ShapeGroupId, Is.EqualTo("grp-7"));
+    }
 }

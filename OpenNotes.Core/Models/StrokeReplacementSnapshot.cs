@@ -41,7 +41,11 @@ public sealed class StrokeReplacementSnapshot : IEquatable<StrokeReplacementSnap
         double height,
         bool isHighlighter,
         bool fitToCurve,
-        bool ignorePressure = true)
+        bool ignorePressure = true,
+        string shapeGroupId = null,
+        string shapeKind = null,
+        int shapePartIndex = 0,
+        bool isDashedShape = false)
     {
         if (token == Guid.Empty)
             throw new ArgumentException("A replacement snapshot requires a non-empty token.", nameof(token));
@@ -59,6 +63,10 @@ public sealed class StrokeReplacementSnapshot : IEquatable<StrokeReplacementSnap
         IsHighlighter = isHighlighter;
         FitToCurve = fitToCurve;
         IgnorePressure = ignorePressure;
+        ShapeGroupId = shapeGroupId ?? string.Empty;
+        ShapeKind = shapeKind ?? string.Empty;
+        ShapePartIndex = shapePartIndex;
+        IsDashedShape = isDashedShape;
     }
 
     public Guid Token { get; }
@@ -74,6 +82,20 @@ public sealed class StrokeReplacementSnapshot : IEquatable<StrokeReplacementSnap
     public bool FitToCurve { get; }
     public bool IgnorePressure { get; }
 
+    // The logical-shape identity rides along with the stroke payload so a
+    // snapshot→live-stroke round-trip (recognition undo/redo, or any
+    // FromSnapshot restore) reproduces a grouped/dashed shape exactly —
+    // dropping it would silently demote the stroke to plain ink on the next
+    // save (the sidecar serializes these fields).
+    public string ShapeGroupId { get; }
+    public string ShapeKind { get; }
+    public int ShapePartIndex { get; }
+    public bool IsDashedShape { get; }
+
+    /// <summary>The four shape fields as one identity record.</summary>
+    public ShapeStrokeIdentity GetShapeIdentity() =>
+        new(ShapeGroupId, ShapeKind, ShapePartIndex, IsDashedShape);
+
     public StrokeReplacementSnapshot WithSide(StrokeReplacementSide side)
     {
         return new StrokeReplacementSnapshot(
@@ -88,7 +110,11 @@ public sealed class StrokeReplacementSnapshot : IEquatable<StrokeReplacementSnap
             Height,
             IsHighlighter,
             FitToCurve,
-            IgnorePressure);
+            IgnorePressure,
+            ShapeGroupId,
+            ShapeKind,
+            ShapePartIndex,
+            IsDashedShape);
     }
 
     public StrokeReplacementSnapshot WithIgnorePressure(bool ignorePressure)
@@ -105,7 +131,11 @@ public sealed class StrokeReplacementSnapshot : IEquatable<StrokeReplacementSnap
             Height,
             IsHighlighter,
             FitToCurve,
-            ignorePressure);
+            ignorePressure,
+            ShapeGroupId,
+            ShapeKind,
+            ShapePartIndex,
+            IsDashedShape);
     }
 
     public bool Equals(StrokeReplacementSnapshot other)
@@ -124,6 +154,10 @@ public sealed class StrokeReplacementSnapshot : IEquatable<StrokeReplacementSnap
             || IsHighlighter != other.IsHighlighter
             || FitToCurve != other.FitToCurve
             || IgnorePressure != other.IgnorePressure
+            || ShapeGroupId != other.ShapeGroupId
+            || ShapeKind != other.ShapeKind
+            || ShapePartIndex != other.ShapePartIndex
+            || IsDashedShape != other.IsDashedShape
             || Points.Count != other.Points.Count)
         {
             return false;
@@ -148,6 +182,10 @@ public sealed class StrokeReplacementSnapshot : IEquatable<StrokeReplacementSnap
         hash.Add(IsHighlighter);
         hash.Add(FitToCurve);
         hash.Add(IgnorePressure);
+        hash.Add(ShapeGroupId);
+        hash.Add(ShapeKind);
+        hash.Add(ShapePartIndex);
+        hash.Add(IsDashedShape);
         foreach (var point in Points)
         {
             hash.Add(point.X);

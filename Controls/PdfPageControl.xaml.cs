@@ -1213,6 +1213,10 @@ namespace Caelum.Controls
                 .Select(point => new StrokeReplacementPoint(point.X, point.Y, point.PressureFactor))
                 .ToList();
             var color = attrs.Color;
+            // The logical-shape identity must ride inside the snapshot too:
+            // a replacement/undo round-trip that drops it demotes a grouped
+            // or dashed shape to plain ink on the next save.
+            var shape = ShapeStrokeMetadata.Read(stroke);
             return new StrokeReplacementSnapshot(
                 token,
                 side,
@@ -1225,7 +1229,11 @@ namespace Caelum.Controls
                 attrs.Height,
                 attrs.IsHighlighter,
                 attrs.FitToCurve,
-                attrs.IgnorePressure);
+                attrs.IgnorePressure,
+                shape.GroupId,
+                shape.Kind,
+                shape.PartIndex,
+                shape.IsDashed);
         }
 
         private static Stroke CreateStrokeFromSnapshot(StrokeReplacementSnapshot snapshot)
@@ -1251,6 +1259,16 @@ namespace Caelum.Controls
                     IgnorePressure = snapshot.IgnorePressure
                 }
             };
+            if (!string.IsNullOrWhiteSpace(snapshot.ShapeGroupId)
+                || !string.IsNullOrWhiteSpace(snapshot.ShapeKind))
+            {
+                ShapeStrokeMetadata.Apply(
+                    stroke,
+                    snapshot.ShapeGroupId,
+                    snapshot.ShapeKind,
+                    snapshot.ShapePartIndex,
+                    snapshot.IsDashedShape);
+            }
             return stroke;
         }
 

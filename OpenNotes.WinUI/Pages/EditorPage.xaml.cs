@@ -120,7 +120,7 @@ namespace Caelum.Pages
         private Windows.UI.Color _penColor = Windows.UI.Color.FromArgb(255, 0, 0, 0);
         private Windows.UI.Color _highlighterColor = Windows.UI.Color.FromArgb(255, 255, 255, 0);
         private double _penSize = 1.5;
-        private double _highlighterSize = 6.0;
+        private double _highlighterSize = 8.0; // WPF default (was 6.0 here)
         private double _eraserSize = 20.0;
 
         private bool _isLoadingAnnotations;

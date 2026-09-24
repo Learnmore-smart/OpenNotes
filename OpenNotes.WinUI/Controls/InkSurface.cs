@@ -91,7 +91,9 @@ public sealed class InkStrokeRecognizedEventArgs : EventArgs
 /// - Pen draws/erases; mouse draws/erases unless <see cref="PenOnlyMode"/>
 ///   and an ink-creation tool is active (pen-only blocks non-pen INK, not
 ///   erasing — same as the WPF IsInkCreationModeActive gate).
-/// - Touch is never ink input in Phase A (it pans the ScrollViewer).
+/// - Touch is never ink input in Phase A (it pans the ScrollViewer) — but a
+///   second pointer arriving DURING an ink gesture is marked handled so a
+///   palm/touch can't pan the document mid-stroke.
 /// - An inverted pen (<see cref="PointerPointProperties.IsEraser"/>) or a
 ///   held barrel button erases regardless of the active tool. The
 ///   draw-vs-erase decision is sampled once at pointer-down and held for
@@ -99,6 +101,9 @@ public sealed class InkStrokeRecognizedEventArgs : EventArgs
 ///   effect on the NEXT stroke (WPF arbitrates the same way at
 ///   stroke-collect boundaries). The WPF double-barrel press-to-toggle
 ///   is not ported.
+/// - <c>PointerCanceled</c> and <c>PointerCaptureLost</c> both roll the
+///   in-flight gesture back through <see cref="CancelInteraction"/>; a
+///   failed <c>CapturePointer</c> begins no gesture at all.
 /// </summary>
 public sealed partial class InkSurface : Canvas
 {
@@ -114,7 +119,9 @@ public sealed partial class InkSurface : Canvas
     public Color HighlighterColor { get; set; } = Color.FromArgb(140, 255, 255, 0);
 
     public double PenSize { get; set; } = 1.5;
-    public double HighlighterSize { get; set; } = 6.0;
+
+    /// <summary>Highlighter stroke width — matches the WPF 8.0 default.</summary>
+    public double HighlighterSize { get; set; } = 8.0;
     public double EraserSize { get; set; } = 20.0;
 
     /// <summary>AppSettings.PenOnlyMode — blocks non-pen ink creation.</summary>
@@ -204,6 +211,7 @@ public sealed partial class InkSurface : Canvas
         PointerPressed += InkSurface_PointerPressed;
         PointerMoved += InkSurface_PointerMoved;
         PointerReleased += InkSurface_PointerReleased;
+        PointerCanceled += InkSurface_PointerCanceled;
         PointerCaptureLost += InkSurface_PointerCaptureLost;
         PointerExited += InkSurface_PointerExited;
     }
@@ -220,6 +228,11 @@ public sealed partial class InkSurface : Canvas
         var stroke = InkStrokeData.FromAnnotation(annotation);
         if (stroke.Points.Count == 0)
             return null;
+        // WPF AddStroke parity: a stroke belonging to a logical shape group
+        // renders uniform-width (the shape tool commits IgnorePressure=true;
+        // the flag never serializes, so the load path re-derives it).
+        if (!string.IsNullOrWhiteSpace(stroke.ShapeGroupId))
+            stroke.IgnorePressure = true;
         Store.AddStrokeQuiet(stroke);
         return stroke;
     }
@@ -239,14 +252,16 @@ public sealed partial class InkSurface : Canvas
     }
 
     /// <summary>
-    /// Shared pen service — the surface applies its PressureEnabled flag and
-    /// feeds it pen packets for capability probing (WPF SetPenService parity).
+    /// Shared pen service — the surface feeds it pen packets for capability
+    /// probing (WPF SetPenService parity). It deliberately does NOT sync
+    /// <see cref="EnablePressure"/> from <c>service.PressureEnabled</c>: that
+    /// flag is never written back from settings, so syncing it would clobber
+    /// the real value — <c>EditorPage.ApplyToolToAllPages</c> owns
+    /// <see cref="EnablePressure"/> from <c>AppSettings.EnablePressure</c>.
     /// </summary>
     public void SetPenService(Caelum.Services.PenService service)
     {
         _penService = service;
-        if (service != null)
-            EnablePressure = service.PressureEnabled;
     }
 
     /// <summary>Positions and shows the eraser indicator over a page point.</summary>
@@ -275,8 +290,18 @@ public sealed partial class InkSurface : Canvas
 
     private void InkSurface_PointerPressed(object sender, PointerRoutedEventArgs e)
     {
-        if (!InputEnabled || _activePointerId.HasValue)
+        if (!InputEnabled)
             return;
+
+        if (_activePointerId.HasValue)
+        {
+            // A second pointer (palm touch, second pen, another mouse) during
+            // an active ink gesture must not bubble to the ScrollViewer and
+            // pan the document mid-stroke — swallow it. WPF never sees this
+            // case: InkCanvas owns the stylus capture exclusively.
+            e.Handled = true;
+            return;
+        }
 
         var point = e.GetCurrentPoint(this);
         var device = point.PointerDeviceType;
@@ -306,15 +331,23 @@ public sealed partial class InkSurface : Canvas
         if (!wantsErase && !inkCreation)
             return; // Tool == None (or a Phase-B tool)
 
+        // Capture failure means moves/releases for this pointer may never
+        // reach us — do not begin an untracked gesture (and keep the press
+        // handled so it can't start a ScrollViewer pan either).
+        if (!CapturePointer(e.Pointer))
+        {
+            e.Handled = true;
+            return;
+        }
         _activePointerId = e.Pointer.PointerId;
-        CapturePointer(e.Pointer);
 
         if (wantsErase)
         {
             BeginEraseGesture();
             _isErasing = true;
             ShowEraserIndicatorAt(ToPointD(point.Position));
-            EraseAtPoint(ToPointD(point.Position));
+            if (EraseAtPoint(ToPointD(point.Position)))
+                InkMutated?.Invoke(this, EventArgs.Empty);
         }
         else
         {
@@ -343,12 +376,28 @@ public sealed partial class InkSurface : Canvas
 
         if (_isErasing)
         {
-            var points = e.GetIntermediatePoints(this);
-            foreach (var p in points)
+            // One routed event can carry a whole packet batch — the batch
+            // is erased in a single pass (one swept footprint over all
+            // intermediate points, one candidate scan) and the side effects
+            // coalesce: the indicator lands once on the freshest position
+            // and InkMutated fires once per event, not per packet.
+            var intermediates = e.GetIntermediatePoints(this);
+            var batch = new List<PointD>(intermediates.Count + 1);
+            foreach (var p in intermediates)
+                batch.Add(ToPointD(p.Position));
+            // GetIntermediatePoints may exclude the current point — append
+            // it past the same dedup the draw path applies so the eraser
+            // reaches the freshest position too.
+            var currentPoint = ToPointD(current.Position);
+            if (batch.Count == 0
+                || Math.Abs(batch[batch.Count - 1].X - currentPoint.X) > 0.0001
+                || Math.Abs(batch[batch.Count - 1].Y - currentPoint.Y) > 0.0001)
             {
-                ShowEraserIndicatorAt(ToPointD(p.Position));
-                EraseAtPoint(ToPointD(p.Position));
+                batch.Add(currentPoint);
             }
+            ShowEraserIndicatorAt(batch[batch.Count - 1]);
+            if (EraseAlongPoints(batch))
+                InkMutated?.Invoke(this, EventArgs.Empty);
             e.Handled = true;
             return;
         }
@@ -385,7 +434,8 @@ public sealed partial class InkSurface : Canvas
         var point = e.GetCurrentPoint(this);
         if (_isErasing)
         {
-            EraseAtPoint(ToPointD(point.Position));
+            if (EraseAtPoint(ToPointD(point.Position)))
+                InkMutated?.Invoke(this, EventArgs.Empty);
             _isErasing = false;
             ReleaseActivePointer();
             EndEraseGesture();
@@ -408,6 +458,20 @@ public sealed partial class InkSurface : Canvas
                 (e.KeyModifiers & Windows.System.VirtualKeyModifiers.Shift) != 0);
             ReleaseActivePointer();
         }
+        e.Handled = true;
+    }
+
+    /// <summary>
+    /// The OS cancelled the active pointer (pen out of range, touch
+    /// pre-empted by a system gesture, device lost). Treat it like a capture
+    /// loss: roll the in-flight gesture back rather than leave a
+    /// half-committed erase or a stuck live stroke.
+    /// </summary>
+    private void InkSurface_PointerCanceled(object sender, PointerRoutedEventArgs e)
+    {
+        if (_activePointerId == null || e.Pointer.PointerId != _activePointerId.Value)
+            return;
+        CancelInteraction();
         e.Handled = true;
     }
 
@@ -549,6 +613,12 @@ public sealed partial class InkSurface : Canvas
         // place; a hit raises StrokeRecognized (the editor pushes
         // InkStrokeReplacedAction so undo restores the raw scribble) and
         // skips StrokeCollected entirely.
+        //
+        // Event order note: StrokeRecognized fires BEFORE InkMutated — the
+        // undo action must land on the editor's stack before the trailing
+        // "visuals changed" invalidate, matching the StrokeCollected path
+        // below (collect → undo push → InkMutated last). InkMutated is
+        // always the final signal on every commit path.
         if (ShapeRecognitionEnabled && !stroke.IsHighlighter
             && stroke.Points.Count >= StrokeGeometry.MinRecognizedShapePoints
             && ScribbleShapeRecognition.TryReplaceWithRecognizedStroke(
@@ -606,17 +676,54 @@ public sealed partial class InkSurface : Canvas
     /// the swept segment from the previous update point. Splits are applied
     /// to the live store immediately (visible-during-drag) while the net
     /// removed/added placements accumulate into the gesture payload.
+    /// Returns whether any stroke was mutated — the caller coalesces
+    /// <see cref="InkMutated"/> into one raise per pointer event rather than
+    /// per intermediate packet.
     /// </summary>
-    private void EraseAtPoint(PointD point)
+    private bool EraseAtPoint(PointD point)
     {
-        var path = new List<PointD>();
+        var path = new List<PointD>(2);
         if (_lastErasePoint.HasValue)
             path.Add(_lastErasePoint.Value);
         path.Add(point);
         _lastErasePoint = point;
+        return EraseAlongPath(path);
+    }
 
+    /// <summary>
+    /// Batch variant of <see cref="EraseAtPoint"/> for a routed event's whole
+    /// intermediate-packet batch: the swept path chains from the previous
+    /// update point through every intermediate point, ONE footprint covers
+    /// the batch, and every candidate stroke is evaluated once — not once
+    /// per packet. Returns whether any stroke was mutated.
+    /// </summary>
+    private bool EraseAlongPoints(IReadOnlyList<PointD> points)
+    {
+        if (points == null || points.Count == 0)
+            return false;
+        var path = new List<PointD>(points.Count + 1);
+        if (_lastErasePoint.HasValue)
+            path.Add(_lastErasePoint.Value);
+        path.AddRange(points);
+        _lastErasePoint = points[points.Count - 1];
+        return EraseAlongPath(path);
+    }
+
+    /// <summary>
+    /// The shared erase pass: builds the swept square-stamp footprint for
+    /// <paramref name="path"/> ONCE and evaluates every candidate stroke
+    /// against it (the piece-taking Core overloads keep each stroke from
+    /// rebuilding the stamps).
+    /// </summary>
+    private bool EraseAlongPath(IReadOnlyList<PointD> path)
+    {
         if (Store.Count == 0)
-            return;
+            return false;
+
+        // The swept square-stamp footprint is identical for every candidate
+        // stroke — build it ONCE per update instead of letting each
+        // EraserHitsStroke/SplitStrokeAtEraser call rebuild it.
+        var footprintPieces = StrokeGeometry.BuildEraserFootprint(path, EraserSize);
 
         // Candidate prefilter: rendered spine bounds must overlap the stamp
         // footprint — mirrors the WPF rect-union prefilter before HitTest.
@@ -633,7 +740,7 @@ public sealed partial class InkSurface : Canvas
             if (WholeStrokeEraser)
             {
                 if (!StrokeGeometry.EraserHitsStroke(
-                        stroke.Points, stroke.Size, stroke.IgnorePressure, path, EraserSize))
+                        stroke.Points, stroke.Size, stroke.IgnorePressure, footprintPieces))
                     continue;
                 ApplyErasedStroke(stroke, new List<InkStrokeData>());
                 mutated = true;
@@ -641,7 +748,7 @@ public sealed partial class InkSurface : Canvas
             }
 
             var fragments = StrokeGeometry.SplitStrokeAtEraser(
-                stroke.Points, stroke.Size, stroke.IgnorePressure, path, EraserSize);
+                stroke.Points, stroke.Size, stroke.IgnorePressure, footprintPieces);
             // A miss returns a copy of the input — compare coordinates to
             // detect the no-op (GetEraseResult returns the same reference;
             // the Core splitter always allocates).
@@ -655,8 +762,7 @@ public sealed partial class InkSurface : Canvas
             mutated = true;
         }
 
-        if (mutated)
-            InkMutated?.Invoke(this, EventArgs.Empty);
+        return mutated;
     }
 
     /// <summary>A split fragment inherits every stroke property.</summary>
