@@ -357,11 +357,15 @@ namespace Caelum
                 t.IsActive = false;
                 if (t.Frame != null)
                     t.Frame.Visibility = Visibility.Collapsed;
+                // Hidden editors gate page input + stop the marching-ants
+                // timer (WPF SetHostActive parity).
+                (t.Frame?.Content as EditorPage)?.SetHostActive(false);
             }
 
             tab.IsActive = true;
             if (tab.Frame != null)
                 tab.Frame.Visibility = Visibility.Visible;
+            (tab.Frame?.Content as EditorPage)?.SetHostActive(true);
             _activeTab = tab;
 
             _syncingTabSelection = true;

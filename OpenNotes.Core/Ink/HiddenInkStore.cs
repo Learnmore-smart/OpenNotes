@@ -5,6 +5,32 @@ using Caelum.Models;
 namespace Caelum.Ink;
 
 /// <summary>
+/// Mutation payload for <see cref="HiddenInkStore.Changed"/> — mirrors the
+/// <see cref="InkStrokeStore"/> Mutated contract so surfaces can apply
+/// incremental visual updates (Added/Removed carry the item + its index;
+/// Cleared carries neither).
+/// </summary>
+public sealed class HiddenInkStoreChangedEventArgs : EventArgs
+{
+    public HiddenInkStoreChangedEventArgs(
+        InkStoreMutationKind kind, HiddenInkAnnotation item, int index)
+    {
+        Kind = kind;
+        Item = item;
+        Index = index;
+    }
+
+    /// <summary>Added / Removed / Cleared (hidden masks are never replaced in place).</summary>
+    public InkStoreMutationKind Kind { get; }
+
+    /// <summary>The mask that was added or removed; null on Cleared.</summary>
+    public HiddenInkAnnotation Item { get; }
+
+    /// <summary>Store index where the item landed (Added) or used to sit (Removed); -1 on Cleared.</summary>
+    public int Index { get; }
+}
+
+/// <summary>
 /// Ordered, UI-free per-page collection of <see cref="HiddenInkAnnotation"/>
 /// masks — the hidden-ink counterpart of <see cref="InkStrokeStore"/>.
 /// Masks are intentionally kept out of the ordinary stroke store so lasso
@@ -17,8 +43,12 @@ public sealed class HiddenInkStore
 {
     private readonly List<HiddenInkAnnotation> _items = new();
 
-    /// <summary>Raised after every quiet mutation (add/insert/remove/clear).</summary>
-    public event EventHandler Changed;
+    /// <summary>
+    /// Raised after every quiet mutation (add/insert/remove/clear) with the
+    /// mutation kind, the affected mask and its store index — pages use it
+    /// for incremental visual updates instead of rebuilding per change.
+    /// </summary>
+    public event EventHandler<HiddenInkStoreChangedEventArgs> Changed;
 
     public IReadOnlyList<HiddenInkAnnotation> Items => _items;
     public int Count => _items.Count;
@@ -53,7 +83,8 @@ public sealed class HiddenInkStore
         Sanitize(item);
         index = Math.Max(0, Math.Min(index, _items.Count));
         _items.Insert(index, item);
-        Changed?.Invoke(this, EventArgs.Empty);
+        Changed?.Invoke(this,
+            new HiddenInkStoreChangedEventArgs(InkStoreMutationKind.Added, item, index));
         return item;
     }
 
@@ -63,8 +94,10 @@ public sealed class HiddenInkStore
         int index = IndexOf(item);
         if (index < 0)
             return false;
+        var removed = _items[index];
         _items.RemoveAt(index);
-        Changed?.Invoke(this, EventArgs.Empty);
+        Changed?.Invoke(this,
+            new HiddenInkStoreChangedEventArgs(InkStoreMutationKind.Removed, removed, index));
         return true;
     }
 
@@ -74,7 +107,8 @@ public sealed class HiddenInkStore
         if (_items.Count == 0)
             return;
         _items.Clear();
-        Changed?.Invoke(this, EventArgs.Empty);
+        Changed?.Invoke(this,
+            new HiddenInkStoreChangedEventArgs(InkStoreMutationKind.Cleared, null, -1));
     }
 
     /// <summary>

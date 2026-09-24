@@ -114,8 +114,11 @@ the save/history pipeline remain deferred to T8–T9.
   into thumbs yet). Undo/Redo toolbar buttons carry the accelerators —
   Ctrl+Z undo, Ctrl+Y and Ctrl+Shift+Z redo (WPF `EditorPage_KeyDown`
   parity) — and consume `_undoStack`/`_redoStack` of
-  `Caelum.Ink.IUndoAction` (`UndoAsync`/`RedoAsync` awaited;
-  `InkStrokesErasedAction.LastOperationSucceeded` guards the stack pop;
+  `Caelum.Ink.IUndoAction` (`UndoAsync`/`RedoAsync` awaited — both
+  `CancelInteraction()` on every page first so a live selection-drag
+  snapshot restore or erase gesture can't re-apply/duplicate what the
+  action is undoing; `LastOperationSucceeded=false` on erased/cross-page
+  actions skips the stack pop;
   `UpdateUndoRedoButtons` refreshes `IsEnabled` after every mutation).
   `CancelInteraction` runs on every page before viewport re-renders/tab
   teardown so a stroke in progress can't strand pointer capture. Pen
@@ -193,8 +196,10 @@ the save/history pipeline remain deferred to T8–T9.
   selection action-bar flyout (style apply → `ApplySelectedDrawingStyle`
   → `InkStrokesStyleChangedAction`), `ShowBlankContextMenu`.
 - `EditorPage_PreviewKeyDown`: Ctrl+A → arm Select + `SelectAllAnnotations`
-  on the current page; Delete/Back → `DeleteSelection` (captures
-  placements → `InkStrokesRemovedAction`); Escape → search close else
+  on the current page; Delete/Back → `DeleteSelection` — the page is
+  captured FIRST (`ClearSelection` fires `SelectionChanged(false)`
+  synchronously and the handler nulls `_activeSelectionPage`), then
+  placements → `InkStrokesRemovedAction`; Escape → search close else
   `ActivateTool(None)` (WPF Esc parity — also drops live selection).
 - Hidden-ink load: `LoadAnnotationsIntoPages` feeds
   `pageAnnotation.HiddenInks` quietly under `_isLoadingAnnotations` (no
@@ -203,11 +208,18 @@ the save/history pipeline remain deferred to T8–T9.
 - WPF `SetResourceReference` has no WinUI equivalent — transient overlay
   brushes resolve once via `TryFindBrush` (rebuilt on next selection).
 
+- `SetHostActive(bool)` (public) — `MainWindow.ActivateTab` calls it so
+  hidden-tab editors gate page input + stop the ants timer via
+  `PdfPageControl.SetHostActive`→`ApplyInputGate` (WPF parity, minimal:
+  render/scroll state stays warm). `EditorPage_SizeChanged` also
+  re-clamps a visible ruler's centre via `ClampRulerCenter` so a
+  shrinking viewport can't strand it off-canvas.
+
 ## Open Threads / Resume Context
 - **Status:** GREEN — `tools/winui-editor-smoke.ps1` 60/60; Task 7 Phase A
   ink engine + Phase B (select/lasso/transforms incl. cross-page, shape
   tools, hidden ink, laser, ruler, mixed undo) live; WinUI build 0 err/0
-  warn, headless `CoreInkPhaseBTests` 44/44.
+  warn, headless `CoreInkPhaseBTests` 45/45.
 - **Deferred (stubbed, by design):** text/sticky/image overlays +
   persistent PDF text selection visuals (T8); save/autosave/dirty-close +
   version history + settings (`CollectAnnotations`, inert SavePdfButton)

@@ -335,6 +335,45 @@ public sealed class CoreInkPhaseBTests
     }
 
     [Test]
+    public void HiddenInkStore_Changed_CarriesKindItemAndIndex()
+    {
+        var store = new HiddenInkStore();
+        var events = new List<HiddenInkStoreChangedEventArgs>();
+        store.Changed += (_, e) => events.Add(e);
+
+        var first = Mask("a");
+        store.AddQuiet(first);
+        store.AddQuiet(Mask("b"));
+        // Undo-restore path: insert at a specific index keeps the payload's
+        // index aligned with where the item actually landed.
+        var restored = Mask("r");
+        store.InsertQuiet(1, restored);
+        store.RemoveQuiet(Mask("b"));
+        store.Clear();
+
+        Assert.That(events.Count, Is.EqualTo(5));
+
+        Assert.That(events[0].Kind, Is.EqualTo(InkStoreMutationKind.Added));
+        Assert.That(events[0].Item, Is.SameAs(first));
+        Assert.That(events[0].Index, Is.EqualTo(0));
+
+        Assert.That(events[1].Kind, Is.EqualTo(InkStoreMutationKind.Added));
+        Assert.That(events[1].Index, Is.EqualTo(1));
+
+        Assert.That(events[2].Kind, Is.EqualTo(InkStoreMutationKind.Added));
+        Assert.That(events[2].Item, Is.SameAs(restored));
+        Assert.That(events[2].Index, Is.EqualTo(1));
+
+        Assert.That(events[3].Kind, Is.EqualTo(InkStoreMutationKind.Removed));
+        Assert.That(events[3].Item, Is.Not.Null);
+        Assert.That(events[3].Index, Is.EqualTo(2));
+
+        Assert.That(events[4].Kind, Is.EqualTo(InkStoreMutationKind.Cleared));
+        Assert.That(events[4].Item, Is.Null);
+        Assert.That(events[4].Index, Is.EqualTo(-1));
+    }
+
+    [Test]
     public void HiddenInkIntersectsEraser_DetectsTouchAndMiss()
     {
         var mask = Mask(points: new List<double[]>

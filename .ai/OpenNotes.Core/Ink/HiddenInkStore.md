@@ -6,7 +6,8 @@
 UI-free ordered store for `HiddenInkAnnotation` masks (`Caelum.Ink`), Task 7
 Phase B. Hidden ink is deliberately NOT in `InkStrokeStore` — masks are study
 mode covers, not ink: the lasso/eraser/undo stroke ledger must never see them.
-One `HiddenInkStore` per `PdfPageControl`; visuals rebuild off `Changed`.
+One `HiddenInkStore` per `PdfPageControl`; visuals sync incrementally off
+typed `Changed` args.
 
 ## API surface
 
@@ -19,7 +20,11 @@ One `HiddenInkStore` per `PdfPageControl`; visuals rebuild off `Changed`.
   path (index captured pre-removal).
 - `RemoveQuiet(item)` — removes the mask carrying `item.Id`; returns false
   when absent. `Clear()` empties quietly.
-- `Changed` event — raised after every mutation (visual rebuild trigger).
+- `Changed` — `EventHandler<HiddenInkStoreChangedEventArgs>` carrying
+  `InkStoreMutationKind` (Added/Removed/Cleared), the affected `Item`
+  (null on Cleared) and its store `Index` (post-clamp for inserts, so an
+  undo-restore reports where the mask actually landed). Surfaces apply
+  single-visual updates on Added/Removed instead of rebuilding.
 
 ## Constraints / NEVER Change
 

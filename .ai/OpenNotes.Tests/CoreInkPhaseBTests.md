@@ -27,7 +27,9 @@ the WinUI host calls so the port can't silently drift.
   clamped `InsertQuiet` + `Changed`, `HiddenInkIntersectsEraser`
   (point-in-inflated-rect, segment crossing, miss, degenerate), and the
   `HiddenInkAdded`/`Removed`/`RemovedBatch` undo actions incl. index
-  restore.
+  restore, and `Changed` carrying `HiddenInkStoreChangedEventArgs`
+  (Kind/Item/Index — Added reports the post-clamp index, Removed the
+  vacated slot, Cleared neither).
 - **Shape commit** — `ShapeStrokeFactory.BuildShapeStrokes` identity
   stamping (shared `ShapeGroupId`, `ShapeKind` name, sequential
   `ShapePartIndex`, `IsDashedShape`), arrow shaft+head, dashed baking

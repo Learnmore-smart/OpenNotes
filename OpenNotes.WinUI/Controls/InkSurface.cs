@@ -592,8 +592,10 @@ public sealed partial class InkSurface : Canvas
 
         // Cursor indicator follows the cursor even without contact (WPF
         // UpdateBrushIndicatorStyle parity: eraser ring while erasing, brush
-        // ring while hovering in an ink mode).
-        if (!_isDrawing && !_isErasing && !_isShapeDragging && !_isLaserDrawing)
+        // ring while hovering in an ink mode). Input-gated surfaces (inactive
+        // tab, modal block) show nothing — CancelInteraction already hid the
+        // ring when the gate closed.
+        if (InputEnabled && !_isDrawing && !_isErasing && !_isShapeDragging && !_isLaserDrawing)
         {
             if (eraserish)
                 ShowEraserIndicatorAt(ToPointD(current.Position));
@@ -1257,7 +1259,11 @@ public sealed partial class InkSurface : Canvas
             return;
         var path = StrokeRenderer.CreateStrokePath(stroke);
         _strokeVisuals[stroke] = path;
-        int insertAt = Math.Max(0, Math.Min(index, Children.Count));
+        // The live in-progress path (not a store visual) is always the last
+        // child — clamp restored/inserted strokes below it so an undo
+        // mid-stroke can't paint over the stroke being drawn.
+        int maxIndex = Math.Max(0, Children.Count - (_livePath != null ? 1 : 0));
+        int insertAt = Math.Max(0, Math.Min(index, maxIndex));
         Children.Insert(insertAt, path);
     }
 

@@ -657,7 +657,6 @@ namespace Caelum.Pages
             pageControl.InkMutated += PageControl_InkMutated;
             pageControl.ShapeCommittedUndoable += PageControl_ShapeCommittedUndoable;
             pageControl.HiddenInkCreated += PageControl_HiddenInkCreated;
-            pageControl.HiddenInkRemoved += PageControl_HiddenInkRemoved;
             pageControl.HiddenInksRemoved += PageControl_HiddenInksRemoved;
             pageControl.SelectionChanged += PageControl_SelectionChanged;
             pageControl.SelectionMoveCompleted += PageControl_SelectionMoveCompleted;
@@ -2162,6 +2161,12 @@ namespace Caelum.Pages
         {
             if (_undoStack.Count == 0)
                 return;
+            // Cancel live gestures first (ApplyToolToAllPages contract):
+            // a selection-drag snapshot restore would re-apply the undone
+            // transform, and an erase undo would insert duplicates over the
+            // still-running gesture.
+            foreach (var p in _pageControls)
+                p.CancelInteraction();
             var action = _undoStack.Peek();
             try
             {
@@ -2190,6 +2195,8 @@ namespace Caelum.Pages
         {
             if (_redoStack.Count == 0)
                 return;
+            foreach (var p in _pageControls)
+                p.CancelInteraction();
             var action = _redoStack.Peek();
             try
             {
@@ -2396,15 +2403,6 @@ namespace Caelum.Pages
             PushUndoAction(new HiddenInkAddedAction(page.HiddenInkStore, annotation));
         }
 
-        private void PageControl_HiddenInkRemoved(object sender, HiddenInkAnnotation annotation)
-        {
-            if (_isLoadingAnnotations || annotation == null || sender is not PdfPageControl page)
-                return;
-            int index = page.HiddenInkStore.IndexOf(annotation);
-            PushUndoAction(new HiddenInkRemovedAction(
-                page.HiddenInkStore, annotation, Math.Max(0, index)));
-        }
-
         private void PageControl_HiddenInksRemoved(object sender, HiddenInksRemovedEventArgs e)
         {
             if (_isLoadingAnnotations || e?.Entries == null
@@ -2429,17 +2427,21 @@ namespace Caelum.Pages
             if (_activeSelectionPage == null || !_activeSelectionPage.HasSelection)
                 return;
 
-            var strokes = _activeSelectionPage.SelectedStrokes.ToList();
+            // Capture FIRST — ClearSelection() fires SelectionChanged(false)
+            // synchronously and PageControl_SelectionChanged nulls
+            // _activeSelectionPage, so post-clear dereferences would NRE.
+            var page = _activeSelectionPage;
+            var strokes = page.SelectedStrokes.ToList();
             var placements = strokes
-                .Select(s => _activeSelectionPage.Ink.Store.CaptureStrokePlacement(s))
+                .Select(s => page.Ink.Store.CaptureStrokePlacement(s))
                 .ToList();
 
             foreach (var stroke in strokes)
-                _activeSelectionPage.Ink.Store.RemoveStrokeQuiet(stroke);
+                page.Ink.Store.RemoveStrokeQuiet(stroke);
 
-            PushUndoAction(new InkStrokesRemovedAction(_activeSelectionPage.Ink.Store, placements));
-            _activeSelectionPage.ClearSelection();
-            InvalidateThumbnail(_activeSelectionPage.PageIndex);
+            PushUndoAction(new InkStrokesRemovedAction(page.Ink.Store, placements));
+            page.ClearSelection();
+            InvalidateThumbnail(page.PageIndex);
         }
 
         /// <summary>
@@ -3144,6 +3146,13 @@ namespace Caelum.Pages
                 ToolbarItemsScrollViewer.MaxWidth = Math.Max(220, ActualWidth - 24);
                 SetToolbarMetadata(ToolbarItemsScrollViewer, "Editor.ToolbarOverflow",
                     LocalizationService.Get("Editor.ToolbarScroll"));
+            }
+            // A shrinking viewport can strand the ruler outside the canvas —
+            // re-clamp so its centre (and grab handle) stays reachable.
+            if (_rulerVisible && _rulerVisual != null)
+            {
+                ClampRulerCenter();
+                UpdateRulerPosition();
             }
             AutoCollapseSidebarForNarrowLayout();
         }
@@ -4611,6 +4620,25 @@ namespace Caelum.Pages
         /// the same teardown Unloaded performs, idempotent.
         /// </summary>
         public void ShutdownEditor() => ReleaseResources();
+
+        /// <summary>
+        /// WPF SetHostActive parity (minimal): MainWindow calls this on tab
+        /// switches so hidden tabs gate page input AND stop the selection
+        /// marching-ants timer via <see cref="PdfPageControl.SetHostActive"/>
+        /// → ApplyInputGate. Rendering/scroll state stays warm — the tab is
+        /// hidden, not torn down.
+        /// </summary>
+        public void SetHostActive(bool isActive)
+        {
+            if (_resourcesReleased || _isHostActive == isActive)
+                return;
+            _isHostActive = isActive;
+            foreach (var page in _pageControls)
+            {
+                page.SetHostActive(isActive);
+                page.SetDocumentInputEnabled(isActive);
+            }
+        }
 
         // ── Session/lease plumbing ──────────────────────────────────────────
 

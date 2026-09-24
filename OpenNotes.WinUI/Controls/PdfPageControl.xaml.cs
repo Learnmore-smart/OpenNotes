@@ -196,6 +196,8 @@ namespace Caelum.Controls
         // ── Hidden ink ───────────────────────────────────────────────────
         private readonly Dictionary<string, Polyline> _hiddenInkVisuals = new();
         private readonly Dictionary<string, DispatcherQueueTimer> _hiddenInkRevealTimers = new();
+        private bool _selectionVisualsDirty;
+        private bool _selectionVisualsUpdateQueued;
         private List<(HiddenInkAnnotation Item, int Index)> _eraseGestureRemovedHiddenInks;
 
         // ── Laser ────────────────────────────────────────────────────────
@@ -258,8 +260,10 @@ namespace Caelum.Controls
             {
                 // Selection visuals track live geometry — move/scale/rotate
                 // and their undo rebuild the bounds rectangle and handles.
+                // NotifyGeometryChanged raises one Mutated PER STROKE, so
+                // coalesce the chrome rebuild to at most once per frame.
                 if (HasSelection)
-                    UpdateSelectionVisuals();
+                    QueueSelectionVisualsUpdate();
                 InkMutated?.Invoke(this, e);
             };
 
@@ -286,7 +290,35 @@ namespace Caelum.Controls
             SelectionOverlayCanvas.DoubleTapped += SelectionOverlay_DoubleTapped;
             SelectionOverlayCanvas.RightTapped += SelectionOverlay_RightTapped;
 
-            HiddenInkStore.Changed += (s, e) => RebuildHiddenInkVisuals();
+            HiddenInkStore.Changed += (s, e) =>
+            {
+                // Incremental sync: a single Added/Removed mask updates one
+                // visual (reveal timers + hit-test state on the others stay
+                // untouched); Cleared/unknown kinds rebuild the layer.
+                switch (e?.Kind)
+                {
+                    case InkStoreMutationKind.Added when e.Item != null:
+                        AddHiddenInkVisual(e.Item, e.Index);
+                        break;
+                    case InkStoreMutationKind.Removed when e.Item != null:
+                        // WPF RemoveHiddenInkQuiet parity — a removed mask's
+                        // reveal timer must not keep ticking on a dead visual.
+                        StopHiddenInkRevealTimer(e.Item.Id);
+                        if (_hiddenInkVisuals.TryGetValue(e.Item.Id, out var dead))
+                        {
+                            HiddenInkCanvas.Children.Remove(dead);
+                            _hiddenInkVisuals.Remove(e.Item.Id);
+                        }
+                        break;
+                    case InkStoreMutationKind.Cleared:
+                        StopAllHiddenInkRevealTimers();
+                        RebuildHiddenInkVisuals();
+                        break;
+                    default:
+                        RebuildHiddenInkVisuals();
+                        break;
+                }
+            };
 
             // WPF HiddenInkCanvas ClipToBounds="True" parity — WinUI Canvas
             // has no ClipToBounds member, so the clip rect tracks the
@@ -350,9 +382,6 @@ namespace Caelum.Controls
 
         /// <summary>A hidden-ink mask was created (drawn and committed).</summary>
         public event EventHandler<HiddenInkAnnotation> HiddenInkCreated;
-
-        /// <summary>A single hidden-ink mask was removed (eraser click).</summary>
-        public event EventHandler<HiddenInkAnnotation> HiddenInkRemoved;
 
         /// <summary>One erase gesture removed masks (batch payload for undo).</summary>
         public event EventHandler<HiddenInksRemovedEventArgs> HiddenInksRemoved;
@@ -425,6 +454,14 @@ namespace Caelum.Controls
             {
                 InkSurface.CancelInteraction();
                 CancelSelectionInteraction(restoreSnapshot: true);
+                // Hidden tabs keep no ticking ants (WPF SetHostActive parity).
+                StopSelectionDashTimer();
+            }
+            else if (HasSelection)
+            {
+                // StopSelectionDashTimer cleared the per-item outlines —
+                // rebuild the chrome once on reactivation.
+                UpdateSelectionVisuals();
             }
         }
 
@@ -1164,8 +1201,32 @@ namespace Caelum.Controls
 
         // ── Selection visuals ────────────────────────────────────────────
 
+        /// <summary>
+        /// Coalesces selection-chrome rebuilds: NotifyGeometryChanged fires
+        /// one Mutated per stroke, so an N-stroke drag would otherwise run
+        /// the full overlay rebuild N times per pointer packet.
+        /// </summary>
+        private void QueueSelectionVisualsUpdate()
+        {
+            _selectionVisualsDirty = true;
+            if (_selectionVisualsUpdateQueued)
+                return;
+            _selectionVisualsUpdateQueued = true;
+            DispatcherQueue.TryEnqueue(() =>
+            {
+                _selectionVisualsUpdateQueued = false;
+                if (!_selectionVisualsDirty)
+                    return;
+                _selectionVisualsDirty = false;
+                if (HasSelection)
+                    UpdateSelectionVisuals();
+            });
+        }
+
         private void UpdateSelectionVisuals()
         {
+            // A synchronous rebuild also satisfies a queued request.
+            _selectionVisualsDirty = false;
             var boundsD = StrokeGeometry.GetSelectionBounds(_selectedStrokes);
             if (_selectedStrokes.Count == 0)
             {
@@ -1549,7 +1610,7 @@ namespace Caelum.Controls
                 AddHiddenInkVisual(annotation);
         }
 
-        private void AddHiddenInkVisual(HiddenInkAnnotation annotation)
+        private void AddHiddenInkVisual(HiddenInkAnnotation annotation, int insertIndex = -1)
         {
             var polyline = new Polyline
             {
@@ -1578,7 +1639,12 @@ namespace Caelum.Controls
             polyline.PointerPressed += HiddenInkVisual_PointerPressed;
             polyline.IsHitTestVisible = IsHiddenInkInteractive();
             _hiddenInkVisuals[annotation.Id] = polyline;
-            HiddenInkCanvas.Children.Add(polyline);
+            // Undo restores InsertQuiet at a captured index — keep the visual
+            // z-order aligned with the store instead of always appending.
+            if (insertIndex >= 0 && insertIndex < HiddenInkCanvas.Children.Count)
+                HiddenInkCanvas.Children.Insert(insertIndex, polyline);
+            else
+                HiddenInkCanvas.Children.Add(polyline);
         }
 
         private bool IsHiddenInkInteractive()
@@ -1602,22 +1668,12 @@ namespace Caelum.Controls
                 return;
 
             e.Handled = true;
-            // WPF HandleHiddenInkVisualPress parity: in Erasing mode a press
-            // removes the mask through the single-removal event; otherwise
-            // it reveals. (The visual is non-hit-testable while erasing so
-            // the branch mirrors WPF's exact code path.)
-            if (_currentMode == CustomInkInputProcessingMode.Erasing)
-            {
-                // Event fires while the mask is still in the store so the
-                // editor's undo action can capture its index (WPF
-                // RemoveHiddenInk parity: raise, then quiet-remove).
-                HiddenInkRemoved?.Invoke(this, annotation);
-                HiddenInkStore.RemoveQuiet(annotation);
-            }
-            else
-            {
-                RevealHiddenInk(annotation, visual);
-            }
+            // WPF HandleHiddenInkVisualPress also removed the mask here in
+            // Erasing mode — that branch is dead on WinUI because the visual
+            // is non-hit-testable while erasing (IsHiddenInkInteractive);
+            // erasing-mode removal happens through the swept-eraser path
+            // (Ink_EraserPathUpdated). A press therefore always reveals.
+            RevealHiddenInk(annotation, visual);
         }
 
         /// <summary>
@@ -1652,6 +1708,18 @@ namespace Caelum.Controls
             };
             _hiddenInkRevealTimers[annotation.Id] = timer;
             timer.Start();
+        }
+
+        /// <summary>Stops one mask's reveal timer (removed-mask path).</summary>
+        private void StopHiddenInkRevealTimer(string id)
+        {
+            if (id == null)
+                return;
+            if (_hiddenInkRevealTimers.TryGetValue(id, out var timer))
+            {
+                timer.Stop();
+                _hiddenInkRevealTimers.Remove(id);
+            }
         }
 
         private void StopAllHiddenInkRevealTimers()

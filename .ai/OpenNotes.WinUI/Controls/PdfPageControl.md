@@ -25,7 +25,9 @@
   the WPF loader). `CancelInteraction()` dismisses an in-flight stroke/erase
   gesture (scroll-pawn + tool-switch + teardown safety).
 - `SetHostActive`/`SetDocumentInputEnabled` combine into `ApplyInputGate` →
-  `InkSurface.InputEnabled` (+ `CancelInteraction` when the gate closes).
+  `InkSurface.InputEnabled` (+ `CancelInteraction` and
+  `StopSelectionDashTimer` when the gate closes — hidden tabs keep no
+  ticking ants; re-opening with a live selection rebuilds the chrome once).
 - `ClearPdfTextSelection`, `SetPdfTextSelectionRects`,
   `RefreshStickyNoteContextMenuLocalization` — Task-6 shells/stubs kept so call
   sites compile; annotation behavior lands T8–T9.
@@ -71,10 +73,18 @@
   tap-to-reveal (`DispatcherQueueTimer`, auto-recover after
   `HiddenInkRevealDurationMs`/`RevealDurationMs`, `HiddenInkRevealState`
   deadline math). Eraser path hits whole masks via
-  `HiddenInkIntersectsEraser` → `HiddenInkRemoved` (single) /
-  `HiddenInksRemoved` (batch `HiddenInksRemovedEventArgs` with captured
-  indices); cancel rolls back quietly. `AddHiddenInk` = quiet loader,
-  `GetHiddenInkData` = save-path collector (T9 `CollectAnnotations`).
+  `HiddenInkIntersectsEraser` → `HiddenInksRemoved` (batch
+  `HiddenInksRemovedEventArgs` with captured indices — WPF's single
+  press-remove branch is dead here because the visual is
+  non-hit-testable while erasing; tap-remove rides the same swept
+  gesture path); cancel rolls back quietly. `AddHiddenInk` = quiet
+  loader, `GetHiddenInkData` = save-path collector (T9 `CollectAnnotations`).
+  Store `Changed` args drive incremental sync: `Added` →
+  `AddHiddenInkVisual(item, index)` (index-clamped `Children.Insert`
+  preserves undo-restore z-order), `Removed` → `StopHiddenInkRevealTimer(id)`
+  + drop just that visual (WPF `RemoveHiddenInkQuiet` parity — a removed
+  mask's reveal timer must not keep ticking), `Cleared` → stop all +
+  `RebuildHiddenInkVisuals`.
 - **Laser** (`LaserInkCanvas`): surface events → red (`FF3B30`) 3-DIP
   `Polyline`s; completed strokes timestamp and fade on a ~30 ms
   `DispatcherQueueTimer` via `LaserInkFade.GetOpacity`/`IsExpired`
@@ -85,6 +95,12 @@
   `InkSurface.RulerGeometryProvider`; `ProtectedCursor` (own-element only —
   WinUI keeps it protected) flips to the resize shape while the pointer is
   inside a corner handle.
+- **Selection-chrome coalescing**: `NotifyGeometryChanged` raises one
+  `Mutated` per stroke, so `InkMutated` → `QueueSelectionVisualsUpdate`
+  dirty-flag + `DispatcherQueue.TryEnqueue` — the bounds/handles/ants
+  overlay rebuilds at most once per frame, not N× per pointer packet
+  (synchronous `UpdateSelectionVisuals` callers satisfy the queued
+  request by clearing the dirty flag).
 - Timers store on `Microsoft.UI.Dispatching.DispatcherQueueTimer` via an
   alias — `Windows.System` is also imported and its type wins unqualified
   (was a build break).
