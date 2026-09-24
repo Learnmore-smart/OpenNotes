@@ -18,45 +18,80 @@ namespace Caelum.Services
         private const uint BI_RGB = 0;
 
         /// <summary>
+        /// Sanity cap on the clipboard EMF record stream — a real
+        /// CF_ENHMETAFILE over 256 MB is pathological, and the bound keeps
+        /// <c>new byte[size]</c> safely inside int range.
+        /// </summary>
+        private const uint MaxEmfByteSize = 256 * 1024 * 1024;
+
+        /// <summary>
         /// True when the Win32 clipboard carries a live CF_ENHMETAFILE handle.
         /// WinUI's <c>DataPackageView</c> does not surface metafiles, so PowerPoint
         /// / Word / CAD copies that only publish EMF are invisible without this
         /// check (WPF ClipboardImageDecoder EMF leg parity).
         /// </summary>
         public static bool IsClipboardEnhMetafileAvailable()
-            => IsClipboardFormatAvailable(CF_ENHMETAFILE);
+        {
+            if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                return false;
+            try
+            {
+                return IsClipboardFormatAvailable(CF_ENHMETAFILE);
+            }
+            catch
+            {
+                // WPF IsWin32EnhMetafileAvailable: a clipboard API that
+                // throws simply means "no EMF" — probing must never kill
+                // Ctrl+V.
+                return false;
+            }
+        }
 
         /// <summary>
         /// Copies the current clipboard EMF out to a self-contained byte[]
         /// (GetEnhMetaFileBits). Returns false when no metafile is on the
-        /// clipboard or the handle cannot be read.
+        /// clipboard or the handle cannot be read. Never throws — malformed
+        /// or oversized metafiles return false (WPF TryFromWin32EnhMetafile
+        /// contract).
         /// </summary>
         public static bool TryReadClipboardEnhMetafileBytes(out byte[] emfBytes)
         {
             emfBytes = null;
-            if (!OpenClipboard(IntPtr.Zero))
+            if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
                 return false;
 
             try
             {
-                IntPtr hEmf = GetClipboardData(CF_ENHMETAFILE);
-                if (hEmf == IntPtr.Zero)
+                if (!OpenClipboard(IntPtr.Zero))
                     return false;
 
-                uint size = GetEnhMetaFileBits(hEmf, 0, null);
-                if (size == 0)
-                    return false;
+                try
+                {
+                    IntPtr hEmf = GetClipboardData(CF_ENHMETAFILE);
+                    if (hEmf == IntPtr.Zero)
+                        return false;
 
-                byte[] buffer = new byte[size];
-                if (GetEnhMetaFileBits(hEmf, size, buffer) == 0)
-                    return false;
+                    uint size = GetEnhMetaFileBits(hEmf, 0, null);
+                    // Cap BEFORE the alloc — a hostile metafile reporting a
+                    // huge record stream must not even attempt it.
+                    if (size == 0 || size > MaxEmfByteSize)
+                        return false;
 
-                emfBytes = buffer;
-                return true;
+                    byte[] buffer = new byte[size];
+                    if (GetEnhMetaFileBits(hEmf, size, buffer) == 0)
+                        return false;
+
+                    emfBytes = buffer;
+                    return true;
+                }
+                finally
+                {
+                    CloseClipboard();
+                }
             }
-            finally
+            catch
             {
-                CloseClipboard();
+                return false;
             }
         }
 
@@ -66,7 +101,8 @@ namespace Caelum.Services
         /// rclFrame physical-size (.01 mm → 96 DIP) conversion as a floor for
         /// boundsless records — mirroring the WPF decoder's sizing rules.
         /// <paramref name="maxEdge"/> caps either axis so a hostile metafile
-        /// cannot request unbounded memory (0 = no cap).
+        /// cannot request unbounded memory (0 = no cap). Never throws —
+        /// malformed records or OOM return false (WPF decoder contract).
         /// </summary>
         public static bool TryRasterizeToBgra(
             byte[] emfBytes,
@@ -79,13 +115,12 @@ namespace Caelum.Services
             width = 0;
             height = 0;
 
-            if (emfBytes == null || emfBytes.Length < Marshal.SizeOf<ENHMETAHEADER>())
+            if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
+                || emfBytes == null
+                || emfBytes.Length < Marshal.SizeOf<ENHMETAHEADER>())
                 return false;
 
-            IntPtr hEmf = SetEnhMetaFileBits((uint)emfBytes.Length, emfBytes);
-            if (hEmf == IntPtr.Zero)
-                return false;
-
+            IntPtr hEmf = IntPtr.Zero;
             IntPtr hdcScreen = IntPtr.Zero;
             IntPtr hdcMem = IntPtr.Zero;
             IntPtr hBitmap = IntPtr.Zero;
@@ -93,6 +128,10 @@ namespace Caelum.Services
 
             try
             {
+                hEmf = SetEnhMetaFileBits((uint)emfBytes.Length, emfBytes);
+                if (hEmf == IntPtr.Zero)
+                    return false;
+
                 var header = new ENHMETAHEADER();
                 if (GetEnhMetaFileHeader(hEmf, (uint)Marshal.SizeOf<ENHMETAHEADER>(), header) == 0)
                     return false;
@@ -168,6 +207,13 @@ namespace Caelum.Services
                 bgraPixels = pixels;
                 return true;
             }
+            catch
+            {
+                // WPF decoder contract: a malformed metafile, a GDI failure
+                // mid-playback or an oversized buffer request is just "no
+                // image" — never throw through the clipboard path.
+                return false;
+            }
             finally
             {
                 if (hOld != IntPtr.Zero && hdcMem != IntPtr.Zero)
@@ -178,7 +224,8 @@ namespace Caelum.Services
                     DeleteDC(hdcMem);
                 if (hdcScreen != IntPtr.Zero)
                     ReleaseDC(IntPtr.Zero, hdcScreen);
-                DeleteEnhMetaFile(hEmf);
+                if (hEmf != IntPtr.Zero)
+                    DeleteEnhMetaFile(hEmf);
             }
         }
 

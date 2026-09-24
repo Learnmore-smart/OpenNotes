@@ -2,12 +2,14 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using Caelum.Ink;
 using Caelum.InkGeometry;
 using Caelum.Models;
 using Caelum.Pdf;
 using NUnit.Framework;
+using EnhMetafileRasterizer = Caelum.Services.EnhMetafileRasterizer;
 
 namespace Caelum.Tests;
 
@@ -451,6 +453,118 @@ public sealed class Task8PhaseBTests
     }
 
     // ------------------------------------------------------------------
+    // EnhMetafileRasterizer — real EMF roundtrip + hostile-input contract.
+    // ------------------------------------------------------------------
+
+    [Test]
+    public void TryRasterizeToBgra_RasterizesARealEmf()
+    {
+        if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            Assert.Ignore("GDI metafile playback is Windows-only.");
+
+        byte[] emf = CreateTestEmfBytes();
+        Assert.That(emf, Is.Not.Null.And.Not.Empty);
+
+        Assert.That(
+            EnhMetafileRasterizer.TryRasterizeToBgra(
+                emf, 4096, out byte[] bgra, out int width, out int height),
+            Is.True);
+
+        Assert.Multiple(() =>
+        {
+            // The test EMF draws Rectangle(10,10,110,90) — bounds land near
+            // 100×80 (GDI includes the drawn extent, so allow slack).
+            Assert.That(width, Is.InRange(40, 400));
+            Assert.That(height, Is.InRange(30, 320));
+            Assert.That(bgra.Length, Is.EqualTo(width * height * 4));
+        });
+
+        // Alpha is normalized to opaque on every pixel.
+        for (int i = 3; i < bgra.Length; i += 4)
+            Assert.That(bgra[i], Is.EqualTo(0xFF));
+
+        // The black Rectangle border must survive — the white backing is
+        // not a blanket "all white" shortcut.
+        bool hasDarkPixel = false;
+        for (int i = 0; i < bgra.Length; i += 4)
+        {
+            if (bgra[i] < 0x40 && bgra[i + 1] < 0x40 && bgra[i + 2] < 0x40)
+            {
+                hasDarkPixel = true;
+                break;
+            }
+        }
+        Assert.That(hasDarkPixel, Is.True, "Rectangle border should rasterize dark pixels.");
+    }
+
+    [Test]
+    public void TryRasterizeToBgra_OversizedOrMalformedNeverAllocatesOrThrows()
+    {
+        if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            Assert.Ignore("GDI metafile playback is Windows-only.");
+
+        // Malformed: header-sized garbage — SetEnhMetaFileBits rejects it.
+        var garbage = new byte[256];
+        for (int i = 0; i < garbage.Length; i++)
+            garbage[i] = 0xAB;
+        Assert.That(
+            EnhMetafileRasterizer.TryRasterizeToBgra(
+                garbage, 4096, out _, out _, out _),
+            Is.False);
+
+        // Oversized: a REAL emf whose rclBounds header fields are patched to
+        // a giant extent — the maxEdge cap runs before any pixel buffer
+        // alloc, so output dims are bounded (or playback simply rejects).
+        byte[] emf = CreateTestEmfBytes();
+        WriteInt32(emf, 8, 0);          // rclBounds.left
+        WriteInt32(emf, 12, 0);         // rclBounds.top
+        WriteInt32(emf, 16, 200_000);   // rclBounds.right
+        WriteInt32(emf, 20, 150_000);   // rclBounds.bottom
+
+        bool ok = EnhMetafileRasterizer.TryRasterizeToBgra(
+            emf, 4096, out byte[] bgra, out int width, out int height);
+        if (ok)
+        {
+            Assert.Multiple(() =>
+            {
+                Assert.That(width, Is.LessThanOrEqualTo(4096));
+                Assert.That(height, Is.LessThanOrEqualTo(4096));
+                Assert.That(bgra.Length, Is.EqualTo(width * height * 4));
+            });
+        }
+        // !ok is equally valid — the forged header is malformed input and
+        // the "never throws" contract holds either way.
+    }
+
+    [Test]
+    public void EditorPageCapturesRequestIdAfterClearPdfTextSelection()
+    {
+        // P0 ordering pin: the press handler must take its request
+        // generation AFTER ClearPdfTextSelection() — the clear increments
+        // the field itself, so a pre-clear capture is always stale and the
+        // handler would return before arming the drag.
+        string editor = ReadWinUi("Pages", "EditorPage.xaml.cs");
+        int handlerIdx = editor.IndexOf(
+            "private async void PageControl_PdfTextSelectionPointerPressed(",
+            StringComparison.Ordinal);
+        Assert.That(handlerIdx, Is.GreaterThanOrEqualTo(0));
+
+        int bodyEnd = editor.IndexOf("\n        private", handlerIdx + 1, StringComparison.Ordinal);
+        string body = editor.Substring(handlerIdx, bodyEnd - handlerIdx);
+
+        int clearIdx = body.IndexOf("ClearPdfTextSelection();", StringComparison.Ordinal);
+        int captureIdx = body.IndexOf(
+            "requestId = Interlocked.Increment(ref _pdfTextSelectionRequestId)",
+            StringComparison.Ordinal);
+        Assert.Multiple(() =>
+        {
+            Assert.That(clearIdx, Is.GreaterThanOrEqualTo(0));
+            Assert.That(captureIdx, Is.GreaterThan(clearIdx),
+                "request id must be captured AFTER ClearPdfTextSelection()");
+        });
+    }
+
+    // ------------------------------------------------------------------
     // WinUI source contract — pins the Phase-B wiring in the port.
     // ------------------------------------------------------------------
 
@@ -489,6 +603,25 @@ public sealed class Task8PhaseBTests
             Assert.That(page, Does.Contain("PdfTextSelectionCanvas_PointerMoved"));
             Assert.That(page, Does.Contain("PdfTextSelectionCanvas_PointerReleased"));
             Assert.That(page, Does.Contain("CapturePointer(e.Pointer)"));
+
+            // Each selection-canvas handler must filter touch (finger pans
+            // the ScrollViewer, WPF IsTouchFinger parity) AND respect the
+            // host/document input gate — not just _isPdfTextSelectionEnabled.
+            foreach (string handler in new[]
+            {
+                "PdfTextSelectionCanvas_PointerPressed",
+                "PdfTextSelectionCanvas_PointerMoved",
+                "PdfTextSelectionCanvas_PointerReleased",
+            })
+            {
+                int hIdx = page.IndexOf(
+                    $"private void {handler}(object sender", StringComparison.Ordinal);
+                Assert.That(hIdx, Is.GreaterThanOrEqualTo(0), handler);
+                int hEnd = page.IndexOf("\n        }", hIdx, StringComparison.Ordinal);
+                string hBody = page.Substring(hIdx, hEnd - hIdx);
+                Assert.That(hBody, Does.Contain("!_hostActive || !_documentInputEnabled"), handler);
+                Assert.That(hBody, Does.Contain("PointerDeviceType.Touch"), handler);
+            }
 
             // Quiet paths + cross-page payload for undo/move.
             Assert.That(page, Does.Contain("IAnnotationContainerHost.GetImageData"));
@@ -756,4 +889,59 @@ public sealed class Task8PhaseBTests
         return File.ReadAllText(Path.Combine(
             new[] { Path.Combine(root, "OpenNotes.WinUI") }.Concat(segments).ToArray()));
     }
+
+    // ------------------------------------------------------------------
+    // EMF test fixture — records a real enhanced metafile through GDI.
+    // ------------------------------------------------------------------
+
+    /// <summary>
+    /// Records a ~100×80 EMF containing a single Rectangle. Returned bytes
+    /// are a self-contained metafile stream (GetEnhMetaFileBits).
+    /// </summary>
+    private static byte[] CreateTestEmfBytes()
+    {
+        IntPtr hdc = CreateEnhMetaFile(IntPtr.Zero, null, IntPtr.Zero, "Task8PhaseBTests");
+        Assert.That(hdc, Is.Not.EqualTo(IntPtr.Zero), "CreateEnhMetaFile failed");
+
+        Rectangle(hdc, 10, 10, 110, 90);
+        IntPtr hEmf = CloseEnhMetaFile(hdc);
+        Assert.That(hEmf, Is.Not.EqualTo(IntPtr.Zero), "CloseEnhMetaFile failed");
+
+        try
+        {
+            uint size = GetEnhMetaFileBits(hEmf, 0, null);
+            Assert.That(size, Is.GreaterThan(0), "GetEnhMetaFileBits size query failed");
+            var bytes = new byte[size];
+            Assert.That(GetEnhMetaFileBits(hEmf, size, bytes), Is.EqualTo(size));
+            return bytes;
+        }
+        finally
+        {
+            DeleteEnhMetaFile(hEmf);
+        }
+    }
+
+    private static void WriteInt32(byte[] buffer, int offset, int value)
+    {
+        buffer[offset] = (byte)value;
+        buffer[offset + 1] = (byte)(value >> 8);
+        buffer[offset + 2] = (byte)(value >> 16);
+        buffer[offset + 3] = (byte)(value >> 24);
+    }
+
+    [DllImport("gdi32.dll", CharSet = CharSet.Unicode)]
+    private static extern IntPtr CreateEnhMetaFile(
+        IntPtr hdcRef, string lpFilename, IntPtr lpRect, string lpDescription);
+
+    [DllImport("gdi32.dll")]
+    private static extern IntPtr CloseEnhMetaFile(IntPtr hdc);
+
+    [DllImport("gdi32.dll")]
+    private static extern bool DeleteEnhMetaFile(IntPtr hEmf);
+
+    [DllImport("gdi32.dll")]
+    private static extern uint GetEnhMetaFileBits(IntPtr hEmf, uint nSize, byte[] buffer);
+
+    [DllImport("gdi32.dll")]
+    private static extern bool Rectangle(IntPtr hdc, int left, int top, int right, int bottom);
 }

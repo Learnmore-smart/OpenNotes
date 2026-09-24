@@ -224,7 +224,12 @@
   page-DIP positions through `PdfTextSelectionPointerPressed/Moved/Released`
   (editor owns anchor/active offsets + the commit). `SetPdfTextSelectionRects`
   paints the merged quads; `ClearPdfTextSelection` drops them. Disarming
-  releases capture + clears.
+  releases capture + clears. All three handlers gate on
+  `!_hostActive || !_documentInputEnabled` (sibling-layer parity) AND
+  early-return `PointerDeviceType.Touch` (WPF `IsTouchFinger` — finger pans
+  the ScrollViewer, never selects); `ApplyInputGate`'s `!enabled` branch
+  releases a live selection-canvas capture so a hidden/modal page can't
+  pin the pointer.
 - **Quiet paths cover every overlay kind** — `RemoveTextContainerQuiet`
   detaches from whichever canvas parents the container (keeping
   `_overlayData`/`_imageDataById` entries so re-add restores as-is);
@@ -233,6 +238,9 @@
 - **`CancelInteraction`/`ReleaseResources` sweep the new state** — in-flight
   area-highlight drag, the text-selection pointer capture, `_imageDataById`,
   `_highlights`, both selection canvases.
+- **`AreaHighlightCreated` is undo-only** — the editor pushes one
+  `AnnotationItemsAddedAction`; unlike pasted images there is NO auto-select
+  (WPF `PageControl_AreaHighlightCreated` parity).
 - **`SelectAllAnnotations` (Ctrl+A) selects image containers too** — the
   concat is `TextOverlayCanvas` grids + `ImageOverlayCanvas` grids filtered
   by `IsOverlayContainer` (WPF parity); `GetOverlayContainers()` must NOT

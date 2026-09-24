@@ -2974,8 +2974,6 @@ namespace Caelum.Pages
             using var operationLease = CaptureDocumentOperationLease(page);
             if (!ValidateDocumentOperationLease(operationLease, page) || !_pageControls.Contains(page))
                 return;
-            int requestId = Interlocked.Increment(ref _pdfTextSelectionRequestId);
-
             if (_selectedTextBox != null)
                 DeselectTextBox();
 
@@ -2983,6 +2981,14 @@ namespace Caelum.Pages
             // Escape/arrows reach the page-level key handlers mid-drag.
             PdfScrollViewer.Focus(FocusState.Programmatic);
             ClearPdfTextSelection();
+
+            // Capture the request generation AFTER ClearPdfTextSelection —
+            // the clear itself increments the field, so a pre-clear capture
+            // is always stale and the handler returned before arming the
+            // drag. WPF has the identical ordering bug (increment at :2374
+            // then clear at :2379) — its selection silently dead-arms too;
+            // fixed here so the port actually works.
+            int requestId = Interlocked.Increment(ref _pdfTextSelectionRequestId);
             _pdfTextSelectionPressPoint = e.Position;
 
             try

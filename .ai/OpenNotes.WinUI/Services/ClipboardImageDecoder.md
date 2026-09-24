@@ -23,8 +23,11 @@ whatever image payload a source app put on the clipboard into PNG bytes that
      no equivalent — `DataPackageView` merges CF_DIB/CF_BITMAP publishers
      into Bitmap).
   3. `CF_ENHMETAFILE` — Core `EnhMetafileRasterizer` reads + rasterizes the
-     Win32 handle to BGRA, wrapped in `SoftwareBitmap` and PNG-encoded here.
-- `MaxDecodeEdge = 16384` caps a decoded bitmap edge (WPF parity).
+     Win32 handle to BGRA, wrapped in `SoftwareBitmap` and PNG-encoded here;
+     the whole leg is try/catch-wrapped (WPF `TryFromWin32EnhMetafile`).
+- `MaxDecodeEdge = 16384` caps the WIC Bitmap leg only (a WinUI safety cap —
+  WPF's Bitmap/DIB legs are uncapped); `MaxEmfDecodeEdge = 4096` caps EMF
+  playback (WPF `RasterizeMetafile` parity — tighter than the WIC leg).
 - All image reads are exception-swallowing by contract — a bad clipboard must
   never kill Ctrl+V (`ex is not OutOfMemoryException` filter everywhere).
 

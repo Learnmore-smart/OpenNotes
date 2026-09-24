@@ -289,7 +289,12 @@ the save/history pipeline remain deferred to T8–T9.
   ∞ while dragging), `_pdfTextSelectionInfo` comes from
   `TryGetCachedPageTextInfo`/`GetPageTextInfoAsync`, drag threshold 4 DIP,
   `UpdatePdfTextSelectionVisuals` repaints merged quads + refreshes
-  `_selectedPdfText`; Ctrl+C copies it when no annotation selection is
+  `_selectedPdfText`; the press handler captures `requestId =
+  Interlocked.Increment(_pdfTextSelectionRequestId)` AFTER
+  `ClearPdfTextSelection()` — the clear increments the field itself, so a
+  pre-clear capture is always stale and the drag never armed (the WPF
+  original has the identical dead-arm bug — fixed here); Ctrl+C copies it
+  when no annotation selection is
   live (`TryCopySelectedPdfTextToClipboard` — a successful copy toasts
   `Editor.TextCopied` + `\uE8C8`/1500 ms via `GetMainWindow().ShowToast`,
   WPF parity); Escape/tool-switch/lease

@@ -31,6 +31,13 @@ port plus the WinUI source contract that pins the wiring.
   move-undo replays −delta to the origin, highlight-undo delists), then
   redo replays commit order — `FakeImageHost.Positions` keeps a detached
   container's coordinates like a real Grid keeps Canvas.Left/Top.
+- **`EnhMetafileRasterizer`**: a REAL emf is generated in-test
+  (`CreateEnhMetaFile` → GDI `Rectangle` → `CloseEnhMetaFile` →
+  `GetEnhMetaFileBits`) then rasterized — asserts bounded dims, BGRA
+  length, all-alpha-0xFF and surviving dark border pixels; a forged
+  giant-bounds header exercises the pre-alloc cap without a giant alloc;
+  garbage bytes prove malformed input returns false. All Windows-only
+  tests self-`Assert.Ignore` off-Windows.
 - **WinUI source contract** (reads `OpenNotes.WinUI` files as text —
   `ReadWinUi` anchors on the dir containing `OpenNotes.WinUI.csproj`):
   `PdfPageControl.xaml.cs` keeps `AddImageAsync`/`_imageDataById`/
@@ -47,7 +54,11 @@ port plus the WinUI source contract that pins the wiring.
   and `LoadAnnotationsIntoPagesAsync` covering every Phase-B collection;
   `CollectAnnotations` writes `Images`/`TextMarkups`/`AreaHighlights`/
   `Highlights` with live geometry; `ClipboardImageDecoder.cs` keeps the
-  three WPF legs (PNG > Bitmap > EMF).
+  three WPF legs (PNG > Bitmap > EMF); per-handler pins keep the
+  pdf-text-selection canvas touch-filtered (`PointerDeviceType.Touch`
+  early-return) and input-gated (`!_hostActive || !_documentInputEnabled`),
+  and `EditorPageCapturesRequestIdAfterClearPdfTextSelection` pins the
+  press handler's request-id capture AFTER the clear (P0 dead-arm fix).
 
 ## Notes
 
@@ -56,4 +67,4 @@ port plus the WinUI source contract that pins the wiring.
   `MoveItemsDirectly` mutates container coords the way the real
   `PdfPageControl` moves Grids); the latter exercises the Phase-B default
   members.
-- All 30 tests are headless (no UI thread) — run with the standard suite.
+- All 33 tests are headless (no UI thread) — run with the standard suite.

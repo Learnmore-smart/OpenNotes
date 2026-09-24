@@ -27,8 +27,11 @@ namespace Caelum.Services
     /// </summary>
     public static class ClipboardImageDecoder
     {
-        /// <summary>Cap on a decoded bitmap edge (WPF parity: 16384).</summary>
+        /// <summary>Cap on a WIC-decoded bitmap edge (WinUI safety cap — WPF's Bitmap/DIB legs are uncapped).</summary>
         private const int MaxDecodeEdge = 16384;
+
+        /// <summary>Cap on the EMF playback edge (WPF RasterizeMetafile parity: 4096).</summary>
+        private const int MaxEmfDecodeEdge = 4096;
 
         /// <summary>
         /// True when <paramref name="content"/> (or the raw Win32 clipboard)
@@ -88,17 +91,27 @@ namespace Caelum.Services
 
             // Leg 3 — CF_ENHMETAFILE (PowerPoint/Word/CAD copies that never
             // publish a raster format). Rasterize in Core, encode here.
-            if (includeWin32Clipboard &&
-                EnhMetafileRasterizer.TryReadClipboardEnhMetafileBytes(out byte[] emfBytes) &&
-                EnhMetafileRasterizer.TryRasterizeToBgra(
-                    emfBytes, MaxDecodeEdge, out byte[] bgra, out int width, out int height))
+            // WPF caps EMF playback at 4096px — tighter than the WIC leg —
+            // and wraps the whole leg so a malformed metafile means "no
+            // image", never a Ctrl+V crash.
+            try
             {
-                var bitmap = new SoftwareBitmap(
-                    BitmapPixelFormat.Bgra8, width, height, BitmapAlphaMode.Premultiplied);
-                bitmap.CopyFromBuffer(bgra.AsBuffer());
-                byte[] png = await EncodeToPngAsync(bitmap).ConfigureAwait(true);
-                if (png != null)
-                    return png;
+                if (includeWin32Clipboard &&
+                    EnhMetafileRasterizer.TryReadClipboardEnhMetafileBytes(out byte[] emfBytes) &&
+                    EnhMetafileRasterizer.TryRasterizeToBgra(
+                        emfBytes, MaxEmfDecodeEdge, out byte[] bgra, out int width, out int height))
+                {
+                    var bitmap = new SoftwareBitmap(
+                        BitmapPixelFormat.Bgra8, width, height, BitmapAlphaMode.Premultiplied);
+                    bitmap.CopyFromBuffer(bgra.AsBuffer());
+                    byte[] png = await EncodeToPngAsync(bitmap).ConfigureAwait(true);
+                    if (png != null)
+                        return png;
+                }
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                // fall through — no image
             }
 
             return null;

@@ -577,8 +577,8 @@ namespace Caelum.Controls
 
         /// <summary>
         /// An area-highlight drag committed — the container payload is the
-        /// created Grid; the editor pushes the undo action and selects it
-        /// (WPF AreaHighlightCreated).
+        /// created Grid; the editor only pushes the undo action (WPF
+        /// AreaHighlightCreated — no auto-select, unlike pasted images).
         /// </summary>
         public event EventHandler<Grid> AreaHighlightCreated;
 
@@ -685,6 +685,13 @@ namespace Caelum.Controls
                 InkSurface.CancelInteraction();
                 CancelSelectionInteraction(restoreSnapshot: true);
                 CancelStickyDrag();
+                // An in-flight pdf text-selection drag holds pointer capture —
+                // release it so a hidden/modal page can't pin the pointer.
+                if (_pdfTextSelectionPointerId != null)
+                {
+                    _pdfTextSelectionPointerId = null;
+                    PdfTextSelectionCanvas.ReleasePointerCaptures();
+                }
                 // Hidden tabs keep no ticking ants (WPF SetHostActive parity).
                 StopSelectionDashTimer();
             }
@@ -769,7 +776,12 @@ namespace Caelum.Controls
 
         private void PdfTextSelectionCanvas_PointerPressed(object sender, PointerRoutedEventArgs e)
         {
-            if (!_isPdfTextSelectionEnabled)
+            if (!_isPdfTextSelectionEnabled || !_hostActive || !_documentInputEnabled)
+                return;
+            // WPF PdfTextSelectionCanvas_StylusDown: finger touches pass
+            // through to ScrollViewer manipulation (pan/zoom) — touch
+            // reports IsLeftButtonPressed, so filter the device first.
+            if (e.Pointer.PointerDeviceType == PointerDeviceType.Touch)
                 return;
             var point = e.GetCurrentPoint(PdfTextSelectionCanvas);
             // Only the primary button begins a selection drag; a second
@@ -786,7 +798,9 @@ namespace Caelum.Controls
 
         private void PdfTextSelectionCanvas_PointerMoved(object sender, PointerRoutedEventArgs e)
         {
-            if (!_isPdfTextSelectionEnabled)
+            if (!_isPdfTextSelectionEnabled || !_hostActive || !_documentInputEnabled)
+                return;
+            if (e.Pointer.PointerDeviceType == PointerDeviceType.Touch)
                 return;
             var point = e.GetCurrentPoint(PdfTextSelectionCanvas);
             bool pressed = point.Properties.IsLeftButtonPressed
@@ -799,7 +813,9 @@ namespace Caelum.Controls
 
         private void PdfTextSelectionCanvas_PointerReleased(object sender, PointerRoutedEventArgs e)
         {
-            if (!_isPdfTextSelectionEnabled)
+            if (!_isPdfTextSelectionEnabled || !_hostActive || !_documentInputEnabled)
+                return;
+            if (e.Pointer.PointerDeviceType == PointerDeviceType.Touch)
                 return;
             var point = e.GetCurrentPoint(PdfTextSelectionCanvas);
             if (_pdfTextSelectionPointerId == e.Pointer.PointerId)
