@@ -446,8 +446,10 @@
                                                  Stroke="{ThemeResource ThemeForegroundBrush}"/>
                         </ToggleButton>
 
-                        <!-- On-screen ruler toggle (T7). -->
-                        <ToggleButton x:Name="RulerToolButton" Click="ToolButton_Click"
+                        <!-- On-screen ruler overlay toggle (T7 Phase B).
+                             WPF parity: NOT a ToolType — stays active
+                             alongside the current tool. -->
+                        <ToggleButton x:Name="RulerToolButton" Click="RulerToolButton_Click"
                                       Style="{StaticResource ToolbarToggleButtonStyle}"
                                       Width="36" Height="36" Margin="1,0"
                                       AutomationProperties.AutomationId="Editor.RulerToolButton">

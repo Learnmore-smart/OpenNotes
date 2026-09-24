@@ -44,12 +44,15 @@ public static class StrokeRenderer
     /// <summary>
     /// Rebuilds an existing path's geometry in place — the live-stroke fast
     /// path: one Path element per in-flight pointer, updated per move event.
+    /// The fill is re-resolved too so selection style changes (colour/size)
+    /// refresh through the same GeometryChanged notification.
     /// </summary>
     public static void UpdateStrokePath(Path path, InkStrokeData stroke)
     {
         if (path == null)
             return;
         path.Data = BuildGeometry(stroke);
+        path.Fill = new SolidColorBrush(ToColor(stroke));
     }
 
     /// <summary>

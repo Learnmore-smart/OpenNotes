@@ -17,7 +17,11 @@ is hit-test/tabbable-inert.
   cannot be shared between two live `Path` elements (second assignment throws);
   each icon instance parses its own `PathGeometry` on assignment.
 - `ParseIconGeometry` is a minimal SVG-path parser covering the command set the
-  table uses (`M/L/H/V/A/Z`, relative+absolute). `XamlReader.Load` was the first
+  table uses (`M/L/H/V/A/C/Z`, relative+absolute). It is `internal` (Phase B —
+  the free-form selection/shape preview paths reuse it for `Geometry.Parse`-
+  style markup since WinUI has no `Geometry.Parse`). `C/c` emits
+  `BezierSegment`s (control points resolve absolute/relative like WPF).
+  `XamlReader.Load` was the first
   port attempt and **cannot be re-entered while the page's own XAML is loading**
   (the control is first materialized inside `InitializeComponent`) — the nested
   parse crashed icon creation with `Cannot create instance of type
@@ -27,7 +31,7 @@ is hit-test/tabbable-inert.
 - NEVER cache/share a parsed `Geometry` across icon instances (mutation +
   cross-element share crashes — was the `Kind` assignment failure).
 - Keep the parser scope-limited to the table's commands; extending the table
-  beyond `M/L/H/V/A/Z` requires extending `ParseIconGeometry` first.
+  beyond `M/L/H/V/A/C/Z` requires extending `ParseIconGeometry` first.
 
 ## Open Threads / Resume Context
 - **Status:** GREEN — all toolbar icons instantiate; editor smoke passes.

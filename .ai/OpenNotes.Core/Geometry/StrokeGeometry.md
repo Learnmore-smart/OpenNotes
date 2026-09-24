@@ -20,6 +20,7 @@ Pure, UI-free stroke/ink geometry for the V6 WinUI 3 migration (Task 2). Everyth
 - Recognition: `TryRecognizeShape` (enforces `public const int MinRecognizedShapePoints = 8` — the same ≥8-point gate the WPF call site applies) + scribble thresholds and `DirectionRun` helper.
 - Point transforms: `SimulateInkFlow`, `SmoothPoints`, `TryGetStraightEndpoints`, `ConstrainPointsToRuler`, `IsPointInsideConvexQuad`, `TryFindFirstQuadIntersection`.
 - Rendering law: `GetRenderedStrokeHalfWidth(size, pressure)` — the empirical WPF width law `half = size·(0.125 + 0.75·p)` (diameter = `size·(0.25+1.5p)`; p=0.5 → nominal, p=1.0 → 1.75×, IgnorePressure ≡ p=0.5). Shared by the eraser reach, the outline tessellator and tests.
+- Selection transforms (Task 7 Phase B): `TranslateSpinePoints` (pressure preserved), `ScaleSpinePoints` (uniform scale about anchor — pressure forced 0.5, the InkCanvas-forced-uniform parity), `RotateSpinePoints` (about centre, pressure preserved), `ScalePoint`, `GetRenderedStrokeBounds`/`GetSelectionBounds` (spine bounds inflated by max rendered half-width), `GetRotateHandlePoint` (22 DIP above bounds top-centre), `GetOppositeCorner` (the resize anchor = corner opposite the grabbed handle), `GetSelectionCornerHandleRects`/`TryGetResizeHandleIndex` (four 8×8 corner rects, TL/TR/BL/BR).
 
 ## Square-stamp eraser model (Task 7 Phase A)
 
@@ -40,4 +41,4 @@ Pure, UI-free stroke/ink geometry for the V6 WinUI 3 migration (Task 2). Everyth
 
 ## Verification
 
-`OpenNotes.Tests/CoreStrokeGeometryTests.cs` (geometry/eraser/hit-test/shape suites) + `OpenNotes.Tests/WpfCoreEraserParityTests.cs` (live WPF `GetEraseResult`/`HitTest` corpus — STA fixture).
+`OpenNotes.Tests/CoreStrokeGeometryTests.cs` (geometry/eraser/hit-test/shape suites) + `OpenNotes.Tests/WpfCoreEraserParityTests.cs` (live WPF `GetEraseResult`/`HitTest` corpus — STA fixture) + `OpenNotes.Tests/CoreInkPhaseBTests.cs` (selection transforms, lasso/marquee containment, ruler constraints — 44 tests).

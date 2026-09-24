@@ -14,6 +14,11 @@ public enum InkStoreMutationKind
     Removed,
     Replaced,
     Cleared,
+    /// <summary>
+    /// In-place point/size mutation (selection move/resize/rotate). No list
+    /// membership change — surfaces should refresh the stroke's visual only.
+    /// </summary>
+    GeometryChanged,
 }
 
 /// <summary>
@@ -311,6 +316,23 @@ public sealed class InkStrokeStore
                 return snapshot.Side;
         }
         return null;
+    }
+
+    /// <summary>
+    /// Notifies that these strokes' spine points/size were mutated in place
+    /// (selection move/scale/rotate). Strokes no longer in the store are
+    /// skipped so undo of a stale selection is a safe no-op.
+    /// </summary>
+    public void NotifyGeometryChanged(IEnumerable<InkStrokeData> strokes)
+    {
+        if (strokes == null)
+            return;
+        foreach (var stroke in strokes)
+        {
+            int index = _strokes.IndexOf(stroke);
+            if (index >= 0)
+                RaiseMutated(InkStoreMutationKind.GeometryChanged, stroke, index);
+        }
     }
 
     /// <summary>Empties the collection quietly.</summary>

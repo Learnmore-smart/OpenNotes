@@ -21,8 +21,16 @@ The custom pointer-ink pipeline for the WinUI editor (`Caelum.Controls`, Task 7 
 - `SetPenService(PenService)` stores the service so pen pointer-down packets feed `ProbePointer`/`NoteBarrelButton` capability probing — WPF `SetPenService` parity. It deliberately does NOT sync `EnablePressure` from `service.PressureEnabled` (that flag is never written back from settings; `ApplyToolToAllPages` owns `EnablePressure` from `AppSettings.EnablePressure`).
 - `AddStroke(StrokeAnnotation)` is the quiet sidecar-load path — no `StrokeCollected`, no undo. Strokes with a non-empty `ShapeGroupId` are forced `IgnorePressure=true` on load (WPF `PdfPageControl.AddStroke` parity — `IgnorePressure` never serializes, shape strokes always render uniform-width).
 - Undo/dirty/thumbnail policy lives in `EditorPage` — the surface only mutates the store quietly and raises `StrokeCollected`/`StrokeRecognized`/`StrokesErased`/`InkMutated`.
-- Selection/shape tools/hidden ink/laser/ruler are Phase B — the surface deliberately has no lasso/shape-preview state.
+## Phase B additions (2026-09-23)
+
+- `InkSurfaceTool.Laser` added (Phase-B tools otherwise ride `CustomInkInputProcessingMode` on the page, not `Tool`).
+- **Laser gesture**: pointer drags emit `LaserStrokeStarted`/`LaserStrokePointsAppended`/`LaserStrokeCompleted` (`LaserStrokeEventArgs` — batched raw page-DIP points); the page draws the ephemeral polyline on `LaserInkCanvas`. Laser never touches `Store`/undo — the surface only arbitrates capture the same way as ink.
+- **Shape gesture**: in shape mode the surface owns the drag lifecycle and raises `ShapeDragStarted`/`ShapeDragUpdated`/`ShapeDragCompleted`/`ShapeDragCanceled` (`ShapeDragEventArgs` — anchor, current, live `ShiftHeld` sampled per event like WPF `Keyboard.IsKeyDown`). The page renders the preview and commits.
+- **Hidden ink**: `HiddenInkColor` (opaque 199,205,212 default) + `HiddenInkSize` (28.0) snapshot at pointer-down; completed freehand masks raise `HiddenInkStrokeCommitted` (`IReadOnlyList<PointD>`) instead of `StrokeCollected` — the page builds the `HiddenInkAnnotation`.
+- **Eraser path**: `EraserPathTraced` (`EraserPathEventArgs` — path + `EraserSize`) so the page can hit hidden-ink masks with `StrokeGeometry.HiddenInkIntersectsEraser` during the same gesture.
+- **Ruler**: `RulerGeometryProvider` (`Func<(TopA,TopB,BottomA,BottomB)?>` — null while hidden) + `RulerSnapTolerance = 24.0`; `CompleteStroke` runs `StrokeGeometry.ConstrainPointsToRuler` on Pen/Highlighter commits (start-inside → stroke dropped; crossing → clipped; near edge → snapped). Snapped strokes are ordinary ink — undo/save unchanged.
+- Selection visuals/lasso still live on the PAGE (`SelectionOverlayCanvas`), not the surface — the surface only needs `Tool`/mode flags.
 
 ## Open Threads / Resume Context
 
-- **Status:** GREEN — Phase A complete (pen/highlighter/eraser, pressure, recognition-on-collect); Phase B extends this file.
+- **Status:** GREEN — Phase A complete (pen/highlighter/eraser, pressure, recognition-on-collect); Phase B gestures (laser, shape drag, hidden-ink commit, eraser path trace, ruler constraint) live and build clean.

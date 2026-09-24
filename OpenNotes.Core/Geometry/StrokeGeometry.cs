@@ -1972,4 +1972,114 @@ public static class StrokeGeometry
         double u = (qp.X * r.Y - qp.Y * r.X) / cross;
         return t >= 0 && t <= 1 && u >= 0 && u <= 1;
     }
+
+    // ------------------------------------------------------------------
+    // Selection transforms (Task 7 Phase B)
+    // ------------------------------------------------------------------
+    // These helpers mutate a stroke's spine in place — the same math the
+    // WPF reference applies inside MoveItemsDirectly/ScaleItemsDirectly/
+    // RotateItemsDirectly. Undo actions call the same helpers with the
+    // inverse delta so undo/redo stay numerically symmetric.
+
+    /// <summary>Translate every spine point by (dx,dy); pressure is preserved.</summary>
+    public static void TranslateSpinePoints(List<InkPointData> points, double dx, double dy)
+    {
+        for (int i = 0; i < points.Count; i++)
+            points[i] = new InkPointData(points[i].X + dx, points[i].Y + dy, points[i].Pressure);
+    }
+
+    /// <summary>
+    /// Scale every spine point about <paramref name="anchor"/>. Mirrors WPF:
+    /// pressure is reset to 0.5 (the InkCanvas forced it to uniform anyway).
+    /// </summary>
+    public static void ScaleSpinePoints(List<InkPointData> points, double scale, PointD anchor)
+    {
+        for (int i = 0; i < points.Count; i++)
+        {
+            double x = anchor.X + (points[i].X - anchor.X) * scale;
+            double y = anchor.Y + (points[i].Y - anchor.Y) * scale;
+            points[i] = new InkPointData(x, y, 0.5f);
+        }
+    }
+
+    /// <summary>Rotate every spine point about <paramref name="center"/>; pressure preserved.</summary>
+    public static void RotateSpinePoints(List<InkPointData> points, double degrees, PointD center)
+    {
+        for (int i = 0; i < points.Count; i++)
+        {
+            PointD p = AnnotationRotation.RotatePoint(new PointD(points[i].X, points[i].Y), center, degrees);
+            points[i] = new InkPointData(p.X, p.Y, points[i].Pressure);
+        }
+    }
+
+    /// <summary>Scale a single screen point about the anchor (used by the resize gesture).</summary>
+    public static PointD ScalePoint(PointD p, double scale, PointD anchor) =>
+        new(anchor.X + (p.X - anchor.X) * scale, anchor.Y + (p.Y - anchor.Y) * scale);
+
+    /// <summary>
+    /// Selection-bounds for a rendered stroke: spine bounds inflated by the
+    /// maximum rendered half-width (matching what the WPF selection layer
+    /// computes from the visual stroke).
+    /// </summary>
+    public static RectD GetRenderedStrokeBounds(InkStrokeData stroke)
+    {
+        if (stroke?.Points == null || stroke.Points.Count == 0)
+            return new RectD(0, 0, 0, 0);
+        double halfWidth = stroke.Points.Max(p => GetRenderedStrokeHalfWidth(stroke.Size, (float)p.Pressure));
+        return GetSpineBounds(stroke.Points, halfWidth);
+    }
+
+    /// <summary>Union of rendered stroke bounds; empty rect when no strokes.</summary>
+    public static RectD GetSelectionBounds(IReadOnlyList<InkStrokeData> strokes)
+    {
+        if (strokes == null || strokes.Count == 0)
+            return new RectD(0, 0, 0, 0);
+        RectD bounds = GetRenderedStrokeBounds(strokes[0]);
+        for (int i = 1; i < strokes.Count; i++)
+            bounds = bounds.Union(GetRenderedStrokeBounds(strokes[i]));
+        return bounds;
+    }
+
+    /// <summary>Rotate handle sits 22px above the bounds top-centre (WPF parity).</summary>
+    public static PointD GetRotateHandlePoint(RectD bounds) =>
+        new(bounds.X + bounds.Width / 2.0, bounds.Y - 22);
+
+    /// <summary>Opposite corner of a resize handle (0=TL,1=TR,2=BL,3=BR).</summary>
+    public static PointD GetOppositeCorner(RectD bounds, int handleIndex) => handleIndex switch
+    {
+        0 => new PointD(bounds.Right, bounds.Bottom),
+        1 => new PointD(bounds.X, bounds.Bottom),
+        2 => new PointD(bounds.Right, bounds.Y),
+        3 => new PointD(bounds.X, bounds.Y),
+        _ => new PointD(bounds.X, bounds.Y),
+    };
+
+    /// <summary>Four 8x8 corner-handle rects on the selection bounds (TL,TR,BL,BR).</summary>
+    public static RectD[] GetSelectionCornerHandleRects(RectD bounds)
+    {
+        const double handleSize = 8.0, half = handleSize / 2;
+        return new[]
+        {
+            new RectD(bounds.X - half, bounds.Y - half, handleSize, handleSize),
+            new RectD(bounds.Right - half, bounds.Y - half, handleSize, handleSize),
+            new RectD(bounds.X - half, bounds.Bottom - half, handleSize, handleSize),
+            new RectD(bounds.Right - half, bounds.Bottom - half, handleSize, handleSize),
+        };
+    }
+
+    /// <summary>True when the pointer is inside any corner handle; index out.</summary>
+    public static bool TryGetResizeHandleIndex(RectD bounds, PointD point, out int handleIndex)
+    {
+        RectD[] rects = GetSelectionCornerHandleRects(bounds);
+        for (int i = 0; i < rects.Length; i++)
+        {
+            if (rects[i].Contains(point))
+            {
+                handleIndex = i;
+                return true;
+            }
+        }
+        handleIndex = -1;
+        return false;
+    }
 }

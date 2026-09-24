@@ -8,7 +8,7 @@ Converts `InkStrokeData` into WinUI `Path` fill geometry (`Caelum.Rendering`, Ta
 ## API
 
 - `CreateStrokePath(InkStrokeData)` → `Path` — `Fill = SolidColorBrush(ToColor(stroke))`, `Data = BuildGeometry(stroke)`, `IsHitTestVisible = false` (hit-testing lives in `StrokeGeometry` math, not XAML). The path is NOT parented — the caller adds it to the surface's `Children`.
-- `UpdateStrokePath(Path, InkStrokeData)` — rebuilds `path.Data` in place; the live-stroke fast path (one `Path` per in-flight pointer, updated per move event).
+- `UpdateStrokePath(Path, InkStrokeData)` — rebuilds `path.Data` in place; the live-stroke fast path (one `Path` per in-flight pointer, updated per move event). Phase B: also re-resolves `Fill` so selection style changes (colour/size) refresh through the same `GeometryChanged` notification.
 - `BuildGeometry(InkStrokeData)` → `PathGeometry` — normally a single closed `PathFigure` (`IsClosed=true`, `IsFilled=true`) holding one `PolyLineSegment` over the outline polygon; empty/degenerate strokes produce an empty geometry.
 - `ToColor(InkStrokeData)` → `Windows.UI.Color` straight from the stroke's RGBA channels.
 

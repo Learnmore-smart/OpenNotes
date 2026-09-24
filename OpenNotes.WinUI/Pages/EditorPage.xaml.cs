@@ -9,6 +9,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Caelum.Controls;
 using Caelum.Ink;
+using Caelum.InkGeometry;
 using Caelum.Models;
 using Caelum.Pdf;
 using Caelum.Services;
@@ -92,9 +93,10 @@ namespace Caelum.Pages
         // ── Ink tools / undo (Task 7 Phase A) ──────────────────────────────
 
         /// <summary>
-        /// Toolbar tool set — mirrors the WPF ToolType order. Phase A wires
-        /// Pen/Highlighter/Eraser; the rest keep their visual toggle but map
-        /// to InkSurfaceTool.None until Phase B.
+        /// Toolbar tool set — mirrors the WPF ToolType order minus Ruler,
+        /// which is an OVERLAY toggle in WPF (RulerToolButton_Click →
+        /// SetRulerVisible), never a ToolType: it stays active alongside the
+        /// current tool (e.g. Pen + ruler ON).
         /// </summary>
         private enum ToolType
         {
@@ -106,7 +108,6 @@ namespace Caelum.Pages
             Eraser,
             Shape,
             Laser,
-            Ruler,
             Select,
             Text,
         }
@@ -122,6 +123,18 @@ namespace Caelum.Pages
         private double _penSize = 1.5;
         private double _highlighterSize = 8.0; // WPF default (was 6.0 here)
         private double _eraserSize = 20.0;
+
+        // ── Task 7 Phase B: shape tool + selection state ─────────────────
+        // Shape tool attributes are session-only in WPF (never persisted).
+        private InkShapeKind _shapeKind = InkShapeKind.Line;
+        private bool _shapeIsDashed;
+        private Windows.UI.Color _shapeColor = Windows.UI.Color.FromArgb(255, 0, 0, 0);
+        private double _shapeSize = 2.0;
+        private Caelum.Controls.SelectionShape _selectionShape = Caelum.Controls.SelectionShape.Rectangle;
+        private Caelum.Controls.SelectionFilter _selectionFilter = Caelum.Controls.SelectionFilter.Both;
+        // The page currently owning an annotation selection — set/cleared by
+        // PageControl_SelectionChanged; used by Delete/Ctrl+A/Esc paths.
+        private PdfPageControl _activeSelectionPage;
 
         private bool _isLoadingAnnotations;
         private readonly Stack<IUndoAction> _undoStack = new();
@@ -415,7 +428,6 @@ namespace Caelum.Pages
                 (EraserToolButton, ToolType.Eraser),
                 (ShapeToolButton, ToolType.Shape),
                 (LaserToolButton, ToolType.Laser),
-                (RulerToolButton, ToolType.Ruler),
                 (SelectToolButton, ToolType.Select),
                 (TextToolButton, ToolType.Text),
             };
@@ -423,6 +435,15 @@ namespace Caelum.Pages
             {
                 if (button != null)
                     button.IsChecked = t == tool;
+            }
+            // Leaving Select abandons the selection (WPF ActivateTool clears
+            // _activeSelectionPage before switching; _currentTool still holds
+            // the outgoing tool at this point in the method).
+            if (_currentTool == ToolType.Select && tool != ToolType.Select
+                && _activeSelectionPage != null)
+            {
+                _activeSelectionPage.ClearSelection();
+                _activeSelectionPage = null;
             }
             if (tool != _currentTool)
             {
@@ -632,6 +653,37 @@ namespace Caelum.Pages
             pageControl.StrokeRecognized += PageControl_StrokeRecognized;
             pageControl.StrokesErased += PageControl_StrokesErased;
             pageControl.InkMutated += PageControl_InkMutated;
+            pageControl.ShapeCommittedUndoable += PageControl_ShapeCommittedUndoable;
+            pageControl.HiddenInkCreated += PageControl_HiddenInkCreated;
+            pageControl.HiddenInkRemoved += PageControl_HiddenInkRemoved;
+            pageControl.HiddenInksRemoved += PageControl_HiddenInksRemoved;
+            pageControl.SelectionChanged += PageControl_SelectionChanged;
+            pageControl.SelectionMoveCompleted += PageControl_SelectionMoveCompleted;
+            pageControl.SelectionResizeCompleted += PageControl_SelectionResizeCompleted;
+            pageControl.SelectionRotateCompleted += PageControl_SelectionRotateCompleted;
+            pageControl.BlankContextRequested += PageControl_BlankContextRequested;
+
+            // Task 22 parity: the page queries the active ruler edge at
+            // stroke-collect/shape-commit time; the viewport→page transform
+            // runs per query so scrolling/zooming/ruler moves never serve a
+            // stale segment. Null while the ruler is hidden.
+            pageControl.GetRulerGeometryInPageCoords = () =>
+            {
+                var geometry = GetRulerGeometryEndpoints();
+                if (geometry == null)
+                    return null;
+                var transform = RulerOverlayCanvas.TransformToVisual(pageControl);
+                PointD Map(PointD p)
+                {
+                    var mapped = transform.TransformPoint(new Point(p.X, p.Y));
+                    return new PointD(mapped.X, mapped.Y);
+                }
+                return (
+                    Map(geometry.Value.TopA),
+                    Map(geometry.Value.TopB),
+                    Map(geometry.Value.BottomA),
+                    Map(geometry.Value.BottomB));
+            };
 
             _pageTopOffsets.Add(currentTop);
             _pageHeights.Add(size.Height);
@@ -667,12 +719,22 @@ namespace Caelum.Pages
                 foreach (var page in _pageControls)
                 {
                     if (!annotations.TryGetValue(page.PageIndex, out var pageAnnotation)
-                        || pageAnnotation?.Strokes == null)
+                        || pageAnnotation == null)
                     {
                         continue;
                     }
-                    foreach (var stroke in pageAnnotation.Strokes)
-                        page.AddStroke(stroke);
+                    if (pageAnnotation.Strokes != null)
+                    {
+                        foreach (var stroke in pageAnnotation.Strokes)
+                            page.AddStroke(stroke);
+                    }
+                    // Task 7 Phase B: study-mode masks load quietly alongside
+                    // the strokes (WPF loader parity — no undo entries).
+                    if (pageAnnotation.HiddenInks != null)
+                    {
+                        foreach (var mask in pageAnnotation.HiddenInks)
+                            page.AddHiddenInk(mask);
+                    }
                 }
             }
             finally
@@ -1455,7 +1517,6 @@ namespace Caelum.Pages
                 (EraserToolButton, ToolType.Eraser),
                 (ShapeToolButton, ToolType.Shape),
                 (LaserToolButton, ToolType.Laser),
-                (RulerToolButton, ToolType.Ruler),
                 (SelectToolButton, ToolType.Select),
                 (TextToolButton, ToolType.Text),
             };
@@ -1474,35 +1535,42 @@ namespace Caelum.Pages
                 }
             }
 
+            // Leaving Select abandons the selection (WPF ActivateTool parity).
+            if (_currentTool == ToolType.Select && next != ToolType.Select
+                && _activeSelectionPage != null)
+            {
+                _activeSelectionPage.ClearSelection();
+                _activeSelectionPage = null;
+            }
+
             if (next != _currentTool)
             {
                 _previousTool = _currentTool;
                 _currentTool = next;
             }
             ApplyToolToAllPages();
+
+            // WPF ToggleToolButton parity: arming the Shape or Select tool
+            // opens its options flyout under the button.
+            if (next == ToolType.Shape)
+                ShowShapeFlyout(clicked);
+            else if (next == ToolType.Select)
+                ShowSelectionFlyout(clicked);
         }
 
         /// <summary>
         /// Pushes the current tool + ink settings into every page surface —
-        /// the ApplyToolToAllPages port. Phase-B tools resolve to None so
-        /// their buttons arm visually without enabling ink input.
+        /// the ApplyToolToAllPages port. The page-level SetInputMode owns the
+        /// ink-surface tool; Pen/Highlighter pre-seed <see cref="InkSurface.Tool"/>
+        /// so the Inking mode keeps the right nib (WPF SetInkAttributes parity).
         /// </summary>
         private void ApplyToolToAllPages()
         {
-            var surfaceTool = _currentTool switch
-            {
-                ToolType.Pen => InkSurfaceTool.Pen,
-                ToolType.Highlighter => InkSurfaceTool.Highlighter,
-                ToolType.Eraser => InkSurfaceTool.Eraser,
-                _ => InkSurfaceTool.None,
-            };
-
             var settings = _applicationSettings;
             foreach (var page in _pageControls)
             {
                 var ink = page.Ink;
                 ink.SetPenService(_penService);
-                ink.Tool = surfaceTool;
                 ink.PenColor = _penColor;
                 ink.PenSize = _penSize;
                 ink.HighlighterColor = Windows.UI.Color.FromArgb(
@@ -1519,6 +1587,49 @@ namespace Caelum.Pages
                     ink.ShapeRecognitionEnabled = settings.ShapeRecognition;
                     ink.StrokeSmoothingLevel = settings.StrokeSmoothing;
                 }
+
+                page.SetSelectionMode(_currentTool == ToolType.Select);
+                page.SetSelectionFilter(_selectionFilter);
+                page.SetSelectionShape(_selectionShape);
+
+                switch (_currentTool)
+                {
+                    case ToolType.Pen:
+                        ink.Tool = InkSurfaceTool.Pen;
+                        page.SetInputMode(CustomInkInputProcessingMode.Inking);
+                        break;
+                    case ToolType.Highlighter:
+                        ink.Tool = InkSurfaceTool.Highlighter;
+                        page.SetInputMode(CustomInkInputProcessingMode.Inking);
+                        break;
+                    case ToolType.HiddenInk:
+                        // WPF parity: new masks use the neutral gray cover;
+                        // loaded masks keep their serialized colour.
+                        page.HiddenInkMaskColor = Windows.UI.Color.FromArgb(255, 199, 205, 212);
+                        page.HiddenInkSize = 28.0;
+                        page.HiddenInkRevealDurationMs = HiddenInkRevealState.DefaultRevealDurationMs;
+                        page.SetInputMode(CustomInkInputProcessingMode.HiddenInk);
+                        break;
+                    case ToolType.Eraser:
+                        page.SetInputMode(CustomInkInputProcessingMode.Erasing);
+                        break;
+                    case ToolType.Shape:
+                        page.CurrentShape = _shapeKind;
+                        page.ShapeIsDashed = _shapeIsDashed;
+                        page.ShapeColor = _shapeColor;
+                        page.ShapeStrokeSize = _shapeSize;
+                        page.SetInputMode(CustomInkInputProcessingMode.Shape);
+                        break;
+                    case ToolType.Laser:
+                        page.SetInputMode(CustomInkInputProcessingMode.Laser);
+                        break;
+                    default:
+                        // None/Select/StickyNote/Text — ink surface idles;
+                        // Select already armed its overlay above.
+                        page.SetInputMode(CustomInkInputProcessingMode.None);
+                        break;
+                }
+
                 page.CancelInteraction();
             }
         }
@@ -1531,6 +1642,505 @@ namespace Caelum.Pages
             AppSettingsService.Save(_applicationSettings);
             foreach (var page in _pageControls)
                 page.Ink.PenOnlyMode = _applicationSettings.PenOnlyMode;
+        }
+
+        // ── Task 22: on-screen ruler (viewport overlay, NOT a ToolType) ───
+        //
+        // WPF parity: the ruler is an overlay toggle that stays active
+        // alongside the current tool (e.g. Pen + ruler ON). Session-only —
+        // neither persisted to settings nor saved with the document.
+        // Pen/Highlighter strokes drawn near a long edge are constrained by
+        // it (Core StrokeGeometry.ConstrainPointsToRuler via each page's
+        // GetRulerGeometryInPageCoords); snapped strokes are ordinary ink so
+        // undo/save work naturally, and the ruler itself never touches
+        // undo/dirty.
+
+        private bool _rulerVisible;
+        private Point _rulerCenter;   // viewport (root-grid) coordinates
+        private double _rulerAngle;   // degrees; always snapped to 15° steps
+        private Grid _rulerVisual;    // built in code on first show
+        private RotateTransform _rulerRotate;
+        private bool _isDraggingRuler;
+        private bool _isRotatingRuler;
+        private Point _rulerDragOffset;          // pointer - center at drag start
+        private double _rotateStartPointerAngle; // pointer angle around center at rotate start
+        private double _rotateStartRulerAngle;
+        private uint? _rulerPointerId;
+
+        private const double DefaultRulerLength = 360.0;
+        private const double MinRulerLength = 80.0;
+        private double _rulerLength = DefaultRulerLength;
+        private const double RulerHeight = 56.0;
+        private const double RulerEndCapZone = 14.0;      // end zones rotate instead of move
+        private const double RulerRotationSnapDegrees = 15.0;
+        private bool _isResizingRuler;
+        private bool _rulerResizeFromLeft;
+        private Canvas _rulerTickCanvas;
+        private FrameworkElement _rulerLeftLengthHandle;
+        private FrameworkElement _rulerRightLengthHandle;
+
+        // WinUI keeps UIElement.ProtectedCursor protected, so per-element
+        // hover cursors (WPF Cursor=... parity) need these tiny derived
+        // types instead of property assignment from the page.
+        private sealed class CursorGrid : Grid
+        {
+            internal void SetCursor(InputSystemCursorShape shape) =>
+                ProtectedCursor = InputSystemCursor.Create(shape);
+        }
+
+        /// <summary>Overlay toggle — the button is NOT in the exclusive tool set.</summary>
+        private void RulerToolButton_Click(object sender, RoutedEventArgs e)
+        {
+            SetRulerVisible(RulerToolButton.IsChecked == true);
+        }
+
+        private void SetRulerVisible(bool visible)
+        {
+            _rulerVisible = visible;
+            RulerToolButton.IsChecked = visible;
+            if (RulerIcon != null)
+            {
+                RulerIcon.Stroke = ResolveThemeBrush(
+                    visible ? "ThemeAccentBrush" : "ThemeForegroundBrush",
+                    visible ? Color.FromArgb(0xFF, 0x25, 0x63, 0xEB) : Color.FromArgb(0xFF, 0x1F, 0x24, 0x2B));
+            }
+
+            if (visible)
+            {
+                EnsureRulerVisual();
+                _rulerVisual.Visibility = Visibility.Visible;
+            }
+            else if (_rulerVisual != null)
+            {
+                _rulerVisual.Visibility = Visibility.Collapsed;
+                // Drop any in-flight manipulation so a stale capture can't
+                // keep dragging an invisible ruler.
+                _isDraggingRuler = false;
+                _isRotatingRuler = false;
+                _isResizingRuler = false;
+                _rulerPointerId = null;
+            }
+        }
+
+        /// <summary>
+        /// Builds the ruler visual once (Grid 360×56: semi-transparent
+        /// rounded body, tick marks every 10px with longer ticks every
+        /// 50px, a centre handle dot, transparent end-cap rectangles that
+        /// afford rotation, and edge length handles). Rotation snaps to
+        /// 15° increments — WPF EnsureRulerVisual parity.
+        /// </summary>
+        private void EnsureRulerVisual()
+        {
+            if (_rulerVisual != null)
+                return;
+
+            _rulerRotate = new RotateTransform { Angle = 0, CenterX = _rulerLength / 2, CenterY = RulerHeight / 2 };
+
+            var ruler = new CursorGrid
+            {
+                Width = _rulerLength,
+                Height = RulerHeight,
+                // Keep the ruler body draggable even though its visual
+                // children are intentionally non-hit-testable. The full
+                // overlay canvas stays background-free so empty space
+                // still passes through to the document surface.
+                Background = new SolidColorBrush(Color.FromArgb(0, 0, 0, 0)),
+                RenderTransform = _rulerRotate,
+            };
+            ruler.SetCursor(InputSystemCursorShape.SizeAll);
+            AutomationProperties.SetAutomationId(ruler, "Editor.RulerVisual");
+            AutomationProperties.SetName(ruler, LocalizationService.Get("Editor.RulerTooltip"));
+
+            // Semi-transparent body — chrome resources only (the ruler is
+            // application chrome, not document content).
+            var rulerBody = new Microsoft.UI.Xaml.Shapes.Rectangle
+            {
+                StrokeThickness = 1,
+                RadiusX = 6,
+                RadiusY = 6,
+                IsHitTestVisible = false,
+                Opacity = 0.92,
+                Fill = ResolveThemeBrush("ThemeToolbarBrush", Color.FromArgb(0xF2, 0xF8, 0xF9, 0xFC)),
+                Stroke = ResolveThemeBrush("ThemeBorderBrush", Color.FromArgb(0xFF, 0xC9, 0xCE, 0xD6)),
+            };
+            ruler.Children.Add(rulerBody);
+
+            _rulerTickCanvas = new Canvas { IsHitTestVisible = false };
+            RebuildRulerTicks();
+            ruler.Children.Add(_rulerTickCanvas);
+
+            // Centre rotation handle dot.
+            var rulerCenterDot = new Microsoft.UI.Xaml.Shapes.Ellipse
+            {
+                Width = 8,
+                Height = 8,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+                IsHitTestVisible = false,
+                Opacity = 0.82,
+                Fill = ResolveThemeBrush("ThemeAccentBrush", Color.FromArgb(0xFF, 0x25, 0x63, 0xEB)),
+            };
+            ruler.Children.Add(rulerCenterDot);
+
+            // Transparent end-cap zones: hitting them starts a rotation
+            // drag instead of a move (non-null Fill required for hit tests).
+            var capFill = new SolidColorBrush(Color.FromArgb(0, 0, 0, 0));
+            var leftCap = new CursorGrid
+            {
+                Width = RulerEndCapZone,
+                Height = RulerHeight,
+                Background = capFill,
+                HorizontalAlignment = HorizontalAlignment.Left,
+            };
+            var rightCap = new CursorGrid
+            {
+                Width = RulerEndCapZone,
+                Height = RulerHeight,
+                Background = capFill,
+                HorizontalAlignment = HorizontalAlignment.Right,
+            };
+            leftCap.SetCursor(InputSystemCursorShape.SizeNortheastSouthwest);
+            rightCap.SetCursor(InputSystemCursorShape.SizeNortheastSouthwest);
+            ruler.Children.Add(leftCap);
+            ruler.Children.Add(rightCap);
+
+            _rulerLeftLengthHandle = CreateRulerLengthHandle(HorizontalAlignment.Left);
+            _rulerRightLengthHandle = CreateRulerLengthHandle(HorizontalAlignment.Right);
+            ruler.Children.Add(_rulerLeftLengthHandle);
+            ruler.Children.Add(_rulerRightLengthHandle);
+
+            // Pointer interactions: left-drag the body = move; left-drag
+            // either end cap OR right-drag anywhere = rotate; the edge
+            // handles resize. Pen/touch drags are allowed (GoodNotes
+            // style); the ruler never creates ink so pen-only mode does
+            // not apply to it.
+            ruler.PointerPressed += Ruler_PointerPressed;
+            ruler.PointerMoved += Ruler_PointerMoved;
+            ruler.PointerReleased += Ruler_PointerReleased;
+            ruler.PointerCanceled += Ruler_PointerCanceled;
+            ruler.PointerCaptureLost += Ruler_PointerCaptureLost;
+
+            _rulerVisual = ruler;
+
+            // First show: default to the middle of the viewport so the
+            // ruler can never appear off-screen.
+            double vw = RulerOverlayCanvas.ActualWidth > 0
+                ? RulerOverlayCanvas.ActualWidth
+                : PdfScrollViewer.ViewportWidth;
+            double vh = RulerOverlayCanvas.ActualHeight > 0
+                ? RulerOverlayCanvas.ActualHeight
+                : PdfScrollViewer.ViewportHeight;
+            if (vw <= 0) vw = 800;
+            if (vh <= 0) vh = 600;
+            _rulerCenter = new Point(vw / 2, vh / 2);
+            UpdateRulerPosition();
+
+            RulerOverlayCanvas.Children.Add(ruler);
+        }
+
+        private void Ruler_PointerPressed(object sender, PointerRoutedEventArgs e)
+        {
+            if (!_rulerVisible || _rulerVisual == null || _rulerPointerId != null)
+                return;
+
+            var props = e.GetCurrentPoint(_rulerVisual).Properties;
+            bool isLeft = props.IsLeftButtonPressed;
+            bool isRight = props.IsRightButtonPressed;
+            if (!isLeft && !isRight)
+                return;
+
+            // GetCurrentPoint applies the ruler's RenderTransform, so local
+            // coordinates are the ruler's own (unrotated) frame — the end
+            // zones stay the first/last 14px of the body at any angle.
+            var local = e.GetCurrentPoint(_rulerVisual).Position;
+            var viewport = e.GetCurrentPoint(RulerOverlayCanvas).Position;
+
+            if (isLeft && IsRulerLengthHandle(e.OriginalSource as DependencyObject, out bool fromLeft))
+            {
+                StartRulerLengthResize(viewport, fromLeft);
+            }
+            else
+            {
+                bool inEndZone = local.X < RulerEndCapZone || local.X > _rulerLength - RulerEndCapZone;
+                // Right-drag anywhere rotates (alternative affordance when
+                // the end caps are hard to hit at steep angles).
+                StartRulerManipulation(viewport, rotating: isRight || inEndZone);
+            }
+
+            _rulerVisual.CapturePointer(e.Pointer);
+            _rulerPointerId = e.Pointer.PointerId;
+            e.Handled = true;
+        }
+
+        private void Ruler_PointerMoved(object sender, PointerRoutedEventArgs e)
+        {
+            if (_rulerPointerId == null || e.Pointer.PointerId != _rulerPointerId.Value)
+                return;
+            if (!_isDraggingRuler && !_isRotatingRuler && !_isResizingRuler)
+                return;
+
+            var p = e.GetCurrentPoint(RulerOverlayCanvas).Position;
+
+            if (_isResizingRuler)
+            {
+                UpdateRulerLengthFromPointer(p);
+            }
+            else if (_isDraggingRuler)
+            {
+                _rulerCenter = new Point(p.X - _rulerDragOffset.X, p.Y - _rulerDragOffset.Y);
+                ClampRulerCenter();
+                UpdateRulerPosition();
+            }
+            else if (_isRotatingRuler)
+            {
+                double pointerAngle = Math.Atan2(p.Y - _rulerCenter.Y, p.X - _rulerCenter.X) * 180.0 / Math.PI;
+                _rulerAngle = SnapRulerAngle(_rotateStartRulerAngle + pointerAngle - _rotateStartPointerAngle);
+                _rulerRotate.Angle = _rulerAngle;
+            }
+            e.Handled = true;
+        }
+
+        private void Ruler_PointerReleased(object sender, PointerRoutedEventArgs e)
+        {
+            if (_rulerPointerId == null || e.Pointer.PointerId != _rulerPointerId.Value)
+                return;
+            _rulerPointerId = null;
+            _rulerVisual?.ReleasePointerCapture(e.Pointer);
+            _isDraggingRuler = false;
+            _isRotatingRuler = false;
+            _isResizingRuler = false;
+            e.Handled = true;
+        }
+
+        private void Ruler_PointerCanceled(object sender, PointerRoutedEventArgs e)
+        {
+            if (_rulerPointerId == null || e.Pointer.PointerId != _rulerPointerId.Value)
+                return;
+            _rulerPointerId = null;
+            _isDraggingRuler = false;
+            _isRotatingRuler = false;
+            _isResizingRuler = false;
+        }
+
+        private void Ruler_PointerCaptureLost(object sender, PointerRoutedEventArgs e)
+        {
+            _rulerPointerId = null;
+            _isDraggingRuler = false;
+            _isRotatingRuler = false;
+            _isResizingRuler = false;
+        }
+
+        private void StartRulerManipulation(Point viewportPoint, bool rotating)
+        {
+            _isDraggingRuler = !rotating;
+            _isRotatingRuler = rotating;
+            _isResizingRuler = false;
+            _rulerDragOffset = new Point(viewportPoint.X - _rulerCenter.X, viewportPoint.Y - _rulerCenter.Y);
+            _rotateStartPointerAngle = Math.Atan2(viewportPoint.Y - _rulerCenter.Y, viewportPoint.X - _rulerCenter.X) * 180.0 / Math.PI;
+            _rotateStartRulerAngle = _rulerAngle;
+        }
+
+        private void StartRulerLengthResize(Point viewportPoint, bool fromLeft)
+        {
+            _isResizingRuler = true;
+            _rulerResizeFromLeft = fromLeft;
+            _isDraggingRuler = false;
+            _isRotatingRuler = false;
+            UpdateRulerLengthFromPointer(viewportPoint);
+        }
+
+        private static FrameworkElement CreateRulerLengthHandle(HorizontalAlignment alignment)
+        {
+            var handle = new CursorGrid
+            {
+                Width = 12,
+                Height = 12,
+                HorizontalAlignment = alignment,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(alignment == HorizontalAlignment.Left ? 2 : 0, 0, alignment == HorizontalAlignment.Right ? 2 : 0, 0),
+                Tag = alignment == HorizontalAlignment.Left ? "ruler-length-left" : "ruler-length-right",
+                // Non-null Background required for the wrapper to hit-test.
+                Background = new SolidColorBrush(Color.FromArgb(0, 0, 0, 0)),
+            };
+            handle.Children.Add(new Microsoft.UI.Xaml.Shapes.Ellipse
+            {
+                StrokeThickness = 1.5,
+                IsHitTestVisible = false,
+                Fill = ResolveThemeBrush("ThemeSurfaceBrush", Color.FromArgb(0xFF, 0xFF, 0xFF, 0xFF)),
+                Stroke = ResolveThemeBrush("ThemeAccentBrush", Color.FromArgb(0xFF, 0x25, 0x63, 0xEB)),
+            });
+            handle.SetCursor(InputSystemCursorShape.SizeWestEast);
+            return handle;
+        }
+
+        private bool IsRulerLengthHandle(DependencyObject source, out bool fromLeft)
+        {
+            fromLeft = false;
+            while (source != null && !ReferenceEquals(source, _rulerVisual))
+            {
+                if (source is FrameworkElement element)
+                {
+                    if (ReferenceEquals(element, _rulerLeftLengthHandle)
+                        || (element.Tag as string) == "ruler-length-left")
+                    {
+                        fromLeft = true;
+                        return true;
+                    }
+                    if (ReferenceEquals(element, _rulerRightLengthHandle)
+                        || (element.Tag as string) == "ruler-length-right")
+                    {
+                        fromLeft = false;
+                        return true;
+                    }
+                }
+                source = VisualTreeHelper.GetParent(source);
+            }
+            return false;
+        }
+
+        private void RebuildRulerTicks()
+        {
+            if (_rulerTickCanvas == null)
+                return;
+
+            _rulerTickCanvas.Children.Clear();
+            var tickBrush = ResolveThemeBrush("ThemeSubtleTextBrush", Color.FromArgb(0xFF, 0x6B, 0x72, 0x80));
+            for (double x = 10; x < _rulerLength; x += 10)
+            {
+                bool major = Math.Abs(x % 50) < 0.01;
+                var tick = new Microsoft.UI.Xaml.Shapes.Line
+                {
+                    X1 = x, Y1 = 0,
+                    X2 = x, Y2 = major ? 12 : 6,
+                    StrokeThickness = 1,
+                    IsHitTestVisible = false,
+                    Opacity = 0.72,
+                    Stroke = tickBrush,
+                };
+                _rulerTickCanvas.Children.Add(tick);
+            }
+        }
+
+        private void ApplyRulerLengthToVisual()
+        {
+            if (_rulerVisual == null)
+                return;
+
+            _rulerVisual.Width = _rulerLength;
+            if (_rulerRotate != null)
+            {
+                _rulerRotate.CenterX = _rulerLength / 2;
+                _rulerRotate.CenterY = RulerHeight / 2;
+            }
+            RebuildRulerTicks();
+            UpdateRulerPosition();
+        }
+
+        private void UpdateRulerLengthFromPointer(Point viewportPoint)
+        {
+            double rad = _rulerAngle * Math.PI / 180.0;
+            double dirX = Math.Cos(rad);
+            double dirY = Math.Sin(rad);
+            double half = _rulerLength / 2;
+            var left = new Point(_rulerCenter.X - half * dirX, _rulerCenter.Y - half * dirY);
+            var right = new Point(_rulerCenter.X + half * dirX, _rulerCenter.Y + half * dirY);
+
+            double t = ((viewportPoint.X - _rulerCenter.X) * dirX) + ((viewportPoint.Y - _rulerCenter.Y) * dirY);
+            var projected = new Point(_rulerCenter.X + t * dirX, _rulerCenter.Y + t * dirY);
+
+            if (_rulerResizeFromLeft)
+                left = projected;
+            else
+                right = projected;
+
+            double dx = right.X - left.X;
+            double dy = right.Y - left.Y;
+            double length = Math.Sqrt((dx * dx) + (dy * dy));
+            if (length < MinRulerLength)
+            {
+                double scale = MinRulerLength / Math.Max(length, 0.001);
+                if (_rulerResizeFromLeft)
+                    left = new Point(right.X - dx * scale, right.Y - dy * scale);
+                else
+                    right = new Point(left.X + dx * scale, left.Y + dy * scale);
+                length = MinRulerLength;
+            }
+
+            _rulerLength = length;
+            _rulerCenter = new Point((left.X + right.X) / 2, (left.Y + right.Y) / 2);
+            ClampRulerCenter();
+            ApplyRulerLengthToVisual();
+        }
+
+        private void UpdateRulerPosition()
+        {
+            Canvas.SetLeft(_rulerVisual, _rulerCenter.X - _rulerLength / 2);
+            Canvas.SetTop(_rulerVisual, _rulerCenter.Y - RulerHeight / 2);
+        }
+
+        // Keeps the ruler reachable: clamping the CENTRE inside the viewport
+        // guarantees at least the centre point of the body stays grabbable,
+        // no matter how the ruler is rotated (WPF v1 keeps this simple).
+        private void ClampRulerCenter()
+        {
+            double vw = RulerOverlayCanvas.ActualWidth > 0
+                ? RulerOverlayCanvas.ActualWidth
+                : PdfScrollViewer.ViewportWidth;
+            double vh = RulerOverlayCanvas.ActualHeight > 0
+                ? RulerOverlayCanvas.ActualHeight
+                : PdfScrollViewer.ViewportHeight;
+            if (vw <= 0 || vh <= 0) return;
+
+            _rulerCenter = new Point(
+                Math.Max(0, Math.Min(_rulerCenter.X, vw)),
+                Math.Max(0, Math.Min(_rulerCenter.Y, vh)));
+        }
+
+        // v1: rotation ALWAYS snaps to 15° increments (simple + predictable).
+        private static double SnapRulerAngle(double angle)
+        {
+            double snapped = Math.Round(angle / RulerRotationSnapDegrees) * RulerRotationSnapDegrees;
+            snapped %= 360.0;
+            if (snapped < 0) snapped += 360.0;
+            return snapped;
+        }
+
+        /// <summary>
+        /// Task 22: endpoints of the ruler's TOP edge (the drawing edge) in
+        /// viewport (root-grid) coordinates, or null while the ruler is
+        /// hidden. The edge — not the centre line — is the snap target:
+        /// users draw along the visible edge of the ruler. Rotating the
+        /// ruler 180° swaps which physical edge is "top", so every
+        /// direction stays usable.
+        /// </summary>
+        private (PointD TopA, PointD TopB, PointD BottomA, PointD BottomB)? GetRulerGeometryEndpoints()
+        {
+            if (!_rulerVisible || _rulerVisual == null)
+                return null;
+
+            double rad = _rulerAngle * Math.PI / 180.0;
+            double cos = Math.Cos(rad);
+            double sin = Math.Sin(rad);
+            // Unit vector along the ruler, and its "up" normal
+            // (pre-rotation -Y rotated by the ruler angle).
+            double dirX = cos, dirY = sin;
+            double upX = sin, upY = -cos;
+            double halfLen = _rulerLength / 2;
+            double halfHeight = RulerHeight / 2;
+
+            var topA = new PointD(
+                    _rulerCenter.X - halfLen * dirX + halfHeight * upX,
+                    _rulerCenter.Y - halfLen * dirY + halfHeight * upY);
+            var topB = new PointD(
+                    _rulerCenter.X + halfLen * dirX + halfHeight * upX,
+                    _rulerCenter.Y + halfLen * dirY + halfHeight * upY);
+            var bottomA = new PointD(
+                    _rulerCenter.X - halfLen * dirX - halfHeight * upX,
+                    _rulerCenter.Y - halfLen * dirY - halfHeight * upY);
+            var bottomB = new PointD(
+                    _rulerCenter.X + halfLen * dirX - halfHeight * upX,
+                    _rulerCenter.Y + halfLen * dirY - halfHeight * upY);
+            return (topA, topB, bottomA, bottomB);
         }
 
         // ── Undo/redo (Core IUndoAction over InkStrokeStore) ──────────────
@@ -1645,6 +2255,794 @@ namespace Caelum.Pages
         {
             if (sender is PdfPageControl page)
                 InvalidateThumbnail(page.PageIndex);
+        }
+
+        // ── Phase B page events: selection, shapes, hidden ink ──────────
+
+        private void PageControl_SelectionChanged(object sender, AnnotationSelectionChangedEventArgs e)
+        {
+            if (sender is PdfPageControl page)
+            {
+                if (e.HasSelection)
+                    _activeSelectionPage = page;
+                else if (_activeSelectionPage == page)
+                    _activeSelectionPage = null;
+            }
+        }
+
+        private void PageControl_SelectionMoveCompleted(object sender, SelectionMoveCompletedEventArgs e)
+        {
+            if (sender is not PdfPageControl page)
+                return;
+
+            // WPF cross-page parity: when the selection's post-drag bounds
+            // centre lands on a DIFFERENT page, the strokes transfer stores
+            // inside one undoable action instead of a plain move.
+            Rect bounds = page.GetSelectionBounds();
+            if (bounds.IsEmpty)
+            {
+                PushUndoAction(new InkSelectionMoveAction(
+                    page.Ink.Store, e.Strokes, e.DeltaX, e.DeltaY));
+                return;
+            }
+
+            var centerInPage = new PointD(bounds.X + bounds.Width / 2, bounds.Y + bounds.Height / 2);
+            PdfPageControl targetPage = FindPageAtContainerPoint(page, centerInPage);
+
+            if (targetPage != null && targetPage != page)
+            {
+                var targetOriginInPage = targetPage.TransformToVisual(page)
+                    .TransformPoint(new Point(0, 0));
+                double adjustX = -targetOriginInPage.X;
+                double adjustY = -targetOriginInPage.Y;
+
+                page.ClearSelection();
+
+                var moveAction = new InkSelectionCrossPageMoveAction(
+                    page.Ink.Store,
+                    targetPage.Ink.Store,
+                    e.Strokes,
+                    e.DeltaX, e.DeltaY,
+                    adjustX, adjustY,
+                    e.Strokes.Select(s => page.Ink.Store.CaptureStrokePlacement(s)).ToList());
+
+                if (moveAction.ExecuteInitialTransfer())
+                    PushUndoAction(moveAction);
+            }
+            else
+            {
+                PushUndoAction(new InkSelectionMoveAction(
+                    page.Ink.Store, e.Strokes, e.DeltaX, e.DeltaY));
+            }
+        }
+
+        /// <summary>
+        /// Finds the page whose bounds contain the given point expressed in
+        /// the SOURCE page's coordinate system (translated through
+        /// PagesContainer). WPF FindPageAtContainerPoint parity — null when
+        /// the point lands in a page gap or outside the document.
+        /// </summary>
+        private PdfPageControl FindPageAtContainerPoint(PdfPageControl source, PointD centerInSource)
+        {
+            var centerInContainer = source.TransformToVisual(PagesContainer)
+                .TransformPoint(new Point(centerInSource.X, centerInSource.Y));
+
+            foreach (var p in _pageControls)
+            {
+                var ptInPage = PagesContainer.TransformToVisual(p)
+                    .TransformPoint(centerInContainer);
+                if (ptInPage.X >= 0 && ptInPage.X <= p.Width &&
+                    ptInPage.Y >= 0 && ptInPage.Y <= p.Height)
+                {
+                    return p;
+                }
+            }
+            return null;
+        }
+
+        private void PageControl_SelectionResizeCompleted(object sender, SelectionResizeCompletedEventArgs e)
+        {
+            if (sender is not PdfPageControl page)
+                return;
+            PushUndoAction(new InkSelectionResizeAction(
+                page.Ink.Store, e.Strokes, e.TotalScale, e.Anchor));
+        }
+
+        private void PageControl_SelectionRotateCompleted(object sender, SelectionRotateCompletedEventArgs e)
+        {
+            if (sender is not PdfPageControl page)
+                return;
+            PushUndoAction(new InkSelectionRotateAction(
+                page.Ink.Store, e.Strokes, e.TotalDegrees, e.Center));
+        }
+
+        /// <summary>
+        /// A shape drag committed N strokes as ONE undoable unit (arrow
+        /// shaft+head, baked dash segments share the ShapeGroupId). WPF then
+        /// arms Select and selects the group — same here.
+        /// </summary>
+        private void PageControl_ShapeCommittedUndoable(object sender, IReadOnlyList<InkStrokeData> strokes)
+        {
+            if (_isLoadingAnnotations || sender is not PdfPageControl page
+                || strokes == null || strokes.Count == 0)
+                return;
+
+            var placements = strokes
+                .Select(s => page.Ink.Store.CaptureStrokePlacement(s))
+                .ToList();
+            PushUndoAction(new InkStrokesAddedAction(page.Ink.Store, placements));
+
+            ActivateTool(ToolType.Select);
+            page.SelectItems(strokes);
+            _activeSelectionPage = page;
+        }
+
+        private void PageControl_HiddenInkCreated(object sender, HiddenInkAnnotation annotation)
+        {
+            if (_isLoadingAnnotations || annotation == null || sender is not PdfPageControl page)
+                return;
+            PushUndoAction(new HiddenInkAddedAction(page.HiddenInkStore, annotation));
+        }
+
+        private void PageControl_HiddenInkRemoved(object sender, HiddenInkAnnotation annotation)
+        {
+            if (_isLoadingAnnotations || annotation == null || sender is not PdfPageControl page)
+                return;
+            int index = page.HiddenInkStore.IndexOf(annotation);
+            PushUndoAction(new HiddenInkRemovedAction(
+                page.HiddenInkStore, annotation, Math.Max(0, index)));
+        }
+
+        private void PageControl_HiddenInksRemoved(object sender, HiddenInksRemovedEventArgs e)
+        {
+            if (_isLoadingAnnotations || e?.Entries == null
+                || e.Entries.Count == 0 || sender is not PdfPageControl page)
+                return;
+            PushUndoAction(new HiddenInksRemovedAction(page.HiddenInkStore, e.Entries));
+        }
+
+        private void PageControl_BlankContextRequested(object sender, EventArgs e)
+        {
+            ShowBlankContextMenu();
+        }
+
+        /// <summary>
+        /// Delete-key selection removal: capture placements first so undo
+        /// restores z-order, then quietly remove and push the batch action —
+        /// WPF DeleteSelection → ItemsRemovedAction parity (strokes only;
+        /// text containers are T8).
+        /// </summary>
+        private void DeleteSelection()
+        {
+            if (_activeSelectionPage == null || !_activeSelectionPage.HasSelection)
+                return;
+
+            var strokes = _activeSelectionPage.SelectedStrokes.ToList();
+            var placements = strokes
+                .Select(s => _activeSelectionPage.Ink.Store.CaptureStrokePlacement(s))
+                .ToList();
+
+            foreach (var stroke in strokes)
+                _activeSelectionPage.Ink.Store.RemoveStrokeQuiet(stroke);
+
+            PushUndoAction(new InkStrokesRemovedAction(_activeSelectionPage.Ink.Store, placements));
+            _activeSelectionPage.ClearSelection();
+            InvalidateThumbnail(_activeSelectionPage.PageIndex);
+        }
+
+        /// <summary>
+        /// WPF EnsureBlankContextMenu minus clipboard/save entries (T8/T9):
+        /// Select-all and Delete (visible only with a live selection).
+        /// </summary>
+        private void ShowBlankContextMenu()
+        {
+            bool hasSelection = _activeSelectionPage != null && _activeSelectionPage.HasSelection;
+
+            var flyout = new MenuFlyout();
+            var selectAll = new MenuFlyoutItem
+            {
+                Text = LocalizationService.Get("Editor.Action.SelectAll"),
+            };
+            AutomationProperties.SetAutomationId(selectAll, "Editor.Action.SelectAll");
+            selectAll.Click += (_, __) =>
+            {
+                ActivateTool(ToolType.Select);
+                var page = _pageControls.Count == 0 ? null : _pageControls[GetCurrentPageIndex()];
+                if (page != null)
+                {
+                    page.SelectAllAnnotations();
+                    _activeSelectionPage = page;
+                }
+            };
+            flyout.Items.Add(selectAll);
+
+            if (hasSelection)
+            {
+                var deleteItem = new MenuFlyoutItem
+                {
+                    Text = LocalizationService.Get("Editor.Action.Delete"),
+                };
+                AutomationProperties.SetAutomationId(deleteItem, "Editor.Action.Delete");
+                deleteItem.Click += (_, __) => DeleteSelection();
+                flyout.Items.Add(deleteItem);
+            }
+
+            flyout.ShowAt(PdfScrollViewer);
+        }
+
+        /// <summary>
+        /// Selection drawing-style undo: capture the before/after colour+size
+        /// of every selected stroke, apply the new values in place and push
+        /// one batch action — WPF ApplySelectedDrawingStyle →
+        /// StrokeStyleChangedAction parity.
+        /// </summary>
+        private void ApplySelectedDrawingStyle(Windows.UI.Color? color, double? width)
+        {
+            var page = _activeSelectionPage;
+            var strokes = page?.SelectedStrokes?.Distinct().ToList();
+            if (page == null || strokes == null || strokes.Count == 0)
+                return;
+
+            var before = strokes.ToDictionary(
+                stroke => stroke,
+                stroke => (stroke.R, stroke.G, stroke.B, stroke.A, stroke.Size));
+            bool changed = false;
+            foreach (var stroke in strokes)
+            {
+                if (color.HasValue
+                    && (stroke.R != color.Value.R || stroke.G != color.Value.G
+                        || stroke.B != color.Value.B || stroke.A != color.Value.A))
+                {
+                    stroke.R = color.Value.R;
+                    stroke.G = color.Value.G;
+                    stroke.B = color.Value.B;
+                    stroke.A = color.Value.A;
+                    changed = true;
+                }
+                if (width.HasValue && Math.Abs(stroke.Size - width.Value) > 0.001)
+                {
+                    stroke.Size = width.Value;
+                    changed = true;
+                }
+            }
+
+            if (!changed)
+                return;
+
+            var after = strokes.ToDictionary(
+                stroke => stroke,
+                stroke => (stroke.R, stroke.G, stroke.B, stroke.A, stroke.Size));
+            page.Ink.Store.NotifyGeometryChanged(strokes);
+            PushUndoAction(new InkStrokesStyleChangedAction(page.Ink.Store, before, after));
+        }
+
+        // ── Tool flyouts (WPF popups → WinUI Flyout) ────────────────────
+
+        /// <summary>
+        /// The Shape tool's options flyout — the WPF _shapePopup port:
+        /// 3×3 shape-kind grid, Solid/Dashed line style, size slider
+        /// (1–20, 0.5 steps) and the shared 12×8 HSV palette. Selection is
+        /// session-only exactly like WPF and applies to all pages at once.
+        /// </summary>
+        private void ShowShapeFlyout(FrameworkElement anchor)
+        {
+            var panel = new StackPanel { Margin = new Thickness(4) };
+
+            panel.Children.Add(PopupSectionHeader(LocalizationService.Get("Editor.ShapeHeader")));
+
+            var shapeGrid = new Grid { ColumnSpacing = 4, RowSpacing = 4 };
+            for (int col = 0; col < 3; col++)
+                shapeGrid.ColumnDefinitions.Add(
+                    new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            var buttons = new Dictionary<InkShapeKind, ToggleButton>();
+            var choices = new (InkShapeKind Kind, string Label, string AutomationId)[]
+            {
+                (InkShapeKind.Line, LocalizationService.Get("Editor.ShapeLine"), "Editor.Shape.Line"),
+                (InkShapeKind.Rectangle, LocalizationService.Get("Editor.ShapeRectangle"), "Editor.Shape.Rectangle"),
+                (InkShapeKind.Ellipse, LocalizationService.Get("Editor.ShapeEllipse"), "Editor.Shape.Ellipse"),
+                (InkShapeKind.Arrow, LocalizationService.Get("Editor.ShapeArrow"), "Editor.Shape.Arrow"),
+                (InkShapeKind.Triangle, LocalizationService.Get("Editor.ShapeTriangle"), "Editor.Shape.Triangle"),
+                (InkShapeKind.Diamond, LocalizationService.Get("Editor.ShapeDiamond"), "Editor.Shape.Diamond"),
+                (InkShapeKind.Parallelogram, LocalizationService.Get("Editor.ShapeParallelogram"), "Editor.Shape.Parallelogram"),
+                (InkShapeKind.Pentagon, LocalizationService.Get("Editor.ShapePentagon"), "Editor.Shape.Pentagon"),
+                (InkShapeKind.Hexagon, LocalizationService.Get("Editor.ShapeHexagon"), "Editor.Shape.Hexagon"),
+            };
+
+            foreach (var choice in choices)
+            {
+                var button = BuildGlyphToggleButton(
+                    choice.Label, choice.AutomationId, BuildShapePreviewGlyph(choice.Kind));
+                button.Click += (_, __) =>
+                {
+                    if (_shapeKind == choice.Kind)
+                        return;
+                    _shapeKind = choice.Kind;
+                    ApplyShapeKindVisuals(buttons);
+                    if (_currentTool == ToolType.Shape)
+                        ApplyToolToAllPages();
+                };
+                buttons[choice.Kind] = button;
+                int slot = shapeGrid.Children.Count;
+                while (shapeGrid.RowDefinitions.Count <= slot / 3)
+                    shapeGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+                Grid.SetColumn(button, slot % 3);
+                Grid.SetRow(button, slot / 3);
+                shapeGrid.Children.Add(button);
+            }
+            panel.Children.Add(shapeGrid);
+
+            panel.Children.Add(PopupSectionHeader(
+                LocalizationService.Get("Editor.ShapeLineStyleHeader"), topMargin: 12));
+
+            var styleGrid = new Grid { ColumnSpacing = 4 };
+            for (int col = 0; col < 2; col++)
+                styleGrid.ColumnDefinitions.Add(
+                    new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            var solidButton = BuildGlyphToggleButton(
+                LocalizationService.Get("Editor.ShapeSolid"),
+                "Editor.Shape.Style.Solid",
+                BuildShapePreviewGlyph(InkShapeKind.Line));
+            var dashedButton = BuildGlyphToggleButton(
+                LocalizationService.Get("Editor.ShapeDashed"),
+                "Editor.Shape.Style.Dashed",
+                BuildShapePreviewGlyph(InkShapeKind.DashedLine));
+            solidButton.Click += (_, __) =>
+            {
+                if (_shapeIsDashed)
+                {
+                    _shapeIsDashed = false;
+                    ApplyShapeStyleVisuals(solidButton, dashedButton);
+                    if (_currentTool == ToolType.Shape)
+                        ApplyToolToAllPages();
+                }
+            };
+            dashedButton.Click += (_, __) =>
+            {
+                if (!_shapeIsDashed)
+                {
+                    _shapeIsDashed = true;
+                    ApplyShapeStyleVisuals(solidButton, dashedButton);
+                    if (_currentTool == ToolType.Shape)
+                        ApplyToolToAllPages();
+                }
+            };
+            Grid.SetColumn(dashedButton, 1);
+            styleGrid.Children.Add(solidButton);
+            styleGrid.Children.Add(dashedButton);
+            panel.Children.Add(styleGrid);
+
+            ApplyShapeKindVisuals(buttons);
+            ApplyShapeStyleVisuals(solidButton, dashedButton);
+
+            panel.Children.Add(PopupSectionHeader(
+                LocalizationService.Get("Editor.PopupSize"), topMargin: 12));
+            var slider = new Slider
+            {
+                Minimum = 1,
+                Maximum = 20,
+                Value = _shapeSize,
+                StepFrequency = 0.5,
+                Width = 240,
+            };
+            AutomationProperties.SetAutomationId(slider, "Editor.Shape.Size");
+            AutomationProperties.SetName(slider, LocalizationService.Get("Editor.PopupSize"));
+            slider.ValueChanged += (_, args) =>
+            {
+                _shapeSize = args.NewValue;
+                if (_currentTool == ToolType.Shape)
+                    ApplyToolToAllPages();
+            };
+            panel.Children.Add(slider);
+
+            panel.Children.Add(PopupSectionHeader(
+                LocalizationService.Get("Editor.PopupColor"), topMargin: 12));
+            panel.Children.Add(BuildColorPalette(_shapeColor, color =>
+            {
+                _shapeColor = color;
+                if (_currentTool == ToolType.Shape)
+                    ApplyToolToAllPages();
+            }));
+
+            var flyout = new Flyout { Content = panel };
+            flyout.ShowAt(anchor);
+        }
+
+        /// <summary>
+        /// The Select tool's options flyout — the WPF _selectionPopup port:
+        /// marquee shape (Rectangle/Freehand), the Both/Drawings/Text filter
+        /// and the "Selected drawing" restyle row (widths + swatches →
+        /// InkStrokesStyleChangedAction).
+        /// </summary>
+        private void ShowSelectionFlyout(FrameworkElement anchor)
+        {
+            var panel = new StackPanel { Margin = new Thickness(4) };
+
+            panel.Children.Add(PopupSectionHeader(LocalizationService.Get("Editor.SelectShape")));
+
+            var shapePanel = new StackPanel { Orientation = Orientation.Horizontal };
+            var rectButton = BuildGlyphToggleButton(
+                LocalizationService.Get("Editor.SelectShapeRect"),
+                "Editor.Select.Shape.Rectangle",
+                BuildSelectionShapePreviewGlyph(Caelum.Controls.SelectionShape.Rectangle));
+            var freeButton = BuildGlyphToggleButton(
+                LocalizationService.Get("Editor.SelectShapeFree"),
+                "Editor.Select.Shape.FreeForm",
+                BuildSelectionShapePreviewGlyph(Caelum.Controls.SelectionShape.FreeForm));
+            void SelectShape(Caelum.Controls.SelectionShape shape)
+            {
+                _selectionShape = shape;
+                StylePopupToggle(rectButton, shape == Caelum.Controls.SelectionShape.Rectangle);
+                StylePopupToggle(freeButton, shape == Caelum.Controls.SelectionShape.FreeForm);
+                ApplyToolToAllPages();
+            }
+            rectButton.Click += (_, __) => SelectShape(Caelum.Controls.SelectionShape.Rectangle);
+            freeButton.Click += (_, __) => SelectShape(Caelum.Controls.SelectionShape.FreeForm);
+            shapePanel.Children.Add(rectButton);
+            shapePanel.Children.Add(freeButton);
+            panel.Children.Add(shapePanel);
+
+            panel.Children.Add(PopupSectionHeader(
+                LocalizationService.Get("Editor.SelectFilter"), topMargin: 12));
+
+            var filterPanel = new StackPanel { Orientation = Orientation.Horizontal };
+            var bothButton = BuildTextToggleButton(
+                LocalizationService.Get("Editor.SelectFilterBoth"), "Editor.Select.Filter.Both");
+            var drawingsButton = BuildTextToggleButton(
+                LocalizationService.Get("Editor.SelectFilterDrawings"), "Editor.Select.Filter.Drawings");
+            var textButton = BuildTextToggleButton(
+                LocalizationService.Get("Editor.SelectFilterText"), "Editor.Select.Filter.Text");
+            void SelectFilter(Caelum.Controls.SelectionFilter filter)
+            {
+                _selectionFilter = filter;
+                StylePopupToggle(bothButton, filter == Caelum.Controls.SelectionFilter.Both);
+                StylePopupToggle(drawingsButton, filter == Caelum.Controls.SelectionFilter.DrawingsOnly);
+                StylePopupToggle(textButton, filter == Caelum.Controls.SelectionFilter.TextOnly);
+                ApplyToolToAllPages();
+            }
+            bothButton.Click += (_, __) => SelectFilter(Caelum.Controls.SelectionFilter.Both);
+            drawingsButton.Click += (_, __) => SelectFilter(Caelum.Controls.SelectionFilter.DrawingsOnly);
+            textButton.Click += (_, __) => SelectFilter(Caelum.Controls.SelectionFilter.TextOnly);
+            filterPanel.Children.Add(bothButton);
+            filterPanel.Children.Add(drawingsButton);
+            filterPanel.Children.Add(textButton);
+            panel.Children.Add(filterPanel);
+
+            StylePopupToggle(rectButton, _selectionShape == Caelum.Controls.SelectionShape.Rectangle);
+            StylePopupToggle(freeButton, _selectionShape == Caelum.Controls.SelectionShape.FreeForm);
+            StylePopupToggle(bothButton, _selectionFilter == Caelum.Controls.SelectionFilter.Both);
+            StylePopupToggle(drawingsButton, _selectionFilter == Caelum.Controls.SelectionFilter.DrawingsOnly);
+            StylePopupToggle(textButton, _selectionFilter == Caelum.Controls.SelectionFilter.TextOnly);
+
+            // ── Selected drawing style (restyles the live selection) ────
+            panel.Children.Add(PopupSectionHeader(
+                LocalizationService.Get("Editor.SelectedDrawingStyle"), topMargin: 12));
+
+            var widthRow = new StackPanel { Orientation = Orientation.Horizontal };
+            foreach (double width in new[] { 1d, 2d, 4d, 8d })
+            {
+                var widthButton = new Button
+                {
+                    Content = width.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture),
+                    Width = 44,
+                    Height = 32,
+                    Margin = new Thickness(0, 0, 6, 0),
+                };
+                AutomationProperties.SetAutomationId(
+                    widthButton, $"Editor.Select.DrawingWidth.{width:0.#}");
+                double w = width;
+                widthButton.Click += (_, __) => ApplySelectedDrawingStyle(null, w);
+                widthRow.Children.Add(widthButton);
+            }
+            panel.Children.Add(widthRow);
+
+            var colorRow = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Margin = new Thickness(0, 8, 0, 0),
+            };
+            var swatchColors = new[]
+            {
+                Windows.UI.Color.FromArgb(255, 0, 0, 0),
+                Windows.UI.Color.FromArgb(255, 255, 0, 0),
+                Windows.UI.Color.FromArgb(255, 255, 165, 0),
+                Windows.UI.Color.FromArgb(255, 0, 128, 0),
+                Windows.UI.Color.FromArgb(255, 0, 0, 255),
+                Windows.UI.Color.FromArgb(255, 128, 0, 128),
+            };
+            foreach (var color in swatchColors)
+            {
+                var swatch = new Button
+                {
+                    Width = 32,
+                    Height = 32,
+                    Margin = new Thickness(0, 0, 6, 0),
+                    Background = new SolidColorBrush(color),
+                    BorderThickness = new Thickness(1),
+                    Tag = color,
+                };
+                string label = $"#{color.R:X2}{color.G:X2}{color.B:X2}";
+                AutomationProperties.SetAutomationId(swatch, $"Editor.Select.DrawingColor.{label[1..]}");
+                AutomationProperties.SetName(swatch, label);
+                var picked = color;
+                swatch.Click += (_, __) => ApplySelectedDrawingStyle(picked, null);
+                colorRow.Children.Add(swatch);
+            }
+            panel.Children.Add(colorRow);
+
+            var flyout = new Flyout { Content = panel };
+            flyout.ShowAt(anchor);
+        }
+
+        private static TextBlock PopupSectionHeader(string text, double topMargin = 0) => new()
+        {
+            Text = text,
+            FontSize = 13,
+            FontWeight = FontWeights.SemiBold,
+            Margin = new Thickness(0, topMargin, 0, 10),
+            Foreground = ResolveThemeBrush("ThemeSubtleForegroundBrush", Color.FromArgb(0xFF, 0x6B, 0x72, 0x80)),
+        };
+
+        private static ToggleButton BuildGlyphToggleButton(
+            string tooltip, string automationId, UIElement glyph)
+        {
+            var button = new ToggleButton
+            {
+                Width = 44,
+                Height = 36,
+                Margin = new Thickness(2),
+                Padding = new Thickness(0),
+                Content = glyph,
+            };
+            ToolTipService.SetToolTip(button, tooltip);
+            AutomationProperties.SetAutomationId(button, automationId);
+            AutomationProperties.SetName(button, tooltip);
+            return button;
+        }
+
+        private static ToggleButton BuildTextToggleButton(string label, string automationId)
+        {
+            var button = new ToggleButton
+            {
+                Content = label,
+                Margin = new Thickness(0, 0, 6, 0),
+                Padding = new Thickness(10, 5, 10, 5),
+                FontSize = 12,
+                MinHeight = 32,
+            };
+            ToolTipService.SetToolTip(button, label);
+            AutomationProperties.SetAutomationId(button, automationId);
+            AutomationProperties.SetName(button, label);
+            return button;
+        }
+
+        /// <summary>
+        /// WPF UpdateFilterButtonStyle parity: checked tint + accent border
+        /// when active, quiet surface otherwise.
+        /// </summary>
+        private static void StylePopupToggle(ToggleButton button, bool active)
+        {
+            button.IsChecked = active;
+            button.Background = ResolveThemeBrush(
+                active ? "ThemeSelectionBrush" : "ThemeSurfaceAltBrush",
+                active ? Color.FromArgb(0x3C, 0x25, 0x63, 0xEB) : Color.FromArgb(0xFF, 0xF1, 0xF3, 0xF5));
+            button.BorderBrush = ResolveThemeBrush(
+                active ? "ThemeAccentBrush" : "ThemeBorderBrush",
+                active ? Color.FromArgb(0xFF, 0x25, 0x63, 0xEB) : Color.FromArgb(0xFF, 0xC9, 0xCE, 0xD6));
+            button.Foreground = ResolveThemeBrush(
+                active ? "ThemeSelectionForegroundBrush" : "ThemeForegroundBrush",
+                Color.FromArgb(0xFF, 0x1F, 0x24, 0x2B));
+            if (button.Content is Microsoft.UI.Xaml.Shapes.Path path)
+            {
+                path.Stroke = ResolveThemeBrush(
+                    active ? "ThemeSelectionForegroundBrush" : "ThemeForegroundBrush",
+                    Color.FromArgb(0xFF, 0x1F, 0x24, 0x2B));
+            }
+        }
+
+        private void ApplyShapeKindVisuals(Dictionary<InkShapeKind, ToggleButton> buttons)
+        {
+            foreach (var pair in buttons)
+                StylePopupToggle(pair.Value, _shapeKind == pair.Key);
+        }
+
+        private void ApplyShapeStyleVisuals(ToggleButton solid, ToggleButton dashed)
+        {
+            StylePopupToggle(solid, !_shapeIsDashed);
+            StylePopupToggle(dashed, _shapeIsDashed);
+        }
+
+        /// <summary>
+        /// The shape-option glyph previews — identical markup to the WPF
+        /// BuildShapePreview table, parsed by the shared mini parser.
+        /// </summary>
+        private static Microsoft.UI.Xaml.Shapes.Path BuildShapePreviewGlyph(InkShapeKind kind)
+        {
+            var data = kind switch
+            {
+                InkShapeKind.Rectangle => "M4,4 L28,4 L28,18 L4,18 Z",
+                InkShapeKind.Ellipse => "M16,4 A12,7 0 1 1 15.99,4",
+                InkShapeKind.Arrow => "M4,11 L26,11 M19,5 L26,11 L19,17",
+                InkShapeKind.Triangle => "M16,3 L29,20 L3,20 Z",
+                InkShapeKind.Diamond => "M16,2 L29,11 L16,20 L3,11 Z",
+                InkShapeKind.Parallelogram => "M9,3 H29 L23,20 H3 Z",
+                InkShapeKind.Pentagon => "M16,2 L29,9 L24,20 L8,20 L3,9 Z",
+                InkShapeKind.Hexagon => "M9,3 H23 L29,11 L23,20 H9 L3,11 Z",
+                InkShapeKind.DashedLine => "M4,17 L9,15 M13,13 L18,11 M22,9 L27,7",
+                _ => "M4,17 L27,5",
+            };
+            return new Microsoft.UI.Xaml.Shapes.Path
+            {
+                Width = 30,
+                Height = 22,
+                Stretch = Stretch.Uniform,
+                StrokeThickness = 1.8,
+                StrokeStartLineCap = PenLineCap.Round,
+                StrokeEndLineCap = PenLineCap.Round,
+                StrokeLineJoin = PenLineJoin.Round,
+                Stroke = ResolveThemeBrush("ThemeForegroundBrush", Color.FromArgb(0xFF, 0x1F, 0x24, 0x2B)),
+                Data = LucideIcon.ParseIconGeometry(data),
+            };
+        }
+
+        private static Microsoft.UI.Xaml.Shapes.Path BuildSelectionShapePreviewGlyph(
+            Caelum.Controls.SelectionShape shape)
+        {
+            var data = shape == Caelum.Controls.SelectionShape.Rectangle
+                ? "M4,4 L28,4 L28,18 L4,18 Z"
+                : "M5,16 C7,7 10,19 13,10 C16,3 18,18 22,8 C23,6 25,7 27,5";
+            return new Microsoft.UI.Xaml.Shapes.Path
+            {
+                Width = 30,
+                Height = 22,
+                Stretch = Stretch.Uniform,
+                StrokeThickness = 1.8,
+                StrokeStartLineCap = PenLineCap.Round,
+                StrokeEndLineCap = PenLineCap.Round,
+                StrokeLineJoin = PenLineJoin.Round,
+                Stroke = ResolveThemeBrush("ThemeForegroundBrush", Color.FromArgb(0xFF, 0x1F, 0x24, 0x2B)),
+                Data = LucideIcon.ParseIconGeometry(data),
+            };
+        }
+
+        /// <summary>
+        /// The shared 12×8 HSV palette from WPF BuildToolPopup — grayscale
+        /// row on top, hue columns × saturation/value rows below, accent-ring
+        /// selection marker and Editor.Palette.Color.{row}.{col} ids.
+        /// </summary>
+        private static Grid BuildColorPalette(
+            Windows.UI.Color initialColor, Action<Windows.UI.Color> colorChanged)
+        {
+            int cols = 12;
+            int rows = 8;
+            double cellSize = 32;
+            var paletteGrid = new Grid
+            {
+                Width = cols * cellSize,
+                Height = rows * cellSize,
+            };
+
+            var selectionIndicator = CreateColorSelectionIndicator(cellSize);
+
+            void UpdateColorMarkers(Windows.UI.Color selected)
+            {
+                selectionIndicator.Visibility = Visibility.Collapsed;
+                foreach (var element in paletteGrid.Children)
+                {
+                    if (element is Button cell && cell.Tag is Windows.UI.Color cellColor
+                        && cellColor.R == selected.R && cellColor.G == selected.G && cellColor.B == selected.B)
+                    {
+                        selectionIndicator.Margin = cell.Margin;
+                        selectionIndicator.Visibility = Visibility.Visible;
+                        break;
+                    }
+                }
+            }
+
+            for (int row = 0; row < rows; row++)
+            {
+                for (int col = 0; col < cols; col++)
+                {
+                    Windows.UI.Color cellColor;
+                    if (row == 0)
+                    {
+                        byte gray = (byte)(col * 255 / (cols - 1));
+                        cellColor = Windows.UI.Color.FromArgb(255, gray, gray, gray);
+                    }
+                    else
+                    {
+                        double hue = col * 360.0 / cols;
+                        double saturation = 1.0;
+                        double val = 1.0;
+                        if (row <= rows / 2)
+                            saturation = (double)row / (rows / 2);
+                        else
+                            val = 1.0 - (double)(row - rows / 2) / (rows / 2);
+                        cellColor = HsvToColor(hue, saturation, val);
+                    }
+
+                    var cellVisual = new Border
+                    {
+                        Width = cellSize - 6,
+                        Height = cellSize - 6,
+                        Background = new SolidColorBrush(cellColor),
+                        CornerRadius = new CornerRadius(4),
+                        BorderThickness = new Thickness(1),
+                        BorderBrush = ResolveThemeBrush("ThemeBorderBrush", Color.FromArgb(0xFF, 0xC9, 0xCE, 0xD6)),
+                    };
+                    var cell = new Button
+                    {
+                        Width = cellSize,
+                        Height = cellSize,
+                        Padding = new Thickness(3),
+                        Background = new SolidColorBrush(Color.FromArgb(0, 0, 0, 0)),
+                        BorderThickness = new Thickness(0),
+                        HorizontalContentAlignment = HorizontalAlignment.Center,
+                        VerticalContentAlignment = VerticalAlignment.Center,
+                        HorizontalAlignment = HorizontalAlignment.Left,
+                        VerticalAlignment = VerticalAlignment.Top,
+                        Margin = new Thickness(col * cellSize, row * cellSize, 0, 0),
+                        Content = cellVisual,
+                        Tag = cellColor,
+                    };
+                    string cellLabel = $"#{cellColor.R:X2}{cellColor.G:X2}{cellColor.B:X2}";
+                    ToolTipService.SetToolTip(cell, cellLabel);
+                    AutomationProperties.SetAutomationId(cell, $"Editor.Palette.Color.{row}.{col}");
+                    AutomationProperties.SetName(cell, cellLabel);
+                    cell.Click += (_, __) =>
+                    {
+                        UpdateColorMarkers(cellColor);
+                        colorChanged?.Invoke(cellColor);
+                    };
+                    paletteGrid.Children.Add(cell);
+                }
+            }
+
+            paletteGrid.Children.Add(selectionIndicator);
+            UpdateColorMarkers(initialColor);
+            return paletteGrid;
+        }
+
+        private static Border CreateColorSelectionIndicator(double size)
+        {
+            var inner = new Border
+            {
+                BorderThickness = new Thickness(2),
+                Background = new SolidColorBrush(Color.FromArgb(0, 0, 0, 0)),
+                IsHitTestVisible = false,
+                BorderBrush = ResolveThemeBrush("ThemeSurfaceBrush", Color.FromArgb(0xFF, 0xFF, 0xFF, 0xFF)),
+            };
+            return new Border
+            {
+                Width = size,
+                Height = size,
+                BorderThickness = new Thickness(2),
+                Padding = new Thickness(2),
+                Background = new SolidColorBrush(Color.FromArgb(0, 0, 0, 0)),
+                IsHitTestVisible = false,
+                Visibility = Visibility.Collapsed,
+                HorizontalAlignment = HorizontalAlignment.Left,
+                VerticalAlignment = VerticalAlignment.Top,
+                BorderBrush = ResolveThemeBrush("ThemeFocusBrush", Color.FromArgb(0xFF, 0x25, 0x63, 0xEB)),
+                Child = inner,
+            };
+        }
+
+        private static Windows.UI.Color HsvToColor(double h, double s, double v)
+        {
+            double c = v * s;
+            double x = c * (1 - Math.Abs((h / 60) % 2 - 1));
+            double m = v - c;
+            double r, g, b;
+            if (h < 60) { r = c; g = x; b = 0; }
+            else if (h < 120) { r = x; g = c; b = 0; }
+            else if (h < 180) { r = 0; g = c; b = x; }
+            else if (h < 240) { r = 0; g = x; b = c; }
+            else if (h < 300) { r = x; g = 0; b = c; }
+            else { r = c; g = 0; b = x; }
+            return Windows.UI.Color.FromArgb(255,
+                (byte)((r + m) * 255),
+                (byte)((g + m) * 255),
+                (byte)((b + m) * 255));
         }
 
         /// <summary>
@@ -2918,6 +4316,18 @@ namespace Caelum.Pages
                         }
                         e.Handled = true;
                         return;
+                    case VirtualKey.A:
+                        // WPF Ctrl+A: arm Select and select all ink on the
+                        // current page.
+                        ActivateTool(ToolType.Select);
+                        if (_pageControls.Count > 0)
+                        {
+                            var page = _pageControls[GetCurrentPageIndex()];
+                            page.SelectAllAnnotations();
+                            _activeSelectionPage = page;
+                        }
+                        e.Handled = true;
+                        return;
                     case VirtualKey.Add:
 
                         AdjustZoom(ZoomStep);
@@ -2967,6 +4377,23 @@ namespace Caelum.Pages
                     if (PdfSearchPanel.Visibility == Visibility.Visible)
                     {
                         ClosePdfSearch();
+                        e.Handled = true;
+                    }
+                    else
+                    {
+                        // WPF Esc parity: dismiss the active tool back to
+                        // None (which also drops any live selection).
+                        ActivateTool(ToolType.None);
+                        e.Handled = true;
+                    }
+                    break;
+                case VirtualKey.Delete:
+                case VirtualKey.Back:
+                    if (_currentTool == ToolType.Select
+                        && _activeSelectionPage != null
+                        && _activeSelectionPage.HasSelection)
+                    {
+                        DeleteSelection();
                         e.Handled = true;
                     }
                     break;

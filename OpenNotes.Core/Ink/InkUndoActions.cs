@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using Caelum.InkGeometry;
 using Caelum.Models;
 
 namespace Caelum.Ink;
@@ -261,6 +262,466 @@ public sealed class InkStrokeReplacedAction : IUndoAction
             StrokeReplacementSide.Original,
             _idealSnapshot,
             out _);
+        return Task.CompletedTask;
+    }
+}
+
+// ------------------------------------------------------------------
+// Task 7 Phase B — selection + shape-group + hidden-ink actions.
+// Same contract as the Phase A actions: quiet store primitives only;
+// token/side identity is used wherever a live reference could have been
+// replaced (recognition) between the gesture and a later undo/redo.
+// ------------------------------------------------------------------
+
+/// <summary>
+/// A multi-stroke add committed as ONE undoable unit — shape-group commits
+/// (arrow shaft+head, baked dashes) and any future multi-stroke insert.
+/// Undo removes all parts (descending index), redo reinserts them at their
+/// captured placements (ascending index). Ported from the WPF
+/// ItemsAddedAction minus its container handling.
+/// </summary>
+public sealed class InkStrokesAddedAction : IUndoAction
+{
+    private readonly InkStrokeStore _store;
+    private readonly List<InkStrokePlacement> _placements;
+
+    public InkStrokesAddedAction(InkStrokeStore store, List<InkStrokePlacement> placements)
+    {
+        _store = store ?? throw new ArgumentNullException(nameof(store));
+        _placements = placements ?? new List<InkStrokePlacement>();
+    }
+
+    public string Description => "Add items";
+    public bool LeavesDocumentDirty => true;
+
+    public Task UndoAsync()
+    {
+        foreach (var placement in _placements.OrderByDescending(p => p.Index))
+            _store.RemoveStrokeQuiet(placement);
+        return Task.CompletedTask;
+    }
+
+    public Task RedoAsync()
+    {
+        foreach (var placement in _placements.OrderBy(p => p.Index))
+            _store.AddStrokeQuiet(placement.ForOwner(_store, placement.Index));
+        return Task.CompletedTask;
+    }
+}
+
+/// <summary>
+/// A multi-stroke removal committed as ONE undoable unit — Delete on a
+/// selection. Undo restores all strokes at their captured placements
+/// (ascending index); redo removes them again (descending). Ported from the
+/// WPF ItemsRemovedAction minus containers.
+/// </summary>
+public sealed class InkStrokesRemovedAction : IUndoAction
+{
+    private readonly InkStrokeStore _store;
+    private readonly List<InkStrokePlacement> _placements;
+
+    public InkStrokesRemovedAction(InkStrokeStore store, List<InkStrokePlacement> placements)
+    {
+        _store = store ?? throw new ArgumentNullException(nameof(store));
+        _placements = placements ?? new List<InkStrokePlacement>();
+    }
+
+    public string Description => "Remove items";
+    public bool LeavesDocumentDirty => true;
+
+    public Task UndoAsync()
+    {
+        foreach (var placement in _placements.OrderBy(p => p.Index))
+            _store.AddStrokeQuiet(placement.ForOwner(_store, placement.Index));
+        return Task.CompletedTask;
+    }
+
+    public Task RedoAsync()
+    {
+        foreach (var placement in _placements.OrderByDescending(p => p.Index))
+            _store.RemoveStrokeQuiet(placement);
+        return Task.CompletedTask;
+    }
+}
+
+/// <summary>
+/// Selection move: undo applies −delta, redo +delta. The stroke spine is
+/// mutated in place and the store is notified so surfaces refresh the
+/// affected visuals. Skips strokes no longer in the store (post-erase
+/// undo is a safe no-op), matching the WPF ItemsMoveAction which resolves
+/// through the same live collection.
+/// </summary>
+public sealed class InkSelectionMoveAction : IUndoAction
+{
+    private readonly InkStrokeStore _store;
+    private readonly List<InkStrokeData> _strokes;
+    private readonly double _dx;
+    private readonly double _dy;
+
+    public InkSelectionMoveAction(
+        InkStrokeStore store, IReadOnlyList<InkStrokeData> strokes, double dx, double dy)
+    {
+        _store = store ?? throw new ArgumentNullException(nameof(store));
+        _strokes = strokes?.ToList() ?? new List<InkStrokeData>();
+        _dx = dx;
+        _dy = dy;
+    }
+
+    public string Description => "Move items";
+    public bool LeavesDocumentDirty => true;
+
+    public Task UndoAsync() => Apply(-_dx, -_dy);
+    public Task RedoAsync() => Apply(_dx, _dy);
+
+    private Task Apply(double dx, double dy)
+    {
+        var live = _strokes.Where(s => _store.IndexOf(s) >= 0).ToList();
+        foreach (var stroke in live)
+            Caelum.InkGeometry.StrokeGeometry.TranslateSpinePoints(stroke.Points, dx, dy);
+        _store.NotifyGeometryChanged(live);
+        return Task.CompletedTask;
+    }
+}
+
+/// <summary>
+/// Uniform selection scale about a fixed anchor: undo scales by
+/// 1/totalScale, redo by totalScale. Spine points are rescaled and the
+/// stroke size is multiplied (WPF ScaleItemsDirectly parity).
+/// </summary>
+public sealed class InkSelectionResizeAction : IUndoAction
+{
+    private readonly InkStrokeStore _store;
+    private readonly List<InkStrokeData> _strokes;
+    private readonly double _totalScale;
+    private readonly PointD _anchor;
+
+    public InkSelectionResizeAction(
+        InkStrokeStore store,
+        IReadOnlyList<InkStrokeData> strokes,
+        double totalScale,
+        PointD anchor)
+    {
+        _store = store ?? throw new ArgumentNullException(nameof(store));
+        _strokes = strokes?.ToList() ?? new List<InkStrokeData>();
+        _totalScale = totalScale;
+        _anchor = anchor;
+    }
+
+    public string Description => "Resize items";
+    public bool LeavesDocumentDirty => true;
+
+    public Task UndoAsync() => Apply(1.0 / _totalScale);
+    public Task RedoAsync() => Apply(_totalScale);
+
+    private Task Apply(double scale)
+    {
+        var live = _strokes.Where(s => _store.IndexOf(s) >= 0).ToList();
+        foreach (var stroke in live)
+        {
+            Caelum.InkGeometry.StrokeGeometry.ScaleSpinePoints(stroke.Points, scale, _anchor);
+            stroke.Size *= scale;
+        }
+        _store.NotifyGeometryChanged(live);
+        return Task.CompletedTask;
+    }
+}
+
+/// <summary>
+/// Selection rotation about the bounds centre: undo rotates by
+/// −totalDegrees, redo by +totalDegrees (WPF ItemsRotateAction parity).
+/// </summary>
+public sealed class InkSelectionRotateAction : IUndoAction
+{
+    private readonly InkStrokeStore _store;
+    private readonly List<InkStrokeData> _strokes;
+    private readonly double _totalDegrees;
+    private readonly PointD _center;
+
+    public InkSelectionRotateAction(
+        InkStrokeStore store,
+        IReadOnlyList<InkStrokeData> strokes,
+        double totalDegrees,
+        PointD center)
+    {
+        _store = store ?? throw new ArgumentNullException(nameof(store));
+        _strokes = strokes?.ToList() ?? new List<InkStrokeData>();
+        _totalDegrees = totalDegrees;
+        _center = center;
+    }
+
+    public string Description => "Rotate items";
+    public bool LeavesDocumentDirty => true;
+
+    public Task UndoAsync() => Apply(-_totalDegrees);
+    public Task RedoAsync() => Apply(_totalDegrees);
+
+    private Task Apply(double degrees)
+    {
+        var live = _strokes.Where(s => _store.IndexOf(s) >= 0).ToList();
+        foreach (var stroke in live)
+            Caelum.InkGeometry.StrokeGeometry.RotateSpinePoints(stroke.Points, degrees, _center);
+        _store.NotifyGeometryChanged(live);
+        return Task.CompletedTask;
+    }
+}
+
+/// <summary>
+/// Cross-page selection move: strokes translate by (dx,dy) and transfer from
+/// the source store to the target store in a single undoable operation.
+/// Ported from the WPF SelectionCrossPageMoveAction minus containers.
+/// <paramref name="adjustX"/>/<paramref name="adjustY"/> is the container→page
+/// coordinate delta added on top of the pointer delta (WPF passes the
+/// page-offset correction for strokes dragged between non-overlapping page
+/// frames).
+/// Call <see cref="ExecuteInitialTransfer"/> once after constructing.
+/// </summary>
+public sealed class InkSelectionCrossPageMoveAction : IUndoAction
+{
+    private readonly InkStrokeStore _sourceStore;
+    private readonly InkStrokeStore _targetStore;
+    private readonly List<InkStrokeData> _strokes;
+    private readonly double _dx;
+    private readonly double _dy;
+    private readonly double _adjustX;
+    private readonly double _adjustY;
+    private readonly List<InkStrokePlacement> _sourcePlacements;
+
+    public InkSelectionCrossPageMoveAction(
+        InkStrokeStore sourceStore,
+        InkStrokeStore targetStore,
+        IReadOnlyList<InkStrokeData> strokes,
+        double dx, double dy,
+        double adjustX, double adjustY,
+        List<InkStrokePlacement> sourcePlacements)
+    {
+        _sourceStore = sourceStore ?? throw new ArgumentNullException(nameof(sourceStore));
+        _targetStore = targetStore ?? throw new ArgumentNullException(nameof(targetStore));
+        _strokes = strokes?.ToList() ?? new List<InkStrokeData>();
+        _dx = dx;
+        _dy = dy;
+        _adjustX = adjustX;
+        _adjustY = adjustY;
+        _sourcePlacements = sourcePlacements ?? new List<InkStrokePlacement>();
+    }
+
+    public string Description => "Move items across pages";
+    public bool LeavesDocumentDirty => true;
+    public bool LastOperationSucceeded { get; private set; } = true;
+
+    /// <summary>The target-store indices the strokes landed in (post-transfer).</summary>
+    public List<int> TargetIndices { get; } = new();
+
+    /// <summary>
+    /// Moves the strokes into the target store; idempotent. Returns false
+    /// when nothing could be transferred — the editor then skips the undo
+    /// push (WPF SelectionCrossPageMoveAction parity).
+    /// </summary>
+    public bool ExecuteInitialTransfer()
+    {
+        if (TargetIndices.Count > 0)
+            return true;
+        var sorted = _strokes
+            .OrderBy(s => _sourceStore.IndexOf(s))
+            .Where(s => _sourceStore.IndexOf(s) >= 0)
+            .ToList();
+        foreach (var stroke in sorted)
+        {
+            _sourceStore.RemoveStrokeQuiet(stroke);
+            _targetStore.AddStrokeQuiet(stroke);
+            TargetIndices.Add(_targetStore.IndexOf(stroke));
+        }
+        return TargetIndices.Count > 0;
+    }
+
+    public Task UndoAsync()
+    {
+        // Reverse: pull back to the source store at captured placements and
+        // re-apply the inverse transform.
+        var live = _strokes.Where(s => _targetStore.IndexOf(s) >= 0)
+            .OrderByDescending(s => _targetStore.IndexOf(s))
+            .ToList();
+        if (live.Count != _strokes.Count)
+        {
+            LastOperationSucceeded = false;
+            return Task.CompletedTask;
+        }
+
+        foreach (var stroke in live)
+            _targetStore.RemoveStrokeQuiet(stroke);
+        foreach (var placement in _sourcePlacements.OrderBy(p => p.Index))
+            _sourceStore.AddStrokeQuiet(placement.ForOwner(_sourceStore, placement.Index));
+
+        double totalDx = _dx + _adjustX, totalDy = _dy + _adjustY;
+        foreach (var stroke in _strokes)
+            Caelum.InkGeometry.StrokeGeometry.TranslateSpinePoints(stroke.Points, -totalDx, -totalDy);
+        _sourceStore.NotifyGeometryChanged(_strokes);
+        LastOperationSucceeded = true;
+        return Task.CompletedTask;
+    }
+
+    public Task RedoAsync()
+    {
+        var live = _strokes.Where(s => _sourceStore.IndexOf(s) >= 0).ToList();
+        if (live.Count != _strokes.Count)
+        {
+            LastOperationSucceeded = false;
+            return Task.CompletedTask;
+        }
+
+        double totalDx = _dx + _adjustX, totalDy = _dy + _adjustY;
+        foreach (var stroke in _strokes)
+            Caelum.InkGeometry.StrokeGeometry.TranslateSpinePoints(stroke.Points, totalDx, totalDy);
+        foreach (var stroke in live.OrderByDescending(s => _sourceStore.IndexOf(s)))
+            _sourceStore.RemoveStrokeQuiet(stroke);
+        foreach (var stroke in _strokes)
+            _targetStore.AddStrokeQuiet(stroke);
+        _targetStore.NotifyGeometryChanged(_strokes);
+        LastOperationSucceeded = true;
+        return Task.CompletedTask;
+    }
+}
+
+// ------------------------------------------------------------------
+// Hidden ink — masks live in their own store so these actions never touch
+// the ordinary stroke ledger.
+// ------------------------------------------------------------------
+
+/// <summary>A hidden-ink mask was added; undo removes it (by Id).</summary>
+public sealed class HiddenInkAddedAction : IUndoAction
+{
+    private readonly HiddenInkStore _store;
+    private readonly HiddenInkAnnotation _item;
+
+    public HiddenInkAddedAction(HiddenInkStore store, HiddenInkAnnotation item)
+    {
+        _store = store ?? throw new ArgumentNullException(nameof(store));
+        _item = item ?? throw new ArgumentNullException(nameof(item));
+    }
+
+    public string Description => "Add hidden ink";
+    public bool LeavesDocumentDirty => true;
+
+    public Task UndoAsync()
+    {
+        _store.RemoveQuiet(_item);
+        return Task.CompletedTask;
+    }
+
+    public Task RedoAsync()
+    {
+        _store.AddQuiet(_item);
+        return Task.CompletedTask;
+    }
+}
+
+/// <summary>A hidden-ink mask was removed; undo restores it at its index.</summary>
+public sealed class HiddenInkRemovedAction : IUndoAction
+{
+    private readonly HiddenInkStore _store;
+    private readonly HiddenInkAnnotation _item;
+    private readonly int _index;
+
+    public HiddenInkRemovedAction(HiddenInkStore store, HiddenInkAnnotation item, int index)
+    {
+        _store = store ?? throw new ArgumentNullException(nameof(store));
+        _item = item ?? throw new ArgumentNullException(nameof(item));
+        _index = index;
+    }
+
+    public string Description => "Remove hidden ink";
+    public bool LeavesDocumentDirty => true;
+
+    public Task UndoAsync()
+    {
+        _store.InsertQuiet(_index, _item);
+        return Task.CompletedTask;
+    }
+
+    public Task RedoAsync()
+    {
+        _store.RemoveQuiet(_item);
+        return Task.CompletedTask;
+    }
+}
+
+/// <summary>
+/// Batch hidden-ink removal from one erase gesture — undo restores all masks
+/// at their captured indices (ascending), redo removes them again.
+/// </summary>
+public sealed class HiddenInksRemovedAction : IUndoAction
+{
+    private readonly HiddenInkStore _store;
+    private readonly List<(HiddenInkAnnotation Item, int Index)> _entries;
+
+    public HiddenInksRemovedAction(
+        HiddenInkStore store, IEnumerable<(HiddenInkAnnotation Item, int Index)> entries)
+    {
+        _store = store ?? throw new ArgumentNullException(nameof(store));
+        _entries = entries?.ToList() ?? new List<(HiddenInkAnnotation, int)>();
+    }
+
+    public string Description => "Remove hidden inks";
+    public bool LeavesDocumentDirty => true;
+
+    public Task UndoAsync()
+    {
+        foreach (var entry in _entries.OrderBy(e => e.Index))
+            _store.InsertQuiet(entry.Index, entry.Item);
+        return Task.CompletedTask;
+    }
+
+    public Task RedoAsync()
+    {
+        foreach (var entry in _entries.OrderByDescending(e => e.Index))
+            _store.RemoveQuiet(entry.Item);
+        return Task.CompletedTask;
+    }
+}
+
+
+/// <summary>
+/// Selection drawing-style change (colour and/or stroke size) applied to a
+/// group of strokes as ONE undoable unit — the WPF StrokeStyleChangedAction
+/// port. Values are stored per stroke (before/after) so undo restores each
+/// stroke's own prior appearance, not a single shared value. Strokes no
+/// longer in the store are skipped.
+/// </summary>
+public sealed class InkStrokesStyleChangedAction : IUndoAction
+{
+    private readonly InkStrokeStore _store;
+    private readonly Dictionary<InkStrokeData, (byte R, byte G, byte B, byte A, double Size)> _before;
+    private readonly Dictionary<InkStrokeData, (byte R, byte G, byte B, byte A, double Size)> _after;
+
+    public InkStrokesStyleChangedAction(
+        InkStrokeStore store,
+        Dictionary<InkStrokeData, (byte R, byte G, byte B, byte A, double Size)> before,
+        Dictionary<InkStrokeData, (byte R, byte G, byte B, byte A, double Size)> after)
+    {
+        _store = store ?? throw new ArgumentNullException(nameof(store));
+        _before = before ?? new Dictionary<InkStrokeData, (byte, byte, byte, byte, double)>();
+        _after = after ?? new Dictionary<InkStrokeData, (byte, byte, byte, byte, double)>();
+    }
+
+    public string Description => "Change stroke style";
+    public bool LeavesDocumentDirty => true;
+
+    public Task UndoAsync() => Apply(_before);
+    public Task RedoAsync() => Apply(_after);
+
+    private Task Apply(
+        Dictionary<InkStrokeData, (byte R, byte G, byte B, byte A, double Size)> values)
+    {
+        var live = values.Keys.Where(s => _store.IndexOf(s) >= 0).ToList();
+        foreach (var stroke in live)
+        {
+            var v = values[stroke];
+            stroke.R = v.R;
+            stroke.G = v.G;
+            stroke.B = v.B;
+            stroke.A = v.A;
+            stroke.Size = v.Size;
+        }
+        _store.NotifyGeometryChanged(live);
         return Task.CompletedTask;
     }
 }

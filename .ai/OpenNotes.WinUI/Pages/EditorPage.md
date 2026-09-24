@@ -148,14 +148,64 @@ text/sticky/image overlays and Phase-B ink tools remain deferred to T7B–T9.
 - Keep `Editor.*` AutomationIds stable — the entire smoke contract keys off
   them.
 
+## Phase B additions (2026-09-23)
+
+- `ActivateTool` now maps all Phase-B tools (`Select`, `Shape`, `HiddenInk`,
+  `Laser`) into the exclusive set; `RulerToolButton` is NOT in the set —
+  `RulerToolButton_Click` → `SetRulerVisible`, matching WPF's overlay-toggle
+  semantics (ruler stays on beside Pen/Highlighter). Leaving Select clears
+  `_activeSelectionPage`'s selection (WPF order — `_currentTool` still holds
+  the outgoing tool at that point).
+- `ApplyToolToAllPages` pushes the full Phase-B state per page:
+  `SetSelectionMode`/`SetSelectionShape`/`SetSelectionFilter`,
+  `CustomInkInputProcessingMode.Inking` (Pen/Highlighter, `ink.Tool`
+  pre-seeded), `.Erasing`, `.HiddenInk` (mask colour 199,205,212 + size 28 +
+  `DefaultRevealDurationMs`), `.Shape` (`CurrentShape`/`ShapeIsDashed`/
+  `ShapeColor`/`ShapeStrokeSize`), `.Laser`, `.None` (Select/Text/etc.);
+  then `CancelInteraction`.
+- `AddPdfPage` wires every Phase-B event: `ShapeCommittedUndoable`,
+  `HiddenInkCreated`/`HiddenInkRemoved`/`HiddenInksRemoved`,
+  `SelectionChanged` (tracks `_activeSelectionPage`),
+  `SelectionMoveCompleted` (cross-page detection via
+  `FindPageAtContainerPoint` → `InkSelectionCrossPageMoveAction` with
+  page-origin adjust, else `InkSelectionMoveAction`),
+  `SelectionResizeCompleted`/`SelectionRotateCompleted`,
+  `BlankContextRequested` → `ShowBlankContextMenu`; plus per-page
+  `GetRulerGeometryInPageCoords` (viewport→page `TransformToVisual` on
+  every query — scroll/zoom/drag can never serve stale edges).
+- **Ruler overlay** (`RulerOverlayCanvas`, outside the ScrollViewer so it is
+  viewport-anchored): `EnsureRulerVisual` builds a `CursorGrid` 360×56
+  (semi-transparent themed body, tick canvas every 10 DIP with 50-DIP
+  majors, centre dot, transparent end-cap rotate zones, edge length
+  handles) — WPF `Cursor=` parity needs cursor-capable element subclasses
+  (`CursorGrid`; `Rectangle`/`Ellipse` are SEALED in WinUI and
+  `UIElement.ProtectedCursor` is protected). Left-drag body = move
+  (clamped to viewport), left-drag end caps OR right-drag anywhere =
+  rotate with 15° snapping, handles resize 80..∞; session-only state,
+  first show centres in the viewport.
+- **Flyouts**: `ShowShapeFlyout` (9 shape kinds in a 3×3 `Grid` —
+  `UniformGrid` does not exist in WinUI — Solid/Dashed style, 1–20 size
+  slider at 0.5 steps, shared HSV palette; WPF AutomationIds preserved:
+  `Editor.Shape.<Kind>`, `Editor.Shape.Style.*`, `Editor.Shape.Size`),
+  selection action-bar flyout (style apply → `ApplySelectedDrawingStyle`
+  → `InkStrokesStyleChangedAction`), `ShowBlankContextMenu`.
+- `EditorPage_PreviewKeyDown`: Ctrl+A → arm Select + `SelectAllAnnotations`
+  on the current page; Delete/Back → `DeleteSelection` (captures
+  placements → `InkStrokesRemovedAction`); Escape → search close else
+  `ActivateTool(None)` (WPF Esc parity — also drops live selection).
+- Hidden-ink load: `LoadAnnotationsIntoPages` feeds
+  `pageAnnotation.HiddenInks` quietly under `_isLoadingAnnotations` (no
+  undo entries, WPF loader parity); save-side `HiddenInks` writers already
+  live in Core `PdfService` — `CollectAnnotations` lands with T9.
+- WPF `SetResourceReference` has no WinUI equivalent — transient overlay
+  brushes resolve once via `TryFindBrush` (rebuilt on next selection).
+
 ## Open Threads / Resume Context
 - **Status:** GREEN — `tools/winui-editor-smoke.ps1` 60/60; Task 7 Phase A
-  ink engine live (85/85 headless ink tests).
-- **Deferred (stubbed, by design):** selection lasso/move/rotate/scale,
-  shape tools + the recognition settings toggle (the scribble recognizer
-  itself IS wired — `AppSettings.ShapeRecognition` flows through
-  `ApplyToolToAllPages`), hidden ink, laser, ruler (Task 7 Phase B);
-  text/sticky/image overlays + persistent PDF text selection visuals (T8);
-  save/autosave/dirty-close + version history + settings + remaining
-  flyout actions (T9). `Select`/`None` tools exist as enum values but have
-  no interaction yet.
+  ink engine + Phase B (select/lasso/transforms incl. cross-page, shape
+  tools, hidden ink, laser, ruler, mixed undo) live; WinUI build 0 err/0
+  warn, headless `CoreInkPhaseBTests` 44/44.
+- **Deferred (stubbed, by design):** text/sticky/image overlays +
+  persistent PDF text selection visuals (T8); save/autosave/dirty-close +
+  version history + settings (`CollectAnnotations`, inert SavePdfButton)
+  (T9).

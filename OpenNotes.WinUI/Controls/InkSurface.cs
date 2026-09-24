@@ -16,9 +16,9 @@ using Windows.UI;
 namespace Caelum.Controls;
 
 /// <summary>
-/// Which Phase-A ink tool the surface currently applies. The editor's
-/// wider tool enum maps onto this — selection/shapes/hidden-ink/laser are
-/// Phase-B and simply map to <see cref="None"/> for now.
+/// Which ink tool the surface currently applies. The editor's wider tool
+/// enum maps onto this; <see cref="None"/> ignores input (the page-level
+/// selection overlay handles Select itself).
 /// </summary>
 public enum InkSurfaceTool
 {
@@ -26,6 +26,54 @@ public enum InkSurfaceTool
     Pen,
     Highlighter,
     Eraser,
+    /// <summary>Collects a stroke then commits it as a mask (Phase B).</summary>
+    HiddenInk,
+    /// <summary>Emits raw points for the ephemeral laser layer (Phase B).</summary>
+    Laser,
+    /// <summary>Drag-to-shape; the page owns preview + commit (Phase B).</summary>
+    Shape,
+}
+
+/// <summary>Payload for the laser-stroke events (raw page-DIP points).</summary>
+public sealed class LaserStrokeEventArgs : EventArgs
+{
+    public LaserStrokeEventArgs(IReadOnlyList<PointD> points)
+        => Points = points ?? Array.Empty<PointD>();
+
+    /// <summary>New points since the last raise (page-DIP coordinates).</summary>
+    public IReadOnlyList<PointD> Points { get; }
+}
+
+/// <summary>Payload for the shape-drag events (anchor/current + Shift).</summary>
+public sealed class ShapeDragEventArgs : EventArgs
+{
+    public ShapeDragEventArgs(PointD anchor, PointD current, bool shiftHeld)
+    {
+        Anchor = anchor;
+        Current = current;
+        ShiftHeld = shiftHeld;
+    }
+
+    /// <summary>The pointer-down anchor point.</summary>
+    public PointD Anchor { get; }
+    /// <summary>The latest pointer position.</summary>
+    public PointD Current { get; }
+    /// <summary>Live Shift state — sampled per event like WPF's Keyboard.IsKeyDown.</summary>
+    public bool ShiftHeld { get; }
+}
+
+/// <summary>Payload for <see cref="InkSurface.EraserPathUpdated"/>.</summary>
+public sealed class EraserPathEventArgs : EventArgs
+{
+    public EraserPathEventArgs(IReadOnlyList<PointD> path, double eraserSize)
+    {
+        Path = path;
+        EraserSize = eraserSize;
+    }
+
+    /// <summary>The swept path this update covered (page-DIP coordinates).</summary>
+    public IReadOnlyList<PointD> Path { get; }
+    public double EraserSize { get; }
 }
 
 /// <summary>
@@ -151,9 +199,28 @@ public sealed partial class InkSurface : Canvas
     /// <summary>Host-gated input (modal dialogs, inactive document).</summary>
     public bool InputEnabled { get; set; } = true;
 
+    /// <summary>Hidden-ink mask colour (the opaque mask the tool draws).</summary>
+    public Color HiddenInkColor { get; set; } = Color.FromArgb(255, 199, 205, 212);
+
+    /// <summary>Hidden-ink mask stroke width (WPF HiddenInkSize = 28).</summary>
+    public double HiddenInkSize { get; set; } = 28.0;
+
+    /// <summary>Ruler snap distance in page DIPs (WPF ruler tolerance).</summary>
+    public const double RulerSnapTolerance = 24.0;
+
+    /// <summary>
+    /// Phase B ruler hook: returns the ruler's long-edge endpoints in page-DIP
+    /// coordinates, or null when the ruler overlay is hidden. Consulted once
+    /// per completed pen/highlighter stroke — same post-collect timing as the
+    /// WPF InkCanvas_StrokeCollected ruler snap.
+    /// </summary>
+    public Func<(PointD TopA, PointD TopB, PointD BottomA, PointD BottomB)?> RulerGeometryProvider { get; set; }
+
     /// <summary>
     /// The eraser cursor element (host-owned Ellipse in the same coordinate
-    /// space). The surface moves/sizes it; null disables the indicator.
+    /// space). The surface moves/sizes it during erase gestures and hover —
+    /// and restyles it as the brush cursor in pen/highlighter/hidden-ink
+    /// modes (WPF UpdateBrushIndicatorStyle parity).
     /// </summary>
     public UIElement EraserIndicator { get; set; }
 
@@ -178,6 +245,13 @@ public sealed partial class InkSurface : Canvas
     private List<InkStrokeData> _eraseRemovedStrokes;
     private List<InkStrokeData> _eraseAddedStrokes;
 
+    // Phase B: shape drag + laser draw are surface gestures the PAGE renders
+    // (preview on ShapePreviewCanvas, live polyline on LaserInkCanvas).
+    private bool _isShapeDragging;
+    private PointD _shapeAnchor;
+    private bool _isLaserDrawing;
+    private PointD? _lastLaserPoint;
+
     // ── Events (EditorPage turns these into undo actions + dirty) ────────
 
     /// <summary>A completed pen/highlighter stroke entered the store.</summary>
@@ -193,6 +267,54 @@ public sealed partial class InkSurface : Canvas
 
     /// <summary>An erase gesture completed with net removals/additions.</summary>
     public event EventHandler<InkStrokesErasedEventArgs> StrokesErased;
+
+    /// <summary>
+    /// A hidden-ink stroke completed (Tool=<see cref="InkSurfaceTool.HiddenInk"/>):
+    /// raw collected spine, release point included. The page converts it to a
+    /// <see cref="HiddenInkAnnotation"/> mask — the stroke never enters the
+    /// store, matching WPF CommitHiddenInkStroke which removes the temporary
+    /// ink stroke and keeps only the mask.
+    /// </summary>
+    public event EventHandler<IReadOnlyList<PointD>> HiddenInkStrokeCommitted;
+
+    /// <summary>Laser drag began (first point, page-DIP).</summary>
+    public event EventHandler<LaserStrokeEventArgs> LaserStrokeStarted;
+
+    /// <summary>Laser drag moved — batched new points since the last raise.</summary>
+    public event EventHandler<LaserStrokeEventArgs> LaserStrokePointsAppended;
+
+    /// <summary>Laser drag completed (final release point).</summary>
+    public event EventHandler<LaserStrokeEventArgs> LaserStrokeCompleted;
+
+    /// <summary>Shape drag began — <see cref="ShapeDragEventArgs.Anchor"/>.</summary>
+    public event EventHandler<ShapeDragEventArgs> ShapeDragStarted;
+
+    /// <summary>Shape drag moved — live preview should follow Current/Shift.</summary>
+    public event EventHandler<ShapeDragEventArgs> ShapeDragUpdated;
+
+    /// <summary>Shape drag ended — the page commits the shape strokes.</summary>
+    public event EventHandler<ShapeDragEventArgs> ShapeDragEnded;
+
+    /// <summary>Shape drag cancelled (capture lost / tool switch).</summary>
+    public event EventHandler ShapeDragCancelled;
+
+    /// <summary>
+    /// One eraser update swept <see cref="EraserPathEventArgs.Path"/> — raised
+    /// on every erase step (press stamp and each move batch) so the page can
+    /// hit-test its non-stroke layers (hidden-ink masks) against the same
+    /// footprint. Fires even when the stroke store is empty.
+    /// </summary>
+    public event EventHandler<EraserPathEventArgs> EraserPathUpdated;
+
+    /// <summary>An erase gesture finished — after <see cref="StrokesErased"/>.</summary>
+    public event EventHandler EraseGestureCompleted;
+
+    /// <summary>
+    /// An erase gesture was cancelled AFTER it already mutated the store —
+    /// the strokes were restored; the page restores any hidden-ink masks it
+    /// removed during the gesture (WPF CancelSelectionGesture parity).
+    /// </summary>
+    public event EventHandler EraseGestureCancelled;
 
     /// <summary>
     /// Any visible ink change (drawn stroke, erase mutation, quiet add or
@@ -247,6 +369,21 @@ public sealed partial class InkSurface : Canvas
             DiscardLiveStroke();
         if (_isErasing || HasPendingEraseGesture())
             CancelEraseGesture();
+        if (_isShapeDragging)
+        {
+            _isShapeDragging = false;
+            ShapeDragCancelled?.Invoke(this, EventArgs.Empty);
+        }
+        if (_isLaserDrawing)
+        {
+            // Treat a cancelled laser drag like a release — the page fades
+            // the live polyline instead of orphaning it (WPF leaves it; the
+            // fade-removal path is strictly better and keeps the layer clean).
+            _isLaserDrawing = false;
+            LaserStrokeCompleted?.Invoke(this,
+                new LaserStrokeEventArgs(
+                    _lastLaserPoint.HasValue ? new[] { _lastLaserPoint.Value } : Array.Empty<PointD>()));
+        }
         ReleaseActivePointer();
         HideEraserIndicator();
     }
@@ -275,6 +412,15 @@ public sealed partial class InkSurface : Canvas
         {
             fe.Width = EraserSize;
             fe.Height = EraserSize;
+            // Restore the eraser styling — the brush indicator may have
+            // overridden Stroke/Fill during an inking-mode hover.
+            if (fe is Microsoft.UI.Xaml.Shapes.Ellipse ellipse)
+            {
+                ellipse.Stroke = ResolveThemeBrush("ThemeAccentBrush",
+                    Color.FromArgb(255, 37, 99, 235));
+                ellipse.Fill = ResolveThemeBrush("ThemeSelectionBrush",
+                    Color.FromArgb(60, 37, 99, 235));
+            }
         }
         SetLeft(indicator, pagePoint.X - EraserSize / 2.0);
         SetTop(indicator, pagePoint.Y - EraserSize / 2.0);
@@ -284,6 +430,54 @@ public sealed partial class InkSurface : Canvas
     {
         if (EraserIndicator != null)
             EraserIndicator.Visibility = Visibility.Collapsed;
+    }
+
+    /// <summary>
+    /// Brush-style indicator — WPF UpdateBrushIndicatorStyle parity: eraser
+    /// mode shows the eraser ring; inking modes show a ring sized to the
+    /// stroke (hidden-ink uses the mask size and a translucent fill).
+    /// </summary>
+    private void ShowBrushIndicatorAt(PointD pagePoint)
+    {
+        var indicator = EraserIndicator;
+        if (indicator == null)
+            return;
+
+        bool hiddenInk = Tool == InkSurfaceTool.HiddenInk;
+        bool highlighter = Tool == InkSurfaceTool.Highlighter;
+        double size = hiddenInk ? HiddenInkSize : highlighter ? HighlighterSize : PenSize;
+        Color c = hiddenInk ? HiddenInkColor : highlighter ? HighlighterColor : PenColor;
+
+        indicator.Visibility = Visibility.Visible;
+        if (indicator is Microsoft.UI.Xaml.Shapes.Ellipse ellipse)
+        {
+            ellipse.Width = Math.Max(4, size);
+            ellipse.Height = Math.Max(4, size);
+            ellipse.Stroke = new Microsoft.UI.Xaml.Media.SolidColorBrush(
+                Color.FromArgb(200, c.R, c.G, c.B));
+            ellipse.Fill = new Microsoft.UI.Xaml.Media.SolidColorBrush(
+                Color.FromArgb(
+                    hiddenInk ? (byte)90 : highlighter ? (byte)50 : (byte)0,
+                    c.R, c.G, c.B));
+            size = ellipse.Width;
+        }
+        else if (indicator is FrameworkElement fe)
+        {
+            fe.Width = Math.Max(4, size);
+            fe.Height = Math.Max(4, size);
+            size = fe.Width;
+        }
+        SetLeft(indicator, pagePoint.X - size / 2.0);
+        SetTop(indicator, pagePoint.Y - size / 2.0);
+    }
+
+    /// <summary>Theme-brush lookup (Application.Resources resolves the active dictionary).</summary>
+    private static Microsoft.UI.Xaml.Media.Brush ResolveThemeBrush(string key, Color fallback)
+    {
+        if (Application.Current?.Resources?.TryGetValue(key, out var value) == true
+            && value is Microsoft.UI.Xaml.Media.Brush brush)
+            return brush;
+        return new Microsoft.UI.Xaml.Media.SolidColorBrush(fallback);
     }
 
     // ── Pointer pipeline ─────────────────────────────────────────────────
@@ -323,13 +517,25 @@ public sealed partial class InkSurface : Canvas
         bool barrelErase = isPen && props.IsBarrelButtonPressed;
         bool wantsErase = Tool == InkSurfaceTool.Eraser || invertedEraser || barrelErase;
 
-        // WPF parity: pen-only blocks non-pen INK creation; erasing is not
-        // an ink-creation mode, so a mouse still erases under pen-only.
-        bool inkCreation = !wantsErase && (Tool == InkSurfaceTool.Pen || Tool == InkSurfaceTool.Highlighter);
+        // WPF parity: pen-only blocks non-pen INK creation — Inking and Shape
+        // are ink-creation modes (IsPenOnlyInkCreationMode), hidden-ink/laser/
+        // eraser are not, so a mouse still draws masks, laser lines and erases
+        // under pen-only.
+        bool inkCreation = !wantsErase
+            && (Tool == InkSurfaceTool.Pen
+                || Tool == InkSurfaceTool.Highlighter
+                || Tool == InkSurfaceTool.Shape);
         if (PenOnlyMode && inkCreation && !isPen)
             return;
-        if (!wantsErase && !inkCreation)
-            return; // Tool == None (or a Phase-B tool)
+
+        bool wantsDraw = !wantsErase
+            && (Tool == InkSurfaceTool.Pen
+                || Tool == InkSurfaceTool.Highlighter
+                || Tool == InkSurfaceTool.HiddenInk);
+        bool wantsShape = !wantsErase && Tool == InkSurfaceTool.Shape;
+        bool wantsLaser = !wantsErase && Tool == InkSurfaceTool.Laser;
+        if (!wantsErase && !wantsDraw && !wantsShape && !wantsLaser)
+            return; // Tool == None — input belongs to the selection overlay
 
         // Capture failure means moves/releases for this pointer may never
         // reach us — do not begin an untracked gesture (and keep the press
@@ -349,6 +555,20 @@ public sealed partial class InkSurface : Canvas
             if (EraseAtPoint(ToPointD(point.Position)))
                 InkMutated?.Invoke(this, EventArgs.Empty);
         }
+        else if (wantsShape)
+        {
+            _isShapeDragging = true;
+            _shapeAnchor = ToPointD(point.Position);
+            ShapeDragStarted?.Invoke(this,
+                new ShapeDragEventArgs(_shapeAnchor, _shapeAnchor, IsShiftHeld(e)));
+        }
+        else if (wantsLaser)
+        {
+            _isLaserDrawing = true;
+            var start = ToPointD(point.Position);
+            _lastLaserPoint = start;
+            LaserStrokeStarted?.Invoke(this, new LaserStrokeEventArgs(new[] { start }));
+        }
         else
         {
             BeginStroke(point);
@@ -356,23 +576,71 @@ public sealed partial class InkSurface : Canvas
         e.Handled = true;
     }
 
+    private static bool IsShiftHeld(PointerRoutedEventArgs e) =>
+        (e.KeyModifiers & Windows.System.VirtualKeyModifiers.Shift) != 0;
+
     private void InkSurface_PointerMoved(object sender, PointerRoutedEventArgs e)
     {
         var current = e.GetCurrentPoint(this);
         var device = current.PointerDeviceType;
-        bool penErasingHover = device == PointerDeviceType.Pen
-            && (current.Properties.IsEraser || current.Properties.IsBarrelButtonPressed
-                || Tool == InkSurfaceTool.Eraser);
-        bool mouseEraserHover = device == PointerDeviceType.Mouse
-            && Tool == InkSurfaceTool.Eraser;
+        bool eraserish = Tool == InkSurfaceTool.Eraser
+            || (device == PointerDeviceType.Pen
+                && (current.Properties.IsEraser || current.Properties.IsBarrelButtonPressed));
+        bool brushHover = Tool == InkSurfaceTool.Pen
+            || Tool == InkSurfaceTool.Highlighter
+            || Tool == InkSurfaceTool.HiddenInk;
 
-        // Eraser indicator follows the cursor even without contact (WPF shows
-        // it while hovering with an inverted pen / in eraser mode).
-        if (!_isDrawing && !_isErasing && (penErasingHover || mouseEraserHover))
-            ShowEraserIndicatorAt(ToPointD(current.Position));
+        // Cursor indicator follows the cursor even without contact (WPF
+        // UpdateBrushIndicatorStyle parity: eraser ring while erasing, brush
+        // ring while hovering in an ink mode).
+        if (!_isDrawing && !_isErasing && !_isShapeDragging && !_isLaserDrawing)
+        {
+            if (eraserish)
+                ShowEraserIndicatorAt(ToPointD(current.Position));
+            else if (brushHover)
+                ShowBrushIndicatorAt(ToPointD(current.Position));
+        }
 
         if (_activePointerId == null || e.Pointer.PointerId != _activePointerId.Value)
             return;
+
+        if (_isShapeDragging)
+        {
+            ShapeDragUpdated?.Invoke(this, new ShapeDragEventArgs(
+                _shapeAnchor, ToPointD(current.Position), IsShiftHeld(e)));
+            e.Handled = true;
+            return;
+        }
+
+        if (_isLaserDrawing)
+        {
+            // Same batch semantics as the draw path — intermediate packets
+            // plus the current point when it advanced.
+            var batch = new List<PointD>();
+            foreach (var p in e.GetIntermediatePoints(this))
+            {
+                var d = ToPointD(p.Position);
+                if (!_lastLaserPoint.HasValue
+                    || Math.Abs(_lastLaserPoint.Value.X - d.X) > 0.0001
+                    || Math.Abs(_lastLaserPoint.Value.Y - d.Y) > 0.0001)
+                {
+                    batch.Add(d);
+                    _lastLaserPoint = d;
+                }
+            }
+            var tail = ToPointD(current.Position);
+            if (!_lastLaserPoint.HasValue
+                || Math.Abs(_lastLaserPoint.Value.X - tail.X) > 0.0001
+                || Math.Abs(_lastLaserPoint.Value.Y - tail.Y) > 0.0001)
+            {
+                batch.Add(tail);
+                _lastLaserPoint = tail;
+            }
+            if (batch.Count > 0)
+                LaserStrokePointsAppended?.Invoke(this, new LaserStrokeEventArgs(batch));
+            e.Handled = true;
+            return;
+        }
 
         if (_isErasing)
         {
@@ -432,6 +700,26 @@ public sealed partial class InkSurface : Canvas
             return;
 
         var point = e.GetCurrentPoint(this);
+        if (_isShapeDragging)
+        {
+            _isShapeDragging = false;
+            ShapeDragEnded?.Invoke(this, new ShapeDragEventArgs(
+                _shapeAnchor, ToPointD(point.Position), IsShiftHeld(e)));
+            ReleaseActivePointer();
+            e.Handled = true;
+            return;
+        }
+
+        if (_isLaserDrawing)
+        {
+            _isLaserDrawing = false;
+            var end = ToPointD(point.Position);
+            LaserStrokeCompleted?.Invoke(this, new LaserStrokeEventArgs(new[] { end }));
+            ReleaseActivePointer();
+            e.Handled = true;
+            return;
+        }
+
         if (_isErasing)
         {
             if (EraseAtPoint(ToPointD(point.Position)))
@@ -483,6 +771,18 @@ public sealed partial class InkSurface : Canvas
             DiscardLiveStroke();
         if (_isErasing || HasPendingEraseGesture())
             CancelEraseGesture();
+        if (_isShapeDragging)
+        {
+            _isShapeDragging = false;
+            ShapeDragCancelled?.Invoke(this, EventArgs.Empty);
+        }
+        if (_isLaserDrawing)
+        {
+            _isLaserDrawing = false;
+            LaserStrokeCompleted?.Invoke(this,
+                new LaserStrokeEventArgs(
+                    _lastLaserPoint.HasValue ? new[] { _lastLaserPoint.Value } : Array.Empty<PointD>()));
+        }
         ReleaseActivePointer();
         HideEraserIndicator();
     }
@@ -498,6 +798,9 @@ public sealed partial class InkSurface : Canvas
         _activePointerId = null;
         _isDrawing = false;
         _isErasing = false;
+        _isShapeDragging = false;
+        _isLaserDrawing = false;
+        _lastLaserPoint = null;
     }
 
     /// <summary>
@@ -580,6 +883,37 @@ public sealed partial class InkSurface : Canvas
         // WPF PreserveTapStroke expands a single-point tap so the stroke
         // renders; our outline already draws a 1-point disc, so the point
         // list stays truthful instead.
+
+        // Phase B — hidden ink: the collected stroke is converted to a mask
+        // and NEVER enters the store (WPF removes the temporary ink stroke
+        // in CommitHiddenInkStroke). No smoothing/recognition/simulation —
+        // the mask keeps the raw collected spine.
+        if (Tool == InkSurfaceTool.HiddenInk)
+        {
+            var maskPoints = stroke.Points
+                .Select(p => new PointD(p.X, p.Y))
+                .ToList();
+            HiddenInkStrokeCommitted?.Invoke(this, maskPoints);
+            return;
+        }
+
+        // Phase B — ruler constraint: snaps/clips the collected stroke to the
+        // ruler's nearest long edge, exactly where the WPF
+        // InkCanvas_StrokeCollected applies it (before shift-straighten and
+        // smoothing). A null result = the stroke started inside or entered
+        // the ruler body — WPF drops it silently (e.Handled, no undo entry).
+        var ruler = RulerGeometryProvider?.Invoke();
+        if (ruler.HasValue
+            && (Tool == InkSurfaceTool.Pen || Tool == InkSurfaceTool.Highlighter))
+        {
+            var constrained = StrokeGeometry.ConstrainPointsToRuler(
+                stroke.Points, ruler.Value.TopA, ruler.Value.TopB,
+                ruler.Value.BottomA, ruler.Value.BottomB, RulerSnapTolerance);
+            if (constrained == null || constrained.Count == 0)
+                return; // dropped — never committed
+            if (!ReferenceEquals(constrained, stroke.Points))
+                stroke.Points = new List<InkPointData>(constrained);
+        }
 
         // Task 21 parity: Shift sampled at stylus-up straightens to a
         // first→last segment (FitToCurve off — a line needs no curve fit).
@@ -717,6 +1051,10 @@ public sealed partial class InkSurface : Canvas
     /// </summary>
     private bool EraseAlongPath(IReadOnlyList<PointD> path)
     {
+        // Non-stroke layers (hidden-ink masks) track the same footprint —
+        // raise even when the stroke store is empty.
+        EraserPathUpdated?.Invoke(this, new EraserPathEventArgs(path, EraserSize));
+
         if (Store.Count == 0)
             return false;
 
@@ -834,6 +1172,7 @@ public sealed partial class InkSurface : Canvas
 
         if (removed != null && added != null && (removed.Count > 0 || added.Count > 0))
             StrokesErased?.Invoke(this, new InkStrokesErasedEventArgs(removed, added));
+        EraseGestureCompleted?.Invoke(this, EventArgs.Empty);
     }
 
     /// <summary>
@@ -870,6 +1209,7 @@ public sealed partial class InkSurface : Canvas
                 Store.AddStrokeQuiet(placement.ForOwner(Store, placement.Index));
             }
         }
+        EraseGestureCancelled?.Invoke(this, EventArgs.Empty);
         InkMutated?.Invoke(this, EventArgs.Empty);
     }
 
@@ -895,6 +1235,18 @@ public sealed partial class InkSurface : Canvas
                 break;
             case InkStoreMutationKind.Cleared:
                 RebuildAllVisuals();
+                break;
+            case InkStoreMutationKind.GeometryChanged:
+                // Selection transform (move/scale/rotate) or an undo of one —
+                // rebuild the stroke's geometry in place, no z-order change.
+                // Raising InkMutated keeps thumbnails fresh and lets the page
+                // rebuild its selection overlay through the normal chain.
+                if (e.Stroke != null
+                    && _strokeVisuals.TryGetValue(e.Stroke, out var visual))
+                {
+                    StrokeRenderer.UpdateStrokePath(visual, e.Stroke);
+                    InkMutated?.Invoke(this, EventArgs.Empty);
+                }
                 break;
         }
     }

@@ -186,7 +186,7 @@ namespace Caelum.Controls
         /// produces the equivalent <see cref="PathGeometry"/> without a
         /// nested parser.
         /// </summary>
-        private static Geometry ParseIconGeometry(string markup)
+        internal static Geometry ParseIconGeometry(string markup)
         {
             var figures = new PathFigureCollection();
             PathFigure figure = null;
@@ -271,6 +271,27 @@ namespace Caelum.Controls
                             y += pen.Y;
                         var pt = new Windows.Foundation.Point(pen.X, y);
                         figure?.Segments.Add(new LineSegment { Point = pt });
+                        pen = pt;
+                        break;
+                    }
+                    case 'C':
+                    case 'c':
+                    {
+                        var cp1 = new Windows.Foundation.Point(ReadNumber(), ReadNumber());
+                        var cp2 = new Windows.Foundation.Point(ReadNumber(), ReadNumber());
+                        var pt = new Windows.Foundation.Point(ReadNumber(), ReadNumber());
+                        if (cmd == 'c')
+                        {
+                            cp1 = new Windows.Foundation.Point(pen.X + cp1.X, pen.Y + cp1.Y);
+                            cp2 = new Windows.Foundation.Point(pen.X + cp2.X, pen.Y + cp2.Y);
+                            pt = new Windows.Foundation.Point(pen.X + pt.X, pen.Y + pt.Y);
+                        }
+                        figure?.Segments.Add(new BezierSegment
+                        {
+                            Point1 = cp1,
+                            Point2 = cp2,
+                            Point3 = pt
+                        });
                         pen = pt;
                         break;
                     }
