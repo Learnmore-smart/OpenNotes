@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.InteropServices.WindowsRuntime;
+using System.Threading.Tasks;
 using Caelum.Ink;
 using Caelum.InkGeometry;
 using Caelum.Models;
@@ -14,6 +16,7 @@ using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Imaging;
 using Microsoft.UI.Xaml.Shapes;
 using Windows.Foundation;
+using Windows.Storage.Streams;
 using Windows.System;
 using Windows.UI;
 using DispatcherQueueTimer = Microsoft.UI.Dispatching.DispatcherQueueTimer;
@@ -43,6 +46,23 @@ namespace Caelum.Controls
 
         public bool HasSelection { get; }
         public Rect Bounds { get; }
+    }
+
+    /// <summary>
+    /// Pointer payload for the PDF text-selection layer — position in
+    /// page-DIP coordinates plus whether the primary button is held
+    /// (WPF PdfTextSelectionPointerEventArgs.LeftButton parity).
+    /// </summary>
+    public sealed class PdfTextSelectionPointerEventArgs : EventArgs
+    {
+        public PdfTextSelectionPointerEventArgs(Point position, bool isLeftButtonPressed)
+        {
+            Position = position;
+            IsLeftButtonPressed = isLeftButtonPressed;
+        }
+
+        public Point Position { get; }
+        public bool IsLeftButtonPressed { get; }
     }
 
     /// <summary>A completed selection move gesture (strokes + text/sticky containers).</summary>
@@ -173,10 +193,6 @@ namespace Caelum.Controls
     /// <item><c>SetBitmapScalingMode</c> — WPF toggled
     /// <c>RenderOptions.BitmapScalingMode</c>; WinUI always samples full
     /// quality.</item>
-    /// <item>Image/markup/area-highlight overlay containers — Task 8 Phase B;
-    /// the overlay-data plumbing (<see cref="_overlayData"/>, tag checks,
-    /// quiet add/remove) is already generic so Phase B plugs into the same
-    /// slots.</item>
     /// </list>
     /// </summary>
     public sealed partial class PdfPageControl : UserControl, IAnnotationContainerHost
@@ -234,6 +250,38 @@ namespace Caelum.Controls
         private bool _shapeShiftHeld;
         private readonly List<Polyline> _shapePreviewPolylines = new();
 
+        // ── Area highlight (Task 8 Phase B) — same drag contract as the
+        //    shape tool; the preview rect rides ShapePreviewCanvas and the
+        //    committed annotation becomes an ImageOverlayCanvas container ──
+        private bool _isAreaHighlightDragging;
+        private PointD _areaHighlightAnchor;
+        private Rectangle _areaHighlightPreview;
+
+        /// <summary>Fill colour for the next area highlight (alpha applied internally).</summary>
+        public Color AreaHighlightColor { get; set; } = Color.FromArgb(255, 0xFF, 0xEB, 0x3B);
+
+        /// <summary>Fill alpha for the next area highlight (~30% default).</summary>
+        public byte AreaHighlightOpacity { get; set; } = 76;
+
+        /// <summary>WPF AreaHighlightDragThreshold — sub-4 DIP drags are taps.</summary>
+        public const double AreaHighlightDragThreshold = 4.0;
+
+        /// <summary>WPF NormalizeAreaHighlightRect — anchor/current → axis-aligned rect.</summary>
+        public static Rect NormalizeAreaHighlightRect(PointD anchor, PointD current)
+            => new(
+                Math.Min(anchor.X, current.X),
+                Math.Min(anchor.Y, current.Y),
+                Math.Abs(current.X - anchor.X),
+                Math.Abs(current.Y - anchor.Y));
+
+        // ── Persistent text-quad highlights ──────────────────────────────
+        private readonly List<HighlightAnnotation> _highlights = new();
+
+        // ── PDF text selection (Task 8 Phase B) — the editor owns offset
+        //    tracking; the page forwards pointer traffic and paints rects ──
+        private bool _isPdfTextSelectionEnabled;
+        private uint? _pdfTextSelectionPointerId;
+
         // ── Hidden ink ───────────────────────────────────────────────────
         private readonly Dictionary<string, Polyline> _hiddenInkVisuals = new();
         private readonly Dictionary<string, DispatcherQueueTimer> _hiddenInkRevealTimers = new();
@@ -247,11 +295,21 @@ namespace Caelum.Controls
         private readonly Dictionary<Polyline, DateTimeOffset> _laserCompletedAt = new();
         private DispatcherQueueTimer _laserFadeTimer;
 
-        // ── Overlay annotations (Task 8 Phase A: sticky notes; Phase B adds
-        //    image/markup/area containers to the same dictionary + tags) ───
+        // ── Overlay annotations ──────────────────────────────────────────
         private const string MarkupContainerTag = "textMarkup";
         private const string AreaHighlightContainerTag = "areaHighlight";
         private const string StickyNoteContainerTag = "stickyNote";
+        private const string ImageContainerTag = "ImageAnnotation";
+
+        /// <summary>Image containers (Grid with a child Image visual).</summary>
+        private readonly List<Grid> _imageContainers = new();
+
+        /// <summary>
+        /// Image container → raw encoded bytes (page-local; WPF keeps the
+        /// same container-keyed shape so a cross-page move transfers the
+        /// payload by element reference).
+        /// </summary>
+        private readonly Dictionary<Grid, byte[]> _imageDataById = new();
 
         /// <summary>
         /// Persist-as-auto flags ride the container element itself (WPF
@@ -385,6 +443,15 @@ namespace Caelum.Controls
             TextOverlayCanvas.PointerPressed += TextOverlayCanvas_PointerPressed;
             PageGrid.PointerPressed += PageGrid_PointerPressed;
 
+            // Task 8 Phase B: PDF text selection — the layer is only armed
+            // (visible + hit-testable) while the editor enables it; pointer
+            // traffic is forwarded so the editor owns the offset math.
+            PdfTextSelectionCanvas.PointerPressed += PdfTextSelectionCanvas_PointerPressed;
+            PdfTextSelectionCanvas.PointerMoved += PdfTextSelectionCanvas_PointerMoved;
+            PdfTextSelectionCanvas.PointerReleased += PdfTextSelectionCanvas_PointerReleased;
+            PdfTextSelectionCanvas.PointerCanceled += PdfTextSelectionCanvas_PointerCanceled;
+            PdfTextSelectionCanvas.PointerCaptureLost += PdfTextSelectionCanvas_PointerCaptureLost;
+
             HiddenInkStore.Changed += (s, e) =>
             {
                 // Incremental sync: a single Added/Removed mask updates one
@@ -501,6 +568,29 @@ namespace Caelum.Controls
         /// </summary>
         public event EventHandler<PointerRoutedEventArgs> BackgroundPointerPressed;
 
+        /// <summary>
+        /// The image/markup/area overlay set changed — the editor marks the
+        /// document dirty (WPF ImagesChanged; it also fires for markup/area
+        /// containers since they share the image pipeline there).
+        /// </summary>
+        public event EventHandler ImagesChanged;
+
+        /// <summary>
+        /// An area-highlight drag committed — the container payload is the
+        /// created Grid; the editor pushes the undo action and selects it
+        /// (WPF AreaHighlightCreated).
+        /// </summary>
+        public event EventHandler<Grid> AreaHighlightCreated;
+
+        /// <summary>
+        /// PDF text-selection layer pointer traffic — the editor owns the
+        /// offset math and raises these only while the layer is armed
+        /// (WPF PdfTextSelectionPointerPressed/Moved/Released).
+        /// </summary>
+        public event EventHandler<PdfTextSelectionPointerEventArgs> PdfTextSelectionPointerPressed;
+        public event EventHandler<PdfTextSelectionPointerEventArgs> PdfTextSelectionPointerMoved;
+        public event EventHandler<PdfTextSelectionPointerEventArgs> PdfTextSelectionPointerReleased;
+
         /// <summary>Sticky marker tapped or Enter/Space-activated — open the editor popup.</summary>
         public event EventHandler<Grid> StickyNoteActivated;
 
@@ -549,6 +639,19 @@ namespace Caelum.Controls
             // too — a captured sticky gesture is still an interaction.
             CancelStickyDrag();
             ClearShapePreview();
+            // WPF CancelAll parity: drop an in-flight area-highlight drag and
+            // release the PDF text-selection capture; the transient rects go
+            // away with the gesture (the editor rebuilds if it keeps state).
+            if (_isAreaHighlightDragging)
+            {
+                _isAreaHighlightDragging = false;
+                ClearAreaHighlightPreview();
+            }
+            if (_pdfTextSelectionPointerId != null)
+            {
+                PdfTextSelectionCanvas.ReleasePointerCaptures();
+                _pdfTextSelectionPointerId = null;
+            }
         }
 
         /// <summary>
@@ -594,22 +697,138 @@ namespace Caelum.Controls
         }
 
         /// <summary>
-        /// Clears the transient PDF-text search highlight overlay. The layer
-        /// itself is Task 8, but clearing is shell-safe now.
+        /// Arms/disarms the PDF text-selection layer (WPF
+        /// SetPdfTextSelectionEnabled): while armed the canvas is visible and
+        /// hit-testable and forwards pointer traffic to the editor; disarming
+        /// releases capture and drops the painted rects. The ink surface is
+        /// already hit-test transparent in the modes that enable this
+        /// (None / TextHighlight), so no extra gating is needed here.
         /// </summary>
-        public void ClearPdfTextSelection()
+        public void SetPdfTextSelectionEnabled(bool enabled)
         {
-            PdfTextSelectionCanvas.Children.Clear();
-            PdfTextSelectionCanvas.Visibility = Visibility.Collapsed;
+            _isPdfTextSelectionEnabled = enabled;
+            PdfTextSelectionCanvas.Visibility = enabled ? Visibility.Visible : Visibility.Collapsed;
+            PdfTextSelectionCanvas.IsHitTestVisible = enabled;
+
+            if (!enabled)
+            {
+                if (_pdfTextSelectionPointerId != null)
+                {
+                    PdfTextSelectionCanvas.ReleasePointerCaptures();
+                    _pdfTextSelectionPointerId = null;
+                }
+                ClearPdfTextSelection();
+            }
         }
 
         /// <summary>
-        /// T8: paints the text-bound rectangles produced by search hits.
+        /// Paints the merged selection rectangles (active drag or search-hit
+        /// highlight) on <see cref="PdfTextSelectionCanvas"/> — WPF
+        /// SetPdfTextSelectionRects: rounded rects filled with the theme
+        /// selection brush at 45% opacity.
         /// </summary>
-        public void SetPdfTextSelectionRects(System.Collections.Generic.IReadOnlyList<Windows.Foundation.Rect> rects)
+        public void SetPdfTextSelectionRects(IReadOnlyList<Rect> rects)
         {
-            // T8: highlight rectangles on PdfTextSelectionCanvas.
+            PdfTextSelectionCanvas.Children.Clear();
+            if (rects == null)
+                return;
+
+            var fill = ResolveSelectionBrush();
+            foreach (var rect in rects)
+            {
+                if (rect.Width <= 0 || rect.Height <= 0)
+                    continue;
+
+                var highlight = new Rectangle
+                {
+                    Width = rect.Width,
+                    Height = rect.Height,
+                    RadiusX = 2,
+                    RadiusY = 2,
+                    Fill = fill,
+                    Opacity = 0.45,
+                    IsHitTestVisible = false,
+                };
+                Canvas.SetLeft(highlight, rect.X);
+                Canvas.SetTop(highlight, rect.Y);
+                PdfTextSelectionCanvas.Children.Add(highlight);
+            }
         }
+
+        /// <summary>Clears the painted selection/search rectangles (WPF ClearPdfTextSelection).</summary>
+        public void ClearPdfTextSelection()
+        {
+            PdfTextSelectionCanvas.Children.Clear();
+        }
+
+        private Brush ResolveSelectionBrush()
+            => Application.Current.Resources.TryGetValue("ThemeSelectionBrush", out var resource)
+                && resource is Brush themed
+                ? themed
+                : new SolidColorBrush(Color.FromArgb(255, 0x25, 0x63, 0xEB));
+
+        private void PdfTextSelectionCanvas_PointerPressed(object sender, PointerRoutedEventArgs e)
+        {
+            if (!_isPdfTextSelectionEnabled)
+                return;
+            var point = e.GetCurrentPoint(PdfTextSelectionCanvas);
+            // Only the primary button begins a selection drag; a second
+            // pointer while one is active is ignored (single-gesture layer).
+            if (!point.Properties.IsLeftButtonPressed || _pdfTextSelectionPointerId != null)
+                return;
+            if (!PdfTextSelectionCanvas.CapturePointer(e.Pointer))
+                return;
+            _pdfTextSelectionPointerId = e.Pointer.PointerId;
+            PdfTextSelectionPointerPressed?.Invoke(this,
+                new PdfTextSelectionPointerEventArgs(ToPagePoint(point.Position), true));
+            e.Handled = true;
+        }
+
+        private void PdfTextSelectionCanvas_PointerMoved(object sender, PointerRoutedEventArgs e)
+        {
+            if (!_isPdfTextSelectionEnabled)
+                return;
+            var point = e.GetCurrentPoint(PdfTextSelectionCanvas);
+            bool pressed = point.Properties.IsLeftButtonPressed
+                || (e.Pointer.PointerDeviceType == PointerDeviceType.Pen && point.IsInContact);
+            PdfTextSelectionPointerMoved?.Invoke(this,
+                new PdfTextSelectionPointerEventArgs(ToPagePoint(point.Position), pressed));
+            if (_pdfTextSelectionPointerId == e.Pointer.PointerId)
+                e.Handled = true;
+        }
+
+        private void PdfTextSelectionCanvas_PointerReleased(object sender, PointerRoutedEventArgs e)
+        {
+            if (!_isPdfTextSelectionEnabled)
+                return;
+            var point = e.GetCurrentPoint(PdfTextSelectionCanvas);
+            if (_pdfTextSelectionPointerId == e.Pointer.PointerId)
+            {
+                _pdfTextSelectionPointerId = null;
+                PdfTextSelectionCanvas.ReleasePointerCaptures();
+            }
+            PdfTextSelectionPointerReleased?.Invoke(this,
+                new PdfTextSelectionPointerEventArgs(ToPagePoint(point.Position), false));
+            e.Handled = true;
+        }
+
+        private void PdfTextSelectionCanvas_PointerCanceled(object sender, PointerRoutedEventArgs e)
+        {
+            if (_pdfTextSelectionPointerId == e.Pointer.PointerId)
+            {
+                _pdfTextSelectionPointerId = null;
+                PdfTextSelectionCanvas.ReleasePointerCaptures();
+            }
+        }
+
+        private void PdfTextSelectionCanvas_PointerCaptureLost(object sender, PointerRoutedEventArgs e)
+        {
+            if (_pdfTextSelectionPointerId == e.Pointer.PointerId)
+                _pdfTextSelectionPointerId = null;
+        }
+
+        /// <summary>Canvas-space → PageGrid-space point (identity today; kept for the WPF GetPosition(PageGrid) contract).</summary>
+        private Point ToPagePoint(Point position) => position;
 
         /// <summary>
         /// Refreshes marker automation labels + context-flyout item text
@@ -641,8 +860,9 @@ namespace Caelum.Controls
         /// <summary>
         /// Mirrors the WPF SetInputMode: maps the editor-level mode onto the
         /// ink surface tool. Inking leaves <see cref="InkSurface.Tool"/> alone
-        /// (the caller sets Pen/Highlighter first); AreaHighlight is a T8
-        /// stub that maps to None for now.
+        /// (the caller sets Pen/Highlighter first); AreaHighlight rides the
+        /// surface's shape-drag pipeline — the shape-drag handlers below
+        /// route to the area-highlight path while this mode is armed.
         /// </summary>
         public void SetInputMode(CustomInkInputProcessingMode mode)
         {
@@ -659,6 +879,7 @@ namespace Caelum.Controls
                 CustomInkInputProcessingMode.HiddenInk => InkSurfaceTool.HiddenInk,
                 CustomInkInputProcessingMode.Laser => InkSurfaceTool.Laser,
                 CustomInkInputProcessingMode.Shape => InkSurfaceTool.Shape,
+                CustomInkInputProcessingMode.AreaHighlight => InkSurfaceTool.AreaHighlight,
                 CustomInkInputProcessingMode.Inking
                     => InkSurface.Tool is InkSurfaceTool.Pen or InkSurfaceTool.Highlighter
                         ? InkSurface.Tool
@@ -668,12 +889,18 @@ namespace Caelum.Controls
 
             UpdateHiddenInkHitTesting();
             // WPF parity: a passive ink surface is hit-test transparent so
-            // sticky markers / page background receive the press.
+            // sticky markers / page background / the PDF text-selection layer
+            // receive the press.
             InkSurface.IsHitTestVisible =
                 _hostActive && _documentInputEnabled
                 && mode != CustomInkInputProcessingMode.None;
             if (mode != CustomInkInputProcessingMode.Shape)
                 ClearShapePreview();
+            if (mode != CustomInkInputProcessingMode.AreaHighlight && _isAreaHighlightDragging)
+            {
+                _isAreaHighlightDragging = false;
+                ClearAreaHighlightPreview();
+            }
             if (mode != CustomInkInputProcessingMode.Laser && _laserPolyline != null)
                 EndLaserStroke();
         }
@@ -726,6 +953,11 @@ namespace Caelum.Controls
             _laserPolyline = null;
             _selectedTextContainers.Clear();
             _overlayData.Clear();
+            _imageContainers.Clear();
+            _imageDataById.Clear();
+            _highlights.Clear();
+            HighlightsCanvas.Children.Clear();
+            PdfTextSelectionCanvas.Children.Clear();
         }
 
         // ==================================================================
@@ -1969,19 +2201,26 @@ namespace Caelum.Controls
         // ==================================================================
 
         /// <summary>
-        /// Containers on <see cref="ImageOverlayCanvas"/> that carry a
-        /// serialized annotation payload in <see cref="_overlayData"/> —
-        /// sticky notes now, markup/area highlights in Phase B (WPF
+        /// True for every container kind that lives on
+        /// <see cref="ImageOverlayCanvas"/> — images, text markups, area
+        /// highlights and sticky notes all share the same pipeline: overlay
+        /// placement, marquee/Ctrl+click selection, explicit-size scaling
+        /// and quiet re-parenting for undo / cross-page moves (WPF
         /// IsOverlayContainer).
         /// </summary>
         internal static bool IsOverlayContainer(Grid container)
         {
             if (container?.Tag is not string tag)
                 return false;
-            return tag == MarkupContainerTag
+            return tag == ImageContainerTag
+                || tag == MarkupContainerTag
                 || tag == AreaHighlightContainerTag
                 || tag == StickyNoteContainerTag;
         }
+
+        /// <summary>Image annotation containers (WPF IsImageContainer).</summary>
+        internal static bool IsImageContainer(Grid container)
+            => container != null && (container.Tag as string) == ImageContainerTag;
 
         private bool IsStickyNoteContainer(Grid container)
             => container != null && (container.Tag as string) == StickyNoteContainerTag;
@@ -1998,23 +2237,59 @@ namespace Caelum.Controls
             _overlayData[container] = data;
         }
 
-        /// <summary>All overlay containers on the page (images excluded — Phase B).</summary>
+        /// <summary>
+        /// All non-image overlay containers on the page (WPF
+        /// GetOverlayContainers — images ride their own
+        /// <see cref="ImageContainers"/> list because their payload lives in
+        /// <see cref="_imageDataById"/>, not <see cref="_overlayData"/>).
+        /// </summary>
         public IReadOnlyList<Grid> GetOverlayContainers()
         {
             var result = new List<Grid>();
             foreach (var child in ImageOverlayCanvas.Children)
             {
-                if (child is Grid container && IsOverlayContainer(container))
+                if (child is Grid container
+                    && !IsImageContainer(container)
+                    && IsOverlayContainer(container))
                     result.Add(container);
             }
             return result;
         }
 
+        /// <summary>Image containers currently on the page, in insertion order (WPF ImageContainers).</summary>
+        public IReadOnlyList<Grid> ImageContainers => _imageContainers;
+
+        /// <summary>Raw encoded bytes (PNG/JPEG) behind an image container, or null (WPF GetImageData).</summary>
+        public byte[] GetImageData(Grid container)
+            => container != null && _imageDataById.TryGetValue(container, out var data) ? data : null;
+
         /// <summary>
-        /// Removes a text/sticky container from whichever overlay layer hosts
-        /// it — the payload dictionaries keep their entries so a later re-add
-        /// (undo / move back) restores the item as-is (WPF
-        /// RemoveTextContainerQuiet).
+        /// Registers image payload for a container that arrived from another
+        /// page — cross-page moves re-parent the Grid but the payload dict is
+        /// per-control, so the moving side transfers it explicitly (WPF
+        /// SetImageData).
+        /// </summary>
+        public void SetImageData(Grid container, byte[] data)
+        {
+            if (container == null || data == null)
+                return;
+            _imageDataById[container] = data;
+        }
+
+        /// <summary>Drops the image payload for a container leaving the page (WPF RemoveImageData).</summary>
+        public void RemoveImageData(Grid container)
+        {
+            if (container != null)
+                _imageDataById.Remove(container);
+        }
+
+        /// <summary>
+        /// Removes a container from whichever overlay layer hosts it — text
+        /// boxes on <see cref="TextOverlayCanvas"/>, images and overlay
+        /// annotations (markup / area highlight / sticky note) on
+        /// <see cref="ImageOverlayCanvas"/>. The payload dictionaries keep
+        /// their entries so a later re-add (undo / move back) restores the
+        /// item as-is (WPF RemoveTextContainerQuiet).
         /// </summary>
         public bool RemoveTextContainerQuiet(Grid container)
         {
@@ -2025,6 +2300,7 @@ namespace Caelum.Controls
             if (ReferenceEquals(container.Parent, ImageOverlayCanvas))
             {
                 ImageOverlayCanvas.Children.Remove(container);
+                _imageContainers.Remove(container);
                 removed = true;
             }
             else if (ReferenceEquals(container.Parent, TextOverlayCanvas))
@@ -2045,17 +2321,20 @@ namespace Caelum.Controls
         }
 
         /// <summary>
-        /// Re-adds a container after the quiet remove — sticky markers go
-        /// back on <see cref="ImageOverlayCanvas"/> (below ink), text boxes on
+        /// Re-adds a container after the quiet remove — every overlay kind
+        /// (images, markups, area highlights, sticky markers) goes back on
+        /// <see cref="ImageOverlayCanvas"/> (below ink), text boxes on
         /// <see cref="TextOverlayCanvas"/> (WPF AddTextContainerQuiet).
         /// </summary>
         public void AddTextContainerQuiet(Grid container)
         {
             if (container == null)
                 return;
-            if (IsStickyNoteContainer(container))
+            if (IsOverlayContainer(container))
             {
                 ImageOverlayCanvas.Children.Add(container);
+                if (IsImageContainer(container) && !_imageContainers.Contains(container))
+                    _imageContainers.Add(container);
             }
             else
             {
@@ -2685,6 +2964,301 @@ namespace Caelum.Controls
             return notes;
         }
 
+        // ==================================================================
+        // Image annotations + text markups + area highlights (Task 8 Phase B)
+        // ==================================================================
+
+        /// <summary>
+        /// Decodes encoded image bytes (PNG/JPEG/etc.) and drops a container
+        /// on <see cref="ImageOverlayCanvas"/> at the clamped position — WPF
+        /// AddImage parity. Without explicit dimensions the bitmap fits into
+        /// 40% of the page; the raw bytes stay in <see cref="_imageDataById"/>
+        /// for the collector/save path. Returns null for undecodable input.
+        /// </summary>
+        public async Task<Grid> AddImageAsync(
+            byte[] imageBytes, Point position,
+            double? explicitWidth = null, double? explicitHeight = null)
+        {
+            if (imageBytes == null || imageBytes.Length == 0)
+                return null;
+
+            BitmapImage bitmap;
+            try
+            {
+                using var stream = new InMemoryRandomAccessStream();
+                await stream.WriteAsync(imageBytes.AsBuffer());
+                stream.Seek(0);
+                bitmap = new BitmapImage();
+                // Decode happens eagerly inside SetSourceAsync — the stream
+                // can be disposed afterwards (WPF BitmapCacheOption.OnLoad).
+                await bitmap.SetSourceAsync(stream);
+            }
+            catch
+            {
+                return null;
+            }
+            if (bitmap.PixelWidth <= 0 || bitmap.PixelHeight <= 0)
+                return null;
+
+            double pageWidth = ActualWidth > 0 ? ActualWidth : Width;
+            double pageHeight = ActualHeight > 0 ? ActualHeight : Height;
+            if (pageWidth <= 0 || pageHeight <= 0)
+            {
+                pageWidth = 1584;
+                pageHeight = 2245;
+            }
+
+            double width, height;
+            if (explicitWidth > 0 && explicitHeight > 0)
+            {
+                width = explicitWidth.Value;
+                height = explicitHeight.Value;
+            }
+            else
+            {
+                double maxW = pageWidth * 0.4;
+                double maxH = pageHeight * 0.4;
+                double fit = Math.Min(maxW / bitmap.PixelWidth, maxH / bitmap.PixelHeight);
+                width = Math.Max(1.0, bitmap.PixelWidth * fit);
+                height = Math.Max(1.0, bitmap.PixelHeight * fit);
+            }
+
+            var image = new Image
+            {
+                Source = bitmap,
+                Stretch = Stretch.Uniform,
+                IsHitTestVisible = false,
+            };
+
+            var container = new Grid
+            {
+                Width = width,
+                Height = height,
+                Tag = ImageContainerTag,
+                // SelectionOverlayCanvas owns image interaction; an image
+                // visual must never block the page's drawing surface.
+                IsHitTestVisible = false,
+            };
+            container.Children.Add(image);
+
+            Canvas.SetLeft(container, Math.Max(0, Math.Min(position.X, Math.Max(0, pageWidth - width))));
+            Canvas.SetTop(container, Math.Max(0, Math.Min(position.Y, Math.Max(0, pageHeight - height))));
+
+            ImageOverlayCanvas.Children.Add(container);
+            _imageContainers.Add(container);
+            _imageDataById[container] = imageBytes;
+
+            ImagesChanged?.Invoke(this, EventArgs.Empty);
+            return container;
+        }
+
+        /// <summary>
+        /// Underline / strike-out / squiggly visual as an overlay container —
+        /// WPF AddTextMarkup: the lines are drawn once into an inner Canvas
+        /// inside a Viewbox (Stretch=Fill) so corner-handle rescaling scales
+        /// the drawing with zero re-render logic. The model (position +
+        /// relative rects) rides in <see cref="_overlayData"/>.
+        /// </summary>
+        public Grid AddTextMarkup(TextMarkupAnnotation markup)
+        {
+            if (markup?.Rects == null || markup.Rects.Count == 0)
+                return null;
+
+            double minX = double.MaxValue, minY = double.MaxValue,
+                   maxX = double.MinValue, maxY = double.MinValue;
+            foreach (var rect in markup.Rects)
+            {
+                if (rect == null || rect.Length < 4)
+                    continue;
+                minX = Math.Min(minX, rect[0]);
+                minY = Math.Min(minY, rect[1]);
+                maxX = Math.Max(maxX, rect[0] + rect[2]);
+                maxY = Math.Max(maxY, rect[1] + rect[3]);
+            }
+            if (minX > maxX)
+                return null;
+
+            double width = Math.Max(2.0, maxX - minX);
+            double height = Math.Max(2.0, maxY - minY);
+            var brush = new SolidColorBrush(Color.FromArgb(255, markup.R, markup.G, markup.B));
+
+            var canvas = new Canvas { Width = width, Height = height };
+            double lineThickness = Math.Max(1.4, height * 0.06);
+            var kind = markup.ParsedKind;
+
+            foreach (var rect in markup.Rects)
+            {
+                if (rect == null || rect.Length < 4)
+                    continue;
+                double x = rect[0] - minX;
+                double y = rect[1] - minY;
+                double w = Math.Max(1.0, rect[2]);
+                double h = Math.Max(1.0, rect[3]);
+
+                if (kind == TextMarkupKind.Squiggly)
+                {
+                    var zigzag = new Polyline
+                    {
+                        Stroke = brush,
+                        StrokeThickness = lineThickness,
+                        StrokeStartLineCap = PenLineCap.Round,
+                        StrokeEndLineCap = PenLineCap.Round,
+                        StrokeLineJoin = PenLineJoin.Round,
+                        IsHitTestVisible = false,
+                    };
+                    double baseline = y + h - lineThickness; // hug the text baseline
+                    const double wavelength = 6.0;
+                    const double amplitude = 1.6;
+                    for (double px = x; px <= x + w + 0.01; px += wavelength / 2)
+                    {
+                        double phase = ((px - x) / (wavelength / 2)) % 2.0;
+                        zigzag.Points.Add(new Point(px, baseline + (phase < 1.0 ? -amplitude : amplitude)));
+                    }
+                    canvas.Children.Add(zigzag);
+                }
+                else
+                {
+                    double lineY = kind == TextMarkupKind.StrikeOut
+                        ? y + h / 2
+                        : y + h - lineThickness; // underline hugs the baseline
+                    canvas.Children.Add(new Line
+                    {
+                        X1 = x, Y1 = lineY,
+                        X2 = x + w, Y2 = lineY,
+                        Stroke = brush,
+                        StrokeThickness = lineThickness,
+                        StrokeStartLineCap = PenLineCap.Round,
+                        StrokeEndLineCap = PenLineCap.Round,
+                        IsHitTestVisible = false,
+                    });
+                }
+            }
+
+            var container = new Grid
+            {
+                Width = width,
+                Height = height,
+                Tag = MarkupContainerTag,
+                Background = new SolidColorBrush(Color.FromArgb(0, 0, 0, 0)),
+                IsHitTestVisible = false,
+            };
+            container.Children.Add(new Viewbox
+            {
+                Stretch = Stretch.Fill,
+                StretchDirection = StretchDirection.Both,
+                IsHitTestVisible = false,
+                Child = canvas,
+            });
+
+            Canvas.SetLeft(container, Math.Max(0, markup.X));
+            Canvas.SetTop(container, Math.Max(0, markup.Y));
+            ImageOverlayCanvas.Children.Add(container);
+            _overlayData[container] = markup;
+            ImagesChanged?.Invoke(this, EventArgs.Empty);
+            return container;
+        }
+
+        /// <summary>
+        /// Free-form rectangular area highlight — a Grid whose Background is
+        /// the semi-transparent colour so it stretches automatically when the
+        /// container is rescaled (WPF AddAreaHighlight).
+        /// </summary>
+        public Grid AddAreaHighlight(AreaHighlightAnnotation area)
+        {
+            if (area == null || area.Width <= 0 || area.Height <= 0)
+                return null;
+
+            var container = new Grid
+            {
+                Width = area.Width,
+                Height = area.Height,
+                Tag = AreaHighlightContainerTag,
+                Background = new SolidColorBrush(Color.FromArgb(area.A, area.R, area.G, area.B)),
+                IsHitTestVisible = false,
+            };
+
+            Canvas.SetLeft(container, Math.Max(0, area.X));
+            Canvas.SetTop(container, Math.Max(0, area.Y));
+            ImageOverlayCanvas.Children.Add(container);
+            _overlayData[container] = area;
+            ImagesChanged?.Invoke(this, EventArgs.Empty);
+            return container;
+        }
+
+        // ── Persistent text-quad highlights (Task 8 Phase B) ─────────────
+
+        /// <summary>The persisted text-quad highlights on this page (WPF GetHighlights).</summary>
+        public IReadOnlyList<HighlightAnnotation> GetHighlights() => _highlights;
+
+        /// <summary>
+        /// Creates + registers + renders a highlight from absolute rects —
+        /// the text-selection commit path (WPF AddHighlightAnnotation, fixed
+        /// 120 alpha).
+        /// </summary>
+        public HighlightAnnotation AddHighlightAnnotation(IReadOnlyList<Rect> rects, Color color)
+        {
+            var highlight = new HighlightAnnotation
+            {
+                R = color.R,
+                G = color.G,
+                B = color.B,
+                A = 120, // Semi-transparent overlay
+            };
+            foreach (var r in rects)
+                highlight.Rects.Add(new[] { r.X, r.Y, r.Width, r.Height });
+
+            _highlights.Add(highlight);
+            RenderHighlightVisual(highlight);
+            return highlight;
+        }
+
+        /// <summary>Registers + renders an existing model (load/undo-redo path — WPF AddHighlight).</summary>
+        public void AddHighlight(HighlightAnnotation highlight)
+        {
+            if (highlight == null)
+                return;
+            _highlights.Add(highlight);
+            RenderHighlightVisual(highlight);
+        }
+
+        /// <summary>Deregisters a model and repaints the layer (WPF RemoveHighlight).</summary>
+        public void RemoveHighlight(HighlightAnnotation highlight)
+        {
+            if (highlight == null)
+                return;
+            _highlights.Remove(highlight);
+            RefreshHighlightsVisuals();
+        }
+
+        /// <summary>Repaints every persisted highlight (WPF RefreshHighlightsVisuals).</summary>
+        public void RefreshHighlightsVisuals()
+        {
+            HighlightsCanvas.Children.Clear();
+            foreach (var hl in _highlights)
+                RenderHighlightVisual(hl);
+        }
+
+        private void RenderHighlightVisual(HighlightAnnotation highlight)
+        {
+            var brush = new SolidColorBrush(
+                Color.FromArgb(highlight.A, highlight.R, highlight.G, highlight.B));
+            foreach (var rectInfo in highlight.Rects)
+            {
+                if (rectInfo == null || rectInfo.Length < 4)
+                    continue;
+                var rect = new Rectangle
+                {
+                    Width = rectInfo[2],
+                    Height = rectInfo[3],
+                    Fill = brush,
+                    IsHitTestVisible = false,
+                };
+                Canvas.SetLeft(rect, rectInfo[0]);
+                Canvas.SetTop(rect, rectInfo[1]);
+                HighlightsCanvas.Children.Add(rect);
+            }
+        }
+
         // ── IAnnotationContainerHost (Core undo replay) ──────────────────
 
         bool IAnnotationContainerHost.RemoveTextContainerQuiet(object container)
@@ -2703,6 +3277,18 @@ namespace Caelum.Controls
 
         void IAnnotationContainerHost.SetOverlayData(object container, object data)
             => SetOverlayData(container as Grid, data);
+
+        byte[] IAnnotationContainerHost.GetImageData(object container)
+            => GetImageData(container as Grid);
+
+        void IAnnotationContainerHost.SetImageData(object container, byte[] data)
+            => SetImageData(container as Grid, data);
+
+        void IAnnotationContainerHost.AddHighlight(HighlightAnnotation highlight)
+            => AddHighlight(highlight);
+
+        void IAnnotationContainerHost.RemoveHighlight(HighlightAnnotation highlight)
+            => RemoveHighlight(highlight);
 
         bool IAnnotationContainerHost.SetStickyNotePositionQuiet(object container, PointD position)
             => SetStickyNotePositionQuiet(container as Grid, position);
@@ -2826,8 +3412,17 @@ namespace Caelum.Controls
         // Shape tool (Phase B)
         // ==================================================================
 
+        // The surface shares one drag pipeline between the Shape tool and
+        // the AreaHighlight tool (InkSurfaceTool.Shape / AreaHighlight) —
+        // the page routes by its input mode so only the armed gesture runs.
+
         private void Ink_ShapeDragStarted(object sender, ShapeDragEventArgs e)
         {
+            if (_currentMode == CustomInkInputProcessingMode.AreaHighlight)
+            {
+                BeginAreaHighlightDrag(e.Anchor);
+                return;
+            }
             _isShapeDragging = true;
             _shapeAnchor = e.Anchor;
             _shapeCurrent = e.Current;
@@ -2837,6 +3432,11 @@ namespace Caelum.Controls
 
         private void Ink_ShapeDragUpdated(object sender, ShapeDragEventArgs e)
         {
+            if (_isAreaHighlightDragging)
+            {
+                UpdateAreaHighlightDrag(e.Current);
+                return;
+            }
             if (!_isShapeDragging)
                 return;
             _shapeCurrent = e.Current;
@@ -2846,6 +3446,11 @@ namespace Caelum.Controls
 
         private void Ink_ShapeDragEnded(object sender, ShapeDragEventArgs e)
         {
+            if (_isAreaHighlightDragging)
+            {
+                EndAreaHighlightDrag(e.Current);
+                return;
+            }
             if (!_isShapeDragging)
                 return;
             _isShapeDragging = false;
@@ -2861,8 +3466,84 @@ namespace Caelum.Controls
 
         private void Ink_ShapeDragCancelled(object sender, EventArgs e)
         {
+            if (_isAreaHighlightDragging)
+            {
+                _isAreaHighlightDragging = false;
+                ClearAreaHighlightPreview();
+            }
             _isShapeDragging = false;
             ClearShapePreview();
+        }
+
+        // ==================================================================
+        // Area highlight (Task 8 Phase B) — drag-to-rect on ShapePreviewCanvas;
+        // the committed annotation is an ImageOverlayCanvas container (WPF
+        // Begin/Update/EndAreaHighlightDrag parity).
+        // ==================================================================
+
+        private void BeginAreaHighlightDrag(PointD position)
+        {
+            _isAreaHighlightDragging = true;
+            _areaHighlightAnchor = position;
+
+            _areaHighlightPreview = new Rectangle
+            {
+                Stroke = new SolidColorBrush(Color.FromArgb(220,
+                    AreaHighlightColor.R, AreaHighlightColor.G, AreaHighlightColor.B)),
+                Fill = new SolidColorBrush(Color.FromArgb(AreaHighlightOpacity,
+                    AreaHighlightColor.R, AreaHighlightColor.G, AreaHighlightColor.B)),
+                StrokeThickness = 1.5,
+                StrokeDashArray = new DoubleCollection { 4, 2 },
+                IsHitTestVisible = false,
+            };
+            ShapePreviewCanvas.Children.Add(_areaHighlightPreview);
+            UpdateAreaHighlightDrag(position);
+        }
+
+        private void UpdateAreaHighlightDrag(PointD position)
+        {
+            if (!_isAreaHighlightDragging || _areaHighlightPreview == null)
+                return;
+            var rect = NormalizeAreaHighlightRect(_areaHighlightAnchor, position);
+            Canvas.SetLeft(_areaHighlightPreview, rect.X);
+            Canvas.SetTop(_areaHighlightPreview, rect.Y);
+            _areaHighlightPreview.Width = rect.Width;
+            _areaHighlightPreview.Height = rect.Height;
+        }
+
+        private void EndAreaHighlightDrag(PointD position)
+        {
+            if (!_isAreaHighlightDragging)
+                return;
+            var rect = NormalizeAreaHighlightRect(_areaHighlightAnchor, position);
+            _isAreaHighlightDragging = false;
+            ClearAreaHighlightPreview();
+
+            if (rect.Width < AreaHighlightDragThreshold || rect.Height < AreaHighlightDragThreshold)
+                return;
+
+            var container = AddAreaHighlight(new AreaHighlightAnnotation
+            {
+                X = rect.X,
+                Y = rect.Y,
+                Width = rect.Width,
+                Height = rect.Height,
+                R = AreaHighlightColor.R,
+                G = AreaHighlightColor.G,
+                B = AreaHighlightColor.B,
+                A = AreaHighlightOpacity,
+            });
+            if (container != null)
+                AreaHighlightCreated?.Invoke(this, container);
+        }
+
+        private void ClearAreaHighlightPreview()
+        {
+            if (_areaHighlightPreview != null)
+            {
+                ShapePreviewCanvas.Children.Remove(_areaHighlightPreview);
+                _areaHighlightPreview = null;
+            }
         }
 
         /// <summary>

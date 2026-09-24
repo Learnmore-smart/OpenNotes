@@ -1,5 +1,5 @@
 # OpenNotes.Core/Ink/AnnotationUndoActions.cs
-> Last updated: 2026-09-23 | Protection: STANDARD
+> Last updated: 2026-09-24 | Protection: STANDARD
 
 ## Purpose
 
@@ -22,6 +22,13 @@ opaque `object`s — the actions only compare identity.
   transfer legs),
   `GetOverlayData`/`SetOverlayData` (annotation payload behind a container —
   the sticky model travels with its marker on cross-page moves),
+  `GetImageData`/`SetImageData` (Task 8 Phase B — the encoded image bytes
+  behind an image container; the payload dict is per-host so a cross-page
+  move must hand the bytes to the receiver; default no-op members keep
+  text-only test hosts valid),
+  `AddHighlight`/`RemoveHighlight` (Task 8 Phase B — re-add/remove a
+  persisted text-quad `HighlightAnnotation` on the host's highlight list;
+  default no-op for hosts without a highlight layer),
   `SetStickyNotePositionQuiet`/`SetStickyNoteTextQuiet` (page-bounds clamp
   stays in force), `SetTextContainerPositionQuiet`,
   `SetTextContainerBoundsQuiet(bounds, autoWidth?, autoHeight?)` (persist-
@@ -34,7 +41,10 @@ opaque `object`s — the actions only compare identity.
   `Remove`/`Add`/`Move` verify the quiet remove detached, wrap the add
   (a hosted container throws on re-parent in WinUI), probe membership
   afterwards, and roll a failed move back onto the source so a container
-  never ends up unhosted.
+  never ends up unhosted. `Move` additionally transfers the image payload
+  (`from.GetImageData` → `to.SetImageData`) AFTER the container lands —
+  target-side null check keeps an existing registration authoritative
+  (WPF `TransferImageData` parity); payload loss is non-fatal.
 - `TextFormatSnapshot` / `TextStyleSnapshot` — readonly record structs
   (bold/italic/family/alignment and fontSize+RGB) for before/after captures.
 - **Text lifecycle:** `TextBoxAddedAction` (undo removes, redo re-adds),
@@ -54,6 +64,12 @@ opaque `object`s — the actions only compare identity.
   `AnnotationSelectionMoveAction` (±delta via `MoveItemsDirectly`),
   `AnnotationSelectionResizeAction` (inverse scale about anchor),
   `AnnotationSelectionRotateAction` (±degrees about centre).
+- **Persistent text-quad highlights (Task 8 Phase B):**
+  `HighlightAddedAction` (a selection-commit highlight was created —
+  undo removes from the host list, redo re-adds),
+  `HighlightRemovedAction` (inverse). The model lives on the host's
+  highlight list — not a container — so replay goes through
+  `AddHighlight`/`RemoveHighlight`, not the transfer path.
 - **Combined add/remove/cross-page:** `AnnotationItemsAddedAction`
   (paste — undo clears the live selection first, removes strokes
   descending-index + containers; redo restores at captured placements

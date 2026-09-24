@@ -27,7 +27,7 @@ The custom pointer-ink pipeline for the WinUI editor (`Caelum.Controls`, Task 7 
 - Undo/dirty/thumbnail policy lives in `EditorPage` — the surface only mutates the store quietly and raises `StrokeCollected`/`StrokeRecognized`/`StrokesErased`/`InkMutated`.
 ## Phase B additions (2026-09-23)
 
-- `InkSurfaceTool` gained the Phase-B members `HiddenInk`/`Laser`/`Shape` — `ApplyToolToAllPages` still drives them primarily through `CustomInkInputProcessingMode` on the page (only Pen/Highlighter pre-seed `ink.Tool`).
+- `InkSurfaceTool` gained the Phase-B members `HiddenInk`/`Laser`/`Shape` — `ApplyToolToAllPages` still drives them primarily through `CustomInkInputProcessingMode` on the page (only Pen/Highlighter pre-seed `ink.Tool`). **2026-09-24 (Task 8 Phase B):** `AreaHighlight` joined — it rides the shape-drag event pipeline (`wantsShape` covers it) but is deliberately NOT in `inkCreation`, so `PenOnlyMode` never blocks a mouse area-highlight drag (WPF parity).
 - **Laser gesture**: pointer drags emit `LaserStrokeStarted`/`LaserStrokePointsAppended`/`LaserStrokeCompleted` (`LaserStrokeEventArgs` — batched raw page-DIP points); the page draws the ephemeral polyline on `LaserInkCanvas`. Laser never touches `Store`/undo — the surface only arbitrates capture the same way as ink.
 - **Shape gesture**: in shape mode the surface owns the drag lifecycle and raises `ShapeDragStarted`/`ShapeDragUpdated`/`ShapeDragEnded`/`ShapeDragCancelled` (`ShapeDragEventArgs` — anchor, current, live `ShiftHeld` sampled per event like WPF `Keyboard.IsKeyDown`). The page renders the preview and commits.
 - **Hidden ink**: `HiddenInkColor` (opaque 199,205,212 default) + `HiddenInkSize` (28.0) snapshot at pointer-down; completed freehand masks raise `HiddenInkStrokeCommitted` (`IReadOnlyList<PointD>`) instead of `StrokeCollected` — the page builds the `HiddenInkAnnotation`.
@@ -37,4 +37,4 @@ The custom pointer-ink pipeline for the WinUI editor (`Caelum.Controls`, Task 7 
 
 ## Open Threads / Resume Context
 
-- **Status:** GREEN — Phase A complete (pen/highlighter/eraser, pressure, recognition-on-collect); Phase B gestures (laser, shape drag, hidden-ink commit, eraser path trace, ruler constraint) live and build clean.
+- **Status:** GREEN — Phase A complete (pen/highlighter/eraser, pressure, recognition-on-collect); Phase B gestures (laser, shape drag, hidden-ink commit, eraser path trace, ruler constraint) live and build clean; Task 8 Phase B added the `AreaHighlight` shape-drag mode.

@@ -1,5 +1,5 @@
 # OpenNotes.WinUI/Pages/EditorPage.xaml(.cs)
-> Last updated: 2026-09-23 (V6 Task 8 Phase A — text/sticky annotations + quality pass) | Protection: STANDARD
+> Last updated: 2026-09-24 (V6 Task 8 Phase B — images/highlights/markups/area highlights/PDF text selection) | Protection: STANDARD
 
 ## Purpose
 `Caelum.Pages.EditorPage : Page` — the WinUI editor shell port of the WPF
@@ -266,15 +266,67 @@ the save/history pipeline remain deferred to T8–T9.
   `_textEditSessionId` anchors so a stale `LostFocus` can't push an undo
   for a removed/reparented/reloaded container.
 
+## Task 8 Phase B additions (2026-09-24 — images/highlights/markups/area/PDF text selection)
+
+- **Six-mode highlighter flyout** (`ShowHighlighterFlyout`, WPF
+  `_highlighterPopup` port): `HighlighterApplyMode`
+  Freehand/TextHighlight/Underline/StrikeOut/Squiggly/AreaHighlight 3×2
+  grid with mode-aware preview glyphs (`BuildHighlighterModePreview` —
+  squiggly's smooth-cubic `S` segments spelled out as `C` because the
+  shared mini path parser has no `S`), size slider (2–48, 0.5) + shared
+  palette. Selecting a mode switches the live tool immediately via
+  `ActivateHighlighterModeTool` → `GetActiveHighlighterToolType`
+  (Freehand→`Highlighter`, AreaHighlight→`AreaHighlight`, the rest→
+  `TextHighlight`); `IsHighlighterTool` keeps the toolbar button checked
+  for all three.
+- **`ApplyToolToAllPages`** gained `ToolType.AreaHighlight` →
+  `CustomInkInputProcessingMode.AreaHighlight` (+ `AreaHighlightColor`/
+  `AreaHighlightOpacity` from the highlighter colour) and arms
+  `SetPdfTextSelectionEnabled` for `None`+`TextHighlight`.
+- **Real PDF text selection**: page `PdfTextSelectionPointer*` events →
+  press resolves the anchor offset via
+  `PdfTextSelectionGeometry.FindNearestTextOffset` (24-DIP cap on press,
+  ∞ while dragging), `_pdfTextSelectionInfo` comes from
+  `TryGetCachedPageTextInfo`/`GetPageTextInfoAsync`, drag threshold 4 DIP,
+  `UpdatePdfTextSelectionVisuals` repaints merged quads + refreshes
+  `_selectedPdfText`; Ctrl+C copies it when no annotation selection is
+  live (`TryCopySelectedPdfTextToClipboard`); Escape/tool-switch/lease
+  loss → `ClearPdfTextSelection` (`_pdfTextSelectionRequestId` races
+  in-flight loads). Release under `TextHighlight` commits a persistent
+  `HighlightAnnotation` (`AddHighlightAnnotation` + `HighlightAddedAction`)
+  or a `TextMarkupAnnotation` (`BuildTextMarkupAnnotation` → `AddTextMarkup`
+  + `AnnotationItemsAddedAction`). Search-jump results paint the same
+  quads without persisting.
+- **Image annotations**: `PasteClipboardImageAsync` (Ctrl+V image-first —
+  `ClipboardImageDecoder` PNG/Bitmap/EMF legs → `AddImageAsync` → one
+  `AnnotationItemsAddedAction` + auto-select), `EditorPage_DragOver`/
+  `EditorPage_Drop` wired on `EditorRootGrid.AllowDrop` (Explorer
+  png/jpg/jpeg files land under the cursor, stair-stepped 20 DIP, one undo
+  for all), image legs in `CopySelection` (base64 JSON),
+  `PasteSelection` (verbatim dims + rotation), `DuplicateSelection`
+  (re-decode raw payload at +20,+20), `HasPasteableClipboard`.
+- **Collectors**: `CollectAnnotations` now emits `Strokes`, `HiddenInks`,
+  `Texts`, `StickyNotes`, `Highlights` (via `page.GetHighlights()`),
+  `Images` (base64 + live geometry + `RotationDegrees`), `TextMarkups`
+  (relative rects rescaled by container-vs-original bounds),
+  `AreaHighlights` (live container rect + RGBA). Load path is
+  `LoadAnnotationsIntoPagesAsync` — image decode is awaited
+  (`AddImageAsync` + `ApplyAnnotationRotation`); markups/areas/highlights
+  restore through the quiet adders; `_isLoadingAnnotations` guards dirty.
+- **Undo**: committed area-highlight drags push one
+  `AnnotationItemsAddedAction` via `PageControl_AreaHighlightCreated`;
+  `PageControl_ImagesChanged` marks dirty outside loads.
+
 ## Open Threads / Resume Context
 - **Status:** GREEN — `tools/winui-editor-smoke.ps1` 60/60; Task 7 Phase A
   ink engine + Phase B (select/lasso/transforms incl. cross-page, shape
   tools, hidden ink, laser, ruler, mixed undo) + Task 8 Phase A (text
   boxes, sticky notes, inline toolbar, mixed-selection undo, clipboard,
-  collectors) live; WinUI build 0 err/0 warn, headless
-  `CoreInkPhaseBTests` 45/45 + `CoreAnnotationUndoTests`/
-  `EditorTextStickySourceTests` 23/23.
-- **Deferred (stubbed, by design):** image annotations + persistent PDF
-  text selection visuals (T8 Phase B); save/autosave/dirty-close +
+  collectors) + Task 8 Phase B (images, persistent highlights, text
+  markups, area highlights, real PDF text selection) live; WinUI build
+  0 err/0 warn, headless `CoreInkPhaseBTests` 45/45 +
+  `CoreAnnotationUndoTests`/`EditorTextStickySourceTests` 23/23 +
+  `Task8PhaseBTests` 29/29.
+- **Deferred (stubbed, by design):** save/autosave/dirty-close +
   version history + settings (`CollectAnnotations` ready but unwired,
   SavePdfButton still inert) (T9).

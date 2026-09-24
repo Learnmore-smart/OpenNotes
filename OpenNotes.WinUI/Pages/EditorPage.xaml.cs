@@ -114,14 +114,32 @@ namespace Caelum.Pages
             Laser,
             Select,
             Text,
+            // Task 8 Phase B: the two non-button tools the highlighter popup
+            // activates — a drag over PDF text, a drag-to-rect anywhere.
+            TextHighlight,
+            AreaHighlight,
         }
+
+        /// <summary>
+        /// Task 25/27: what the Highlighter toolbar button applies. Freehand
+        /// is the classic ink highlighter; TextHighlight/Underline/StrikeOut/
+        /// Squiggly ride the PDF text-selection pipeline; AreaHighlight drags
+        /// a free-form rectangle. Session-only (not persisted) — WPF parity.
+        /// </summary>
+        private enum HighlighterApplyMode { Freehand, TextHighlight, Underline, StrikeOut, Squiggly, AreaHighlight }
 
         private ToolType _currentTool = ToolType.None;
         private ToolType _previousTool = ToolType.None;
+        private HighlighterApplyMode _highlighterApplyMode = HighlighterApplyMode.Freehand;
 
         // WPF defaults: pen black @1.5 DIP (settings-driven), highlighter
         // yellow at the fixed 140-alpha translucency, eraser 20 DIP.
+        // Mode-specific opacities keep the popup previews aligned with the
+        // real annotation pipelines (WPF parity).
         private const byte FreehandHighlighterOpacity = 140;
+        private const byte TextHighlightOpacity = 120;
+        private const byte AreaHighlightStrokeOpacity = 220;
+        private const byte AreaHighlightFillOpacity = 76;
         private Windows.UI.Color _penColor = Windows.UI.Color.FromArgb(255, 0, 0, 0);
         private Windows.UI.Color _highlighterColor = Windows.UI.Color.FromArgb(255, 255, 255, 0);
         private double _penSize = 1.5;
@@ -143,6 +161,20 @@ namespace Caelum.Pages
         // the paste anchor prefers it over the selection page.
         private PdfPageControl _lastClickedPage;
         private Point _lastClickedPoint;
+
+        // ── Task 8 Phase B: PDF text selection state (WPF parity) ────────
+        // One page owns the active selection at a time; offsets are
+        // PdfTextCharacterInfo indices, not Text string indices.
+        private PdfPageControl _pdfTextSelectionPage;
+        private PdfService.PdfPageTextInfo _pdfTextSelectionInfo;
+        private Point _pdfTextSelectionPressPoint;
+        private int _pdfTextSelectionAnchorOffset = -1;
+        private int _pdfTextSelectionActiveOffset = -1;
+        private bool _isPdfTextSelectionDragging;
+        private bool _pdfTextSelectionExceededThreshold;
+        private int _pdfTextSelectionRequestId;
+        private string _selectedPdfText;
+        private const double PdfTextSelectionDragThreshold = 4.0;
 
         // ── Task 8 Phase A: text boxes + sticky notes ─────────────────
         // Session defaults for newly created text boxes (WPF fields; the
@@ -323,6 +355,13 @@ namespace Caelum.Pages
             _scrollRenderDebounceTimer.Tick += ScrollRenderDebounceTimer_Tick;
 
             BuildPageContextMenu();
+            // Task 19: Explorer image files can drop anywhere on the editor
+            // surface (WPF PreviewDragOver/Drop on the page root). The
+            // handlers resolve the page under the cursor themselves; drops
+            // over chrome land on the first visible page.
+            EditorRootGrid.AllowDrop = true;
+            EditorRootGrid.DragOver += EditorPage_DragOver;
+            EditorRootGrid.Drop += EditorPage_Drop;
             ApplyLocalization();
             // Expanded is the default state — same as the WPF shell — so the
             // pages margin starts at the 228 DIP offset.
@@ -524,8 +563,13 @@ namespace Caelum.Pages
             };
             foreach (var (button, t) in toolButtons)
             {
-                if (button != null)
-                    button.IsChecked = t == tool;
+                if (button == null)
+                    continue;
+                // WPF parity: TextHighlight/AreaHighlight keep the
+                // highlighter button checked — they're its apply modes.
+                button.IsChecked = t == ToolType.Highlighter
+                    ? IsHighlighterTool(tool)
+                    : t == tool;
             }
             // Leaving Select abandons the selection (WPF ActivateTool clears
             // _activeSelectionPage before switching; _currentTool still holds
@@ -720,7 +764,7 @@ namespace Caelum.Pages
                     AddPdfPage(i, size, ref currentTop, pageCount);
                 }
                 ApplyToolToAllPages();
-                LoadAnnotationsIntoPages();
+                await LoadAnnotationsIntoPagesAsync();
 
                 _zoomLevel = 1.0;
                 PdfScrollViewer.ChangeView(0, 0, 1.0f, disableAnimation: true);
@@ -782,6 +826,14 @@ namespace Caelum.Pages
             pageControl.StickyNoteActivated += PageControl_StickyNoteActivated;
             pageControl.StickyNoteMoved += PageControl_StickyNoteMoved;
             pageControl.StickyNoteDeleteRequested += PageControl_StickyNoteDeleteRequested;
+            // Task 8 Phase B: overlay-set changes (images/markups/areas) mark
+            // dirty; committed area-highlight drags push one undo action;
+            // the PDF text-selection layer forwards pointer traffic.
+            pageControl.ImagesChanged += PageControl_ImagesChanged;
+            pageControl.AreaHighlightCreated += PageControl_AreaHighlightCreated;
+            pageControl.PdfTextSelectionPointerPressed += PageControl_PdfTextSelectionPointerPressed;
+            pageControl.PdfTextSelectionPointerMoved += PageControl_PdfTextSelectionPointerMoved;
+            pageControl.PdfTextSelectionPointerReleased += PageControl_PdfTextSelectionPointerReleased;
 
             // Task 22 parity: the page queries the active ruler edge at
             // stroke-collect/shape-commit time; the viewport→page transform
@@ -831,9 +883,11 @@ namespace Caelum.Pages
         /// Quiet sidecar load: ExtractedAnnotations is page-indexed markup
         /// harvested during LoadPdfAsync. Strokes enter through the store's
         /// quiet path under the _isLoadingAnnotations guard so loading never
-        /// creates undo actions — the same contract as the WPF loader.
+        /// creates undo actions — the same contract as the WPF loader
+        /// (strokes → hidden inks → texts → highlights → images → markups →
+        /// areas → stickies).
         /// </summary>
-        private void LoadAnnotationsIntoPages()
+        private async Task LoadAnnotationsIntoPagesAsync()
         {
             var annotations = _pdfService.ExtractedAnnotations;
             if (annotations == null || annotations.Count == 0)
@@ -861,9 +915,9 @@ namespace Caelum.Pages
                         foreach (var mask in pageAnnotation.HiddenInks)
                             page.AddHiddenInk(mask);
                     }
-                    // Task 8 Phase A: text boxes + sticky markers restore
-                    // quietly — CreateTextBox(select:false) pushes no undo
-                    // action and keeps the serialized auto-size sentinels.
+                    // Task 8 Phase A: text boxes restore quietly —
+                    // CreateTextBox(select:false) pushes no undo action and
+                    // keeps the serialized auto-size sentinels.
                     if (pageAnnotation.Texts != null)
                     {
                         foreach (var ta in pageAnnotation.Texts)
@@ -884,6 +938,42 @@ namespace Caelum.Pages
                                 alignment: ParseTextAlignment(ta.Alignment),
                                 rotationDegrees: ta.RotationDegrees);
                         }
+                    }
+                    // Task 8 Phase B: persisted text-quad highlights repaint
+                    // through the same render path as a fresh selection.
+                    if (pageAnnotation.Highlights != null)
+                    {
+                        foreach (var hl in pageAnnotation.Highlights)
+                            page.AddHighlight(hl);
+                    }
+                    // Task 19: restored image annotations keep their saved
+                    // geometry + rotation verbatim.
+                    if (pageAnnotation.Images != null)
+                    {
+                        foreach (var ia in pageAnnotation.Images)
+                        {
+                            if (string.IsNullOrEmpty(ia.ImageDataBase64))
+                                continue;
+
+                            byte[] imageBytes;
+                            try { imageBytes = Convert.FromBase64String(ia.ImageDataBase64); }
+                            catch { continue; }
+
+                            var imageContainer = await page.AddImageAsync(
+                                imageBytes, new Point(ia.X, ia.Y), ia.Width, ia.Height);
+                            if (imageContainer != null)
+                                PdfPageControl.ApplyAnnotationRotation(imageContainer, ia.RotationDegrees);
+                        }
+                    }
+                    if (pageAnnotation.TextMarkups != null)
+                    {
+                        foreach (var markup in pageAnnotation.TextMarkups)
+                            page.AddTextMarkup(markup);
+                    }
+                    if (pageAnnotation.AreaHighlights != null)
+                    {
+                        foreach (var area in pageAnnotation.AreaHighlights)
+                            page.AddAreaHighlight(area);
                     }
                     if (pageAnnotation.StickyNotes != null)
                     {
@@ -1697,6 +1787,12 @@ namespace Caelum.Pages
                 }
             }
 
+            // The Highlighter button arms whichever apply mode is armed in
+            // its flyout (WPF HighlighterToolButton_Click →
+            // GetActiveHighlighterToolType).
+            if (next == ToolType.Highlighter)
+                next = GetActiveHighlighterToolType();
+
             // Leaving Select abandons the selection (WPF ActivateTool parity).
             if (_currentTool == ToolType.Select && next != ToolType.Select
                 && _activeSelectionPage != null)
@@ -1726,11 +1822,41 @@ namespace Caelum.Pages
             ApplyToolToAllPages();
 
             // WPF ToggleToolButton parity: arming the Shape or Select tool
-            // opens its options flyout under the button.
+            // opens its options flyout under the button; the highlighter
+            // flyout opens for every apply mode (WPF _highlighterPopup).
             if (next == ToolType.Shape)
                 ShowShapeFlyout(clicked);
             else if (next == ToolType.Select)
                 ShowSelectionFlyout(clicked);
+            else if (IsHighlighterTool(next))
+                ShowHighlighterFlyout(clicked);
+        }
+
+        /// <summary>WPF GetActiveHighlighterToolType — apply mode → ToolType.</summary>
+        private ToolType GetActiveHighlighterToolType() => _highlighterApplyMode switch
+        {
+            HighlighterApplyMode.Freehand => ToolType.Highlighter,
+            HighlighterApplyMode.AreaHighlight => ToolType.AreaHighlight,
+            _ => ToolType.TextHighlight,
+        };
+
+        private static bool IsHighlighterTool(ToolType tool) =>
+            tool == ToolType.Highlighter
+            || tool == ToolType.TextHighlight
+            || tool == ToolType.AreaHighlight;
+
+        /// <summary>
+        /// Activates the ToolType matching the current highlighter apply
+        /// mode — used by the flyout mode selector and the toolbar click
+        /// (WPF ActivateHighlighterModeTool).
+        /// </summary>
+        private void ActivateHighlighterModeTool()
+        {
+            var tool = GetActiveHighlighterToolType();
+            if (_currentTool != tool)
+                ActivateTool(tool);
+            else
+                ApplyToolToAllPages();
         }
 
         /// <summary>
@@ -1769,6 +1895,11 @@ namespace Caelum.Pages
                 // WPF SetMode: text containers only take direct input while
                 // the Text tool is armed.
                 page.SetMode(_currentTool == ToolType.Text);
+                // WPF parity: the PDF text-selection layer arms only when no
+                // other tool owns the pointer (None) or when a text-markup
+                // highlighter mode is armed (TextHighlight).
+                page.SetPdfTextSelectionEnabled(
+                    _currentTool == ToolType.None || _currentTool == ToolType.TextHighlight);
 
                 switch (_currentTool)
                 {
@@ -1801,9 +1932,19 @@ namespace Caelum.Pages
                     case ToolType.Laser:
                         page.SetInputMode(CustomInkInputProcessingMode.Laser);
                         break;
+                    case ToolType.AreaHighlight:
+                        // Drag-to-rect over any content (text, images, ink);
+                        // colour + fill alpha ride the highlighter colour.
+                        page.AreaHighlightColor = _highlighterColor;
+                        page.AreaHighlightOpacity = AreaHighlightFillOpacity;
+                        page.SetInputMode(CustomInkInputProcessingMode.AreaHighlight);
+                        break;
                     default:
-                        // None/Select/StickyNote/Text — ink surface idles;
-                        // Select already armed its overlay above.
+                        // None/Select/StickyNote/Text/TextHighlight — ink
+                        // surface idles; Select already armed its overlay
+                        // above and TextHighlight armed the PDF
+                        // text-selection layer above (WPF parity: those
+                        // modes share SetInputMode(None)).
                         page.SetInputMode(CustomInkInputProcessingMode.None);
                         break;
                 }
@@ -2718,6 +2859,267 @@ namespace Caelum.Pages
             PushUndoAction(new HiddenInksRemovedAction(page.HiddenInkStore, e.Entries));
         }
 
+        // ==================================================================
+        // Task 8 Phase B: overlay annotations + PDF text selection
+        // ==================================================================
+
+        /// <summary>WPF PageControl_ImagesChanged — overlay-set edits mark dirty (load is guarded).</summary>
+        private void PageControl_ImagesChanged(object sender, EventArgs e)
+        {
+            if (!_isLoadingAnnotations)
+                MarkDirty();
+        }
+
+        /// <summary>
+        /// WPF PageControl_AreaHighlightCreated — the page already committed
+        /// the container; the editor only pushes the undo action.
+        /// </summary>
+        private void PageControl_AreaHighlightCreated(object sender, Grid container)
+        {
+            if (sender is PdfPageControl page && container != null)
+            {
+                PushUndoAction(new AnnotationItemsAddedAction(
+                    page.Ink.Store,
+                    new List<InkStrokePlacement>(),
+                    page,
+                    new List<Grid> { container }));
+            }
+        }
+
+        /// <summary>
+        /// Clears the active PDF text selection — painted rects on every
+        /// page plus the editor's offset state (WPF ClearPdfTextSelection).
+        /// </summary>
+        private void ClearPdfTextSelection(bool clearCopiedText = true)
+        {
+            Interlocked.Increment(ref _pdfTextSelectionRequestId);
+
+            foreach (var page in _pageControls)
+                page.ClearPdfTextSelection();
+
+            _pdfTextSelectionPage = null;
+            _pdfTextSelectionInfo = null;
+            _pdfTextSelectionAnchorOffset = -1;
+            _pdfTextSelectionActiveOffset = -1;
+            _isPdfTextSelectionDragging = false;
+            _pdfTextSelectionExceededThreshold = false;
+
+            if (clearCopiedText)
+                _selectedPdfText = null;
+        }
+
+        /// <summary>
+        /// WPF TryCopySelectedPdfTextToClipboard — annotation selection wins;
+        /// the pdf-text copy only fires while the surface tool is passive.
+        /// </summary>
+        private bool TryCopySelectedPdfTextToClipboard()
+        {
+            if ((_currentTool != ToolType.None && _currentTool != ToolType.Select)
+                || string.IsNullOrEmpty(_selectedPdfText))
+                return false;
+
+            try
+            {
+                var package = new DataPackage();
+                package.SetText(_selectedPdfText);
+                Clipboard.SetContent(package);
+                Clipboard.Flush();
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Repaints the selection rects on the owning page and refreshes
+        /// <see cref="_selectedPdfText"/> (WPF UpdatePdfTextSelectionVisuals).
+        /// </summary>
+        private void UpdatePdfTextSelectionVisuals()
+        {
+            if (_pdfTextSelectionPage == null
+                || _pdfTextSelectionInfo?.Text == null)
+            {
+                ClearPdfTextSelection();
+                return;
+            }
+
+            int start = Math.Min(_pdfTextSelectionAnchorOffset, _pdfTextSelectionActiveOffset);
+            int end = Math.Max(_pdfTextSelectionAnchorOffset, _pdfTextSelectionActiveOffset);
+            if (start < 0 || end < start || end >= _pdfTextSelectionInfo.Text.Length)
+            {
+                ClearPdfTextSelection();
+                return;
+            }
+
+            foreach (var pageControl in _pageControls)
+            {
+                if (!ReferenceEquals(pageControl, _pdfTextSelectionPage))
+                    pageControl.ClearPdfTextSelection();
+            }
+
+            _pdfTextSelectionPage.SetPdfTextSelectionRects(
+                BuildPdfTextSelectionRects(_pdfTextSelectionInfo, start, end));
+            _selectedPdfText = _pdfTextSelectionInfo.Text.Substring(start, end - start + 1);
+        }
+
+        private async void PageControl_PdfTextSelectionPointerPressed(
+            object sender, PdfTextSelectionPointerEventArgs e)
+        {
+            if ((_currentTool != ToolType.None && _currentTool != ToolType.TextHighlight)
+                || sender is not PdfPageControl page)
+                return;
+
+            using var operationLease = CaptureDocumentOperationLease(page);
+            if (!ValidateDocumentOperationLease(operationLease, page) || !_pageControls.Contains(page))
+                return;
+            int requestId = Interlocked.Increment(ref _pdfTextSelectionRequestId);
+
+            if (_selectedTextBox != null)
+                DeselectTextBox();
+
+            // WPF Keyboard.Focus(PdfScrollViewer): pull focus off chrome so
+            // Escape/arrows reach the page-level key handlers mid-drag.
+            PdfScrollViewer.Focus(FocusState.Programmatic);
+            ClearPdfTextSelection();
+            _pdfTextSelectionPressPoint = e.Position;
+
+            try
+            {
+                var textInfo = _pdfService.TryGetCachedPageTextInfo(page.PageIndex, out var cached)
+                    ? cached
+                    : await _pdfService.GetPageTextInfoAsync(page.PageIndex, operationLease.Token);
+
+                if (!ValidateDocumentOperationLease(operationLease, page)
+                    || !_pageControls.Contains(page)
+                    || requestId != _pdfTextSelectionRequestId
+                    || (_currentTool != ToolType.None && _currentTool != ToolType.TextHighlight))
+                    return;
+
+                int anchorOffset = PdfTextSelectionGeometry.FindNearestTextOffset(
+                    textInfo, new PointD(e.Position.X, e.Position.Y), 24.0);
+                if (anchorOffset < 0)
+                    return;
+
+                _pdfTextSelectionPage = page;
+                _pdfTextSelectionInfo = textInfo;
+                _pdfTextSelectionAnchorOffset = anchorOffset;
+                _pdfTextSelectionActiveOffset = anchorOffset;
+                _isPdfTextSelectionDragging = true;
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            catch (Exception ex)
+            {
+                if (ValidateDocumentOperationLease(operationLease, page))
+                    System.Diagnostics.Debug.WriteLine($"[PdfTextSelection] Failed to read page text: {ex}");
+            }
+        }
+
+        private void PageControl_PdfTextSelectionPointerMoved(
+            object sender, PdfTextSelectionPointerEventArgs e)
+        {
+            if (!_isPdfTextSelectionDragging || _pdfTextSelectionInfo == null
+                || !ReferenceEquals(sender, _pdfTextSelectionPage))
+                return;
+            if (!e.IsLeftButtonPressed)
+                return;
+
+            int offset = PdfTextSelectionGeometry.FindNearestTextOffset(
+                _pdfTextSelectionInfo,
+                new PointD(e.Position.X, e.Position.Y),
+                double.PositiveInfinity);
+            if (offset < 0)
+                return;
+
+            _pdfTextSelectionActiveOffset = offset;
+            if (!_pdfTextSelectionExceededThreshold)
+            {
+                _pdfTextSelectionExceededThreshold =
+                    Math.Abs(e.Position.X - _pdfTextSelectionPressPoint.X) >= PdfTextSelectionDragThreshold
+                    || Math.Abs(e.Position.Y - _pdfTextSelectionPressPoint.Y) >= PdfTextSelectionDragThreshold;
+            }
+            if (_pdfTextSelectionExceededThreshold)
+                UpdatePdfTextSelectionVisuals();
+        }
+
+        private void PageControl_PdfTextSelectionPointerReleased(
+            object sender, PdfTextSelectionPointerEventArgs e)
+        {
+            Interlocked.Increment(ref _pdfTextSelectionRequestId);
+
+            if (!_isPdfTextSelectionDragging || _pdfTextSelectionInfo == null
+                || !ReferenceEquals(sender, _pdfTextSelectionPage))
+            {
+                ClearPdfTextSelection();
+                return;
+            }
+
+            int offset = PdfTextSelectionGeometry.FindNearestTextOffset(
+                _pdfTextSelectionInfo,
+                new PointD(e.Position.X, e.Position.Y),
+                double.PositiveInfinity);
+            if (offset >= 0)
+                _pdfTextSelectionActiveOffset = offset;
+
+            bool keepSelection = _pdfTextSelectionExceededThreshold
+                && _pdfTextSelectionAnchorOffset >= 0
+                && _pdfTextSelectionActiveOffset >= 0;
+
+            _isPdfTextSelectionDragging = false;
+            _pdfTextSelectionExceededThreshold = false;
+
+            if (!keepSelection)
+            {
+                ClearPdfTextSelection();
+                return;
+            }
+
+            // WPF parity: under a text-markup highlighter mode the release
+            // commits the persistent annotation and clears the selection.
+            if (_currentTool == ToolType.TextHighlight)
+            {
+                int start = Math.Min(_pdfTextSelectionAnchorOffset, _pdfTextSelectionActiveOffset);
+                int end = Math.Max(_pdfTextSelectionAnchorOffset, _pdfTextSelectionActiveOffset);
+                var rects = BuildPdfTextSelectionRects(_pdfTextSelectionInfo, start, end);
+                if (rects.Count > 0)
+                {
+                    if (_highlighterApplyMode == HighlighterApplyMode.TextHighlight)
+                    {
+                        var highlight = _pdfTextSelectionPage.AddHighlightAnnotation(rects, _highlighterColor);
+                        if (highlight != null)
+                            PushUndoAction(new HighlightAddedAction(_pdfTextSelectionPage, highlight));
+                        MarkDirty();
+                    }
+                    else
+                    {
+                        var markup = PdfTextSelectionGeometry.BuildTextMarkupAnnotation(
+                            rects.Select(r => new RectD(r.X, r.Y, r.Width, r.Height)).ToList(),
+                            _highlighterApplyMode switch
+                            {
+                                HighlighterApplyMode.StrikeOut => TextMarkupKind.StrikeOut,
+                                HighlighterApplyMode.Squiggly => TextMarkupKind.Squiggly,
+                                _ => TextMarkupKind.Underline
+                            },
+                            _highlighterColor.R, _highlighterColor.G, _highlighterColor.B);
+                        var container = _pdfTextSelectionPage.AddTextMarkup(markup);
+                        if (container != null)
+                            PushUndoAction(new AnnotationItemsAddedAction(
+                                _pdfTextSelectionPage.Ink.Store,
+                                new List<InkStrokePlacement>(),
+                                _pdfTextSelectionPage,
+                                new List<Grid> { container }));
+                    }
+                }
+                ClearPdfTextSelection();
+                return;
+            }
+
+            UpdatePdfTextSelectionVisuals();
+        }
+
         private void PageControl_BlankContextRequested(object sender, EventArgs e)
         {
             ShowBlankContextMenu();
@@ -2783,9 +3185,9 @@ namespace Caelum.Pages
         }
 
         /// <summary>
-        /// Serializes the live selection — strokes, text boxes and sticky
-        /// notes — as AnnotationData JSON on the clipboard (WPF
-        /// CopySelection parity; image annotations join in Phase B).
+        /// Serializes the live selection — strokes, text boxes, images and
+        /// sticky notes — as AnnotationData JSON on the clipboard (WPF
+        /// CopySelection parity).
         /// </summary>
         private void CopySelection()
         {
@@ -2805,6 +3207,24 @@ namespace Caelum.Pages
                     if (_activeSelectionPage.TryGetTextAnnotation(container) is TextAnnotation text)
                     {
                         pageAnnotation.Texts.Add(text);
+                    }
+                    else if (PdfPageControl.IsImageContainer(container))
+                    {
+                        // Task 19: selected images ride along as base64 payload.
+                        var imageData = _activeSelectionPage.GetImageData(container);
+                        if (imageData != null)
+                        {
+                            pageAnnotation.Images.Add(new ImageAnnotation
+                            {
+                                X = Canvas.GetLeft(container),
+                                Y = Canvas.GetTop(container),
+                                Width = container.ActualWidth > 0 ? container.ActualWidth : container.Width,
+                                Height = container.ActualHeight > 0 ? container.ActualHeight : container.Height,
+                                Format = PdfService.DetectImageFormat(imageData),
+                                ImageDataBase64 = Convert.ToBase64String(imageData),
+                                RotationDegrees = PdfPageControl.ReadAnnotationRotation(container),
+                            });
+                        }
                     }
                     else if (_activeSelectionPage.GetOverlayData(container) is StickyNoteAnnotation sticky)
                     {
@@ -2844,8 +3264,8 @@ namespace Caelum.Pages
         }
 
         /// <summary>
-        /// Ctrl+V — rebuilds strokes + text boxes + sticky markers from
-        /// clipboard JSON on the anchor page, offset either to the last
+        /// Ctrl+V — rebuilds strokes + text boxes + images + sticky markers
+        /// from clipboard JSON on the anchor page, offset either to the last
         /// clicked point or by (+20,+20), then pushes ONE
         /// <see cref="AnnotationItemsAddedAction"/> and auto-selects the
         /// pasted items (WPF PasteSelection parity). Sticky ids are
@@ -2909,6 +3329,15 @@ namespace Caelum.Pages
                             hasBoundingBox = true;
                             if (text.X < minX) minX = text.X;
                             if (text.Y < minY) minY = text.Y;
+                        }
+                    }
+                    if (pageAnnotation.Images != null)
+                    {
+                        foreach (var img in pageAnnotation.Images)
+                        {
+                            hasBoundingBox = true;
+                            if (img.X < minX) minX = img.X;
+                            if (img.Y < minY) minY = img.Y;
                         }
                     }
                     if (pageAnnotation.StickyNotes != null)
@@ -3014,6 +3443,35 @@ namespace Caelum.Pages
                     }
                 }
 
+                // Paste image annotations (Task 19) — the copied dimensions
+                // are restored verbatim, only the position takes the offset.
+                if (pageAnnotation.Images != null)
+                {
+                    foreach (var imageAnnotation in pageAnnotation.Images)
+                    {
+                        if (string.IsNullOrEmpty(imageAnnotation.ImageDataBase64))
+                            continue;
+
+                        byte[] imageBytes;
+                        try { imageBytes = Convert.FromBase64String(imageAnnotation.ImageDataBase64); }
+                        catch
+                        {
+                            continue;
+                        }
+
+                        var img = await targetPage.AddImageAsync(
+                            imageBytes,
+                            new Point(imageAnnotation.X + pasteOffsetX, imageAnnotation.Y + pasteOffsetY),
+                            imageAnnotation.Width,
+                            imageAnnotation.Height);
+                        if (img != null)
+                        {
+                            PdfPageControl.ApplyAnnotationRotation(img, imageAnnotation.RotationDegrees);
+                            pastedContainers.Add(img);
+                        }
+                    }
+                }
+
                 if (pageAnnotation.StickyNotes != null)
                 {
                     foreach (var sticky in pageAnnotation.StickyNotes)
@@ -3071,12 +3529,363 @@ namespace Caelum.Pages
             }
         }
 
-        /// <summary>Clipboard holds annotation JSON (or any text) — WPF HasPasteableClipboard.</summary>
+        // ----- Task 19 port: image annotations (clipboard paste / drag-drop) -----
+
+        /// <summary>
+        /// WPF Ctrl+V ordering: a bitmap on the clipboard wins over
+        /// annotation JSON — the decoder returns false when nothing
+        /// decodable is present so the JSON path still runs.
+        /// </summary>
+        private async void PasteClipboardImageOrSelection()
+        {
+            if (!await PasteClipboardImageAsync())
+                PasteSelection();
+        }
+
+        /// <summary>
+        /// Task 19: Ctrl+V with a bitmap/PNG/EMF on the clipboard. Decodes
+        /// through <see cref="ClipboardImageDecoder"/>, drops the container
+        /// on the target page (last clicked → selection → first), pushes one
+        /// AnnotationItemsAddedAction and auto-selects — WPF
+        /// PasteClipboardImage parity.
+        /// </summary>
+        private async Task<bool> PasteClipboardImageAsync()
+        {
+            try
+            {
+                DataPackageView content;
+                try { content = Clipboard.GetContent(); }
+                catch { return false; }
+
+                var pngBytes = await ClipboardImageDecoder.TryGetPngBytesAsync(
+                    content, includeWin32Clipboard: true);
+                if (pngBytes == null || pngBytes.Length == 0)
+                    return false;
+
+                var targetPage = _lastClickedPage != null && _pageControls.Contains(_lastClickedPage)
+                    ? _lastClickedPage
+                    : null;
+                targetPage ??= _activeSelectionPage ?? _pageControls.FirstOrDefault();
+                if (targetPage == null)
+                    return false;
+
+                var position = ReferenceEquals(_lastClickedPage, targetPage)
+                    ? _lastClickedPoint
+                    : new Point(targetPage.ActualWidth / 2, targetPage.ActualHeight / 2);
+
+                var container = await targetPage.AddImageAsync(pngBytes, position);
+                if (container == null)
+                    return false;
+
+                if (!ReferenceEquals(_lastClickedPage, targetPage))
+                {
+                    // No click anchor: centre the image on the target page.
+                    Canvas.SetLeft(container,
+                        Math.Max(0, (targetPage.ActualWidth - container.Width) / 2));
+                    Canvas.SetTop(container,
+                        Math.Max(0, (targetPage.ActualHeight - container.Height) / 2));
+                }
+
+                PushUndoAction(new AnnotationItemsAddedAction(
+                    targetPage.Ink.Store,
+                    new List<InkStrokePlacement>(),
+                    targetPage,
+                    new List<Grid> { container }));
+
+                foreach (var page in _pageControls)
+                {
+                    if (!ReferenceEquals(page, targetPage) && page.HasSelection)
+                        page.ClearSelection();
+                }
+                targetPage.SelectItems(Array.Empty<InkStrokeData>(), new List<Grid> { container });
+                InvalidateThumbnail(targetPage.PageIndex);
+                MarkDirty();
+                GetMainWindow()?.ShowToast(
+                    LocalizationService.Get("Editor.ImagePasted"), "\uE8B7", 1500);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[PasteClipboardImage] Error: {ex.Message}");
+                return false;
+            }
+        }
+
+        private static readonly string[] SupportedImageExtensions = { ".png", ".jpg", ".jpeg" };
+
+        private static bool IsSupportedImageFile(string path)
+            => Array.Exists(SupportedImageExtensions,
+                ext => string.Equals(Path.GetExtension(path), ext, StringComparison.OrdinalIgnoreCase));
+
+        /// <summary>
+        /// WPF EditorPage_PreviewDragOver — advertise Copy while storage
+        /// items are over the document surface. Extension filtering is async
+        /// in WinRT, so it happens on Drop instead (anything undecodable is
+        /// ignored there).
+        /// </summary>
+        private void EditorPage_DragOver(object sender, DragEventArgs e)
+        {
+            if (e.DataView.Contains(StandardDataFormats.StorageItems))
+            {
+                e.AcceptedOperation = DataPackageOperation.Copy;
+                e.Handled = true;
+            }
+            else
+            {
+                e.AcceptedOperation = DataPackageOperation.None;
+            }
+        }
+
+        /// <summary>
+        /// WPF EditorPage_Drop — Explorer image files land on the page under
+        /// the cursor (centre of the first visible page when over chrome),
+        /// stair-stepped by 20 DIP for multiples, one undo action for all.
+        /// </summary>
+        private async void EditorPage_Drop(object sender, DragEventArgs e)
+        {
+            var deferral = e.GetDeferral();
+            try
+            {
+                if (!e.DataView.Contains(StandardDataFormats.StorageItems))
+                    return;
+                var items = await e.DataView.GetStorageItemsAsync();
+                var imageFiles = items?
+                    .OfType<Windows.Storage.StorageFile>()
+                    .Where(f => !string.IsNullOrEmpty(f.Path) && IsSupportedImageFile(f.Path))
+                    .ToList();
+                if (imageFiles == null || imageFiles.Count == 0)
+                    return;
+                e.Handled = true;
+
+                // Resolve the page under the cursor (PagesContainer
+                // coordinates — same translate trick as WPF).
+                var pointInContainer = e.GetPosition(PagesContainer);
+                PdfPageControl targetPage = null;
+                Point pagePoint = default;
+                foreach (var p in _pageControls)
+                {
+                    var ptInPage = PagesContainer.TransformToVisual(p).TransformPoint(pointInContainer);
+                    if (ptInPage.X >= 0 && ptInPage.X <= p.ActualWidth
+                        && ptInPage.Y >= 0 && ptInPage.Y <= p.ActualHeight)
+                    {
+                        targetPage = p;
+                        pagePoint = ptInPage;
+                        break;
+                    }
+                }
+
+                if (targetPage == null)
+                {
+                    // Over a gap/chrome: first visible page, centred.
+                    targetPage = GetVisiblePageControls().FirstOrDefault()
+                        ?? _pageControls.FirstOrDefault();
+                    if (targetPage == null)
+                        return;
+                    pagePoint = new Point(targetPage.ActualWidth / 2, targetPage.ActualHeight / 2);
+                }
+
+                var addedContainers = new List<Grid>();
+                double stackOffset = 0;
+                foreach (var file in imageFiles)
+                {
+                    byte[] bytes;
+                    try { bytes = (await Windows.Storage.FileIO.ReadBufferAsync(file)).ToArray(); }
+                    catch (Exception ex)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[EditorPage_Drop] Cannot read {file.Path}: {ex.Message}");
+                        continue;
+                    }
+
+                    var container = await targetPage.AddImageAsync(
+                        bytes, new Point(pagePoint.X + stackOffset, pagePoint.Y + stackOffset));
+                    stackOffset += 20; // multiple files land stair-stepped
+                    if (container != null)
+                        addedContainers.Add(container);
+                }
+
+                if (addedContainers.Count == 0)
+                    return;
+
+                PushUndoAction(new AnnotationItemsAddedAction(
+                    targetPage.Ink.Store,
+                    new List<InkStrokePlacement>(),
+                    targetPage,
+                    addedContainers));
+
+                foreach (var page in _pageControls)
+                {
+                    if (!ReferenceEquals(page, targetPage) && page.HasSelection)
+                        page.ClearSelection();
+                }
+                targetPage.SelectItems(Array.Empty<InkStrokeData>(), addedContainers);
+                InvalidateThumbnail(targetPage.PageIndex);
+                MarkDirty();
+                GetMainWindow()?.ShowToast(
+                    LocalizationService.Get("Editor.ImageAdded"), "\uE8B7", 1500);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[EditorPage_Drop] Error: {ex.Message}");
+            }
+            finally
+            {
+                deferral.Complete();
+            }
+        }
+
+        /// <summary>
+        /// WPF DuplicateSelection (Ctrl+D): clone the selection in place at
+        /// (+20,+20) without touching the clipboard — strokes keep pressure
+        /// data, images rebuild from their raw payload, one undo action for
+        /// the whole duplicate, then auto-select.
+        /// </summary>
+        private async void DuplicateSelection()
+        {
+            var page = _activeSelectionPage;
+            if (page == null || !page.HasSelection)
+                return;
+
+            try
+            {
+                const double offsetX = 20.0;
+                const double offsetY = 20.0;
+
+                var clonedStrokes = new List<InkStrokeData>();
+                var clonedContainers = new List<Grid>();
+
+                // Clone strokes: fresh point lists (offset applied, pressure
+                // preserved — WPF Clone parity) + fresh shape group ids so
+                // duplicates never merge with the originals.
+                var duplicatedShapeGroups = new Dictionary<string, string>(StringComparer.Ordinal);
+                foreach (var stroke in page.SelectedStrokes)
+                {
+                    var clone = stroke.Clone();
+                    clone.Points = clone.Points
+                        .Select(p => new InkPointData(p.X + offsetX, p.Y + offsetY, p.Pressure))
+                        .ToList();
+                    var shape = stroke.GetShapeIdentity();
+                    if (!string.IsNullOrWhiteSpace(shape.GroupId))
+                    {
+                        if (!duplicatedShapeGroups.TryGetValue(shape.GroupId, out var duplicateGroupId))
+                        {
+                            duplicateGroupId = Guid.NewGuid().ToString("N");
+                            duplicatedShapeGroups[shape.GroupId] = duplicateGroupId;
+                        }
+                        clone.ApplyShapeIdentity(new ShapeStrokeIdentity(
+                            duplicateGroupId, shape.Kind, shape.PartIndex, shape.IsDashed));
+                    }
+                    page.Ink.Store.AddStrokeQuiet(clone);
+                    clonedStrokes.Add(clone);
+                }
+
+                foreach (var container in page.SelectedTextContainers.ToList())
+                {
+                    if (page.TryGetTextAnnotation(container) is TextAnnotation text)
+                    {
+                        var clone = CreateTextBox(
+                            page,
+                            new Point(text.X + offsetX, text.Y + offsetY),
+                            color: Windows.UI.Color.FromArgb(255, text.R, text.G, text.B),
+                            fontSize: text.FontSize,
+                            text: text.Text,
+                            select: false,
+                            bold: text.Bold,
+                            italic: text.Italic,
+                            fontFamily: text.FontFamily,
+                            alignment: ParseTextAlignment(text.Alignment),
+                            width: text.Width > 0 ? text.Width : null,
+                            height: text.Height > 0 ? text.Height : null,
+                            rotationDegrees: text.RotationDegrees);
+                        if (clone != null)
+                            clonedContainers.Add(clone);
+                    }
+                    else if (PdfPageControl.IsImageContainer(container))
+                    {
+                        // Task 19: duplicate image annotations from their raw
+                        // payload, keeping the live size + rotation.
+                        var imageData = page.GetImageData(container);
+                        if (imageData != null)
+                        {
+                            double left = Canvas.GetLeft(container);
+                            double top = Canvas.GetTop(container);
+                            var clone = await page.AddImageAsync(
+                                imageData,
+                                new Point(
+                                    (double.IsNaN(left) ? 0 : left) + offsetX,
+                                    (double.IsNaN(top) ? 0 : top) + offsetY),
+                                container.ActualWidth > 0 ? container.ActualWidth : container.Width,
+                                container.ActualHeight > 0 ? container.ActualHeight : container.Height);
+                            if (clone != null)
+                            {
+                                PdfPageControl.ApplyAnnotationRotation(
+                                    clone, PdfPageControl.ReadAnnotationRotation(container));
+                                clonedContainers.Add(clone);
+                            }
+                        }
+                    }
+                    else if (page.GetOverlayData(container) is StickyNoteAnnotation sticky)
+                    {
+                        double left = Canvas.GetLeft(container);
+                        double top = Canvas.GetTop(container);
+                        var clone = page.AddStickyNote(new StickyNoteAnnotation
+                        {
+                            Id = Guid.NewGuid().ToString("N"),
+                            X = (double.IsNaN(left) ? sticky.X : left) + offsetX,
+                            Y = (double.IsNaN(top) ? sticky.Y : top) + offsetY,
+                            Text = sticky.Text,
+                            Width = container.ActualWidth > 0 ? container.ActualWidth : container.Width,
+                            Height = container.ActualHeight > 0 ? container.ActualHeight : container.Height,
+                            R = sticky.R,
+                            G = sticky.G,
+                            B = sticky.B,
+                            RotationDegrees = PdfPageControl.ReadAnnotationRotation(container),
+                        });
+                        if (clone != null)
+                            clonedContainers.Add(clone);
+                    }
+                }
+
+                if (clonedStrokes.Count == 0 && clonedContainers.Count == 0)
+                    return;
+
+                // Undo state FIRST (selection is UI state, not undoable).
+                var placements = clonedStrokes
+                    .Select(s => page.Ink.Store.CaptureStrokePlacement(s))
+                    .ToList();
+                PushUndoAction(new AnnotationItemsAddedAction(
+                    page.Ink.Store, placements, page, clonedContainers));
+
+                // Cross-page rule: clear any selection lingering on other
+                // pages, then auto-select the duplicates.
+                foreach (var other in _pageControls)
+                {
+                    if (!ReferenceEquals(other, page) && other.HasSelection)
+                        other.ClearSelection();
+                }
+                page.SelectItems(clonedStrokes, clonedContainers);
+                InvalidateThumbnail(page.PageIndex);
+                MarkDirty();
+                GetMainWindow()?.ShowToast(
+                    LocalizationService.Get("Editor.Duplicated"), "\uE8C8", 1500);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[DuplicateSelection] Error: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Clipboard holds annotation JSON text or any decodable image
+        /// payload — WPF HasPasteableClipboard (text || image || EMF).
+        /// </summary>
         private static bool HasPasteableClipboard()
         {
             try
             {
-                return Clipboard.GetContent()?.Contains(StandardDataFormats.Text) == true;
+                var content = Clipboard.GetContent();
+                return content != null
+                    && (content.Contains(StandardDataFormats.Text)
+                        || ClipboardImageDecoder.ContainsImage(content));
             }
             catch (Exception)
             {
@@ -3114,7 +3923,7 @@ namespace Caelum.Pages
                     Text = LocalizationService.Get("Editor.Action.Paste"),
                 };
                 AutomationProperties.SetAutomationId(pasteItem, "Editor.Action.Paste");
-                pasteItem.Click += (_, __) => PasteSelection();
+                pasteItem.Click += (_, __) => PasteClipboardImageOrSelection();
                 flyout.Items.Add(pasteItem);
             }
 
@@ -5490,7 +6299,7 @@ namespace Caelum.Pages
         /// Live annotation collector for the T9 save pipeline — rebuilds
         /// <see cref="PageAnnotation"/> per page from the current container
         /// state so a save always reflects what the user sees (WPF
-        /// CollectAnnotations parity for the Phase A annotation kinds).
+        /// CollectAnnotations parity).
         /// </summary>
         internal Dictionary<int, PageAnnotation> CollectAnnotations()
         {
@@ -5503,10 +6312,104 @@ namespace Caelum.Pages
                     HiddenInks = page.GetHiddenInkData(),
                     Texts = page.GetTextData(),
                     StickyNotes = page.GetStickyNoteData(),
+                    Highlights = page.GetHighlights().ToList(),
                 };
 
+                // Task 19: image annotations (raw encoded bytes + geometry).
+                foreach (var imageContainer in page.ImageContainers)
+                {
+                    var imageData = page.GetImageData(imageContainer);
+                    if (imageData == null)
+                        continue;
+
+                    pa.Images.Add(new ImageAnnotation
+                    {
+                        X = Canvas.GetLeft(imageContainer),
+                        Y = Canvas.GetTop(imageContainer),
+                        Width = imageContainer.ActualWidth > 0
+                            ? imageContainer.ActualWidth : imageContainer.Width,
+                        Height = imageContainer.ActualHeight > 0
+                            ? imageContainer.ActualHeight : imageContainer.Height,
+                        Format = PdfService.DetectImageFormat(imageData),
+                        ImageDataBase64 = Convert.ToBase64String(imageData),
+                        RotationDegrees = PdfPageControl.ReadAnnotationRotation(imageContainer),
+                    });
+                }
+
+                // Task 25/27: overlay annotations share the image
+                // selection/move/resize pipeline. Rebuild their saved models
+                // from the live container geometry so a move or scale is
+                // preserved even when the user saves before another redraw.
+                foreach (var container in page.GetOverlayContainers())
+                {
+                    var data = page.GetOverlayData(container);
+                    double x = Canvas.GetLeft(container);
+                    double y = Canvas.GetTop(container);
+                    if (double.IsNaN(x)) x = 0;
+                    if (double.IsNaN(y)) y = 0;
+
+                    if (data is TextMarkupAnnotation markup)
+                    {
+                        var copy = new TextMarkupAnnotation
+                        {
+                            Kind = markup.Kind,
+                            X = x,
+                            Y = y,
+                            R = markup.R,
+                            G = markup.G,
+                            B = markup.B,
+                        };
+                        double originalWidth = markup.Rects
+                            .Where(r => r != null && r.Length >= 4)
+                            .Select(r => r[0] + r[2])
+                            .DefaultIfEmpty(1)
+                            .Max();
+                        double originalHeight = markup.Rects
+                            .Where(r => r != null && r.Length >= 4)
+                            .Select(r => r[1] + r[3])
+                            .DefaultIfEmpty(1)
+                            .Max();
+                        double width = container.ActualWidth > 0
+                            ? container.ActualWidth : container.Width;
+                        double height = container.ActualHeight > 0
+                            ? container.ActualHeight : container.Height;
+                        double scaleX = originalWidth > 0 ? width / originalWidth : 1;
+                        double scaleY = originalHeight > 0 ? height / originalHeight : 1;
+                        foreach (var rect in markup.Rects)
+                        {
+                            if (rect != null && rect.Length >= 4)
+                            {
+                                copy.Rects.Add(new[]
+                                {
+                                    rect[0] * scaleX, rect[1] * scaleY,
+                                    rect[2] * scaleX, rect[3] * scaleY,
+                                });
+                            }
+                        }
+                        pa.TextMarkups.Add(copy);
+                    }
+                    else if (data is AreaHighlightAnnotation area)
+                    {
+                        pa.AreaHighlights.Add(new AreaHighlightAnnotation
+                        {
+                            X = x,
+                            Y = y,
+                            Width = container.ActualWidth > 0
+                                ? container.ActualWidth : container.Width,
+                            Height = container.ActualHeight > 0
+                                ? container.ActualHeight : container.Height,
+                            R = area.R,
+                            G = area.G,
+                            B = area.B,
+                            A = area.A,
+                        });
+                    }
+                }
+
                 if (pa.Strokes.Count > 0 || pa.Texts.Count > 0
-                    || pa.StickyNotes.Count > 0 || pa.HiddenInks.Count > 0)
+                    || pa.StickyNotes.Count > 0 || pa.HiddenInks.Count > 0
+                    || pa.Highlights.Count > 0 || pa.Images.Count > 0
+                    || pa.TextMarkups.Count > 0 || pa.AreaHighlights.Count > 0)
                 {
                     annotations[page.PageIndex] = pa;
                 }
@@ -5645,6 +6548,239 @@ namespace Caelum.Pages
             _transientFlyout = flyout;
             flyout.ShowAt(anchor);
         }
+
+        /// <summary>
+        /// The Highlighter tool's options flyout — the WPF _highlighterPopup
+        /// port: the six apply modes (Freehand / Text / Underline /
+        /// StrikeOut / Squiggly / Area) as a 3×2 grid, the size slider
+        /// (2–48, 0.5 steps) and the shared 12×8 HSV palette. Mode choice is
+        /// session-only and switches the live tool immediately (WPF
+        /// SelectMode → ActivateHighlighterModeTool).
+        /// </summary>
+        private void ShowHighlighterFlyout(FrameworkElement anchor)
+        {
+            var panel = new StackPanel { Margin = new Thickness(4) };
+
+            panel.Children.Add(PopupSectionHeader(
+                LocalizationService.Get("Editor.HighlighterModeHeader")));
+
+            var modeGrid = new Grid { ColumnSpacing = 4, RowSpacing = 4 };
+            for (int col = 0; col < 3; col++)
+                modeGrid.ColumnDefinitions.Add(
+                    new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            modeGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            modeGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+
+            var modes = new (HighlighterApplyMode Mode, string Label, string AutomationId)[]
+            {
+                (HighlighterApplyMode.Freehand, LocalizationService.Get("Editor.HighlighterFreehand"), "Editor.Highlighter.Freehand"),
+                (HighlighterApplyMode.TextHighlight, LocalizationService.Get("Editor.HighlighterText"), "Editor.Highlighter.Text"),
+                (HighlighterApplyMode.Underline, LocalizationService.Get("Editor.HighlighterUnderline"), "Editor.Highlighter.Underline"),
+                (HighlighterApplyMode.StrikeOut, LocalizationService.Get("Editor.HighlighterStrikeOut"), "Editor.Highlighter.StrikeOut"),
+                (HighlighterApplyMode.Squiggly, LocalizationService.Get("Editor.HighlighterSquiggly"), "Editor.Highlighter.Squiggly"),
+                (HighlighterApplyMode.AreaHighlight, LocalizationService.Get("Editor.HighlighterArea"), "Editor.Highlighter.Area"),
+            };
+
+            var buttons = new Dictionary<HighlighterApplyMode, ToggleButton>();
+            var previews = new Dictionary<HighlighterApplyMode, Microsoft.UI.Xaml.Shapes.Path>();
+
+            void ApplyVisual()
+            {
+                foreach (var pair in buttons)
+                {
+                    bool active = pair.Key == _highlighterApplyMode;
+                    StylePopupToggle(pair.Value, active);
+                    if (previews.TryGetValue(pair.Key, out var preview))
+                        ApplyHighlighterPreviewVisual(pair.Key, preview, _highlighterColor, _highlighterSize);
+                    if (pair.Value.Content is StackPanel content
+                        && content.Children.OfType<TextBlock>().FirstOrDefault() is TextBlock text)
+                    {
+                        text.Foreground = ResolveThemeBrush(
+                            active ? "ThemeAccentBrush" : "ThemeForegroundBrush",
+                            Color.FromArgb(0xFF, 0x1F, 0x24, 0x2B));
+                        text.FontWeight = active ? FontWeights.SemiBold : FontWeights.Normal;
+                    }
+                }
+            }
+
+            for (int i = 0; i < modes.Length; i++)
+            {
+                var mode = modes[i].Mode;
+                var preview = BuildHighlighterModePreview(mode);
+                var label = new TextBlock
+                {
+                    Text = modes[i].Label,
+                    FontSize = 11,
+                    TextAlignment = TextAlignment.Center,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    Margin = new Thickness(0, 3, 0, 0),
+                    Foreground = ResolveThemeBrush("ThemeForegroundBrush", Color.FromArgb(0xFF, 0x1F, 0x24, 0x2B)),
+                };
+                var contentPanel = new StackPanel
+                {
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center,
+                };
+                contentPanel.Children.Add(preview);
+                contentPanel.Children.Add(label);
+
+                var button = new ToggleButton
+                {
+                    Height = 54,
+                    MinWidth = 32,
+                    MinHeight = 32,
+                    Margin = new Thickness(2),
+                    Padding = new Thickness(4),
+                    Content = contentPanel,
+                };
+                ToolTipService.SetToolTip(button, modes[i].Label);
+                AutomationProperties.SetAutomationId(button, modes[i].AutomationId);
+                AutomationProperties.SetName(button, modes[i].Label);
+                AutomationProperties.SetHelpText(button, modes[i].Label);
+                button.Click += (_, __) =>
+                {
+                    if (_highlighterApplyMode != mode)
+                    {
+                        _highlighterApplyMode = mode;
+                        ApplyVisual();
+                        // WPF SelectMode parity: switch the live tool
+                        // immediately; the flyout stays open for further
+                        // colour/size tweaks.
+                        ActivateHighlighterModeTool();
+                    }
+                    button.IsChecked = true;
+                };
+
+                buttons[mode] = button;
+                previews[mode] = preview;
+                Grid.SetColumn(button, i % 3);
+                Grid.SetRow(button, i / 3);
+                modeGrid.Children.Add(button);
+            }
+            panel.Children.Add(modeGrid);
+            ApplyVisual();
+
+            panel.Children.Add(PopupSectionHeader(
+                LocalizationService.Get("Editor.PopupSize"), topMargin: 12));
+            var slider = new Slider
+            {
+                Minimum = 2,
+                Maximum = 48,
+                Value = _highlighterSize,
+                StepFrequency = 0.5,
+                Width = 240,
+            };
+            AutomationProperties.SetAutomationId(slider, "Editor.Highlighter.Size");
+            AutomationProperties.SetName(slider, LocalizationService.Get("Editor.PopupSize"));
+            slider.ValueChanged += (_, args) =>
+            {
+                _highlighterSize = args.NewValue;
+                ApplyVisual();
+                if (_currentTool == ToolType.Highlighter)
+                    ApplyToolToAllPages();
+            };
+            panel.Children.Add(slider);
+
+            panel.Children.Add(PopupSectionHeader(
+                LocalizationService.Get("Editor.PopupColor"), topMargin: 12));
+            panel.Children.Add(BuildColorPalette(_highlighterColor, color =>
+            {
+                _highlighterColor = color;
+                ApplyVisual();
+                if (HighlighterColorIndicator != null)
+                {
+                    HighlighterColorIndicator.Background = new SolidColorBrush(
+                        GetHighlighterPreviewStrokeColor(HighlighterApplyMode.Freehand, color));
+                }
+                // Freehand strokes + area-highlight drags both consume the
+                // colour live (WPF ApplyToolToAllPages gate parity).
+                if (_currentTool == ToolType.Highlighter || _currentTool == ToolType.AreaHighlight)
+                    ApplyToolToAllPages();
+            }));
+
+            var flyout = new Flyout { Content = panel };
+            _transientFlyout = flyout;
+            flyout.ShowAt(anchor);
+        }
+
+        /// <summary>
+        /// The six mode-preview glyphs — identical markup to the WPF
+        /// BuildHighlighterModePreview table. The squiggly path spells the
+        /// smooth-cubic S segments as explicit C curves (the shared mini
+        /// parser has no S command).
+        /// </summary>
+        private Microsoft.UI.Xaml.Shapes.Path BuildHighlighterModePreview(HighlighterApplyMode mode)
+        {
+            var data = mode switch
+            {
+                HighlighterApplyMode.Freehand => "M3,16 C8,8 12,18 17,10 C20,5 23,12 26,6",
+                HighlighterApplyMode.TextHighlight => "M3,7 H25 M3,14 H25",
+                HighlighterApplyMode.Underline => "M4,6 H24 M4,11 H18 M3,16 H25",
+                HighlighterApplyMode.StrikeOut => "M4,6 H24 M3,11 H25 M4,16 H20",
+                // WPF "S16,10 19,14 S22,18 25,14" expanded: each S control is
+                // the reflection of the previous second control point.
+                HighlighterApplyMode.Squiggly => "M4,6 H24 M3,14 C6,10 8,18 11,14 C14,10 16,10 19,14 C22,18 22,18 25,14",
+                _ => "M4,4 L24,4 L24,18 L4,18 Z", // AreaHighlight
+            };
+            var preview = new Microsoft.UI.Xaml.Shapes.Path
+            {
+                Width = 30,
+                Height = 22,
+                Stretch = Stretch.Uniform,
+                StrokeStartLineCap = PenLineCap.Round,
+                StrokeEndLineCap = PenLineCap.Round,
+                StrokeLineJoin = PenLineJoin.Round,
+                Data = LucideIcon.ParseIconGeometry(data),
+            };
+            ApplyHighlighterPreviewVisual(mode, preview, _highlighterColor, _highlighterSize);
+            return preview;
+        }
+
+        /// <summary>
+        /// Mode-aware preview styling — the stroke keeps the highlighter
+        /// colour at the mode's own alpha so previews match the real
+        /// pipelines (WPF ApplyHighlighterPreviewVisual parity).
+        /// </summary>
+        private static void ApplyHighlighterPreviewVisual(
+            HighlighterApplyMode mode,
+            Microsoft.UI.Xaml.Shapes.Path preview,
+            Windows.UI.Color color,
+            double size)
+        {
+            if (preview == null)
+                return;
+            preview.StrokeThickness = GetHighlighterPreviewStrokeThickness(mode, size);
+            preview.Stroke = new SolidColorBrush(GetHighlighterPreviewStrokeColor(mode, color));
+            byte fillOpacity = GetHighlighterPreviewFillOpacity(mode);
+            preview.Fill = fillOpacity == 0
+                ? new SolidColorBrush(Color.FromArgb(0, 0, 0, 0))
+                : new SolidColorBrush(Color.FromArgb(fillOpacity, color.R, color.G, color.B));
+        }
+
+        private static double GetHighlighterPreviewStrokeThickness(HighlighterApplyMode mode, double size)
+            => mode switch
+            {
+                HighlighterApplyMode.Freehand => Math.Clamp(1.6 + (size - 2.0) * (1.2 / 46.0), 1.6, 2.8),
+                HighlighterApplyMode.AreaHighlight => 1.4,
+                _ => 1.8,
+            };
+
+        private static byte GetHighlighterPreviewStrokeOpacity(HighlighterApplyMode mode)
+            => mode switch
+            {
+                HighlighterApplyMode.Freehand => FreehandHighlighterOpacity,
+                HighlighterApplyMode.TextHighlight => TextHighlightOpacity,
+                HighlighterApplyMode.AreaHighlight => AreaHighlightStrokeOpacity,
+                _ => byte.MaxValue,
+            };
+
+        private static byte GetHighlighterPreviewFillOpacity(HighlighterApplyMode mode)
+            => mode == HighlighterApplyMode.AreaHighlight ? AreaHighlightFillOpacity : (byte)0;
+
+        private static Windows.UI.Color GetHighlighterPreviewStrokeColor(
+            HighlighterApplyMode mode, Windows.UI.Color color)
+            => Windows.UI.Color.FromArgb(
+                GetHighlighterPreviewStrokeOpacity(mode), color.R, color.G, color.B);
 
         /// <summary>
         /// The Select tool's options flyout — the WPF _selectionPopup port:
@@ -6850,8 +7986,9 @@ namespace Caelum.Pages
                     if (!ReferenceEquals(other, page))
                         other.ClearPdfTextSelection();
                 }
-                // T8: real text-bound highlight rectangles land with the text
-                // overlay; SetPdfTextSelectionRects is a shell stub for now.
+                // Task 8 Phase B: text-bound highlight rectangles paint on
+                // the selection canvas — visual only, never persisted (WPF
+                // search-jump parity).
                 page.SetPdfTextSelectionRects(BuildPdfTextSelectionRects(info, result.StartOffset, result.StartOffset + result.Length - 1));
             }
             catch (OperationCanceledException)
@@ -6871,13 +8008,16 @@ namespace Caelum.Pages
         }
 
         /// <summary>
-        /// T8 placeholder: WPF converts text-hit glyph bounds into selection
-        /// rectangles on PdfTextSelectionCanvas. The shell keeps the call
-        /// shape; the highlight draw arrives with the text overlay.
+        /// Converts a character-offset range into merged selection
+        /// rectangles on PdfTextSelectionCanvas — the search-jump path and
+        /// the interactive drag both paint through this (WPF
+        /// BuildPdfTextSelectionRects, Core PdfTextSelectionGeometry).
         /// </summary>
         private static IReadOnlyList<Rect> BuildPdfTextSelectionRects(
             PdfService.PdfPageTextInfo info, int startOffset, int endOffset)
-            => Array.Empty<Rect>();
+            => PdfTextSelectionGeometry.BuildSelectionRects(info, startOffset, endOffset)
+                .Select(r => new Rect(r.X, r.Y, r.Width, r.Height))
+                .ToList();
 
         /// <summary>
         /// SelectionChanged fires synchronously on SelectedIndex and performs
@@ -7362,10 +8502,16 @@ namespace Caelum.Pages
                         e.Handled = true;
                         return;
                     case VirtualKey.C:
-                        // WPF Ctrl+C: selection serializes to clipboard JSON.
+                        // WPF Ctrl+C: a live annotation selection serializes
+                        // to clipboard JSON; otherwise a PDF text selection
+                        // copies its text (WPF TryCopySelectedPdfText).
                         if (_activeSelectionPage != null && _activeSelectionPage.HasSelection)
                         {
                             CopySelection();
+                            e.Handled = true;
+                        }
+                        else if (TryCopySelectedPdfTextToClipboard())
+                        {
                             e.Handled = true;
                         }
                         return;
@@ -7377,10 +8523,18 @@ namespace Caelum.Pages
                         }
                         return;
                     case VirtualKey.V:
-                        // WPF Task 19 puts a bitmap first — the image branch
-                        // lands in Phase B; annotation JSON is handled here.
-                        PasteSelection();
+                        // WPF Task 19: a bitmap on the clipboard wins over
+                        // annotation JSON.
+                        PasteClipboardImageOrSelection();
                         e.Handled = true;
+                        return;
+                    case VirtualKey.D:
+                        // WPF Ctrl+D: duplicate the selection in place.
+                        if (_activeSelectionPage != null && _activeSelectionPage.HasSelection)
+                        {
+                            DuplicateSelection();
+                            e.Handled = true;
+                        }
                         return;
                     case VirtualKey.Add:
 
@@ -7908,6 +9062,9 @@ namespace Caelum.Pages
             // DeselectTextBox additionally drops the selection itself.
             CloseTransientUi("release");
             DeselectTextBox();
+            // WPF parity: the PDF text-selection state is session state —
+            // drop it with the rest of the transient UI on teardown.
+            ClearPdfTextSelection();
 
             foreach (var page in _pageControls)
             {

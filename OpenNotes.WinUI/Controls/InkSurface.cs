@@ -32,6 +32,13 @@ public enum InkSurfaceTool
     Laser,
     /// <summary>Drag-to-shape; the page owns preview + commit (Phase B).</summary>
     Shape,
+    /// <summary>
+    /// Drag-to-rect for the persistent area highlight (Task 8 Phase B).
+    /// Rides the same drag event pipeline as <see cref="Shape"/> — the page
+    /// routes by its input mode — but is NOT an ink-creation tool, so
+    /// pen-only mode never blocks the mouse here (WPF AreaHighlight parity).
+    /// </summary>
+    AreaHighlight,
 }
 
 /// <summary>Payload for the laser-stroke events (raw page-DIP points).</summary>
@@ -532,7 +539,11 @@ public sealed partial class InkSurface : Canvas
             && (Tool == InkSurfaceTool.Pen
                 || Tool == InkSurfaceTool.Highlighter
                 || Tool == InkSurfaceTool.HiddenInk);
-        bool wantsShape = !wantsErase && Tool == InkSurfaceTool.Shape;
+        // Area-highlight drags reuse the shape-drag pipeline — the page
+        // routes by input mode. It is deliberately NOT in inkCreation above:
+        // WPF lets the mouse draw an area highlight even under pen-only.
+        bool wantsShape = !wantsErase
+            && (Tool == InkSurfaceTool.Shape || Tool == InkSurfaceTool.AreaHighlight);
         bool wantsLaser = !wantsErase && Tool == InkSurfaceTool.Laser;
         if (!wantsErase && !wantsDraw && !wantsShape && !wantsLaser)
             return; // Tool == None — input belongs to the selection overlay

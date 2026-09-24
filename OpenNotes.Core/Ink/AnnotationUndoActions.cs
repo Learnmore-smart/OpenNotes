@@ -46,6 +46,27 @@ public interface IAnnotationContainerHost
     /// <summary>Attach an annotation payload to the container (cross-page transfer).</summary>
     void SetOverlayData(object container, object data);
 
+    /// <summary>
+    /// Raw encoded image bytes (PNG/JPEG) behind an image container, or null
+    /// for non-image containers (WPF GetImageData). The payload dict is
+    /// per-host, so a cross-page move must hand the bytes to the receiving
+    /// host — the default no-op keeps text-only test hosts valid.
+    /// </summary>
+    byte[] GetImageData(object container) => null;
+
+    /// <summary>Register image bytes for a container that arrived from another host.</summary>
+    void SetImageData(object container, byte[] data) { }
+
+    /// <summary>
+    /// Re-add a persisted text-quad highlight to the host's highlight list
+    /// and repaint it (WPF AddHighlight — undo/redo of a text-highlight
+    /// gesture; default no-op for hosts without a highlight layer).
+    /// </summary>
+    void AddHighlight(HighlightAnnotation highlight) { }
+
+    /// <summary>Remove a persisted text-quad highlight (WPF RemoveHighlight).</summary>
+    void RemoveHighlight(HighlightAnnotation highlight) { }
+
     /// <summary>Move a sticky note marker to a clamped position; false when not a sticky container.</summary>
     bool SetStickyNotePositionQuiet(object container, PointD position);
 
@@ -175,6 +196,33 @@ internal static class AnnotationContainerTransfer
             try
             {
                 to.SetOverlayData(container, data);
+            }
+            catch
+            {
+                // Payload loss is non-fatal: the container landed.
+            }
+        }
+
+        // Image payloads live in a per-host dictionary just like overlay
+        // models (WPF TransferImageData): the bytes must follow the
+        // reparented container or a cross-page move renders but loses the
+        // image on save/copy. Target-side null check keeps an existing
+        // registration authoritative (WPF parity).
+        byte[] imageData;
+        try
+        {
+            imageData = from.GetImageData(container);
+        }
+        catch
+        {
+            imageData = null;
+        }
+        if (imageData != null)
+        {
+            try
+            {
+                if (to.GetImageData(container) == null)
+                    to.SetImageData(container, imageData);
             }
             catch
             {
@@ -713,6 +761,74 @@ public sealed class AnnotationSelectionRotateAction : IUndoAction
     public Task RedoAsync()
     {
         _host.RotateItemsDirectly(_strokes, _containers, _degrees, _center);
+        return Task.CompletedTask;
+    }
+}
+
+// ------------------------------------------------------------------
+// Persistent text-quad highlights (Task 8 Phase B)
+// ------------------------------------------------------------------
+
+/// <summary>
+/// A text-quad highlight was created from a PDF text selection (WPF
+/// HighlightAddedAction). The model lives on the host's highlight list —
+/// not a container — so undo/redo replay through the host's highlight
+/// mutators rather than the container transfer path.
+/// </summary>
+public sealed class HighlightAddedAction : IUndoAction
+{
+    private readonly IAnnotationContainerHost _host;
+    private readonly HighlightAnnotation _highlight;
+
+    public HighlightAddedAction(IAnnotationContainerHost host, HighlightAnnotation highlight)
+    {
+        _host = host ?? throw new ArgumentNullException(nameof(host));
+        _highlight = highlight ?? throw new ArgumentNullException(nameof(highlight));
+    }
+
+    public string Description => "Add highlight";
+    public bool LeavesDocumentDirty => true;
+
+    public Task UndoAsync()
+    {
+        _host.RemoveHighlight(_highlight);
+        return Task.CompletedTask;
+    }
+
+    public Task RedoAsync()
+    {
+        _host.AddHighlight(_highlight);
+        return Task.CompletedTask;
+    }
+}
+
+/// <summary>
+/// A persisted text-quad highlight was removed. Undo re-adds the model;
+/// redo removes it again (mirror of <see cref="HighlightAddedAction"/>).
+/// </summary>
+public sealed class HighlightRemovedAction : IUndoAction
+{
+    private readonly IAnnotationContainerHost _host;
+    private readonly HighlightAnnotation _highlight;
+
+    public HighlightRemovedAction(IAnnotationContainerHost host, HighlightAnnotation highlight)
+    {
+        _host = host ?? throw new ArgumentNullException(nameof(host));
+        _highlight = highlight ?? throw new ArgumentNullException(nameof(highlight));
+    }
+
+    public string Description => "Remove highlight";
+    public bool LeavesDocumentDirty => true;
+
+    public Task UndoAsync()
+    {
+        _host.AddHighlight(_highlight);
+        return Task.CompletedTask;
+    }
+
+    public Task RedoAsync()
+    {
+        _host.RemoveHighlight(_highlight);
         return Task.CompletedTask;
     }
 }

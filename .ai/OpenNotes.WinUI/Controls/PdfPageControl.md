@@ -1,5 +1,5 @@
 # OpenNotes.WinUI/Controls/PdfPageControl.xaml(.cs)
-> Last updated: 2026-09-23 (V6 Task 8 Phase A — text/sticky overlays) | Protection: STANDARD
+> Last updated: 2026-09-24 (V6 Task 8 Phase B — images/highlights/markups/area highlights/PDF text selection) | Protection: STANDARD
 
 ## Purpose
 `Caelum.Controls.PdfPageControl : UserControl` — the per-page frame stacked in
@@ -28,9 +28,10 @@
   `InkSurface.InputEnabled` (+ `CancelInteraction` and
   `StopSelectionDashTimer` when the gate closes — hidden tabs keep no
   ticking ants; re-opening with a live selection rebuilds the chrome once).
-- `ClearPdfTextSelection`, `SetPdfTextSelectionRects`,
-  `RefreshStickyNoteContextMenuLocalization` — Task-6 shells/stubs kept so call
-  sites compile; annotation behavior lands T8–T9.
+- `SetPdfTextSelectionEnabled`/`SetPdfTextSelectionRects`/`ClearPdfTextSelection`
+  — the real PDF text-selection layer (pointer-forwarding + painted rects,
+  see Phase B below); `RefreshStickyNoteContextMenuLocalization` re-localizes
+  marker menus.
 - `AutomationProperties.AutomationId` = `PdfPageControl.<index>` (set by
   EditorPage) — load-bearing for `tools/winui-editor-smoke.ps1`.
 
@@ -178,6 +179,61 @@
   every quiet mutator raises `InkMutated` so thumbnail/dirty observers
   refresh through undo/redo and quiet loads.
 
+## Task 8 Phase B additions (2026-09-24 — images/highlights/markups/area/PDF text selection)
+
+- **Image annotations** (`ImageOverlayCanvas`): `AddImageAsync(imageBytes,
+  position, explicitW?, explicitH?)` decodes via `InMemoryRandomAccessStream`
+  → `BitmapImage.SetSourceAsync` (eager, WPF `OnLoad` parity), sizes to 40%
+  of the page when no explicit dims (Core
+  `PdfTextSelectionGeometry.ComputeImagePlacementSize` rule), clamps into
+  page bounds and registers the raw bytes in `_imageDataById` (the
+  persistence payload — `GetImageData`/`SetImageData`, also the
+  `IAnnotationContainerHost` cross-page transfer legs). `_imageContainers`
+  is the ordered list `ImageContainers` exposes to the collector; the
+  container is `IsHitTestVisible=false` (the selection overlay owns image
+  interaction). `ImagesChanged` fires on every overlay-set mutation —
+  images, markups AND area highlights (WPF `ImagesChanged` parity — the
+  editor marks dirty through it).
+- **Overlay annotations**: `AddTextMarkup(TextMarkupAnnotation)` draws the
+  underline/strikeout/squiggly once into an inner `Canvas` inside a
+  `Viewbox(Stretch=Fill)` — corner-handle rescaling scales the drawing for
+  free; the model rides `_overlayData`. `AddAreaHighlight(AreaHighlightAnnotation)`
+  is a `Grid` whose `Background` is the semi-transparent colour so stretch
+  is automatic too. Both are non-hit-testable overlay containers tagged
+  `MarkupContainerTag`/`AreaHighlightContainerTag` (`IsOverlayContainer`
+  covers image/markup/area/sticky tags).
+- **Persistent text-quad highlights** (`HighlightsCanvas`): `_highlights`
+  list + `AddHighlightAnnotation(rects, color)` (commit path — fixed 120
+  alpha), `AddHighlight`/`RemoveHighlight` (load + undo replay — the
+  `IAnnotationContainerHost` legs `HighlightAddedAction`/
+  `HighlightRemovedAction` call), `GetHighlights()` (collector),
+  `RefreshHighlightsVisuals()` repaint.
+- **Area-highlight drag**: rides the `InkSurface` shape-drag event pipeline
+  (`Ink_ShapeDragStarted/Updated/Ended/Cancelled` route by
+  `_currentMode == AreaHighlight`); `Begin/Update/EndAreaHighlightDrag`
+  normalize anchor/current via `NormalizeAreaHighlightRect`, paint a
+  dashed-edge (220 alpha) + translucent-fill (`AreaHighlightOpacity`, 76)
+  preview on `ShapePreviewCanvas`, ignore sub-4-DIP gestures
+  (`AreaHighlightDragThreshold`) and commit a container + raise
+  `AreaHighlightCreated` (editor pushes one `AnnotationItemsAddedAction`).
+- **PDF text selection** (`PdfTextSelectionCanvas`): armed by
+  `SetPdfTextSelectionEnabled` (editor pushes `true` for `ToolType.None` +
+  `TextHighlight`); pointer handlers capture the press pointer
+  (`_pdfTextSelectionPointerId`, `CapturePointer`/`ReleasePointerCaptures`,
+  `PointerCanceled`/`PointerCaptureLost` release) and forward
+  page-DIP positions through `PdfTextSelectionPointerPressed/Moved/Released`
+  (editor owns anchor/active offsets + the commit). `SetPdfTextSelectionRects`
+  paints the merged quads; `ClearPdfTextSelection` drops them. Disarming
+  releases capture + clears.
+- **Quiet paths cover every overlay kind** — `RemoveTextContainerQuiet`
+  detaches from whichever canvas parents the container (keeping
+  `_overlayData`/`_imageDataById` entries so re-add restores as-is);
+  `AddTextContainerQuiet` re-parents by `IsOverlayContainer` →
+  `ImageOverlayCanvas` (re-registering `_imageContainers` for image tags).
+- **`CancelInteraction`/`ReleaseResources` sweep the new state** — in-flight
+  area-highlight drag, the text-selection pointer capture, `_imageDataById`,
+  `_highlights`, both selection canvases.
+
 ## Important Notes / NEVER Change
 - The ink layer sits UNDER `ShapePreviewCanvas`/`TextOverlayCanvas` — strokes must
   not swallow overlay input.
@@ -193,5 +249,6 @@
 - **Status:** GREEN — Phase A ink (pen/highlighter/eraser, pressure, scribble
   shape recognition, undo seams) + Phase B (select/lasso/transforms, shapes,
   hidden ink, laser, ruler bridge) + Task 8 Phase A (text/sticky overlay
-  surface, quiet mutators, `IAnnotationContainerHost`) live; renders BGRA
-  pages. Image annotations + persistent PDF text selection remain Phase B.
+  surface, quiet mutators, `IAnnotationContainerHost`) + Task 8 Phase B
+  (image annotations, persistent highlights, text markups, area highlights,
+  real PDF text selection) live; renders BGRA pages.
