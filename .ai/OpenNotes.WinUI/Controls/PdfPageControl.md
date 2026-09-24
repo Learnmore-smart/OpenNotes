@@ -229,7 +229,10 @@
   early-return `PointerDeviceType.Touch` (WPF `IsTouchFinger` — finger pans
   the ScrollViewer, never selects); `ApplyInputGate`'s `!enabled` branch
   releases a live selection-canvas capture so a hidden/modal page can't
-  pin the pointer.
+  pin the pointer. `PointerReleased` also requires
+  `_pdfTextSelectionPointerId == e.Pointer.PointerId` before forwarding —
+  a pen lift mid-mouse-drag must not emit a spurious release nor mark the
+  event handled (single-gesture layer).
 - **Quiet paths cover every overlay kind** — `RemoveTextContainerQuiet`
   detaches from whichever canvas parents the container (keeping
   `_overlayData`/`_imageDataById` entries so re-add restores as-is);

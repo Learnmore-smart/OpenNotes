@@ -817,12 +817,14 @@ namespace Caelum.Controls
                 return;
             if (e.Pointer.PointerDeviceType == PointerDeviceType.Touch)
                 return;
+            // Single-gesture layer: only the captured pointer's release ends
+            // the drag — a pen lift mid-mouse-drag must not forward a
+            // spurious release (or swallow it via Handled).
+            if (_pdfTextSelectionPointerId != e.Pointer.PointerId)
+                return;
             var point = e.GetCurrentPoint(PdfTextSelectionCanvas);
-            if (_pdfTextSelectionPointerId == e.Pointer.PointerId)
-            {
-                _pdfTextSelectionPointerId = null;
-                PdfTextSelectionCanvas.ReleasePointerCaptures();
-            }
+            _pdfTextSelectionPointerId = null;
+            PdfTextSelectionCanvas.ReleasePointerCaptures();
             PdfTextSelectionPointerReleased?.Invoke(this,
                 new PdfTextSelectionPointerEventArgs(ToPagePoint(point.Position), false));
             e.Handled = true;
