@@ -9774,11 +9774,12 @@ namespace Caelum.Pages
             }
             finally
             {
-                if (ValidateDocumentOperationLease(operationLease))
-                {
-                    LoadingText.Text = originalLoadingText;
-                    LoadingOverlay.Visibility = Visibility.Collapsed;
-                }
+                // The overlay is page-owned chrome — restore it unconditionally.
+                // A mid-print rebase (UpdateCurrentPdfPath) invalidates the
+                // lease without unloading the page, and gating on the lease
+                // would leave the input-blocking overlay stuck forever.
+                LoadingText.Text = originalLoadingText;
+                LoadingOverlay.Visibility = Visibility.Collapsed;
                 printJob?.Dispose();
                 if (ownsLease)
                     operationLease.Dispose();
@@ -10964,7 +10965,12 @@ namespace Caelum.Pages
             if (ctrl && e.Key == VirtualKey.P)
             {
                 e.Handled = true;
-                _ = PrintPdfAsync();
+                _ = PrintPdfAsync().ContinueWith(
+                    t => System.Diagnostics.Debug.WriteLine(
+                        $"[EditorPage] Ctrl+P print faulted: {t.Exception?.GetBaseException()}"),
+                    CancellationToken.None,
+                    TaskContinuationOptions.OnlyOnFaulted,
+                    TaskScheduler.Default);
                 return;
             }
 

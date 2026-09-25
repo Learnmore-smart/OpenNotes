@@ -25,6 +25,8 @@ namespace Caelum.Services
     /// </summary>
     internal static class Win32Print
     {
+        /// <summary>Fixed PRINTPAGERANGE buffer passed to PrintDlgEx.</summary>
+        private const int RangeBufferCapacity = 32;
         // ── PRINTDLGEX / comdlg32 ────────────────────────────────────────
 
         private const uint PD_ALLPAGES = 0x00000000;
@@ -139,32 +141,32 @@ namespace Caelum.Services
         private static extern IntPtr CreateDCW(
             string lpszDriver, string lpszDevice, string lpszOutput, IntPtr lpInitData);
 
-        [DllImport("gdi32.dll")]
+        [DllImport("gdi32.dll", SetLastError = true)]
         private static extern int GetDeviceCaps(IntPtr hdc, int nIndex);
 
         [DllImport("gdi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
         private static extern int StartDocW(IntPtr hdc, ref DOCINFO lpdi);
 
-        [DllImport("gdi32.dll")]
+        [DllImport("gdi32.dll", SetLastError = true)]
         private static extern int StartPage(IntPtr hdc);
 
-        [DllImport("gdi32.dll")]
+        [DllImport("gdi32.dll", SetLastError = true)]
         private static extern int EndPage(IntPtr hdc);
 
-        [DllImport("gdi32.dll")]
+        [DllImport("gdi32.dll", SetLastError = true)]
         private static extern int EndDoc(IntPtr hdc);
 
-        [DllImport("gdi32.dll")]
+        [DllImport("gdi32.dll", SetLastError = true)]
         private static extern int AbortDoc(IntPtr hdc);
 
         // Internal: Win32PrintJob::Dispose owns the printer DC lifetime.
         [DllImport("gdi32.dll")]
         internal static extern bool DeleteDC(IntPtr hdc);
 
-        [DllImport("gdi32.dll")]
+        [DllImport("gdi32.dll", SetLastError = true)]
         private static extern int SetStretchBltMode(IntPtr hdc, int mode);
 
-        [DllImport("gdi32.dll")]
+        [DllImport("gdi32.dll", SetLastError = true)]
         private static extern int StretchDIBits(
             IntPtr hdc,
             int xDest, int yDest, int DestWidth, int DestHeight,
@@ -186,9 +188,8 @@ namespace Caelum.Services
         {
             // 32 slots absorb any realistic disjoint "Pages" input; the
             // dialog reports an error to the user when it overflows.
-            const int rangeCapacity = 32;
             IntPtr rangesBuffer = Marshal.AllocHGlobal(
-                rangeCapacity * Marshal.SizeOf<PRINTPAGERANGE>());
+                RangeBufferCapacity * Marshal.SizeOf<PRINTPAGERANGE>());
             try
             {
                 var dialog = new PRINTDLGEX
@@ -200,7 +201,7 @@ namespace Caelum.Services
                     // driver can never double-replicate the job.
                     Flags = PD_ALLPAGES | PD_USEDEVMODECOPIESANDCOLLATE | PD_COLLATE,
                     nPageRanges = 0,
-                    nMaxPageRanges = rangeCapacity,
+                    nMaxPageRanges = RangeBufferCapacity,
                     lpPageRanges = rangesBuffer,
                     nMinPage = 1,
                     nMaxPage = (uint)Math.Max(1, pageCount),
@@ -301,9 +302,12 @@ namespace Caelum.Services
 
                 if ((dialog.Flags & PD_PAGENUMS) != 0 && dialog.nPageRanges > 0)
                 {
-                    var ranges = new List<(int From, int To)>((int)dialog.nPageRanges);
+                    // A broken driver could report more ranges than the fixed
+                    // buffer — clamp to capacity before striding over it.
+                    int rangeCount = (int)Math.Min(dialog.nPageRanges, RangeBufferCapacity);
+                    var ranges = new List<(int From, int To)>(rangeCount);
                     int rangeStride = Marshal.SizeOf<PRINTPAGERANGE>();
-                    for (int i = 0; i < (int)dialog.nPageRanges; i++)
+                    for (int i = 0; i < rangeCount; i++)
                     {
                         var range = Marshal.PtrToStructure<PRINTPAGERANGE>(
                             rangesBuffer + i * rangeStride);
@@ -418,7 +422,10 @@ namespace Caelum.Services
             }
 
             if (EndDoc(job.PrinterDC) <= 0)
+            {
+                AbortDoc(job.PrinterDC);
                 throw new Win32Exception(Marshal.GetLastWin32Error());
+            }
         }
 
         private static void SpoolPageSequence(
