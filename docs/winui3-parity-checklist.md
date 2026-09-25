@@ -8,14 +8,14 @@
 > exists/stubbed, intentionally off) · ❌ dropped (with reason) · — not applicable to WinUI.
 > `[manual]` = needs a real-device/desktop-session check; headless evidence only today.
 
-## Headline gaps (open at audit time)
+## Headline gaps (open at audit time; G2/G3/G4 closed 2026-09-25 — see rows)
 
 | # | Gap | Severity | Plan |
 |---|---|---|---|
 | G1 | **Print pipeline** — `OpenNotes.WinUI/Pages/EditorPage.xaml.cs:8611` `PrintMenuItem` exists with `IsEnabled = false` (`// T9: print pipeline`); no WinUI print implementation | feature missing | Implement `RenderPrintablePages` equivalent (rasterize `IPdfRasterizer` + print dialog) or drop the menu item |
-| G2 | **Pen tool flyout** — WPF pen popup (size slider + preview, palette, recent colors, Pressure / Ink Simulation / Shape Recognition toggles, smoothing levels) has no WinUI counterpart; pen color/size only editable via Settings defaults | UX regression | Add `ShowPenFlyout` mirroring `ShowHighlighterFlyout` |
-| G3 | **Eraser mode flyout** — WPF eraser popup (pixel vs whole-stroke toggle, `Editor.Eraser.WholeStroke` id) missing; mode only via Settings | UX regression | Add eraser flyout or fold mode into a shared tool flyout |
-| G4 | **Recent-colors row** — WPF palettes show a «recent» row (max 8, persisted, `RecentPenColors`/`RecentHighlighterColors`/`RecentTextColors`); WinUI `BuildColorPalette` does not render it | UX regression | Reuse Core settings lists in `BuildColorPalette` |
+| G2 | **Pen tool flyout** — ✅ **ported** (`ShowPenFlyout`): size slider 0.5–8/0.25 (`Editor.Pen.Size`), `Editor.PopupPreview` live stroke, recents row + HSV palette, Pressure/Ink Simulation/Shape Recognition toggles (`Editor.Pen.Pressure`/`InkSimulation`/`ShapeRecognition`, persisted via `SaveSetting`), Off–High smoothing (`Editor.Pen.Smoothing.{i}`). Residual: flyout light-dismisses on first ink press (WPF's `StaysOpen`+gesture-arm kept the popup up mid-stroke); `XamlRoot.Size` stands in for `SystemParameters.WorkArea` in the scroll cap | closed | `ShowPenFlyout` + `BuildSettingToggleButton`/`WrapToolFlyoutContent` helpers |
+| G3 | **Eraser mode flyout** — ✅ **ported** (`ShowEraserFlyout`): `Editor.Eraser.Pixel`/`Editor.Eraser.WholeStroke` mode row (persisted `WholeStrokeEraser`) above the 4–80 `Editor.Eraser.Size` slider; slider drags flash `EraserSizePreviewEllipse` for ~1.2 s (WPF `ShowEraserSizePreview`) | closed | eraser flyout opened from `EraserToolButton` like WPF `ToggleToolButton` |
+| G4 | **Recent-colors row** — ✅ **ported**: `RefreshRecentColorsRow`/`BuildRecentColorsSection` render the «最近 Recent» swatch row (`Editor.Color.Recent.{i}`) above the palette in the pen + highlighter + text flyouts; recording/dedupe/cap live in new Core `RecentColors` (`MaxRecentColors=8`, `Record`, `TryParse`); the cached text flyout refreshes on `FlyoutBase.Opening` (WPF `popup.Opened`). Shape flyout intentionally has none — WPF keeps shape colours session-only | closed | pen/highlighter rebuilt per show ⇒ per-show refresh; text flyout `Opening` hook |
 | G5 | **Sidebar thumbnail drag-reorder** — WPF `ThumbnailListBox` drag/drop + `ThumbnailDropPlacement.ResolveFinalIndex` reorders pages; WinUI `ThumbnailListBox` (`EditorPage.xaml:745`) leaves `CanDragItems`/`CanReorderItems`/`AllowDrop` unset (all default `false`, so drag-inert); `ThumbnailDropIndicator` is present but unused | feature missing | Implement ListView `DragItems` or the WPF custom payload path + `MovePageAsync` |
 | G6 | **F11 immersive fullscreen** — WPF hides toolbar chrome on F11/Esc; no WinUI equivalent | feature missing | Toggle toolbar/sidebar visibility + `AppWindowPresenterKind.FullScreen` |
 | G7 | **Scrollbar track click-to-jump** — WPF hooks `ScrollBar` template parts (`ScrollBarTrackJump_MouseLeftButtonDown`) so a track click centers the thumb; WinUI `ScrollViewer` does not expose that template surface | UX regression | Requires custom `ScrollBar` template or input hook — deferred by design |
@@ -84,14 +84,14 @@ Already-handled contract items (for the record):
 | Barrel button / pen-inversion erase; Win+F19/20 hotkeys | ✅ `[manual]` | `PenService` HWND subclass |
 | Pen-only mode (blocks finger/mouse ink, panning allowed) | ✅ `[manual]` | `PenOnlyButton` + `PenOnlyInputTests` |
 | Shape tools: 9 kinds, dashed, Shift 45°/square/circle snap, `ShapeGroupId` grouping | ✅ | `ShowShapeFlyout` ports all WPF options |
-| Scribble → shape recognition (toggle from Settings) | 🟡 | engine works (`StrokeGeometry.TryRecognizeShape`); the pen-popup toggle surface is missing (G2) |
-| Ink simulation + smoothing levels | 🟡 | wired from `AppSettings`; pen-popup toggles missing (G2) |
+| Scribble → shape recognition (toggle from Settings + pen flyout) | ✅ | engine works (`StrokeGeometry.TryRecognizeShape`); `Editor.Pen.ShapeRecognition` toggle in `ShowPenFlyout` persists via `SaveSetting` |
+| Ink simulation + smoothing levels | ✅ | `Editor.Pen.InkSimulation` toggle + `Editor.Pen.Smoothing.{0..3}` segmented row in `ShowPenFlyout`, persisted via `SaveSetting` |
 | Hidden ink masks (draw/tap-reveal 3 s/erase/undo, `wna_hidden_` persist) | ✅ | `HiddenInkStore`, separate ledger |
 | Laser pointer (0.15 s hold + 0.9 s fade, never persisted) | ✅ `[manual]` | `LaserInkCanvas` |
 | Ruler (drag/rotate 15°-snap/resize, constrains strokes) | ✅ `[manual]` | `RulerOverlayCanvas`, `ConstrainPointsToRuler` |
-| Eraser mode toggle UI | ❌ G3 | setting exists (`WholeStrokeEraser`), no flyout |
-| Pen flyout (size/color/pressure/sim/recognition/smoothing) | ❌ G2 | settings defaults only |
-| Recent colors row | ❌ G4 | settings lists exist in Core, not rendered |
+| Eraser mode toggle UI | ✅ | `ShowEraserFlyout` pixel/whole-stroke row → `AppSettings.WholeStrokeEraser` |
+| Pen flyout (size/color/preview/pressure/sim/recognition/smoothing/recents) | ✅ | `ShowPenFlyout` — full WPF `_penPopup` port |
+| Recent colors row | ✅ | pen/highlighter/text flyouts; Core `RecentColors` (`MaxRecentColors=8`, dedupe newest-first) |
 
 ### Selection & clipboard
 | Feature | Status | Notes |

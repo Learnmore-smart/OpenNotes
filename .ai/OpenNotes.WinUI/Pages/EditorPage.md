@@ -208,12 +208,37 @@ the Task 9 Phase A save/autosave + close/dirty protocol is live (T9-B defers set
   (clamped to viewport), left-drag end caps OR right-drag anywhere =
   rotate with 15° snapping, handles resize 80..∞; session-only state,
   first show centres in the viewport.
-- **Flyouts**: `ShowShapeFlyout` (9 shape kinds in a 3×3 `Grid` —
+- **Flyouts**: `ShowPenFlyout` (WPF `_penPopup` port — 0.5–8/0.25 size
+  slider `Editor.Pen.Size`, `Editor.PopupPreview` live stroke line,
+  «Recent» row + shared 12×8 HSV palette, Pressure/Ink
+  Simulation/Shape Recognition persisted toggles `Editor.Pen.*`,
+  `Editor.Pen.Smoothing.{0..3}` → `AppSettings.StrokeSmoothing`),
+  `ShowEraserFlyout` (`Editor.Eraser.Pixel`/`Editor.Eraser.WholeStroke`
+  mode row → `WholeStrokeEraser`, 4–80 `Editor.Eraser.Size` slider +
+  `EraserSizePreviewEllipse` ~1.2 s flash via `_eraserPreviewCts`),
+  `ShowHighlighterFlyout`, `ShowShapeFlyout` (9 shape kinds in a 3×3 `Grid` —
   `UniformGrid` does not exist in WinUI — Solid/Dashed style, 1–20 size
   slider at 0.5 steps, shared HSV palette; WPF AutomationIds preserved:
   `Editor.Shape.<Kind>`, `Editor.Shape.Style.*`, `Editor.Shape.Size`),
-  selection action-bar flyout (style apply → `ApplySelectedDrawingStyle`
-  → `InkStrokesStyleChangedAction`), `ShowBlankContextMenu`.
+  `ShowSelectionFlyout`, selection action-bar flyout (style apply →
+  `ApplySelectedDrawingStyle` → `InkStrokesStyleChangedAction`),
+  `ShowBlankContextMenu`. All five tool flyouts are built fresh per
+  `ShowAt` and tracked as `_toolFlyout`/`_toolFlyoutTool` (WPF
+  `CloseToolPopups` mutual exclusion — highlighter modes share one
+  bucket) as well as `_transientFlyout`; `WrapToolFlyoutContent` ports
+  `EnableToolPopupScrolling` (XamlRoot height for `WorkArea`) except the
+  selection flyout which WPF left unwrapped.
+- **Recent colors (G4)**: `BuildRecentColorsSection` + `RefreshRecentColorsRow`
+  render the «最近 Recent» swatch row (`Editor.Color.Recent.{i}`,
+  22×22 swatch in a 32×32 button) above the palette in pen/highlighter/
+  text surfaces; `BuildColorPalette(initial, changed, recentRow, out
+  markSelected)` exposes the shared marker so picks flag recents +
+  palette ring alike. List math (`MaxRecentColors=8`, dedupe
+  newest-first, `#RRGGBB`/`#AARRGGBB` parse) lives in Core
+  `Caelum.Services.RecentColors`; persistence via `SaveSetting` (load →
+  mutate → `AppSettingsService.Save` → `_applicationSettings`). The
+  cached `_textColorFlyout` refreshes the row on `FlyoutBase.Opening`.
+  Shape colours stay session-only — WPF records no shape recents.
 - `EditorPage_PreviewKeyDown`: Ctrl+A → arm Select + `SelectAllAnnotations`
   on the current page; Delete/Back → `DeleteSelection` — the page is
   captured FIRST (`ClearSelection` fires `SelectionChanged(false)`

@@ -209,6 +209,16 @@ namespace Caelum.Pages
         // The last-shown tool/options/context flyout — tracked so
         // CloseTransientUi can sweep it (WPF transient-registry parity).
         private FlyoutBase _transientFlyout;
+        // The open tool-options flyout + its owning tool (highlighter
+        // bucket) — WPF CloseToolPopups parity: only one tool flyout lives
+        // at a time and a tool switch sweeps the previous one.
+        private FlyoutBase _toolFlyout;
+        private ToolType _toolFlyoutTool = ToolType.None;
+        // WPF _penPopupSizePreview — the live pen size/colour preview line
+        // inside the pen flyout (rebuilt per show; field mirrors the WPF
+        // popup's persistent-child shape).
+        private Microsoft.UI.Xaml.Shapes.Line _penFlyoutSizePreview;
+        private CancellationTokenSource _eraserPreviewCts;
         private bool _isRefreshingTextAlignmentOptions;
 
         // Border-band drag state (arm on press, start past 4 DIP, cross-page
@@ -654,6 +664,10 @@ namespace Caelum.Pages
                 _previousTool = _currentTool;
                 _currentTool = tool;
             }
+            // WPF ActivateTool → CloseToolPopups(tool): a programmatic tool
+            // switch (pen-service toggle, Ctrl+A, Escape) sweeps every other
+            // tool flyout while the incoming tool's stays open.
+            CloseToolFlyouts(tool);
             ApplyToolToAllPages();
         }
 
@@ -2099,10 +2113,19 @@ namespace Caelum.Pages
             }
             ApplyToolToAllPages();
 
-            // WPF ToggleToolButton parity: arming the Shape or Select tool
-            // opens its options flyout under the button; the highlighter
-            // flyout opens for every apply mode (WPF _highlighterPopup).
-            if (next == ToolType.Shape)
+            // WPF ToggleToolButton → CloseToolPopups() runs first: only one
+            // tool flyout can be open at a time, and deactivating back to
+            // None sweeps it too. The incoming tool's flyout (if any) then
+            // opens under its button — arming Pen/Eraser/Shape/Select or any
+            // highlighter mode opens the matching options flyout (WPF
+            // _penPopup/_eraserPopup/_shapePopup/_selectionPopup/
+            // _highlighterPopup parity).
+            CloseToolFlyouts(next);
+            if (next == ToolType.Pen)
+                ShowPenFlyout(clicked);
+            else if (next == ToolType.Eraser)
+                ShowEraserFlyout(clicked);
+            else if (next == ToolType.Shape)
                 ShowShapeFlyout(clicked);
             else if (next == ToolType.Select)
                 ShowSelectionFlyout(clicked);
@@ -5817,7 +5840,27 @@ namespace Caelum.Pages
             ToolTipService.SetToolTip(colorButton, colorLabel);
             AutomationProperties.SetAutomationId(colorButton, "Editor.TextToolbar.Color");
             AutomationProperties.SetName(colorButton, colorLabel);
-            _textColorFlyout = new Flyout { Content = BuildColorPalette(_textColor, ApplyTextColor) };
+            // G4: WPF's text-colour popup shows the "最近 Recent" swatch row
+            // above the palette; repopulated on every open (WPF popup.Opened
+            // parity) and persisted via AppSettings.RecentTextColors.
+            var textRecentSection = BuildRecentColorsSection(out var textRecentRow);
+            Action<Windows.UI.Color> markTextPalette = null;
+            var textPalette = BuildColorPalette(
+                _textColor, ApplyTextColor, textRecentRow, out markTextPalette);
+            var textColorPanel = new StackPanel { Margin = new Thickness(4) };
+            textColorPanel.Children.Add(textRecentSection);
+            textColorPanel.Children.Add(textPalette);
+            _textColorFlyout = new Flyout { Content = textColorPanel };
+            _textColorFlyout.Opening += (_, __) =>
+            {
+                RefreshRecentColorsRow(
+                    textRecentSection,
+                    textRecentRow,
+                    () => AppSettingsService.Load().RecentTextColors,
+                    ApplyTextColor,
+                    markTextPalette);
+                markTextPalette?.Invoke(_textColor);
+            };
             colorButton.Flyout = _textColorFlyout;
 
             _textBoldButton = new ToggleButton
@@ -6051,6 +6094,10 @@ namespace Caelum.Pages
                         new TextStyleSnapshot(_selectedTextBox.FontSize, picked.R, picked.G, picked.B)));
                 }
                 MarkDirty();
+                // Task 14/G4 parity: the applied colour joins the
+                // text-palette recents (WPF records inside the
+                // _selectedTextBox guard, same as here).
+                SaveSetting(s => RecordRecentColor(s.RecentTextColors, picked));
             }
             _textColorFlyout?.Hide();
         }
@@ -7007,9 +7054,8 @@ namespace Caelum.Pages
                     ApplyToolToAllPages();
             }));
 
-            var flyout = new Flyout { Content = panel };
-            _transientFlyout = flyout;
-            flyout.ShowAt(anchor);
+            var flyout = new Flyout { Content = WrapToolFlyoutContent(panel) };
+            ShowToolFlyout(flyout, ToolType.Shape, anchor);
         }
 
         /// <summary>
@@ -7146,8 +7192,16 @@ namespace Caelum.Pages
 
             panel.Children.Add(PopupSectionHeader(
                 LocalizationService.Get("Editor.PopupColor"), topMargin: 12));
-            panel.Children.Add(BuildColorPalette(_highlighterColor, color =>
+            // G4: the "最近 Recent" swatch row sits between the colour header
+            // and the palette (WPF BuildToolPopup recentColors ordering);
+            // repopulated on every show since the flyout is rebuilt.
+            var recentSection = BuildRecentColorsSection(out var recentRow);
+            panel.Children.Add(recentSection);
+
+            Action<Windows.UI.Color> markPalette = null;
+            void ApplyPickedColor(Windows.UI.Color color)
             {
+                markPalette?.Invoke(color);
                 _highlighterColor = color;
                 ApplyVisual();
                 if (HighlighterColorIndicator != null)
@@ -7159,11 +7213,619 @@ namespace Caelum.Pages
                 // colour live (WPF ApplyToolToAllPages gate parity).
                 if (_currentTool == ToolType.Highlighter || _currentTool == ToolType.AreaHighlight)
                     ApplyToolToAllPages();
-            }));
+                SaveSetting(s => RecordRecentColor(s.RecentHighlighterColors, color));
+            }
 
-            var flyout = new Flyout { Content = panel };
+            var palette = BuildColorPalette(
+                _highlighterColor, ApplyPickedColor, recentRow, out markPalette);
+            panel.Children.Add(palette);
+            RefreshRecentColorsRow(
+                recentSection,
+                recentRow,
+                () => AppSettingsService.Load().RecentHighlighterColors,
+                ApplyPickedColor,
+                markPalette);
+            markPalette?.Invoke(_highlighterColor);
+
+            var flyout = new Flyout { Content = WrapToolFlyoutContent(panel) };
+            ShowToolFlyout(flyout, ToolType.Highlighter, anchor);
+        }
+
+        /// <summary>
+        /// The Pen tool's options flyout — the WPF _penPopup port: size
+        /// slider (0.5–8, 0.25 steps, "Editor.Pen.Size"), the "最近 Recent"
+        /// swatch row over the shared 12×8 HSV palette, the live diagonal
+        /// preview stroke ("Editor.PopupPreview"), the Pressure / Ink
+        /// Simulation / Shape Recognition toggles (persisted to AppSettings
+        /// via SaveSetting) and the Off/Low/Mid/High smoothing selector
+        /// ("Editor.SmoothingHeader", "Editor.Pen.Smoothing.{i}").
+        /// </summary>
+        private void ShowPenFlyout(FrameworkElement anchor)
+        {
+            var panel = new StackPanel { Margin = new Thickness(4) };
+
+            // Size section (WPF BuildToolPopup order: size → colour →
+            // preview → behaviour toggles → smoothing).
+            string sizeLabel = LocalizationService.Get("Editor.PopupSize");
+            panel.Children.Add(PopupSectionHeader(sizeLabel));
+            var slider = new Slider
+            {
+                Minimum = 0.5,
+                Maximum = 8,
+                Value = _penSize,
+                StepFrequency = 0.25,
+                Width = 240,
+            };
+            AutomationProperties.SetAutomationId(slider, "Editor.Pen.Size");
+            AutomationProperties.SetName(slider, sizeLabel);
+            AutomationProperties.SetHelpText(slider, sizeLabel);
+            slider.ValueChanged += (_, args) =>
+            {
+                _penSize = args.NewValue;
+                if (_penFlyoutSizePreview != null)
+                    _penFlyoutSizePreview.StrokeThickness = args.NewValue;
+                if (_currentTool == ToolType.Pen)
+                    ApplyToolToAllPages();
+            };
+            panel.Children.Add(slider);
+
+            // Colour section: header → recents row → shared palette.
+            panel.Children.Add(PopupSectionHeader(
+                LocalizationService.Get("Editor.PopupColor"), topMargin: 12));
+            var recentSection = BuildRecentColorsSection(out var recentRow);
+            panel.Children.Add(recentSection);
+
+            Action<Windows.UI.Color> markPalette = null;
+            void ApplyPickedPenColor(Windows.UI.Color color)
+            {
+                markPalette?.Invoke(color);
+                _penColor = color;
+                if (_penFlyoutSizePreview != null)
+                    _penFlyoutSizePreview.Stroke = new SolidColorBrush(color);
+                // WPF UpdateToolIconColors parity — the pen glyph's colour
+                // bar follows the picked colour.
+                if (PenColorIndicator != null)
+                    PenColorIndicator.Background = new SolidColorBrush(color);
+                if (_currentTool == ToolType.Pen)
+                    ApplyToolToAllPages();
+                SaveSetting(s => RecordRecentColor(s.RecentPenColors, color));
+            }
+
+            var palette = BuildColorPalette(
+                _penColor, ApplyPickedPenColor, recentRow, out markPalette);
+            panel.Children.Add(palette);
+            RefreshRecentColorsRow(
+                recentSection,
+                recentRow,
+                () => AppSettingsService.Load().RecentPenColors,
+                ApplyPickedPenColor,
+                markPalette);
+            markPalette?.Invoke(_penColor);
+
+            // Preview section: diagonal stroke inside the alt-surface well —
+            // the stroke follows size slider + palette picks live.
+            panel.Children.Add(PopupSectionHeader(
+                LocalizationService.Get("Editor.PopupPreview"), topMargin: 12));
+            var previewBorder = new Border
+            {
+                Height = 60,
+                CornerRadius = new CornerRadius(8),
+                Background = ResolveThemeBrush(
+                    "ThemeSurfaceAltBrush", Color.FromArgb(0xFF, 0xF1, 0xF3, 0xF5)),
+            };
+            // WPF ClipToBounds parity — a fat stroke cannot bleed past the
+            // rounded well corners.
+            previewBorder.SizeChanged += (_, args) =>
+                previewBorder.Clip = new RectangleGeometry
+                {
+                    Rect = new Rect(0, 0, args.NewSize.Width, args.NewSize.Height),
+                };
+            _penFlyoutSizePreview = new Microsoft.UI.Xaml.Shapes.Line
+            {
+                X1 = 8,
+                Y1 = 48,
+                X2 = 212,
+                Y2 = 12,
+                Stroke = new SolidColorBrush(_penColor),
+                StrokeThickness = _penSize,
+                StrokeStartLineCap = PenLineCap.Round,
+                StrokeEndLineCap = PenLineCap.Round,
+            };
+            previewBorder.Child = _penFlyoutSizePreview;
+            panel.Children.Add(previewBorder);
+
+            // Behaviour toggles (WPF AddPenBehaviourToggles): a 3-column
+            // grid of vertical setting toggles. UniformGrid has no WinUI
+            // equivalent — star columns produce the same thirds.
+            var pressureToggle = BuildSettingToggleButton(
+                LocalizationService.Get("Editor.Pressure"),
+                AppSettingsService.Load().EnablePressure,
+                v => { SaveSetting(s => s.EnablePressure = v); ApplyToolToAllPages(); },
+                "Editor.Pen.Pressure");
+            var inkSimToggle = BuildSettingToggleButton(
+                LocalizationService.Get("Editor.InkSimulation"),
+                AppSettingsService.Load().InkSimulation,
+                v => { SaveSetting(s => s.InkSimulation = v); ApplyToolToAllPages(); },
+                "Editor.Pen.InkSimulation");
+            var shapeRecognitionToggle = BuildSettingToggleButton(
+                LocalizationService.Get("Editor.ShapeRecognition"),
+                AppSettingsService.Load().ShapeRecognition,
+                v => { SaveSetting(s => s.ShapeRecognition = v); ApplyToolToAllPages(); },
+                "Editor.Pen.ShapeRecognition");
+
+            var behaviourGrid = new Grid
+            {
+                ColumnSpacing = 6,
+                Margin = new Thickness(0, 12, 0, 6),
+            };
+            for (int col = 0; col < 3; col++)
+                behaviourGrid.ColumnDefinitions.Add(
+                    new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            int column = 0;
+            foreach (var toggle in new[] { pressureToggle, inkSimToggle, shapeRecognitionToggle })
+            {
+                // WPF cell adjustments: taller vertical tile, centred
+                // indicator over a wrapped caption.
+                toggle.Height = 58;
+                toggle.MinWidth = 0;
+                toggle.Margin = new Thickness(3);
+                toggle.Padding = new Thickness(4);
+                if (toggle.Content is StackPanel content)
+                {
+                    content.Orientation = Orientation.Vertical;
+                    content.HorizontalAlignment = HorizontalAlignment.Center;
+                    if (content.Children.OfType<Border>().FirstOrDefault() is Border indicator)
+                        indicator.HorizontalAlignment = HorizontalAlignment.Center;
+                    if (content.Children.OfType<TextBlock>().FirstOrDefault() is TextBlock text)
+                    {
+                        text.Margin = new Thickness(0, 4, 0, 0);
+                        text.FontSize = 11;
+                        text.TextAlignment = TextAlignment.Center;
+                        text.TextWrapping = TextWrapping.Wrap;
+                    }
+                }
+                Grid.SetColumn(toggle, column++);
+                behaviourGrid.Children.Add(toggle);
+            }
+            panel.Children.Add(behaviourGrid);
+
+            // Smoothing selector (WPF AddPenSmoothingSection): Off/Low/
+            // Mid/High segmented row persisted to AppSettings.StrokeSmoothing.
+            panel.Children.Add(PopupSectionHeader(
+                LocalizationService.Get("Editor.SmoothingHeader"), topMargin: 12));
+            var smoothingLabels = new[]
+            {
+                LocalizationService.Get("Editor.SmoothingOff"),
+                LocalizationService.Get("Editor.SmoothingLow"),
+                LocalizationService.Get("Editor.SmoothingMid"),
+                LocalizationService.Get("Editor.SmoothingHigh"),
+            };
+            var smoothingButtons = new ToggleButton[smoothingLabels.Length];
+            var smoothingRow = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Margin = new Thickness(0, 0, 0, 6),
+            };
+
+            void ApplySmoothingVisual()
+            {
+                int current = AppSettingsService.Load().StrokeSmoothing;
+                for (int i = 0; i < smoothingButtons.Length; i++)
+                    StylePopupToggle(smoothingButtons[i], active: i == current);
+            }
+
+            for (int i = 0; i < smoothingLabels.Length; i++)
+            {
+                int level = i;
+                var button = BuildTextToggleButton(
+                    smoothingLabels[i], $"Editor.Pen.Smoothing.{i}");
+                button.Width = 54;
+                button.Margin = new Thickness(0, 0, i < smoothingLabels.Length - 1 ? 6 : 0, 0);
+                button.Click += (_, __) =>
+                {
+                    if (AppSettingsService.Load().StrokeSmoothing == level)
+                    {
+                        // Mutually-exclusive mode semantics: re-clicking the
+                        // armed level must not leave it unchecked.
+                        button.IsChecked = true;
+                        return;
+                    }
+                    SaveSetting(settings => settings.StrokeSmoothing = level);
+                    ApplyToolToAllPages();
+                    ApplySmoothingVisual();
+                    button.IsChecked = true;
+                };
+                smoothingButtons[i] = button;
+                smoothingRow.Children.Add(button);
+            }
+            panel.Children.Add(smoothingRow);
+            ApplySmoothingVisual();
+
+            var flyout = new Flyout { Content = WrapToolFlyoutContent(panel) };
+            ShowToolFlyout(flyout, ToolType.Pen, anchor);
+        }
+
+        /// <summary>
+        /// The Eraser tool's options flyout — the WPF _eraserPopup port:
+        /// the pixel / whole-stroke mode row ("Editor.Eraser.Pixel" /
+        /// "Editor.Eraser.WholeStroke", persisted to
+        /// AppSettings.WholeStrokeEraser) above the 4–80 size slider
+        /// ("Editor.Eraser.Size"). No palette — the eraser owns no colour.
+        /// </summary>
+        private void ShowEraserFlyout(FrameworkElement anchor)
+        {
+            var panel = new StackPanel { Margin = new Thickness(4) };
+
+            // WPF AddEraserModeSection inserts the mode row above the size
+            // section — same visual order here.
+            panel.Children.Add(PopupSectionHeader(
+                LocalizationService.Get("Editor.EraserModeHeader")));
+            var modeRow = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Margin = new Thickness(0, 0, 0, 14),
+            };
+            var pixelButton = BuildTextToggleButton(
+                LocalizationService.Get("Editor.EraserPixel"), "Editor.Eraser.Pixel");
+            var wholeButton = BuildTextToggleButton(
+                LocalizationService.Get("Editor.EraserStroke"), "Editor.Eraser.WholeStroke");
+            pixelButton.Width = 116;
+            wholeButton.Width = 116;
+            pixelButton.Margin = new Thickness(0, 0, 8, 0);
+            wholeButton.Margin = new Thickness(0);
+
+            void ApplyModeVisual()
+            {
+                bool whole = AppSettingsService.Load().WholeStrokeEraser;
+                StylePopupToggle(pixelButton, active: !whole);
+                StylePopupToggle(wholeButton, active: whole);
+            }
+
+            void SelectMode(bool whole)
+            {
+                var settings = AppSettingsService.Load();
+                if (settings.WholeStrokeEraser == whole)
+                    return;
+                settings.WholeStrokeEraser = whole;
+                // Keep the editor cache and the page controls on the same
+                // snapshot — a stale _applicationSettings would undo the
+                // mode the user just selected (WPF comment parity).
+                _applicationSettings = AppSettingsService.Save(settings);
+                ApplyToolToAllPages();
+                ApplyModeVisual();
+            }
+
+            pixelButton.Click += (_, __) =>
+            {
+                SelectMode(false);
+                // Mutually-exclusive modes stay armed even when the
+                // already-selected option is re-clicked.
+                pixelButton.IsChecked = true;
+            };
+            wholeButton.Click += (_, __) =>
+            {
+                SelectMode(true);
+                wholeButton.IsChecked = true;
+            };
+            modeRow.Children.Add(pixelButton);
+            modeRow.Children.Add(wholeButton);
+            panel.Children.Add(modeRow);
+            ApplyModeVisual();
+
+            string sizeLabel = LocalizationService.Get("Editor.PopupEraserSize");
+            panel.Children.Add(PopupSectionHeader(sizeLabel));
+            var slider = new Slider
+            {
+                Minimum = 4,
+                Maximum = 80,
+                Value = _eraserSize,
+                StepFrequency = 1,
+                Width = 240,
+            };
+            AutomationProperties.SetAutomationId(slider, "Editor.Eraser.Size");
+            AutomationProperties.SetName(slider, sizeLabel);
+            AutomationProperties.SetHelpText(slider, sizeLabel);
+            slider.ValueChanged += (_, args) =>
+            {
+                _eraserSize = args.NewValue;
+                ShowEraserSizePreview(args.NewValue);
+                ApplyToolToAllPages();
+            };
+            panel.Children.Add(slider);
+
+            var flyout = new Flyout { Content = WrapToolFlyoutContent(panel) };
+            ShowToolFlyout(flyout, ToolType.Eraser, anchor);
+        }
+
+        /// <summary>
+        /// WPF ShowEraserSizePreview parity: flashes the eraser footprint as
+        /// a centred ellipse for ~1.2 s so slider drags show the real stamp
+        /// size. Each new value re-arms the self-hide timer.
+        /// </summary>
+        private void ShowEraserSizePreview(double size)
+        {
+            if (EraserSizePreviewEllipse == null)
+                return;
+            EraserSizePreviewEllipse.Width = size;
+            EraserSizePreviewEllipse.Height = size;
+            EraserSizePreviewEllipse.Visibility = Visibility.Visible;
+
+            _eraserPreviewCts?.Cancel();
+            _eraserPreviewCts = new CancellationTokenSource();
+            var token = _eraserPreviewCts.Token;
+
+            _ = Task.Delay(1200).ContinueWith(
+                _ =>
+                {
+                    if (!token.IsCancellationRequested)
+                    {
+                        DispatcherQueue.TryEnqueue(() =>
+                        {
+                            if (EraserSizePreviewEllipse != null)
+                                EraserSizePreviewEllipse.Visibility = Visibility.Collapsed;
+                        });
+                    }
+                },
+                TaskScheduler.Default);
+        }
+
+        /// <summary>
+        /// The "最近 Recent" section shared by every colour flyout — a
+        /// collapsed-until-populated StackPanel with the Editor.Recent
+        /// header above the swatch row (WPF recentSection parity).
+        /// </summary>
+        private StackPanel BuildRecentColorsSection(out StackPanel row)
+        {
+            row = new StackPanel { Orientation = Orientation.Horizontal };
+            var header = PopupSectionHeader(LocalizationService.Get("Editor.Recent"));
+            header.Margin = new Thickness(0, 0, 0, 8);
+            return new StackPanel
+            {
+                Margin = new Thickness(0, 0, 0, 12),
+                Visibility = Visibility.Collapsed,
+                Children = { header, row },
+            };
+        }
+
+        /// <summary>
+        /// Repopulates a recent-colors swatch row from the settings list —
+        /// the WPF RefreshRecentColorsRow port. Hidden entirely while empty;
+        /// each 22×22 rounded swatch inside a 32×32 button applies its
+        /// colour exactly like a palette cell of the owning flyout and
+        /// carries the "Editor.Color.Recent.{i}" id.
+        /// </summary>
+        private void RefreshRecentColorsRow(
+            StackPanel section,
+            StackPanel row,
+            Func<List<string>> getRecentColors,
+            Action<Windows.UI.Color> applyColor,
+            Action<Windows.UI.Color> selectedChanged = null)
+        {
+            row.Children.Clear();
+
+            List<string> recent = null;
+            try { recent = getRecentColors?.Invoke(); }
+            catch { /* settings read failures leave the row hidden */ }
+
+            if (recent != null)
+            {
+                foreach (var hex in recent)
+                {
+                    if (row.Children.Count >= RecentColors.MaxRecentColors)
+                        break;
+                    if (!TryParseRecentColor(hex, out var color))
+                        continue;
+
+                    int recentIndex = row.Children.Count;
+                    var swatchVisual = new Border
+                    {
+                        Width = 22,
+                        Height = 22,
+                        CornerRadius = new CornerRadius(4),
+                        Background = new SolidColorBrush(color),
+                        BorderThickness = new Thickness(1),
+                        BorderBrush = ResolveThemeBrush(
+                            "ThemeBorderBrush", Color.FromArgb(0xFF, 0xC9, 0xCE, 0xD6)),
+                    };
+                    var swatch = new Button
+                    {
+                        Width = 32,
+                        Height = 32,
+                        Padding = new Thickness(3),
+                        Margin = new Thickness(0, 0, 6, 0),
+                        Content = swatchVisual,
+                        Tag = color,
+                    };
+                    ToolTipService.SetToolTip(swatch, hex);
+                    AutomationProperties.SetAutomationId(swatch, $"Editor.Color.Recent.{recentIndex}");
+                    AutomationProperties.SetName(swatch, hex);
+                    AutomationProperties.SetHelpText(swatch, hex);
+                    swatch.Click += (_, __) =>
+                    {
+                        if (swatch.Tag is Windows.UI.Color picked)
+                        {
+                            applyColor?.Invoke(picked);
+                            selectedChanged?.Invoke(picked);
+                        }
+                    };
+                    row.Children.Add(swatch);
+                }
+            }
+
+            section.Visibility = row.Children.Count > 0
+                ? Visibility.Visible
+                : Visibility.Collapsed;
+        }
+
+        /// <summary>
+        /// "#RRGGBB" parse (tolerates "#AARRGGBB" hand-edits) — the UI-type
+        /// half of <see cref="RecentColors.TryParse"/>.
+        /// </summary>
+        private static bool TryParseRecentColor(string hex, out Windows.UI.Color color)
+        {
+            if (RecentColors.TryParse(hex, out byte a, out byte r, out byte g, out byte b))
+            {
+                color = Windows.UI.Color.FromArgb(a, r, g, b);
+                return true;
+            }
+            color = default;
+            return false;
+        }
+
+        /// <summary>
+        /// WPF RecordRecentColor parity: newest-first, deduped, capped at
+        /// <see cref="RecentColors.MaxRecentColors"/> — the list lives on a
+        /// transient AppSettings clone, persisted by the caller's
+        /// <see cref="SaveSetting"/>.
+        /// </summary>
+        private void RecordRecentColor(List<string> list, Windows.UI.Color color)
+            => RecentColors.Record(list, $"#{color.R:X2}{color.G:X2}{color.B:X2}");
+
+        /// <summary>
+        /// WPF SaveSetting parity: load → mutate → save → refresh the editor
+        /// settings cache so tool application reads the same snapshot the
+        /// popup just wrote.
+        /// </summary>
+        private void SaveSetting(Action<AppSettings> mutate)
+        {
+            var settings = AppSettingsService.Load();
+            mutate(settings);
+            _applicationSettings = AppSettingsService.Save(settings);
+        }
+
+        /// <summary>
+        /// WPF BuildSettingToggleRow parity: one clickable toggle row
+        /// (indicator box + label) for boolean settings inside tool flyouts
+        /// — checked state paints the accent indicator + tinted surface.
+        /// </summary>
+        private static ToggleButton BuildSettingToggleButton(
+            string label, bool initialState, Action<bool> toggled, string automationId = null)
+        {
+            var indicator = new Border
+            {
+                Width = 16,
+                Height = 16,
+                CornerRadius = new CornerRadius(4),
+                BorderThickness = new Thickness(1),
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+            var text = new TextBlock
+            {
+                Text = label,
+                FontSize = 13,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(10, 0, 0, 0),
+            };
+            var row = new ToggleButton
+            {
+                Height = 34,
+                MinWidth = 32,
+                MinHeight = 32,
+                Margin = new Thickness(0, 0, 0, 6),
+                Padding = new Thickness(10, 0, 10, 0),
+                Content = new StackPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    Children = { indicator, text },
+                },
+                Tag = indicator,
+            };
+            ToolTipService.SetToolTip(row, label);
+            AutomationProperties.SetAutomationId(row, automationId ?? "Editor.Popup.Setting");
+            AutomationProperties.SetName(row, label);
+            AutomationProperties.SetHelpText(row, label);
+
+            row.IsChecked = initialState;
+
+            void ApplyVisual()
+            {
+                bool state = row.IsChecked == true;
+                row.Background = ResolveThemeBrush(
+                    state ? "ThemeSelectionBrush" : "ThemeSurfaceAltBrush",
+                    state ? Color.FromArgb(0x3C, 0x25, 0x63, 0xEB)
+                          : Color.FromArgb(0xFF, 0xF1, 0xF3, 0xF5));
+                indicator.BorderBrush = ResolveThemeBrush(
+                    state ? "ThemeAccentBrush" : "ThemeBorderBrush",
+                    state ? Color.FromArgb(0xFF, 0x25, 0x63, 0xEB)
+                          : Color.FromArgb(0xFF, 0xC9, 0xCE, 0xD6));
+                indicator.Background = state
+                    ? ResolveThemeBrush("ThemeAccentBrush", Color.FromArgb(0xFF, 0x25, 0x63, 0xEB))
+                    : new SolidColorBrush(Color.FromArgb(0, 0, 0, 0));
+                text.Foreground = ResolveThemeBrush(
+                    state ? "ThemeAccentBrush" : "ThemeForegroundBrush",
+                    state ? Color.FromArgb(0xFF, 0x25, 0x63, 0xEB)
+                          : Color.FromArgb(0xFF, 0x1F, 0x24, 0x2B));
+            }
+
+            ApplyVisual();
+            row.Click += (_, __) =>
+            {
+                ApplyVisual();
+                toggled?.Invoke(row.IsChecked == true);
+            };
+            return row;
+        }
+
+        /// <summary>
+        /// WPF EnableToolPopupScrolling parity: tool flyout content scrolls
+        /// when taller than the work-area-derived cap
+        /// (Math.Max(320, Math.Min(680, height − 120))). WinUI has no
+        /// SystemParameters.WorkArea — the XamlRoot content height stands in
+        /// for it (flyouts cannot overflow the window anyway).
+        /// </summary>
+        private ScrollViewer WrapToolFlyoutContent(UIElement content)
+        {
+            double workHeight = XamlRoot != null && XamlRoot.Size.Height > 0
+                ? XamlRoot.Size.Height
+                : 680;
+            return new ScrollViewer
+            {
+                Content = content,
+                MaxHeight = Math.Max(320, Math.Min(680, workHeight - 120)),
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            };
+        }
+
+        /// <summary>
+        /// Shows a tool-options flyout under its toolbar button and records
+        /// ownership so the mutual-exclusion sweep (<see cref="CloseToolFlyouts"/>)
+        /// and the transient-UI sweep (<see cref="CloseTransientUi"/>) can
+        /// both reach it. <paramref name="owner"/> is the bucket tool — all
+        /// three highlighter apply modes share
+        /// <see cref="ToolType.Highlighter"/> (WPF _highlighterPopup).
+        /// </summary>
+        private void ShowToolFlyout(Flyout flyout, ToolType owner, FrameworkElement anchor)
+        {
+            _toolFlyout = flyout;
+            _toolFlyoutTool = ToolFlyoutOwner(owner);
             _transientFlyout = flyout;
             flyout.ShowAt(anchor);
+        }
+
+        /// <summary>Highlighter apply modes share one flyout owner bucket.</summary>
+        private static ToolType ToolFlyoutOwner(ToolType tool)
+            => IsHighlighterTool(tool) ? ToolType.Highlighter : tool;
+
+        /// <summary>
+        /// WPF CloseToolPopups parity: sweeps the open tool flyout unless it
+        /// belongs to <paramref name="keepOpen"/> — the highlighter bucket
+        /// keeps the flyout alive across apply-mode switches (WPF
+        /// IsHighlighterTool(toolToKeepOpen)).
+        /// </summary>
+        private void CloseToolFlyouts(ToolType keepOpen = ToolType.None)
+        {
+            if (_toolFlyout == null)
+                return;
+            if (keepOpen != ToolType.None
+                && _toolFlyoutTool == ToolFlyoutOwner(keepOpen))
+                return;
+
+            if (ReferenceEquals(_transientFlyout, _toolFlyout))
+                _transientFlyout = null;
+            _toolFlyout.Hide();
+            _toolFlyout = null;
+            _toolFlyoutTool = ToolType.None;
         }
 
         /// <summary>
@@ -7367,9 +8029,10 @@ namespace Caelum.Pages
             }
             panel.Children.Add(colorRow);
 
+            // WPF parity note: the selection popup never got
+            // EnableToolPopupScrolling — it stays unwrapped here too.
             var flyout = new Flyout { Content = panel };
-            _transientFlyout = flyout;
-            flyout.ShowAt(anchor);
+            ShowToolFlyout(flyout, ToolType.Select, anchor);
         }
 
         private static TextBlock PopupSectionHeader(string text, double topMargin = 0) => new()
@@ -7510,6 +8173,20 @@ namespace Caelum.Pages
         /// </summary>
         private static Grid BuildColorPalette(
             Windows.UI.Color initialColor, Action<Windows.UI.Color> colorChanged)
+            => BuildColorPalette(initialColor, colorChanged, null, out _);
+
+        /// <summary>
+        /// Palette overload carrying the WPF shared UpdateColorMarkers
+        /// surface: when <paramref name="recentRow"/> is supplied the recent
+        /// swatches' focus rings move with the pick (WPF recentRow loop
+        /// parity), and <paramref name="markSelected"/> exposes the combined
+        /// marker so recent-swatch clicks re-mark the palette too.
+        /// </summary>
+        private static Grid BuildColorPalette(
+            Windows.UI.Color initialColor,
+            Action<Windows.UI.Color> colorChanged,
+            StackPanel recentRow,
+            out Action<Windows.UI.Color> markSelected)
         {
             int cols = 12;
             int rows = 8;
@@ -7524,6 +8201,24 @@ namespace Caelum.Pages
 
             void UpdateColorMarkers(Windows.UI.Color selected)
             {
+                if (recentRow != null)
+                {
+                    foreach (var element in recentRow.Children)
+                    {
+                        if (element is not Button swatch || swatch.Content is not Border visual)
+                            continue;
+
+                        bool isSelected = swatch.Tag is Windows.UI.Color swatchColor
+                            && swatchColor.R == selected.R && swatchColor.G == selected.G
+                            && swatchColor.B == selected.B;
+                        visual.BorderThickness = isSelected ? new Thickness(2) : new Thickness(1);
+                        visual.BorderBrush = ResolveThemeBrush(
+                            isSelected ? "ThemeFocusBrush" : "ThemeBorderBrush",
+                            isSelected ? Color.FromArgb(0xFF, 0x25, 0x63, 0xEB)
+                                       : Color.FromArgb(0xFF, 0xC9, 0xCE, 0xD6));
+                    }
+                }
+
                 selectionIndicator.Visibility = Visibility.Collapsed;
                 foreach (var element in paletteGrid.Children)
                 {
@@ -7598,6 +8293,7 @@ namespace Caelum.Pages
 
             paletteGrid.Children.Add(selectionIndicator);
             UpdateColorMarkers(initialColor);
+            markSelected = UpdateColorMarkers;
             return paletteGrid;
         }
 
@@ -10285,6 +10981,17 @@ namespace Caelum.Pages
             _textColorFlyout?.Hide();
             _transientFlyout?.Hide();
             _transientFlyout = null;
+            if (_toolFlyout != null)
+            {
+                _toolFlyout.Hide();
+                _toolFlyout = null;
+            }
+            _toolFlyoutTool = ToolType.None;
+            // The eraser-size preview ellipse is transient chrome too —
+            // cancel its self-hide timer and drop it immediately.
+            _eraserPreviewCts?.Cancel();
+            if (EraserSizePreviewEllipse != null)
+                EraserSizePreviewEllipse.Visibility = Visibility.Collapsed;
             _pageContextMenu?.Hide();
             RemoveInlineTextBoxToolbar();
 
