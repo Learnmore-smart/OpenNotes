@@ -260,6 +260,8 @@ namespace Caelum.Services
                 job.PrinterName = device;
 
                 IntPtr devMode = GlobalLock(job.DevModeHandle);
+                if (devMode == IntPtr.Zero)
+                    throw new Win32Exception("The print dialog returned no DEVMODE.");
                 try
                 {
                     int dmCopies = Marshal.ReadInt16(devMode, DmCopiesOffset);
@@ -327,6 +329,8 @@ namespace Caelum.Services
             if (hDevNames == IntPtr.Zero)
                 return null;
             IntPtr ptr = GlobalLock(hDevNames);
+            if (ptr == IntPtr.Zero)
+                return null;
             try
             {
                 var names = Marshal.PtrToStructure<DEVNAMES>(ptr);
@@ -335,7 +339,9 @@ namespace Caelum.Services
                     : names.wOutputOffset;
                 if (offset == 0)
                     return null;
-                return Marshal.PtrToStringUni(ptr + offset);
+                // DEVNAMES offsets are in CHARACTERS, not bytes —
+                // PtrToStringUni(ptr + offset * sizeof(char)).
+                return Marshal.PtrToStringUni(ptr + (int)offset * 2);
             }
             finally
             {

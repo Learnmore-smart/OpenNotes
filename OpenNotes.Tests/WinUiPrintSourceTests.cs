@@ -172,6 +172,22 @@ public sealed class WinUiPrintSourceTests
         });
     }
 
+    [Test]
+    public void DevNamesOffsetsAreCharacterBasedNotByteBased()
+    {
+        // DEVNAMES w*Offsets are in WCHARs — byte offset = offset * 2.
+        // Using the raw char offset lands halfway into the string table and
+        // CreateDCW fails on every print (spec-review catch).
+        string source = Read("Services", "Win32Print.cs");
+        Assert.Multiple(() =>
+        {
+            Assert.That(source, Does.Contain("Marshal.PtrToStringUni(ptr + (int)offset * 2)"));
+            Assert.That(source, Does.Not.Contain("PtrToStringUni(ptr + offset)"));
+            Assert.That(source, Does.Contain("GlobalLock(hDevNames)"));
+            Assert.That(source, Does.Contain("returned no DEVMODE"));
+        });
+    }
+
     private static string Read(params string[] segments)
     {
         return File.ReadAllText(Path.Combine(
