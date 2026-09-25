@@ -32,7 +32,10 @@ public sealed class WinUiPrintSourceTests
 
             // Ctrl+P keyboard parity (WPF EditorPage_KeyDown branch).
             Assert.That(editor, Does.Contain("e.Key == VirtualKey.P"));
-            Assert.That(editor, Does.Contain("_ = PrintPdfAsync();"));
+            // Faulted Ctrl+P print is observed (OnlyOnFaulted ContinueWith),
+            // not fire-and-forget over an unobserved task.
+            Assert.That(editor, Does.Contain("_ = PrintPdfAsync().ContinueWith("));
+            Assert.That(editor, Does.Contain("TaskContinuationOptions.OnlyOnFaulted"));
 
             // The pipeline: lease capture → Win32 sheet → overlay → bake →
             // rasterize → spool → toast/dialog.
