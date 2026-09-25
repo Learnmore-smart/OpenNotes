@@ -38,7 +38,7 @@ public sealed class WinUiDialogsServicesSourceTests
             // The popup z-order no-port note documents the WPF
             // PopupZOrderHelper → XamlRoot-scoped flyout/dialog mapping.
             Assert.That(service, Does.Contain("PopupZOrderHelper"));
-            Assert.That(service, Does.Contain("HWND_TOPMOST"));
+            Assert.That(service, Does.Contain("HWND_NOTOPMOST"));
         });
     }
 

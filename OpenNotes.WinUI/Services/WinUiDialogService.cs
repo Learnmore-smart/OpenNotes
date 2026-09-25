@@ -25,9 +25,11 @@ namespace Caelum.Services
     ///
     /// <para><b>Popup z-order (WPF PopupZOrderHelper — deliberately not
     /// ported).</b> WPF popups are HWND-backed: <c>ContextMenu</c> and
-    /// ComboBox dropdowns could be clipped or dropped under the window when
-    /// the owner HWND lost topmost, so <c>PopupZOrderHelper</c> called
-    /// SetWindowPos(HWND_TOPMOST) on each popup hwnd. WinUI
+    /// ComboBox dropdowns kept their own HWND in the topmost band after an
+    /// Alt-Tab, so <c>PopupZOrderHelper</c> called SetWindowPos(HWND_NOTOPMOST)
+    /// on each popup hwnd (pulling it out of the topmost band while staying
+    /// above the owner) and added WS_EX_NOACTIVATE so popups never steal
+    /// activation. WinUI
     /// <see cref="MenuFlyout"/>/<see cref="Flyout"/>/<see cref="ContentDialog"/>
     /// are XamlRoot-scoped visuals composited inside the app's own swap
     /// chain — they cannot be clipped by sibling HWNDs and offer no HWND to

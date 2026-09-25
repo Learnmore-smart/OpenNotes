@@ -346,7 +346,7 @@
                               VerticalScrollBarVisibility="Hidden"
                               AutomationProperties.AutomationId="Editor.ToolbarOverflow">
                     <StackPanel Orientation="Horizontal" Height="42">
-                        <!-- Undo (T7/T8: disabled until the undo pipeline lands) -->
+                        <!-- Undo (state-driven: UpdateUndoRedoButtons enables when the ledger has actions) -->
                         <Button x:Name="UndoButton" Click="UndoButton_Click"
                                 Style="{StaticResource UndoRedoButtonStyle}"
                                 Width="36" Height="36" Margin="1,0" IsEnabled="False"
@@ -355,7 +355,7 @@
                                                  Stroke="{ThemeResource ThemeForegroundBrush}"/>
                         </Button>
 
-                        <!-- Redo -->
+                        <!-- Redo (state-driven via UpdateUndoRedoButtons) -->
                         <Button x:Name="RedoButton" Click="RedoButton_Click"
                                 Style="{StaticResource UndoRedoButtonStyle}"
                                 Width="36" Height="36" Margin="1,0" IsEnabled="False"

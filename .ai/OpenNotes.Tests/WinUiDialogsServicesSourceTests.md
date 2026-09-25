@@ -8,7 +8,7 @@ so a refactor cannot silently drop the pieces the WPF shell relies on:
 - `DialogServiceSerializesEveryContentDialogBehindOneGate` — `DialogGate`
   semaphore, the info/error/confirm/danger-confirm API surface, explicit
   `XamlRoot` null-no-op contract, `RunUnderDialogGateAsync<T>`, and the
-  `PopupZOrderHelper`/HWND_TOPMOST no-port doc note.
+  `PopupZOrderHelper`/HWND_NOTOPMOST no-port doc note.
 - `SettingsDialogStagesPreviewsAndRevertsOnDismiss` — ctor staging +
   `SelectedSettings`, live `PreviewSettings` calls, `Closed`-based revert,
   `LanguageChanged`/`ThemeApplied` subscribe-detach, all eight setting rows

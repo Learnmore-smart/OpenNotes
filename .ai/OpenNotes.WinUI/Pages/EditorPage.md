@@ -136,7 +136,8 @@ the Task 9 Phase A save/autosave + close/dirty protocol is live (T9-B defers set
   `SetPenService`; the surfaces' `ProbePointer` calls accumulate
   `Capabilities` → `PenDeviceDetected` toast.
 - **Localization:** `ApplyLocalization()` refreshes chrome/tooltips/context
-  menu labels; validation message strings `Editor.PageJump*`. The page
+  menu labels AND re-stamps page-chrome tooltips via `RefreshPageDeleteButtons()`
+  (per-page delete + insert-gap buttons); validation message strings `Editor.PageJump*`. The page
   self-subscribes `LocalizationService.LanguageChanged` in `Loaded`
   (guarded by `_languageChangedSubscribed`) and unsubscribes inside
   `ReleaseResources` (covers Unloaded + `ShutdownEditor` + `OnNavigatedFrom`

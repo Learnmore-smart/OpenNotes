@@ -157,7 +157,7 @@
 - [ ] `SettingsWindow`, `PageTemplatePickerWindow` as WinUI windows/content dialogs; `DialogService` port; `PopupZOrderHelper` → WinUI flyout layering
 - [ ] `UpdateCheckService` UI, toasts, `VersionControlService` UI, `RecycleBinService` (unchanged — `SHFileOperation`)
 - [ ] Localization parity — `verify-i18n.ps1` equivalent check for WinUI sources
-- [ ] **Commit.**
+- [x] **Commit.** *(Phase A `4fefabe` + lifecycle/spec-fixes → `41233e5`; Phase B `684c571` — settings dialog + live preview, template picker (notebook + insert-page modes), WinUiDialogService API parity + dialog gate, version-history flyout/restore, update-check UI, i18n coverage EN/ZH/FR, `WinUiDialogsServicesSourceTests` + `WinUiLocalizationCoverageTests`.)*
 
 ## Task 10: Parity verification + installer + release cutover
 

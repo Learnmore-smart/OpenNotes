@@ -9627,6 +9627,10 @@ namespace Caelum.Pages
             }
             if (_inlineTextBoxToolbar != null)
                 ApplyInlineTextBoxToolbarLocalization();
+
+            // Task 9-B: page-chrome tooltips (per-page delete + insert-gap
+            // buttons) re-localize live too (WPF ApplyLocalization parity).
+            RefreshPageDeleteButtons();
         }
 
         /// <summary>
