@@ -268,6 +268,10 @@ namespace Caelum.Pages
         private Task<bool> _releaseResourcesInFlight;
         private Task<DocumentSaveResult> _autoSaveInFlight;
         private bool _documentInteractionBlocked;
+        // Debug mirror of the coordinator state — WPF carries the identical
+        // write-only pair (EditorPage :158-159) so the pending-save state is
+        // inspectable in a debugger without evaluating the locked coordinator.
+        // Live reads go through IsDirty / _documentSaveCoordinator directly.
         private bool _isDirty;
         private long _dirtyGeneration;
         private Microsoft.UI.Dispatching.DispatcherQueueTimer _autoSaveTimer;
@@ -2052,6 +2056,106 @@ namespace Caelum.Pages
         /// <summary>Alignment combo row — label + <see cref="TextAlignment"/> value (WPF TextAlignmentOption).</summary>
         private sealed record TextAlignmentOption(TextAlignment Value, string Label);
 
+        /// <summary>
+        /// WPF DocumentSnapshotAction parity — a structural PDF edit (insert
+        /// pages, rotate page) is undone/redone by atomically restoring the
+        /// captured before/after document bytes and the persisted bookmark
+        /// list, then reloading the document. The undo/redo loop hands this
+        /// action the caller's operation lease via <see cref="SetOperationLease"/>;
+        /// the reload swaps the session, so the action publishes the lease of
+        /// the reloaded document on <see cref="CompletedOperationLease"/> for
+        /// the caller's staleness check.
+        /// </summary>
+        private sealed class DocumentSnapshotAction : IUndoAction
+        {
+            private readonly EditorPage _owner;
+            private readonly byte[] _beforeBytes;
+            private readonly byte[] _afterBytes;
+            private readonly int _undoFocusPageIndex;
+            private readonly int _redoFocusPageIndex;
+            private readonly IReadOnlyList<PageBookmark> _beforeBookmarks;
+            private readonly IReadOnlyList<PageBookmark> _afterBookmarks;
+            private DocumentOperationLease _operationLease;
+            private DocumentOperationLease _completedOperationLease;
+
+            public bool LastOperationSucceeded { get; private set; }
+            public DocumentOperationLease CompletedOperationLease => _completedOperationLease;
+
+            public DocumentSnapshotAction(
+                EditorPage owner,
+                byte[] beforeBytes,
+                byte[] afterBytes,
+                int undoFocusPageIndex,
+                int redoFocusPageIndex,
+                IEnumerable<PageBookmark> beforeBookmarks = null,
+                IEnumerable<PageBookmark> afterBookmarks = null)
+            {
+                _owner = owner;
+                _beforeBytes = beforeBytes;
+                _afterBytes = afterBytes;
+                _undoFocusPageIndex = undoFocusPageIndex;
+                _redoFocusPageIndex = redoFocusPageIndex;
+                _beforeBookmarks = beforeBookmarks?.Select(CloneBookmark).ToList();
+                _afterBookmarks = afterBookmarks?.Select(CloneBookmark).ToList();
+            }
+
+            public string Description => "Structural document edit";
+
+            // The snapshot write replaces the PDF bytes itself — the applied
+            // state already matches disk, so this transition is not dirty.
+            public bool LeavesDocumentDirty => false;
+
+            public Task UndoAsync() => ApplyAsync(_beforeBytes, _undoFocusPageIndex, _beforeBookmarks);
+
+            public Task RedoAsync() => ApplyAsync(_afterBytes, _redoFocusPageIndex, _afterBookmarks);
+
+            public void SetOperationLease(DocumentOperationLease operationLease)
+            {
+                _completedOperationLease?.Dispose();
+                _completedOperationLease = null;
+                _operationLease = operationLease;
+                LastOperationSucceeded = false;
+            }
+
+            private async Task ApplyAsync(byte[] bytes, int focusPageIndex, IReadOnlyList<PageBookmark> bookmarks)
+            {
+                LastOperationSucceeded = false;
+                _completedOperationLease?.Dispose();
+                _completedOperationLease = await _owner.ApplyDocumentSnapshotAsync(
+                    bytes,
+                    focusPageIndex,
+                    _operationLease);
+                if (_completedOperationLease == null || bookmarks == null || string.IsNullOrWhiteSpace(_owner._currentPdfPath))
+                {
+                    LastOperationSucceeded = _completedOperationLease != null;
+                    return;
+                }
+
+                try
+                {
+                    if (!_owner.ValidateDocumentOperationLease(_completedOperationLease))
+                        return;
+                    PageBookmarkService.Replace(_owner._currentPdfPath, bookmarks);
+                    _owner.RefreshBookmarks(_owner._loadSessionId, _owner._currentPdfPath, _completedOperationLease);
+                    LastOperationSucceeded = _owner.ValidateDocumentOperationLease(_completedOperationLease);
+                }
+                catch (Exception ex)
+                {
+                    if (_owner.ValidateDocumentOperationLease(_completedOperationLease))
+                        System.Diagnostics.Debug.WriteLine($"[Bookmarks] Snapshot restore failed: {ex}");
+                }
+            }
+
+            private static PageBookmark CloneBookmark(PageBookmark bookmark)
+            {
+                return new PageBookmark
+                {
+                    PageIndex = bookmark?.PageIndex ?? -1,
+                    Label = bookmark?.Label ?? string.Empty
+                };
+            }
+        }
+
         /// <summary>Overlay toggle — the button is NOT in the exclusive tool set.</summary>
         private void RulerToolButton_Click(object sender, RoutedEventArgs e)
         {
@@ -2518,8 +2622,9 @@ namespace Caelum.Pages
             {
                 // The underlying event can arrive after it has already
                 // changed the model. Retain that generation for the close
-                // save loop instead of silently dropping it (WPF parity —
-                // the caller's MarkDirty() keeps the coordinator contract).
+                // save loop instead of silently dropping it (WPF parity).
+                _documentSaveCoordinator.RecordChange(action.LeavesDocumentDirty);
+                SyncDirtyStateMirror();
                 return;
             }
 
@@ -2528,7 +2633,21 @@ namespace Caelum.Pages
                 _undoStack.Push(action);
                 _redoStack.Clear();
                 UpdateUndoRedoButtons();
+                ApplyDirtyStateForAction(action);
             }
+        }
+
+        /// <summary>
+        /// WPF ApplyDirtyStateForAction parity — the ledger push and its
+        /// dirty record are one transition. Every mutation action reports
+        /// <see cref="IUndoAction.LeavesDocumentDirty"/> (all Core
+        /// annotation actions return true; <see cref="DocumentSnapshotAction"/>
+        /// returns false because it rewrites the PDF bytes itself).
+        /// </summary>
+        private void ApplyDirtyStateForAction(IUndoAction action)
+        {
+            _documentSaveCoordinator.RecordChange(action.LeavesDocumentDirty);
+            SyncDirtyStateMirror();
         }
 
         private async Task PerformUndoAsync()
@@ -2551,6 +2670,12 @@ namespace Caelum.Pages
             CancelTextBoxDrag(restoreBounds: true);
             CancelTextResize(restoreBounds: true);
             var action = _undoStack.Peek();
+            // A DocumentSnapshotAction reloads the document, which swaps the
+            // operation session — hand it this lease so it can publish the
+            // reloaded session's lease for the staleness check (WPF parity).
+            using var operationLease = CaptureDocumentOperationLease(_pdfService);
+            if (action is DocumentSnapshotAction snapshotAction)
+                snapshotAction.SetOperationLease(operationLease);
             try
             {
                 await action.UndoAsync();
@@ -2572,21 +2697,35 @@ namespace Caelum.Pages
                 if (action is AnnotationItemsRemovedAction itemsRemoved
                     && !itemsRemoved.LastOperationSucceeded)
                     return;
+                // A snapshot undo ran against the pre-reload session — only
+                // the lease it captured after reloading proves freshness.
+                if (action is DocumentSnapshotAction snapshot
+                    ? !snapshot.LastOperationSucceeded ||
+                      !ValidateDocumentOperationLease(snapshot.CompletedOperationLease)
+                    : !ValidateDocumentOperationLease(operationLease))
+                {
+                    return;
+                }
                 _undoStack.Pop();
                 _redoStack.Push(action);
                 UpdateUndoRedoButtons();
                 // WPF parity: an applied undo records a dirty generation so
                 // the T9 save pipeline persists the reverted state.
-                _documentSaveCoordinator.RecordChange(action.LeavesDocumentDirty);
-                SyncDirtyStateMirror();
+                ApplyDirtyStateForAction(action);
             }
             catch (Exception ex)
             {
+                if (!ValidateDocumentOperationLease(operationLease))
+                    return;
                 GetMainWindow()?.ShowToast(
                     LocalizationService.Format("Editor.UndoFailed", ex.Message), "", 3500);
             }
+            finally
+            {
+                if (action is DocumentSnapshotAction completedSnapshotAction)
+                    completedSnapshotAction.SetOperationLease(null);
+            }
         }
-
         private async Task PerformRedoAsync()
         {
             if (_redoStack.Count == 0)
@@ -2599,6 +2738,9 @@ namespace Caelum.Pages
             CancelTextBoxDrag(restoreBounds: true);
             CancelTextResize(restoreBounds: true);
             var action = _redoStack.Peek();
+            using var operationLease = CaptureDocumentOperationLease(_pdfService);
+            if (action is DocumentSnapshotAction snapshotAction)
+                snapshotAction.SetOperationLease(operationLease);
             try
             {
                 await action.RedoAsync();
@@ -2616,19 +2758,31 @@ namespace Caelum.Pages
                 if (action is AnnotationItemsRemovedAction itemsRemoved
                     && !itemsRemoved.LastOperationSucceeded)
                     return;
+                if (action is DocumentSnapshotAction snapshot
+                    ? !snapshot.LastOperationSucceeded ||
+                      !ValidateDocumentOperationLease(snapshot.CompletedOperationLease)
+                    : !ValidateDocumentOperationLease(operationLease))
+                {
+                    return;
+                }
                 _redoStack.Pop();
                 _undoStack.Push(action);
                 UpdateUndoRedoButtons();
-                _documentSaveCoordinator.RecordChange(action.LeavesDocumentDirty);
-                SyncDirtyStateMirror();
+                ApplyDirtyStateForAction(action);
             }
             catch (Exception ex)
             {
+                if (!ValidateDocumentOperationLease(operationLease))
+                    return;
                 GetMainWindow()?.ShowToast(
                     LocalizationService.Format("Editor.RedoFailed", ex.Message), "", 3500);
             }
+            finally
+            {
+                if (action is DocumentSnapshotAction completedSnapshotAction)
+                    completedSnapshotAction.SetOperationLease(null);
+            }
         }
-
         private void UpdateUndoRedoButtons()
         {
             if (UndoButton != null)
@@ -2702,6 +2856,13 @@ namespace Caelum.Pages
 
         private void PageControl_InkMutated(object sender, EventArgs e)
         {
+            // WPF marks dirty unconditionally here because its quiet load
+            // path raises QuietStrokeMutation instead. WinUI quiet mutators
+            // (AddStroke/AddHiddenInk/…) raise InkMutated as well, so the
+            // load-time sweep under _isLoadingAnnotations must suppress the
+            // dirty mark — thumbnail invalidation stays unconditional.
+            if (!_isLoadingAnnotations)
+                MarkDirty();
             if (sender is PdfPageControl page)
                 InvalidateThumbnail(page.PageIndex);
         }
@@ -8411,9 +8572,13 @@ namespace Caelum.Pages
         }
 
         /// <summary>
-        /// Shared insert-document boundary (WPF InsertExternalDocumentAsync,
-        /// minus the undo/save pipeline that arrives with T9): run the Core
-        /// operation, remap persisted bookmarks, reload, refocus and toast.
+        /// Shared insert-document boundary (WPF InsertExternalDocumentAsync):
+        /// flush a dirty document first, snapshot the before/after PDF bytes
+        /// and the persisted bookmark list, run the Core op, reload under a
+        /// refreshed session lease, refocus, and push a DocumentSnapshotAction
+        /// so the structural edit participates in undo/redo. A mid-operation
+        /// failure rolls the file bytes and bookmark sidecar back before the
+        /// failure toast (WPF parity).
         /// </summary>
         private async Task InsertExternalDocumentAsync(
             Func<Task> operation,
@@ -8422,92 +8587,181 @@ namespace Caelum.Pages
             string successMessage,
             DocumentOperationLease operationLease = null)
         {
+            byte[] before = null;
+            int focusBefore = 0;
+            List<PageBookmark> beforeBookmarks = null;
+            bool operationMayHaveChangedDocument = false;
             // T9: a structural document op is a mutation — hold the edit
             // admission lease so close/navigation quiescence covers it.
             if (!TryBeginDocumentEdit(out var editLease))
                 return;
             using (editLease)
             {
-            bool ownsLease = operationLease == null;
-            DocumentOperationLease currentLease = operationLease ?? CaptureDocumentOperationLease(_pdfService);
-            try
-            {
-                if (string.IsNullOrWhiteSpace(_currentPdfPath) || !ValidateDocumentOperationLease(currentLease))
+                if (string.IsNullOrWhiteSpace(_currentPdfPath))
                     return;
+
                 string filePath = _currentPdfPath;
-                // A dirty document must hit disk BEFORE the binary PDF is
-                // rewritten — otherwise the insert bakes a stale base and
-                // the pending annotations are lost (WPF parity).
-                if (_documentSaveCoordinator.IsDirty &&
-                    (!await AutoSaveAsync(currentLease) || !ValidateDocumentOperationLease(currentLease)))
-                    return;
-                await operation();
-                if (!ValidateDocumentOperationLease(currentLease))
-                    return;
-                PageBookmarkService.ApplyPageInsert(filePath, insertPageIndex, insertedPageCount);
-                await LoadPdfAsync(filePath);
-                // LoadPdfAsync swaps the session; a stale continuation must
-                // not touch the new document.
-                if (!IsSidebarLoadCurrent(_loadSessionId, filePath))
-                    return;
-                int focused = Math.Max(0, Math.Min(insertPageIndex, _pageControls.Count - 1));
-                JumpToPage(focused);
-                RefreshBookmarks(_loadSessionId, filePath, null);
-                GetMainWindow()?.ShowToast(successMessage, "", 2000);
-            }
-            catch (OperationCanceledException)
-            {
-            }
-            catch (Exception ex)
-            {
-                if (ValidateDocumentOperationLease(currentLease))
-                    GetMainWindow()?.ShowToast(
-                        LocalizationService.Format("Editor.ImportFailed", ex.Message), "", 3500);
-            }
-            finally
-            {
-                if (ownsLease)
+                DocumentOperationLease currentLease = operationLease ?? CaptureDocumentOperationLease(_pdfService);
+                try
+                {
+                    if (!ValidateDocumentOperationLease(currentLease))
+                        return;
+                    // A dirty document must hit disk BEFORE the binary PDF is
+                    // rewritten — otherwise the insert bakes a stale base and
+                    // the pending annotations are lost (WPF parity).
+                    if (_documentSaveCoordinator.IsDirty &&
+                        (!await AutoSaveAsync(currentLease) || !ValidateDocumentOperationLease(currentLease)))
+                        return;
+                    before = await File.ReadAllBytesAsync(filePath, currentLease.Token);
+                    if (!ValidateDocumentOperationLease(currentLease))
+                        return;
+                    focusBefore = GetCurrentPageIndex();
+                    beforeBookmarks = PageBookmarkService.Load(filePath).ToList();
+                    operationMayHaveChangedDocument = true;
+                    await operation();
+                    if (!ValidateDocumentOperationLease(currentLease))
+                        return;
+                    byte[] after = await File.ReadAllBytesAsync(filePath, currentLease.Token);
+                    if (!ValidateDocumentOperationLease(currentLease))
+                        return;
+                    currentLease = await ReloadDocumentForOperationAsync(filePath, currentLease);
+                    if (currentLease == null)
+                        return;
+                    int focused = Math.Max(0, Math.Min(insertPageIndex, _pageControls.Count - 1));
+                    if (!ValidateDocumentOperationLease(currentLease))
+                        return;
+                    JumpToPage(focused);
+                    var afterBookmarks = PageBookmarkService.ApplyPageInsert(
+                        filePath,
+                        insertPageIndex,
+                        insertedPageCount).ToList();
+                    RefreshBookmarks(_loadSessionId, filePath, currentLease);
+                    if (!ValidateDocumentOperationLease(currentLease))
+                        return;
+                    PushUndoAction(new DocumentSnapshotAction(
+                        this,
+                        before,
+                        after,
+                        focusBefore,
+                        focused,
+                        beforeBookmarks,
+                        afterBookmarks));
+                    if (!ValidateDocumentOperationLease(currentLease))
+                        return;
+                    GetMainWindow()?.ShowToast(successMessage, "", 2000);
+                }
+                catch (OperationCanceledException)
+                {
+                }
+                catch (Exception ex)
+                {
+                    // A stale import must not roll back or report against the
+                    // replacement document. Only the still-live transaction
+                    // may restore its before-bytes and sidecar.
+                    if (!ValidateDocumentOperationLease(currentLease))
+                        return;
+
+                    if (operationMayHaveChangedDocument && before != null)
+                    {
+                        try
+                        {
+                            await WriteDocumentBytesAsync(filePath, before, currentLease.Token);
+                            if (!ValidateDocumentOperationLease(currentLease))
+                                return;
+                            PageBookmarkService.Replace(filePath, beforeBookmarks ?? new List<PageBookmark>());
+                            currentLease = await ReloadDocumentForOperationAsync(filePath, currentLease);
+                            if (currentLease == null)
+                                return;
+                            if (!ValidateDocumentOperationLease(currentLease))
+                                return;
+                            JumpToPage(Math.Max(0, Math.Min(focusBefore, _pageControls.Count - 1)));
+                            RefreshBookmarks(_loadSessionId, filePath, currentLease);
+                        }
+                        catch (OperationCanceledException)
+                        {
+                            return;
+                        }
+                        catch (Exception rollbackException)
+                        {
+                            if (ValidateDocumentOperationLease(currentLease))
+                                System.Diagnostics.Debug.WriteLine($"[Import] Rollback failed: {rollbackException}");
+                        }
+                    }
+                    if (ValidateDocumentOperationLease(currentLease))
+                        GetMainWindow()?.ShowToast(LocalizationService.Format("Editor.ImportFailed", ex.Message), "", 3500);
+                }
+                finally
+                {
                     currentLease?.Dispose();
-            }
+                }
             }
         }
 
         private async void RotateCurrentPage_Click(object sender, RoutedEventArgs e)
         {
-            using var operationLease = CaptureDocumentOperationLease(_pdfService);
-            if (!ValidateDocumentOperationLease(operationLease) ||
-                string.IsNullOrWhiteSpace(_currentPdfPath) || _pageControls.Count == 0)
+            DocumentOperationLease operationLease = CaptureDocumentOperationLease(_pdfService);
+            if (!ValidateDocumentOperationLease(operationLease))
+            {
+                operationLease.Dispose();
                 return;
+            }
+
             // T9: hold the admission lease across the rewrite + flush a
             // dirty document first, or the rotated PDF bakes a stale base
             // and pending annotations are lost (WPF parity).
             if (!TryBeginDocumentEdit(out var editLease))
+            {
+                operationLease.Dispose();
                 return;
-            using var _ = editLease;
-            string filePath = _currentPdfPath;
-            int pageIndex = GetCurrentPageIndex();
-            try
-            {
-                if (_documentSaveCoordinator.IsDirty &&
-                    (!await AutoSaveAsync(operationLease) || !ValidateDocumentOperationLease(operationLease)))
-                    return;
-                await _pdfService.RotatePageAsync(filePath, pageIndex, 1);
-                if (!ValidateDocumentOperationLease(operationLease))
-                    return;
-                await LoadPdfAsync(filePath);
-                if (!IsSidebarLoadCurrent(_loadSessionId, filePath))
-                    return;
-                JumpToPage(Math.Min(pageIndex, _pageControls.Count - 1));
-                GetMainWindow()?.ShowToast(LocalizationService.Get("Editor.PageRotated"), "", 1800);
             }
-            catch (OperationCanceledException)
+
+            using (operationLease)
+            using (editLease)
             {
-            }
-            catch (Exception ex)
-            {
-                if (ValidateDocumentOperationLease(operationLease))
-                    GetMainWindow()?.ShowToast(
-                        LocalizationService.Format("Editor.RotateFailed", ex.Message), "", 3500);
+                if (string.IsNullOrWhiteSpace(_currentPdfPath) || _pageControls.Count == 0)
+                    return;
+
+                string filePath = _currentPdfPath;
+                try
+                {
+                    if (!ValidateDocumentOperationLease(operationLease))
+                        return;
+                    if (_documentSaveCoordinator.IsDirty &&
+                        (!await AutoSaveAsync(operationLease) || !ValidateDocumentOperationLease(operationLease)))
+                        return;
+                    int pageIndex = GetCurrentPageIndex();
+                    byte[] before = await File.ReadAllBytesAsync(filePath, operationLease.Token);
+                    if (!ValidateDocumentOperationLease(operationLease))
+                        return;
+                    await _pdfService.RotatePageAsync(filePath, pageIndex, 1);
+                    if (!ValidateDocumentOperationLease(operationLease))
+                        return;
+                    byte[] after = await File.ReadAllBytesAsync(filePath, operationLease.Token);
+                    if (!ValidateDocumentOperationLease(operationLease))
+                        return;
+                    var refreshedLease = await ReloadDocumentForOperationAsync(filePath, operationLease);
+                    if (refreshedLease == null)
+                        return;
+                    using (refreshedLease)
+                    {
+                        if (!ValidateDocumentOperationLease(refreshedLease))
+                            return;
+                        JumpToPage(pageIndex);
+                        PushUndoAction(new DocumentSnapshotAction(this, before, after, pageIndex, pageIndex));
+                        if (!ValidateDocumentOperationLease(refreshedLease))
+                            return;
+                        GetMainWindow()?.ShowToast(LocalizationService.Get("Editor.PageRotated"), "\uE7AD", 1800);
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                }
+                catch (Exception ex)
+                {
+                    if (ValidateDocumentOperationLease(operationLease))
+                        GetMainWindow()?.ShowToast(
+                            LocalizationService.Format("Editor.RotateFailed", ex.Message), "\uE783", 3500);
+                }
             }
         }
 
@@ -9100,6 +9354,133 @@ namespace Caelum.Pages
                 DocumentOperationSession.NormalizePath(filePath),
                 DocumentOperationSession.NormalizePath(_currentPdfPath ?? string.Empty),
                 StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
+        /// Reloads the document after a structural file write and returns a
+        /// lease bound to the NEW session (WPF ReloadDocumentForOperationAsync).
+        /// LoadPdfAsync cancels the pre-reload session, so the incoming lease
+        /// is always retired here and must not be reused by the caller.
+        /// </summary>
+        private async Task<DocumentOperationLease> ReloadDocumentForOperationAsync(
+            string filePath,
+            DocumentOperationLease operationLease)
+        {
+            if (!ValidateDocumentOperationLease(operationLease))
+                return null;
+
+            int previousSessionId = _loadSessionId;
+            try
+            {
+                await LoadPdfAsync(filePath);
+            }
+            finally
+            {
+                // LoadPdfAsync begins the replacement session and cancels this
+                // pre-reload lease. It must not remain the owner of an
+                // operation while callers publish only the fresh lease below.
+                operationLease.Dispose();
+            }
+
+            int expectedSessionId = previousSessionId + 1;
+            if (_completedLoadSessionId != expectedSessionId ||
+                _loadSessionId != expectedSessionId ||
+                !string.Equals(
+                    DocumentOperationSession.NormalizePath(filePath),
+                    DocumentOperationSession.NormalizePath(_currentPdfPath),
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return null;
+            }
+
+            var refreshedLease = CaptureDocumentOperationLease(
+                expectedSessionId,
+                filePath,
+                _pdfService);
+            return ValidateDocumentOperationLease(refreshedLease)
+                ? refreshedLease
+                : null;
+        }
+
+        /// <summary>
+        /// DocumentSnapshotAction undo/redo boundary (WPF
+        /// ApplyDocumentSnapshotAsync): atomically restore the snapshot bytes,
+        /// reload the document, restore focus and publish the fresh lease +
+        /// recent-file metadata for the new page count/timestamp.
+        /// </summary>
+        private async Task<DocumentOperationLease> ApplyDocumentSnapshotAsync(
+            byte[] snapshotBytes,
+            int focusPageIndex,
+            DocumentOperationLease operationLease)
+        {
+            if (string.IsNullOrWhiteSpace(_currentPdfPath) ||
+                !ValidateDocumentOperationLease(operationLease))
+                return null;
+
+            string filePath = _currentPdfPath;
+            await WriteDocumentBytesAsync(filePath, snapshotBytes, operationLease.Token);
+            if (!ValidateDocumentOperationLease(operationLease))
+                return null;
+
+            var refreshedLease = await ReloadDocumentForOperationAsync(filePath, operationLease);
+            if (refreshedLease == null)
+                return null;
+
+            if (_pageControls.Count > 0)
+            {
+                if (!ValidateDocumentOperationLease(refreshedLease))
+                {
+                    refreshedLease.Dispose();
+                    return null;
+                }
+                JumpToPage(Math.Max(0, Math.Min(focusPageIndex, _pageControls.Count - 1)));
+            }
+
+            if (!ValidateDocumentOperationLease(refreshedLease))
+            {
+                refreshedLease.Dispose();
+                return null;
+            }
+            RecentFilesService.UpdateMetadata(filePath, _pageControls.Count, File.GetLastWriteTimeUtc(filePath));
+            return refreshedLease;
+        }
+
+        private static Task WriteDocumentBytesAsync(
+            string filePath,
+            byte[] snapshotBytes,
+            CancellationToken cancellationToken = default)
+        {
+            // DocumentSnapshotAction is an editor-owned structural write, so
+            // it must use the same process-wide PDF path lease as PdfService
+            // saves before replacing bytes. The subsequent LoadPdfAsync also
+            // joins that lease for its native reload.
+            return PdfSaveCoordinator.RunExclusiveAsync(
+                filePath,
+                () => WriteDocumentBytesCoreAsync(filePath, snapshotBytes, cancellationToken));
+        }
+
+        private static async Task WriteDocumentBytesCoreAsync(
+            string filePath,
+            byte[] snapshotBytes,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            string tempPath = PdfAtomicFile.CreateTempPath(filePath);
+
+            try
+            {
+                await using (var output = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None))
+                {
+                    await output.WriteAsync(snapshotBytes ?? Array.Empty<byte>(), cancellationToken);
+                    output.Flush(true);
+                }
+                cancellationToken.ThrowIfCancellationRequested();
+                PdfAtomicFile.Replace(tempPath, filePath);
+            }
+            finally
+            {
+                PdfAtomicFile.TryDelete(tempPath);
+            }
         }
 
         private static T FindAncestor<T>(DependencyObject start) where T : DependencyObject

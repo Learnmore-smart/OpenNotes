@@ -29,6 +29,21 @@ coordinator/admission/release/navigation types are shared Core services.
   leases inside `PushUndoAction`/`PerformUndoAsync`/`PerformRedoAsync`/
   `InsertExternalDocumentAsync`/`RotateCurrentPage_Click` plus the
   `_documentSaveCoordinator.IsDirty` flush before binary PDF rewrites.
+- `PushUndoActionRecordsDirtyStateOnBothPaths` — the spec-fix contract:
+  `_documentSaveCoordinator.RecordChange(action.LeavesDocumentDirty)` on
+  the blocked path AND `ApplyDirtyStateForAction(action)` on the admitted
+  path (helper pins `RecordChange` + `SyncDirtyStateMirror`).
+- `InkMutatedMarksDirtyOutsideAnnotationLoad` — `MarkDirty()` inside
+  `if (!_isLoadingAnnotations)` with unconditional
+  `InvalidateThumbnail(page.PageIndex)` after it.
+- `StructuralOperationsPushDocumentSnapshotUndo` — `DocumentSnapshotAction`
+  class surface (`SetOperationLease`/`CompletedOperationLease`/
+  `LeavesDocumentDirty => false`), `ApplyDocumentSnapshotAsync`/
+  `WriteDocumentBytesAsync`/`ReloadDocumentForOperationAsync`,
+  `RecentFilesService.UpdateMetadata`, `PageBookmarkService.Replace`, the
+  insert method's before/after byte + bookmark snapshots and rollback
+  writes, rotate's snapshot push, and the undo/redo
+  `SetOperationLease`/`CompletedOperationLease` handoff.
 - `MainWindowRunsTheTabAndWindowCloseProtocol` — workflow markers,
   `AppWindow.Closing` intercept + `args.Cancel`, bounded prepare/release
   waits, timed-out continuations, `RemoveTabAfterResourcesReleased`,
@@ -43,4 +58,4 @@ coordinator/admission/release/navigation types are shared Core services.
 
 ## Open Threads / Resume Context
 
-- **Status:** GREEN — 6/6 pass in the 685-test suite.
+- **Status:** GREEN — 10/10 pass in the 691-test suite (post spec-fix).

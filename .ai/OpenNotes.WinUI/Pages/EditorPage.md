@@ -109,9 +109,16 @@ the Task 9 Phase A save/autosave + close/dirty protocol is live (T9-B defers set
   `StrokeCollected` → `InkStrokeAddedAction` onto `_undoStack`;
   `StrokeRecognized` → `InkStrokeReplacedAction` (undo restores the raw
   scribble — deliberate spec change from WPF's StrokeAdded-on-fresh-stroke);
-  `StrokesErased` → `InkStrokesErasedAction`; `InkMutated` →
-  `InvalidateThumbnail(pageIndex)` (cache eviction — ink is not composited
-  into thumbs yet). Undo/Redo toolbar buttons carry the accelerators —
+  `StrokesErased` → `InkStrokesErasedAction`; `InkMutated` → guarded
+  `MarkDirty()` (suppressed under `_isLoadingAnnotations` because WinUI
+  quiet mutators raise it too — WPF routes those through
+  `QuietStrokeMutation`) + unconditional `InvalidateThumbnail(pageIndex)`
+  (cache eviction — ink is not composited into thumbs yet).
+  `PushUndoAction` records
+  `_documentSaveCoordinator.RecordChange(action.LeavesDocumentDirty)` on
+  BOTH the admitted path (via `ApplyDirtyStateForAction`) and the blocked
+  path (the event may already have mutated the model — the generation must
+  survive so the close-save loop can't release stale data). Undo/Redo toolbar buttons carry the accelerators —
   Ctrl+Z undo, Ctrl+Y and Ctrl+Shift+Z redo (WPF `EditorPage_KeyDown`
   parity) — and consume `_undoStack`/`_redoStack` of
   `Caelum.Ink.IUndoAction` (`UndoAsync`/`RedoAsync` awaited — both
@@ -362,16 +369,29 @@ the Task 9 Phase A save/autosave + close/dirty protocol is live (T9-B defers set
   `TryBeginDocumentEdit` leases guard `PushUndoAction`, undo/redo,
   `InsertExternalDocumentAsync`, `RotateCurrentPage_Click`; both doc-ops
   flush a dirty doc via `AutoSaveAsync` before rewriting the binary PDF.
+  Both are undoable through the private `DocumentSnapshotAction` (WPF
+  parity): they snapshot the before/after PDF bytes + persisted bookmark
+  list, `ReloadDocumentForOperationAsync` re-loads under the fresh session
+  and hands back a new lease, and a mid-operation failure rolls the file
+  bytes + bookmark sidecar back before the failure toast. Undo/redo pass
+  their operation lease to the action via `SetOperationLease` and validate
+  `snapshot.CompletedOperationLease` (the lease of the reloaded session);
+  `ApplyDocumentSnapshotAsync` writes bytes through
+  `PdfSaveCoordinator.RunExclusiveAsync` + `PdfAtomicFile` (temp → flush →
+  `Replace`), reloads, restores focus, refreshes bookmarks and calls
+  `RecentFilesService.UpdateMetadata`. `LeavesDocumentDirty => false` — the
+  snapshot write already persisted the state.
   `_documentSaveCoordinator.Reset()` runs on each document load;
   `EditorPage_PreviewKeyDown` swallows all shortcuts while
   `_documentInteractionBlocked`.
 
 ## Open Threads / Resume Context
 - **Status:** GREEN — `tools/winui-editor-smoke.ps1` 60/60; Tasks 7A/7B/
-  8A/8B + Task 9 Phase A (save/autosave + close/dirty protocol) live;
-  WinUI build 0 err/0 warn, headless suite 685/685 incl.
-  `WinUiSavePipelineSourceTests` 6/6 + `DocumentSaveCoordinatorTests`
-  (incl. `NavigationCloseCoordinator` behavioral) 17/17.
+  8A/8B + Task 9 Phase A (save/autosave + close/dirty protocol) live +
+  spec-fix (dirty tracking on every mutation path, `DocumentSnapshotAction`
+  undo for insert/rotate); WinUI build 0 err/0 warn, headless suite
+  691/691 incl. `WinUiSavePipelineSourceTests` 10/10 +
+  `DocumentSaveCoordinatorTests` 19/19.
 - **Deferred (by design):** `SettingsWindow`/page-template dialogs,
   `VersionControlService` UI, dormant `promptSaveAsAfterLoad` draft
   flow (no WPF caller), update-check UI (T9-B+).

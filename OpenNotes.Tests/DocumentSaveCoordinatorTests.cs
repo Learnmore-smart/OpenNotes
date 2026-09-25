@@ -475,6 +475,86 @@ public sealed class DocumentSaveCoordinatorTests
         });
     }
 
+    [Test]
+    public void RecordChangeLeavesDocumentDirtyTrueMarksDirty()
+    {
+        // PushUndoAction contract: an action reporting LeavesDocumentDirty ==
+        // true must flip the coordinator dirty so autosave/close persist it.
+        var coordinator = new DocumentSaveCoordinator();
+
+        Assert.That(coordinator.RecordChange(leavesDocumentDirty: true), Is.True);
+        Assert.Multiple(() =>
+        {
+            Assert.That(coordinator.IsDirty, Is.True);
+            Assert.That(coordinator.DirtyGeneration, Is.EqualTo(1));
+        });
+    }
+
+    [Test]
+    public async Task RecordChangeLeavesDocumentDirtyFalseBumpsGenerationWithoutDirtying()
+    {
+        // DocumentSnapshotAction path: a structural undo/redo already wrote
+        // the PDF bytes, so it reports LeavesDocumentDirty == false. The
+        // generation still bumps (staleness detection for in-flight saves)
+        // while a clean coordinator stays clean — SaveAsync must be a no-op.
+        var coordinator = new DocumentSaveCoordinator();
+
+        Assert.That(coordinator.RecordChange(leavesDocumentDirty: false), Is.True);
+        Assert.Multiple(() =>
+        {
+            Assert.That(coordinator.IsDirty, Is.False);
+            Assert.That(coordinator.DirtyGeneration, Is.EqualTo(1));
+        });
+
+        DocumentSaveResult result = await coordinator.SaveAsync(_ => Task.CompletedTask);
+        Assert.That(result.Attempted, Is.False, "a clean RecordChange must not schedule a save");
+    }
+
+    [Test]
+    public async Task CleanRecordChangeDuringActiveSaveStillForcesLatestGenerationWrite()
+    {
+        // RecordChange(false) while a save is in flight stays dirty for the
+        // duration and invalidates the older snapshot — the coordinator
+        // retries once so the persisted generation is the newest one. This
+        // is the snapshot-undo racing an autosave case.
+        var coordinator = new DocumentSaveCoordinator();
+        coordinator.MarkDirty();
+        var entered = NewSignal();
+        var release = NewSignal();
+        var persisted = new ConcurrentQueue<long>();
+
+        Task<DocumentSaveResult> first = coordinator.SaveAsync(async generation =>
+        {
+            persisted.Enqueue(generation);
+            entered.SetResult(true);
+            await release.Task;
+        });
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        coordinator.RecordChange(leavesDocumentDirty: false);
+        release.SetResult(true);
+        DocumentSaveResult stale = await first;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(stale.GenerationIsCurrent, Is.False);
+            Assert.That(coordinator.IsDirty, Is.True,
+                "a clean transition mid-save still invalidates the older snapshot");
+        });
+
+        DocumentSaveResult latest = await coordinator.SaveAsync(generation =>
+        {
+            persisted.Enqueue(generation);
+            return Task.CompletedTask;
+        });
+        Assert.Multiple(() =>
+        {
+            Assert.That(latest.GenerationIsCurrent, Is.True);
+            Assert.That(coordinator.IsDirty, Is.False);
+            Assert.That(persisted, Is.EqualTo(new[] { 1L, 2L }));
+        });
+    }
+
     private static TaskCompletionSource<bool> NewSignal() =>
         new(TaskCreationOptions.RunContinuationsAsynchronously);
 
