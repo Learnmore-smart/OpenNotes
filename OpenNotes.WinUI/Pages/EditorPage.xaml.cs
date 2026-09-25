@@ -9859,7 +9859,15 @@ namespace Caelum.Pages
 
         private async void SavePdf_Click(object sender, RoutedEventArgs e)
         {
-            await SaveAnnotationsToPdfAsync();
+            try
+            {
+                await SaveAnnotationsToPdfAsync();
+            }
+            catch (System.Exception ex)
+            {
+                // async-void click handler: no App.UnhandledException backstop.
+                System.Diagnostics.Debug.WriteLine($"[EditorPage] SavePdf faulted: {ex}");
+            }
         }
 
         /// <summary>

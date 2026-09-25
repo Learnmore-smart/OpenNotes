@@ -1660,10 +1660,18 @@ namespace Caelum
 
         private async void About_Click(object sender, RoutedEventArgs e)
         {
-            await WinUiDialogService.ShowInfoAsync(
-                RootGrid?.XamlRoot,
-                LocalizationService.Get("Main.AboutTitle"),
-                LocalizationService.Get("Main.AboutMessage"));
+            try
+            {
+                await WinUiDialogService.ShowInfoAsync(
+                    RootGrid?.XamlRoot,
+                    LocalizationService.Get("Main.AboutTitle"),
+                    LocalizationService.Get("Main.AboutMessage"));
+            }
+            catch (System.Exception ex)
+            {
+                // async-void click handler: no App.UnhandledException backstop.
+                System.Diagnostics.Debug.WriteLine($"[MainWindow] About faulted: {ex}");
+            }
         }
 
         // ── Keyboard shortcuts (WPF MainWindow_KeyDown parity) ──────────────
