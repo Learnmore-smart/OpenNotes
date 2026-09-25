@@ -163,10 +163,10 @@
 
 ## Task 10: Parity verification + installer + release cutover
 
-- [ ] Port remaining NUnit tests to `OpenNotes.Core.Tests`; document which UI tests become WinUI smoke scripts (`tools/Test-OpenNotes*.ps1` equivalents driving the WinUI window via UIA)
-- [ ] `installer.iss` → V6 (new AppId decision: keep `WindowsNotesApp` name + Caelum data dir for upgrade compatibility), portable zip, `release.yml` job for `v6.*` tags
-- [ ] Full manual feature checklist vs WPF build (checklist.md parity audit)
-- [ ] `git tag v6.0.0` release
+- [x] Port remaining NUnit tests to `OpenNotes.Core.Tests`; document which UI tests become WinUI smoke scripts (`tools/Test-OpenNotes*.ps1` equivalents driving the WinUI window via UIA) *(as implemented `c337b77`: no separate `OpenNotes.Core.Tests` exists — v6 `OpenNotes.Tests` is a strict superset of the WPF suite; new `WinUiParitySourceTests` pins WinUI surfaces; `tools/winui-smoke-map.md` maps every WPF smoke to its `winui-*` equivalent)*
+- [x] `installer.iss` → V6 (new AppId decision: keep `WindowsNotesApp` name + Caelum data dir for upgrade compatibility), portable zip, `release.yml` job for `v6.*` tags *(`c337b77`/`67e1fdd`: parameterized `MyAppSourceDir`/`MyAppWinUIPayload`; AppId/AppName/Caelum preserved; `release-winui` job handles `v6.*` + `6.x` dispatch; rev-parse guard + summary escapes fixed `3f85552`)*
+- [x] Full manual feature checklist vs WPF build (checklist.md parity audit) *(`c337b77`: `docs/winui3-parity-checklist.md` — full surface matrix + honest gap list G1–G10, `[manual]` markers on runtime-dependent rows)*
+- [ ] `git tag v6.0.0` release — **requires explicit user consent; do not run automatically**
 
 ---
 
