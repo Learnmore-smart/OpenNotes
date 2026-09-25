@@ -89,7 +89,8 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          if (git rev-parse "${{ steps.meta.outputs.tag }}" 2>$null) {
+          git rev-parse --verify --quiet "refs/tags/${{ steps.meta.outputs.tag }}" *>$null
+          if ($LASTEXITCODE -eq 0) {
             throw "Tag ${{ steps.meta.outputs.tag }} already exists."
           }
 
@@ -161,9 +162,9 @@ jobs:
           @"
           ## Release outputs
 
-          - Installer artifact: `${{ steps.meta.outputs.installer_name }}`
-          - Portable artifact: `${{ steps.meta.outputs.portable_name }}`
-          - Release tag: `${{ steps.meta.outputs.tag }}`
+          - Installer artifact: ``${{ steps.meta.outputs.installer_name }}``
+          - Portable artifact: ``${{ steps.meta.outputs.portable_name }}``
+          - Release tag: ``${{ steps.meta.outputs.tag }}``
           "@ >> $env:GITHUB_STEP_SUMMARY
 
   # ── WinUI channel (v6.* tags / 6.x manual dispatch) ────────────────────
@@ -244,7 +245,8 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          if (git rev-parse "${{ steps.meta.outputs.tag }}" 2>$null) {
+          git rev-parse --verify --quiet "refs/tags/${{ steps.meta.outputs.tag }}" *>$null
+          if ($LASTEXITCODE -eq 0) {
             throw "Tag ${{ steps.meta.outputs.tag }} already exists."
           }
 
@@ -319,7 +321,7 @@ jobs:
           @"
           ## Release outputs
 
-          - Installer artifact: `${{ steps.meta.outputs.installer_name }}`
-          - Portable artifact: `${{ steps.meta.outputs.portable_name }}`
-          - Release tag: `${{ steps.meta.outputs.tag }}`
+          - Installer artifact: ``${{ steps.meta.outputs.installer_name }}``
+          - Portable artifact: ``${{ steps.meta.outputs.portable_name }}``
+          - Release tag: ``${{ steps.meta.outputs.tag }}``
           "@ >> $env:GITHUB_STEP_SUMMARY
