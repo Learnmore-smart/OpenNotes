@@ -73,6 +73,39 @@ public sealed class WinUiToolFlyoutsSourceTests
     }
 
     [Test]
+    public void HighlighterFlyoutPortsTheWpfSizePreviewBandAndDividers()
+    {
+        string source = Read("Pages", "EditorPage.xaml.cs");
+
+        Assert.Multiple(() =>
+        {
+            // Entry point + toolbar dispatch (WPF _highlighterPopup parity).
+            Assert.That(source, Does.Contain("private void ShowHighlighterFlyout(FrameworkElement anchor)"));
+            Assert.That(source, Does.Contain("ShowHighlighterFlyout(clicked);"));
+            Assert.That(source, Does.Contain("ShowToolFlyout(flyout, ToolType.Highlighter, anchor);"));
+
+            // Size-preview band (WPF AddSizePreviewSection, isHighlighter
+            // branch): a horizontal stroke at the live size inside the
+            // alt-surface well, painted at the freehand alpha and following
+            // the size slider and palette/recents picks live.
+            Assert.That(source, Does.Contain("_highlighterFlyoutSizePreview"));
+            Assert.That(source, Does.Contain("_highlighterFlyoutSizePreview.StrokeThickness = args.NewValue"));
+            Assert.That(source, Does.Contain("_highlighterFlyoutSizePreview.Stroke = new SolidColorBrush("));
+            Assert.That(source, Does.Contain("GetHighlighterPreviewStrokeColor(HighlighterApplyMode.Freehand,"));
+            Assert.That(source, Does.Contain("StrokeThickness = _highlighterSize"));
+            Assert.That(source, Does.Contain("previewBorder.Clip = new RectangleGeometry"));
+
+            // Section rule lines (WPF ThemeDivider parity) ride the shared
+            // section-header helper so every non-first section is separated;
+            // the headerless pen behaviour grid inserts one explicitly.
+            Assert.That(source, Does.Contain("private static Border PopupSectionDivider("));
+            Assert.That(source, Does.Contain("PopupSectionDivider(topMargin)"));
+            Assert.That(source, Does.Contain("panel.Children.Add(PopupSectionDivider())"));
+            Assert.That(source, Does.Contain("private static FrameworkElement PopupSectionHeader("));
+        });
+    }
+
+    [Test]
     public void EraserFlyoutPortsTheWpfEraserPopupSurface()
     {
         string source = Read("Pages", "EditorPage.xaml.cs");

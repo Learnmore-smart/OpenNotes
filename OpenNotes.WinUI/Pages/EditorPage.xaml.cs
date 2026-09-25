@@ -218,6 +218,10 @@ namespace Caelum.Pages
         // inside the pen flyout (rebuilt per show; field mirrors the WPF
         // popup's persistent-child shape).
         private Microsoft.UI.Xaml.Shapes.Line _penFlyoutSizePreview;
+        // WPF _highlighterPopupSizePreview — the live size/colour stroke
+        // inside the highlighter flyout's preview well (rebuilt per show;
+        // the field mirrors the WPF popup's persistent-child shape).
+        private Microsoft.UI.Xaml.Shapes.Line _highlighterFlyoutSizePreview;
         private CancellationTokenSource _eraserPreviewCts;
         private bool _isRefreshingTextAlignmentOptions;
 
@@ -7184,6 +7188,8 @@ namespace Caelum.Pages
             slider.ValueChanged += (_, args) =>
             {
                 _highlighterSize = args.NewValue;
+                if (_highlighterFlyoutSizePreview != null)
+                    _highlighterFlyoutSizePreview.StrokeThickness = args.NewValue;
                 ApplyVisual();
                 if (_currentTool == ToolType.Highlighter)
                     ApplyToolToAllPages();
@@ -7203,6 +7209,9 @@ namespace Caelum.Pages
             {
                 markPalette?.Invoke(color);
                 _highlighterColor = color;
+                if (_highlighterFlyoutSizePreview != null)
+                    _highlighterFlyoutSizePreview.Stroke = new SolidColorBrush(
+                        GetHighlighterPreviewStrokeColor(HighlighterApplyMode.Freehand, color));
                 ApplyVisual();
                 if (HighlighterColorIndicator != null)
                 {
@@ -7226,6 +7235,42 @@ namespace Caelum.Pages
                 ApplyPickedColor,
                 markPalette);
             markPalette?.Invoke(_highlighterColor);
+
+            // Preview section (WPF AddSizePreviewSection, isHighlighter
+            // branch): a horizontal band drawn at the real stroke thickness
+            // inside the alt-surface well — it follows the size slider and
+            // palette/recents picks live and is painted at the freehand
+            // alpha (WPF GetHighlighterPreviewStrokeColor(Freehand) parity).
+            panel.Children.Add(PopupSectionHeader(
+                LocalizationService.Get("Editor.PopupPreview"), topMargin: 12));
+            var previewBorder = new Border
+            {
+                Height = 60,
+                CornerRadius = new CornerRadius(8),
+                Background = ResolveThemeBrush(
+                    "ThemeSurfaceAltBrush", Color.FromArgb(0xFF, 0xF1, 0xF3, 0xF5)),
+            };
+            // WPF ClipToBounds parity — a thick stroke cannot bleed past
+            // the rounded well corners.
+            previewBorder.SizeChanged += (_, args) =>
+                previewBorder.Clip = new RectangleGeometry
+                {
+                    Rect = new Rect(0, 0, args.NewSize.Width, args.NewSize.Height),
+                };
+            _highlighterFlyoutSizePreview = new Microsoft.UI.Xaml.Shapes.Line
+            {
+                X1 = 8,
+                Y1 = 30,
+                X2 = 212,
+                Y2 = 30,
+                Stroke = new SolidColorBrush(GetHighlighterPreviewStrokeColor(
+                    HighlighterApplyMode.Freehand, _highlighterColor)),
+                StrokeThickness = _highlighterSize,
+                StrokeStartLineCap = PenLineCap.Round,
+                StrokeEndLineCap = PenLineCap.Round,
+            };
+            previewBorder.Child = _highlighterFlyoutSizePreview;
+            panel.Children.Add(previewBorder);
 
             var flyout = new Flyout { Content = WrapToolFlyoutContent(panel) };
             ShowToolFlyout(flyout, ToolType.Highlighter, anchor);
@@ -7356,7 +7401,7 @@ namespace Caelum.Pages
             var behaviourGrid = new Grid
             {
                 ColumnSpacing = 6,
-                Margin = new Thickness(0, 12, 0, 6),
+                Margin = new Thickness(0, 0, 0, 6),
             };
             for (int col = 0; col < 3; col++)
                 behaviourGrid.ColumnDefinitions.Add(
@@ -7387,6 +7432,9 @@ namespace Caelum.Pages
                 Grid.SetColumn(toggle, column++);
                 behaviourGrid.Children.Add(toggle);
             }
+            // WPF AddPenBehaviourToggles parity — the toggle grid carries
+            // no section header, so the rule line goes in by hand.
+            panel.Children.Add(PopupSectionDivider());
             panel.Children.Add(behaviourGrid);
 
             // Smoothing selector (WPF AddPenSmoothingSection): Off/Low/
@@ -8035,14 +8083,49 @@ namespace Caelum.Pages
             ShowToolFlyout(flyout, ToolType.Select, anchor);
         }
 
-        private static TextBlock PopupSectionHeader(string text, double topMargin = 0) => new()
+        /// <summary>
+        /// WPF ThemeDivider parity — a 1px rule in the theme border brush
+        /// at 45% opacity, bled -4 horizontally to the flyout edge like the
+        /// WPF -16 popup margins. <see cref="PopupSectionHeader"/> emits it
+        /// before every non-first section; headerless sections (the pen
+        /// behaviour toggles) add it by hand.
+        /// </summary>
+        private static Border PopupSectionDivider(double topMargin = 12, double bottomMargin = 12) => new()
         {
-            Text = text,
-            FontSize = 13,
-            FontWeight = FontWeights.SemiBold,
-            Margin = new Thickness(0, topMargin, 0, 10),
-            Foreground = ResolveThemeBrush("ThemeSubtleForegroundBrush", Color.FromArgb(0xFF, 0x6B, 0x72, 0x80)),
+            Height = 1,
+            Margin = new Thickness(-4, topMargin, -4, bottomMargin),
+            Opacity = 0.45,
+            Background = ResolveThemeBrush("ThemeBorderBrush", Color.FromArgb(0xFF, 0xC9, 0xCE, 0xD6)),
         };
+
+        /// <summary>
+        /// Section header text. A non-first section (<paramref name="topMargin"/>
+        /// &gt; 0 — the marker every flyout already uses) is preceded by the
+        /// WPF-style rule line via <see cref="PopupSectionDivider"/>, so the
+        /// pen, highlighter, eraser, shape and selection flyouts all get the
+        /// separators uniformly.
+        /// </summary>
+        private static FrameworkElement PopupSectionHeader(string text, double topMargin = 0)
+        {
+            var header = new TextBlock
+            {
+                Text = text,
+                FontSize = 13,
+                FontWeight = FontWeights.SemiBold,
+                Margin = new Thickness(0, 0, 0, 10),
+                Foreground = ResolveThemeBrush("ThemeSubtleForegroundBrush", Color.FromArgb(0xFF, 0x6B, 0x72, 0x80)),
+            };
+            if (topMargin <= 0)
+                return header;
+            return new StackPanel
+            {
+                Children =
+                {
+                    PopupSectionDivider(topMargin),
+                    header,
+                },
+            };
+        }
 
         private static ToggleButton BuildGlyphToggleButton(
             string tooltip, string automationId, UIElement glyph)
