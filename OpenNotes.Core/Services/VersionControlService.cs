@@ -23,10 +23,25 @@ namespace Caelum.Services
             return dir;
         }
 
-        public static async Task SaveVersionAsync(
+        public static Task SaveVersionAsync(
             string filePath,
             Dictionary<int, PageAnnotation> annotations,
             CancellationToken cancellationToken = default)
+        {
+            // Serialize + write + prune are pure sidecar I/O — keep them off
+            // the caller's thread (the editor's save pipeline invokes this
+            // from the UI dispatcher). Ordering is preserved: callers still
+            // await the task, so the version lands only after the atomic PDF
+            // save it mirrors has already succeeded.
+            return Task.Run(
+                () => SaveVersionCoreAsync(filePath, annotations, cancellationToken),
+                cancellationToken);
+        }
+
+        private static async Task SaveVersionCoreAsync(
+            string filePath,
+            Dictionary<int, PageAnnotation> annotations,
+            CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var dir = GetVersionDir(filePath);

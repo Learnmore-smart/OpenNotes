@@ -281,7 +281,9 @@ namespace Caelum
         {
             var preparedEditors = new List<EditorPage>();
             var releasesStarted = new HashSet<EditorPage>();
+            var releasedEditors = new HashSet<EditorPage>();
             bool releaseHandoff = false;
+            bool closeDispatched = false;
             try
             {
                 var allEditors = _tabs
@@ -308,6 +310,7 @@ namespace Caelum
                     {
                         if (!await releaseTask.WaitAsync(cancellationToken))
                             return;
+                        releasedEditors.Add(editor);
                     }
                     catch (OperationCanceledException) when (!releaseTask.IsCompleted)
                     {
@@ -318,29 +321,66 @@ namespace Caelum
                         _ = ContinueTimedOutWindowCloseAsync(
                             preparedEditors.ToList(),
                             releaseIndex,
-                            releaseTask);
+                            releaseTask,
+                            releasedEditors);
                         return;
                     }
                 }
 
-                _allowWindowClose = true;
+                // _allowWindowClose is a single-shot latch armed inside the
+                // queued re-close itself: if TryEnqueue fails (dispatcher
+                // shutting down) the latch must NOT stay armed, or the next
+                // user close would bypass the save/release protocol entirely.
                 // Close() must run on the UI dispatcher — the continuation
                 // may be finishing on a thread-pool thread.
-                DispatcherQueue.TryEnqueue(
-                    Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () => Close());
+                if (!DispatcherQueue.TryEnqueue(
+                        Microsoft.UI.Dispatching.DispatcherQueuePriority.Low,
+                        () =>
+                        {
+                            _allowWindowClose = true;
+                            Close();
+                        }))
+                {
+                    throw new InvalidOperationException(
+                        "The window re-close could not be queued on the dispatcher.");
+                }
+                closeDispatched = true;
             }
             catch (Exception ex)
             {
-                ShowToast(LocalizationService.Format("Editor.SaveFailed", ex.Message), "", 3500);
+                ShowToast(LocalizationService.Format("Editor.SaveFailed", ex.Message), "", 3500);
             }
             finally
             {
-                if (!_allowWindowClose)
+                if (!closeDispatched)
                 {
                     foreach (var editor in preparedEditors)
                     {
-                        if (!releasesStarted.Contains(editor))
+                        if (releasesStarted.Contains(editor))
+                            continue;
+                        // Per-item guard: a faulted cancel must not strand
+                        // _windowCloseWorkflowActive (and its close gate).
+                        // This also runs during a release handoff so the
+                        // not-yet-released suffix stays interactive while
+                        // the native release settles in the background.
+                        try
+                        {
                             editor.CancelClosePreparation();
+                        }
+                        catch (Exception ex)
+                        {
+                            System.Diagnostics.Debug.WriteLine(
+                                $"[MainWindow] CancelClosePreparation faulted: {ex}");
+                        }
+                    }
+
+                    // Editors whose release already settled are dead
+                    // objects — a partial close failure must not leave them
+                    // displayed as usable zombie tabs.
+                    foreach (var tab in _tabs.ToList())
+                    {
+                        if (releasedEditors.Contains(GetTabEditor(tab)))
+                            RemoveTabAfterResourcesReleased(tab);
                     }
                 }
 
@@ -361,17 +401,20 @@ namespace Caelum
         private async Task ContinueTimedOutWindowCloseAsync(
             IReadOnlyList<EditorPage> preparedEditors,
             int releaseIndex,
-            Task<bool> releaseTask)
+            Task<bool> releaseTask,
+            HashSet<EditorPage> releasedEditors)
         {
             try
             {
                 if (!await releaseTask.ConfigureAwait(true))
                     throw new InvalidOperationException("The document release did not complete.");
+                releasedEditors.Add(preparedEditors[releaseIndex]);
 
                 for (int i = releaseIndex + 1; i < preparedEditors.Count; i++)
                 {
                     if (!await preparedEditors[i].ReleaseResourcesAsync().ConfigureAwait(true))
                         throw new InvalidOperationException("The document release did not complete.");
+                    releasedEditors.Add(preparedEditors[i]);
                 }
 
                 _allowWindowClose = true;
@@ -379,12 +422,33 @@ namespace Caelum
             }
             catch (Exception ex)
             {
-                ShowToast(LocalizationService.Format("Editor.SaveFailed", ex.Message), "", 3500);
+                ShowToast(LocalizationService.Format("Editor.SaveFailed", ex.Message), "", 3500);
                 // The suffix was prepared but never released — a
                 // timeout/failure must not strand those editors in a
                 // close-preparation state or leave them half-detached.
+                // Per-item guard: one faulted cancel must not skip the rest
+                // or strand _windowCloseWorkflowActive.
                 for (int i = releaseIndex + 1; i < preparedEditors.Count; i++)
-                    preparedEditors[i].CancelClosePreparation();
+                {
+                    if (releasedEditors.Contains(preparedEditors[i]))
+                        continue;
+                    try
+                    {
+                        preparedEditors[i].CancelClosePreparation();
+                    }
+                    catch (Exception cancelEx)
+                    {
+                        System.Diagnostics.Debug.WriteLine(
+                            $"[MainWindow] CancelClosePreparation faulted: {cancelEx}");
+                    }
+                }
+                // Editors whose release already settled are dead objects —
+                // never leave them displayed as usable zombie tabs.
+                foreach (var tab in _tabs.ToList())
+                {
+                    if (releasedEditors.Contains(GetTabEditor(tab)))
+                        RemoveTabAfterResourcesReleased(tab);
+                }
                 _windowCloseWorkflowActive = false;
                 _windowCloseCts?.Dispose();
                 _windowCloseCts = null;
@@ -492,6 +556,12 @@ namespace Caelum
 
         public void AddNewHomeTab(bool activate = true)
         {
+            // Workflow gate (WPF parity): while a close/navigation workflow
+            // holds an editor's lifecycle, no new surface may appear —
+            // ActivateTab is already gated, so an un-gated creation would
+            // strand a dead, never-activated tab mid-close.
+            if (_windowCloseWorkflowActive || _navigationWorkflowActive || _tabCloseWorkflows.Count > 0)
+                return;
             var tab = new AppTab { Title = GetHomeTabTitle(), Icon = "Home" };
             var frame = new Frame();
             frame.Navigated += Frame_Navigated;
@@ -589,7 +659,7 @@ namespace Caelum
                     if (!await editor.PrepareForCloseAsync(timeout.Token).WaitAsync(timeout.Token))
                     {
                         foreach (var prepared in preparedEditors)
-                            prepared.CancelClosePreparation();
+                            TryCancelClosePreparation(prepared);
                         return;
                     }
                     if (wasDirty)
@@ -619,12 +689,12 @@ namespace Caelum
                             preparedEditors.ToList(),
                             releaseIndex,
                             releaseTask);
-                        ShowToast(LocalizationService.Get("Editor.SaveFailed"), "", 3500);
+                        ShowToast(LocalizationService.Get("Editor.CloseTimedOut"), "", 3500);
                         return;
                     }
                     if (!releaseCompleted)
                     {
-                        prepared.CancelClosePreparation();
+                        TryCancelClosePreparation(prepared);
                         return;
                     }
                 }
@@ -636,8 +706,9 @@ namespace Caelum
                 if (!releaseStarted)
                 {
                     foreach (var prepared in preparedEditors)
-                        prepared.CancelClosePreparation();
-                    activeEditor?.CancelClosePreparation();
+                        TryCancelClosePreparation(prepared);
+                    if (activeEditor != null)
+                        TryCancelClosePreparation(activeEditor);
                 }
                 ShowToast(LocalizationService.Format("Editor.SaveFailed", ex.Message), "", 3500);
             }
@@ -681,8 +752,26 @@ namespace Caelum
                 // input/autosave admission while the failed/current
                 // release remains blocked for an explicit retry.
                 for (int i = releaseIndex + 1; i < preparedEditors.Count; i++)
-                    preparedEditors[i].CancelClosePreparation();
+                    TryCancelClosePreparation(preparedEditors[i]);
                 _tabCloseWorkflows.Remove(tab);
+            }
+        }
+
+        /// <summary>
+        /// Per-item close-preparation cancel: a faulted cancel inside a
+        /// workflow's cleanup loop must not skip the remaining editors or
+        /// escape an async-void caller (no App.UnhandledException backstop).
+        /// </summary>
+        private static void TryCancelClosePreparation(EditorPage editor)
+        {
+            try
+            {
+                editor?.CancelClosePreparation();
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine(
+                    $"[MainWindow] CancelClosePreparation faulted: {ex}");
             }
         }
 
@@ -1315,6 +1404,10 @@ namespace Caelum
         {
             if (string.IsNullOrWhiteSpace(filePath))
                 return;
+            // Workflow gate (WPF parity): refuse new tabs while a
+            // close/navigation workflow owns the editor lifecycle.
+            if (_windowCloseWorkflowActive || _navigationWorkflowActive || _tabCloseWorkflows.Count > 0)
+                return;
 
             RecentFilesService.AddOrPromote(filePath);
             var tab = new AppTab
@@ -1356,12 +1449,24 @@ namespace Caelum
         {
             if (GetActiveHomePage() != null)
                 return;
+            // Workflow gate: a drop that arrives while a close/navigation
+            // workflow owns the lifecycle is refused — OpenFileInNewTab is
+            // gated anyway, and the conversion work would be wasted.
+            if (_windowCloseWorkflowActive || _navigationWorkflowActive || _tabCloseWorkflows.Count > 0)
+                return;
 
             var deferral = e.GetDeferral();
             string[] paths;
             try
             {
                 paths = await HomePageDragDropHelper.GetDroppedImportablePathsAsync(e.DataView);
+            }
+            catch (Exception ex)
+            {
+                // async-void: the deferral must still complete (finally
+                // runs on return) and nothing may escape.
+                System.Diagnostics.Debug.WriteLine($"[MainWindow] Drop path collection failed: {ex}");
+                return;
             }
             finally
             {
@@ -1371,13 +1476,22 @@ namespace Caelum
             if (paths.Length == 0)
                 return;
 
-            foreach (var path in paths)
+            try
             {
-                var pdfPath = await TryImportDroppedDocumentAsync(path);
-                if (!string.IsNullOrWhiteSpace(pdfPath))
-                    OpenFileInNewTab(pdfPath);
+                foreach (var path in paths)
+                {
+                    var pdfPath = await TryImportDroppedDocumentAsync(path);
+                    if (!string.IsNullOrWhiteSpace(pdfPath))
+                        OpenFileInNewTab(pdfPath);
+                }
+                e.Handled = true;
             }
-            e.Handled = true;
+            catch (Exception ex)
+            {
+                // async-void last-resort guard: no App.UnhandledException
+                // backstop exists, so nothing may escape.
+                System.Diagnostics.Debug.WriteLine($"[MainWindow] Drop processing failed: {ex}");
+            }
         }
 
         /// <summary>WPF <c>TryImportDroppedDocumentAsync</c>: PDFs pass
@@ -1471,6 +1585,24 @@ namespace Caelum
                     RootGrid?.XamlRoot,
                     LocalizationService.Get("Main.UpdateCheckFailedTitle"),
                     GetUpdateCheckFailureMessage(ex));
+            }
+            catch (Exception ex)
+            {
+                // async-void last-resort guard: an unexpected failure must
+                // not escape (no App.UnhandledException backstop). Surface
+                // the generic update-check error where the dialog allows.
+                System.Diagnostics.Debug.WriteLine($"[MainWindow] Update check faulted: {ex}");
+                try
+                {
+                    await WinUiDialogService.ShowErrorAsync(
+                        RootGrid?.XamlRoot,
+                        LocalizationService.Get("Main.UpdateCheckFailedTitle"),
+                        ex.Message);
+                }
+                catch (Exception dialogEx)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[MainWindow] Update-check error dialog faulted: {dialogEx}");
+                }
             }
             finally
             {

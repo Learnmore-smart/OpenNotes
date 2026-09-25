@@ -191,6 +191,8 @@ namespace Caelum.Services
             ["Editor.PrintFailed"] = ("Failed to print PDF: {0}", "\u6253\u5370 PDF \u5931\u8D25\uFF1A{0}", "Échec de l'impression du PDF : {0}"),
             ["Editor.SaveFailed"] = ("Failed to save annotations: {0}", "\u4FDD\u5B58\u6CE8\u91CA\u5931\u8D25\uFF1A{0}", "Échec de l'enregistrement des annotations : {0}"),
             ["Editor.AutoSaveFailed"] = ("Auto-save failed: {0}", "\u81EA\u52A8\u4FDD\u5B58\u5931\u8D25\uFF1A{0}", "Échec de l'enregistrement automatique : {0}"),
+            ["Editor.SaveTimedOut"] = ("Save timed out: {0}", "\u4FDD\u5B58\u8D85\u65F6\uFF1A{0}", "L'enregistrement a expiré : {0}"),
+            ["Editor.CloseTimedOut"] = ("Closing is taking longer than expected; the tab will finish closing in the background.", "\u5173\u95ED\u8017\u65F6\u8F83\u957F\uFF0C\u6807\u7B7E\u9875\u5C06\u5728\u540E\u53F0\u5B8C\u6210\u5173\u95ED\u3002", "La fermeture prend plus de temps que prévu ; l'onglet se fermera en arrière-plan."),
             ["Editor.UndoFailed"] = ("Undo failed: {0}", "\u64A4\u9500\u5931\u8D25\uFF1A{0}", "Échec de l'annulation : {0}"),
             ["Editor.RedoFailed"] = ("Redo failed: {0}", "\u91CD\u505A\u5931\u8D25\uFF1A{0}", "Échec du rétablissement : {0}"),
             ["Editor.Searching"] = ("Searching...", "\u641C\u7D22\u4E2D...", "Recherche..."),

@@ -208,6 +208,22 @@ public sealed class DocumentSaveCoordinator
         }
     }
 
+    /// <summary>
+    /// The currently tracked save task, or null when the pipeline is idle.
+    /// Callers that must quiesce the pipeline without starting another save
+    /// (a document reload about to <see cref="Reset"/> the generation space)
+    /// join this directly — the task covers the FULL save, including the
+    /// version-sidecar write that runs outside the PDF path lease.
+    /// </summary>
+    public Task<DocumentSaveResult> InFlightSave
+    {
+        get
+        {
+            lock (_gate)
+                return _inFlight;
+        }
+    }
+
     /// <summary>Resets a newly loaded document; active persistence is a bug.</summary>
     public void Reset()
     {

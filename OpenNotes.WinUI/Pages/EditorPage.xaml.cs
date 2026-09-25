@@ -747,6 +747,16 @@ namespace Caelum.Pages
 
             try
             {
+                // Join any in-flight save before the reload mutates state —
+                // a structural op can reach this path while the autosave
+                // pipeline is mid-write (e.g. snapshot undo racing a tick),
+                // and Reset() below throws on an active save. Aborting after
+                // _pageControls.Clear() would leave the file/UI diverged, so
+                // the drain runs before any teardown. It covers the FULL
+                // save task — the version sidecar write runs outside the PDF
+                // path lease — and a faulted save is only observed: the
+                // reload discards the coordinator's generation state anyway.
+                await DrainInFlightDocumentSaveAsync();
                 _currentPdfPath = filePath;
                 SetCompatProbeText(filePath);
                 PagesContainer.Children.Clear();
@@ -760,7 +770,8 @@ namespace Caelum.Pages
                 // WPF LoadPdfAsync parity: a new document starts a fresh
                 // generation space. Reset() throws if a save is in flight —
                 // every mutating boundary (close/tab/doc-op) flushes or
-                // blocks before it can reach a reload.
+                // blocks before it can reach a reload, and the drain above
+                // covers the save that was already in flight.
                 _documentSaveCoordinator.Reset();
                 SyncDirtyStateMirror();
                 // Task 8: retire any live text/sticky edit session before the
@@ -784,6 +795,10 @@ namespace Caelum.Pages
                 if (!ValidateDocumentOperationLease(operationLease))
                     return;
                 _completedLoadSessionId = sessionId;
+                // WPF LoadPdf parity: refresh the library entry's page count
+                // and timestamp once the new document is known good.
+                RecentFilesService.UpdateMetadata(
+                    filePath, _pdfService.PageCount, File.GetLastWriteTimeUtc(filePath));
 
                 int pageCount = _pdfService.PageCount;
 
@@ -1332,6 +1347,12 @@ namespace Caelum.Pages
                 TrimPageBitmapWorkingSet(visiblePages);
             }
             catch (OperationCanceledException) { }
+            catch (Exception ex)
+            {
+                // async-void timer callback: no App.UnhandledException
+                // backstop exists, so nothing may escape.
+                System.Diagnostics.Debug.WriteLine($"[EditorPage] Scroll re-render tick faulted: {ex}");
+            }
         }
 
         // ── Zoom ────────────────────────────────────────────────────────────
@@ -1414,6 +1435,12 @@ namespace Caelum.Pages
                 TrimPageBitmapWorkingSet(visiblePages);
             }
             catch (OperationCanceledException) { }
+            catch (Exception ex)
+            {
+                // async-void timer callback: no App.UnhandledException
+                // backstop exists, so nothing may escape.
+                System.Diagnostics.Debug.WriteLine($"[EditorPage] Zoom re-render tick faulted: {ex}");
+            }
         }
 
         private void UpdateZoomLabel()
@@ -8460,70 +8487,88 @@ namespace Caelum.Pages
 
         private async void InsertPdfPages_Click(object sender, RoutedEventArgs e)
         {
-            using var operationLease = CaptureDocumentOperationLease(_pdfService);
-            if (!ValidateDocumentOperationLease(operationLease) ||
-                string.IsNullOrWhiteSpace(_currentPdfPath))
-                return;
-            string filePath = _currentPdfPath;
-
-            var picker = new FileOpenPicker { SuggestedStartLocation = PickerLocationId.DocumentsLibrary };
-            picker.FileTypeFilter.Add(".pdf");
-            WinRT.Interop.InitializeWithWindow.Initialize(picker, GetWindowHandle());
-            var file = await picker.PickSingleFileAsync();
-            if (file == null || !ValidateDocumentOperationLease(operationLease))
-                return;
-
-            int sourcePageCount;
             try
             {
-                using var source = PdfiumRasterizerFactory.Shared.LoadFromFile(file.Path);
-                sourcePageCount = source.PageCount;
+                using var operationLease = CaptureDocumentOperationLease(_pdfService);
+                if (!ValidateDocumentOperationLease(operationLease) ||
+                    string.IsNullOrWhiteSpace(_currentPdfPath))
+                    return;
+                string filePath = _currentPdfPath;
+
+                var picker = new FileOpenPicker { SuggestedStartLocation = PickerLocationId.DocumentsLibrary };
+                picker.FileTypeFilter.Add(".pdf");
+                WinRT.Interop.InitializeWithWindow.Initialize(picker, GetWindowHandle());
+                var file = await picker.PickSingleFileAsync();
+                if (file == null || !ValidateDocumentOperationLease(operationLease))
+                    return;
+
+                int sourcePageCount;
+                try
+                {
+                    using var source = PdfiumRasterizerFactory.Shared.LoadFromFile(file.Path);
+                    sourcePageCount = source.PageCount;
+                }
+                catch (Exception ex)
+                {
+                    if (ValidateDocumentOperationLease(operationLease))
+                        GetMainWindow()?.ShowToast(
+                            LocalizationService.Format("Editor.SourcePdfReadFailed", ex.Message), "", 3500);
+                    return;
+                }
+
+                var range = await TryPromptPageRangeAsync(sourcePageCount);
+                if (range == null || !ValidateDocumentOperationLease(operationLease))
+                    return;
+
+                int insertPageIndex = Math.Max(0, GetCurrentPageIndex());
+                await InsertExternalDocumentAsync(
+                    () => _pdfService.InsertPdfPagesAsync(
+                        filePath, file.Path, insertPageIndex, range.Value.Start, range.Value.End),
+                    insertPageIndex,
+                    range.Value.End - range.Value.Start + 1,
+                    LocalizationService.Get("Editor.PdfPagesInserted"),
+                    operationLease);
             }
             catch (Exception ex)
             {
-                if (ValidateDocumentOperationLease(operationLease))
-                    GetMainWindow()?.ShowToast(
-                        LocalizationService.Format("Editor.SourcePdfReadFailed", ex.Message), "", 3500);
-                return;
+                // async-void click handler: no App.UnhandledException
+                // backstop exists, so nothing may escape.
+                System.Diagnostics.Debug.WriteLine($"[EditorPage] InsertPdfPages faulted: {ex}");
             }
-
-            var range = await TryPromptPageRangeAsync(sourcePageCount);
-            if (range == null || !ValidateDocumentOperationLease(operationLease))
-                return;
-
-            int insertPageIndex = Math.Max(0, GetCurrentPageIndex());
-            await InsertExternalDocumentAsync(
-                () => _pdfService.InsertPdfPagesAsync(
-                    filePath, file.Path, insertPageIndex, range.Value.Start, range.Value.End),
-                insertPageIndex,
-                range.Value.End - range.Value.Start + 1,
-                LocalizationService.Get("Editor.PdfPagesInserted"),
-                operationLease);
         }
 
         private async void InsertImagePage_Click(object sender, RoutedEventArgs e)
         {
-            using var operationLease = CaptureDocumentOperationLease(_pdfService);
-            if (!ValidateDocumentOperationLease(operationLease) ||
-                string.IsNullOrWhiteSpace(_currentPdfPath))
-                return;
-            string filePath = _currentPdfPath;
+            try
+            {
+                using var operationLease = CaptureDocumentOperationLease(_pdfService);
+                if (!ValidateDocumentOperationLease(operationLease) ||
+                    string.IsNullOrWhiteSpace(_currentPdfPath))
+                    return;
+                string filePath = _currentPdfPath;
 
-            var picker = new FileOpenPicker { SuggestedStartLocation = PickerLocationId.PicturesLibrary };
-            foreach (var ext in new[] { ".png", ".jpg", ".jpeg", ".bmp" })
-                picker.FileTypeFilter.Add(ext);
-            WinRT.Interop.InitializeWithWindow.Initialize(picker, GetWindowHandle());
-            var file = await picker.PickSingleFileAsync();
-            if (file == null || !ValidateDocumentOperationLease(operationLease))
-                return;
+                var picker = new FileOpenPicker { SuggestedStartLocation = PickerLocationId.PicturesLibrary };
+                foreach (var ext in new[] { ".png", ".jpg", ".jpeg", ".bmp" })
+                    picker.FileTypeFilter.Add(ext);
+                WinRT.Interop.InitializeWithWindow.Initialize(picker, GetWindowHandle());
+                var file = await picker.PickSingleFileAsync();
+                if (file == null || !ValidateDocumentOperationLease(operationLease))
+                    return;
 
-            int insertPageIndex = Math.Max(0, GetCurrentPageIndex());
-            await InsertExternalDocumentAsync(
-                () => _pdfService.InsertImagePageAsync(filePath, file.Path, insertPageIndex),
-                insertPageIndex,
-                1,
-                LocalizationService.Get("Editor.ImagePageInserted"),
-                operationLease);
+                int insertPageIndex = Math.Max(0, GetCurrentPageIndex());
+                await InsertExternalDocumentAsync(
+                    () => _pdfService.InsertImagePageAsync(filePath, file.Path, insertPageIndex),
+                    insertPageIndex,
+                    1,
+                    LocalizationService.Get("Editor.ImagePageInserted"),
+                    operationLease);
+            }
+            catch (Exception ex)
+            {
+                // async-void click handler: no App.UnhandledException
+                // backstop exists, so nothing may escape.
+                System.Diagnostics.Debug.WriteLine($"[EditorPage] InsertImagePage faulted: {ex}");
+            }
         }
 
         /// <summary>
@@ -9579,6 +9624,14 @@ namespace Caelum.Pages
                         LocalizationService.Get("Editor.AutoSaved"), "", 1500);
                 }
             }
+            catch (Exception ex)
+            {
+                // async-void timer callback: no App.UnhandledException
+                // backstop exists, so nothing may escape (AutoSaveAsync
+                // already reports save failures — this is the last-resort
+                // guard for the lease/toast plumbing around it).
+                System.Diagnostics.Debug.WriteLine($"[AutoSave] Tick faulted: {ex}");
+            }
             finally
             {
                 Volatile.Write(ref _autoSaveTimerRunning, 0);
@@ -9683,6 +9736,39 @@ namespace Caelum.Pages
                 }
                 if (ownsLease)
                     operationLease.Dispose();
+            }
+        }
+
+        /// <summary>
+        /// Joins the save pipeline's in-flight task(s) before a document
+        /// reload resets the coordinator's generation space — the
+        /// <c>SaveUntilCleanAsync</c> join semantics applied to quiescence
+        /// rather than persistence. The awaited task is the FULL save
+        /// (including the version sidecar write, which runs outside the PDF
+        /// path lease), and the loop repeats until no tracked save remains.
+        /// A faulted save is only observed: the reload discards the
+        /// coordinator's state regardless, and the owning workflow already
+        /// surfaced the failure.
+        /// </summary>
+        private async Task DrainInFlightDocumentSaveAsync()
+        {
+            while (true)
+            {
+                Task<DocumentSaveResult> pending;
+                lock (_saveGate)
+                    pending = _autoSaveInFlight;
+                pending ??= _documentSaveCoordinator.InFlightSave;
+                if (pending == null)
+                    return;
+                try
+                {
+                    await pending.ConfigureAwait(true);
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine(
+                        $"[EditorPage] In-flight save faulted during reload drain: {ex}");
+                }
             }
         }
 
@@ -9997,7 +10083,7 @@ namespace Caelum.Pages
                     return false;
                 SyncDirtyStateMirror();
                 GetMainWindow()?.ShowToast(
-                    LocalizationService.Format("Editor.AutoSaveFailed", ex.Message),
+                    LocalizationService.Format("Editor.SaveTimedOut", ex.Message),
                     "",
                     3500);
                 return false;
@@ -10008,7 +10094,7 @@ namespace Caelum.Pages
                     return false;
                 SyncDirtyStateMirror();
                 GetMainWindow()?.ShowToast(
-                    LocalizationService.Format("Editor.AutoSaveFailed", ex.Message),
+                    LocalizationService.Format("Editor.SaveFailed", ex.Message),
                     "",
                     3500);
                 return false;
@@ -10098,7 +10184,7 @@ namespace Caelum.Pages
                     return false;
                 SyncDirtyStateMirror();
                 GetMainWindow()?.ShowToast(
-                    LocalizationService.Format("Editor.AutoSaveFailed", ex.Message),
+                    LocalizationService.Format("Editor.SaveTimedOut", ex.Message),
                     "",
                     3500);
                 return false;
@@ -10108,10 +10194,20 @@ namespace Caelum.Pages
                 if (!ValidateDocumentOperationLease(operationLease))
                     return false;
                 SyncDirtyStateMirror();
-                await WinUiDialogService.ShowErrorAsync(
+                // The error dialog is best-effort only: ShowErrorAsync waits
+                // on the process-wide DialogGate, which has no cancellation -
+                // awaiting it here could wedge _closePreparationInFlight
+                // forever behind a stuck dialog and deadlock the tab/window
+                // close protocol. Fire-and-forget with an observed exception
+                // keeps the failure visible without blocking the protocol.
+                _ = WinUiDialogService.ShowErrorAsync(
                     XamlRoot ?? GetMainWindow()?.Content?.XamlRoot,
                     LocalizationService.Get("Common.Error"),
-                    LocalizationService.Format("Editor.SaveFailed", ex.Message));
+                    LocalizationService.Format("Editor.SaveFailed", ex.Message))
+                    .ContinueWith(
+                        t => System.Diagnostics.Debug.WriteLine(
+                            $"[EditorPage] Close-preparation error dialog faulted: {t.Exception}"),
+                        TaskContinuationOptions.OnlyOnFaulted);
                 return false;
             }
             finally
@@ -10275,14 +10371,27 @@ namespace Caelum.Pages
                     // still has to run.
                 }
             }
+            bool released;
             try
             {
-                await ReleaseResourcesAsync().ConfigureAwait(true);
+                released = await ReleaseResourcesAsync().ConfigureAwait(true);
             }
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"[EditorPage] Deferred release failed: {ex}");
+                released = false;
             }
+            if (released)
+                return;
+            // A refused/failed release on a detached page has no retry
+            // path — nobody calls ReleaseResourcesAsync again for this
+            // instance. Record the failure so a queued activation can never
+            // silently resume the editor, and hold the input block + timer
+            // stop that a successful release would have set (a pre-cleanup
+            // failure may have re-armed both through CancelClosePreparation).
+            _releaseState.MarkFailed();
+            _autoSaveTimer?.Stop();
+            SetDocumentInteractionBlocked(true);
         }
 
         // ── Lifecycle ───────────────────────────────────────────────────────
@@ -10291,99 +10400,18 @@ namespace Caelum.Pages
         {
             if (_resourcesReleased)
                 return;
-            // Once the async protocol owns the lifecycle, a forced unload
-            // must not clear the annotation collectors under a pending save
-            // or race a tracked native release — let the protocol finish.
-            if (_releaseResourcesInFlight != null ||
-                _closePreparationInFlight != null ||
-                _navigationPreparationInFlight != null ||
-                _releaseState.IsReleaseInFlight)
-            {
-                _ = DeferredTeardownAsync();
-                return;
-            }
-            if (!_releaseState.TryBeginRelease())
-                return;
-            try
-            {
-                _releaseState.MarkCleanupStarted();
-                ReleaseCoreResources();
-                _releaseState.MarkSucceeded();
-            }
-            catch
-            {
-                _releaseState.MarkFailed();
-                throw;
-            }
-        }
-
-        /// <summary>
-        /// Synchronous teardown — the Unloaded/OnNavigatedFrom path when no
-        /// close protocol is in flight (e.g. a navigation that already ran
-        /// its save preparation, or a clean editor). The async protocol uses
-        /// <see cref="ReleaseResourcesCoreAsync"/> instead.
-        /// </summary>
-        private void ReleaseCoreResources()
-        {
-            _resourcesReleased = true;
-            _isHostActive = false;
-
-            if (_languageChangedSubscribed)
-            {
-                LocalizationService.LanguageChanged -= EditorPage_LanguageChanged;
-                _languageChangedSubscribed = false;
-            }
-
-            _loadCts?.Cancel();
-            _reRenderCts?.Cancel();
-            _scrollReRenderCts?.Cancel();
-            _thumbnailLoadCts?.Cancel();
-            _pdfSearchCts?.Cancel();
-            if (_autoSaveTimer != null)
-            {
-                _autoSaveTimer.Stop();
-                _autoSaveTimer.Tick -= AutoSaveTimer_Tick;
-                _autoSaveTimer = null;
-            }
-            _zoomRenderDebounceTimer.Stop();
-            _scrollRenderDebounceTimer.Stop();
-            _documentOperationSession.Cancel();
-
-            _penService?.Dispose();
-            _penService = null;
-
-            // Task 8: close the sticky bubble + drop the text selection
-            // chrome/toolbar before the pages tear down — a late layout pass
-            // against a detached container throws. CloseTransientUi owns the
-            // popup/flyout/gesture sweep (WPF "release" parity);
-            // DeselectTextBox additionally drops the selection itself.
-            CloseTransientUi("release");
-            DeselectTextBox();
-            // WPF parity: the PDF text-selection state is session state —
-            // drop it with the rest of the transient UI on teardown.
-            ClearPdfTextSelection();
-
-            foreach (var page in _pageControls)
-            {
-                // ReleaseResources = CancelInteraction + hidden-ink reveal /
-                // selection-dash / laser-fade timer teardown (the timers
-                // otherwise keep ticking against a detached page).
-                page.ReleaseResources();
-            }
-
-            // PdfService owns the rasterizer/document; async-dispose is
-            // fire-and-forget on teardown (the tab is leaving the tree) but
-            // failures must still be observed — an unobserved fault can take
-            // down the process on a GC pass.
-            var service = _pdfService;
-            _ = service.DisposeAsync().AsTask().ContinueWith(
-                t => System.Diagnostics.Debug.WriteLine(
-                    $"[EditorPage] PdfService.DisposeAsync faulted: {t.Exception}"),
-                TaskContinuationOptions.OnlyOnFaulted);
-
-            ReleaseThumbnailCache();
-            _pageControls.Clear();
-            _documentInteractionBlocked = true;
+            // Every unload funnels through the tracked async release — even
+            // when no protocol task is in flight. The old synchronous
+            // teardown set _resourcesReleased BEFORE its sweep, so a
+            // mid-teardown throw both escaped through the Unloaded /
+            // OnNavigatedFrom handlers (there is no App.UnhandledException
+            // backstop) and left a false "released" marker that made a later
+            // ReleaseResourcesAsync report success without releasing
+            // anything. DeferredTeardownAsync joins any pending protocol
+            // task first, then runs the same awaited teardown a managed
+            // close uses — including the save barrier a dirty forced-unload
+            // still needs and the awaited PdfService dispose.
+            _ = DeferredTeardownAsync();
         }
     }
 

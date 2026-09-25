@@ -364,8 +364,23 @@ the Task 9 Phase A save/autosave + close/dirty protocol is live (T9-B defers set
   `_pdfService.DisposeAsync`. `CancelClosePreparation`/`ResumeDocumentInteraction`
   reopen admission+coordinator (`CancelCloseRequest`+`CancelClose`) only when
   `CanResumeInteraction`. `ReleaseResources` (Unloaded/`OnNavigatedFrom`/
-  `ShutdownEditor`) defers to `DeferredTeardownAsync` while any protocol task
-  is in flight, else runs `ReleaseCoreResources` synchronously.
+  `ShutdownEditor`) now ALWAYS funnels through `DeferredTeardownAsync`:
+  it joins any pending protocol task, then runs the same awaited
+  `ReleaseResourcesAsync` teardown a managed close uses (save barrier +
+  awaited `PdfService.DisposeAsync`), so a mid-teardown throw can no longer
+  escape the Unloaded handler or leave a false "released" marker. A refused
+  or faulted deferred release calls `_releaseState.MarkFailed()` — a
+  detached editor has no retry path and must never silently resume.
+  `LoadPdfAsync` drains in-flight saves via `DrainInFlightDocumentSaveAsync`
+  (`_autoSaveInFlight` + coordinator `InFlightSave`, the FULL task including
+  the version sidecar) before `_documentSaveCoordinator.Reset()`, and
+  refreshes `RecentFilesService.UpdateMetadata` after a validated load.
+  Every async-void handler (insert clicks, debounce ticks, autosave tick)
+  now has a last-resort `catch (Exception)` — there is no
+  App.UnhandledException backstop. The close-prep failure path fire-and-
+  forgets its error dialog (observed via OnlyOnFaulted continuation) so a
+  stuck DialogGate cannot wedge `_closePreparationInFlight`; OCE surfaces
+  `Editor.SaveTimedOut`.
   `TryBeginDocumentEdit` leases guard `PushUndoAction`, undo/redo,
   `InsertExternalDocumentAsync`, `RotateCurrentPage_Click`; both doc-ops
   flush a dirty doc via `AutoSaveAsync` before rewriting the binary PDF.
@@ -395,3 +410,6 @@ the Task 9 Phase A save/autosave + close/dirty protocol is live (T9-B defers set
 - **Deferred (by design):** `SettingsWindow`/page-template dialogs,
   `VersionControlService` UI, dormant `promptSaveAsAfterLoad` draft
   flow (no WPF caller), update-check UI (T9-B+).
+
+## Change History
+- 2026-09-24 Lifecycle hardening: unload funnels through `DeferredTeardownAsync` (sync `ReleaseCoreResources` removed); save drain before `LoadPdfAsync` reset; `RecentFilesService.UpdateMetadata` on load; async-void guards on all seven handlers; close-prep error dialog is fire-and-forget; deferred-teardown failures mark `_releaseState` failed; `Editor.SaveTimedOut` label for cancelled close/nav saves. | Devin

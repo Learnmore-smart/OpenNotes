@@ -13,6 +13,7 @@ Production, WPF-independent save state machine used by EditorPage. It owns the d
 | `SaveAsync(Func<long, Task>)` | Joins `_inFlight` before checking `_isDirty`, closing the clean/completion observation window; returns one shared `DocumentSaveResult` task. Exceptions remain observable and the dirty state remains recoverable. |
 | `SaveUntilCleanAsync(Func<long, Task>, bool)` | Joins any active task even if its callback has already cleared dirty state, retries after generation mismatch, and only succeeds once the latest generation is persisted. Final-close mode blocks new edits during the protocol. |
 | `Reset()` / `CancelCloseRequest()` | Resets load state or reopens editing after a failed/timeout close or a resource-release retry. |
+| `InFlightSave` | The currently tracked save task (or null when idle). Reload/drain callers that must quiesce the pipeline without starting a save join it directly — it covers the FULL save including the version sidecar write, and clears in `RunSaveAsync`'s finally. |
 
 ## Open Threads / Resume Context
 
@@ -23,6 +24,7 @@ Production, WPF-independent save state machine used by EditorPage. It owns the d
 
 - Never mark a newer generation clean merely because an older save completed.
 - Never clear `_inFlight` before the underlying task has completed; all waiters must observe the same result/exception.
+- `Reset()` still throws on an active save — callers performing a document reload must drain `InFlightSave` (plus the page-level `_autoSaveInFlight`) before resetting the generation space.
 - Final-close callers must await `SaveUntilCleanAsync` before disposing the PdfService or removing a tab; the clean check and `_closeCompleted` transition are atomic.
 
 ## Change History
@@ -32,3 +34,4 @@ Production, WPF-independent save state machine used by EditorPage. It owns the d
 | 2026-08-23 | Added for Wave 2 revision close-safe autosave/manual coordination. | Codex |
 | 2026-08-23 | Verified manual/autosave coalescing, generation mismatch retry, final-close blocking, exception recovery, and close-time joining of an active completion task with deterministic production-state tests. | Codex |
 | 2026-08-23 | Final review: late model edits are retained for a latest-generation close retry; `SaveAsync` joins active work before dirty short-circuiting; final close only completes under the clean/in-flight lock. | Codex |
+| 2026-09-24 | Lifecycle hardening: added `InFlightSave` so `LoadPdfAsync` can join/drain an in-flight save (including the version sidecar write outside the PDF lease) before `Reset()` — snapshot undo no longer crashes mid-reload. | Devin |

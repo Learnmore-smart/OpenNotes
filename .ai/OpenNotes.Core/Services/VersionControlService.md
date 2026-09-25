@@ -35,6 +35,7 @@
 - 目录布局 `{SHA256(path)}\*.json` 是既有历史寻址方式，不能随 OpenNotes 品牌迁移改为新数据目录。
 - 目录根通过 `ProductInfo.GetDataDirectory()` 获取；默认布局和兼容路径不变，只有显式 `OPENNOTES_DATA_ROOT` 测试进程才会重定向。
 - `GetVersions` 必须保持最新在前；序列化形状仍是 `Dictionary<int, PageAnnotation>`。
+- `SaveVersionAsync` 现在通过 `Task.Run` 把序列化/写入/剪枝放到线程池（EditorPage 的保存管线从 UI dispatcher 调用它）；排序语义不变——调用方仍 await，sidecar 只在原子 PDF 保存成功后落盘。传入的 `annotations` 是每次保存新建的 DTO 快照，可安全跨线程序列化。
 
 ## V5 Completion Status
 - Task 17 的 50 条上限、剪枝、恢复前快照和同 tick 唯一文件名已实现；自动化构建/测试通过。
@@ -43,3 +44,4 @@
 - 2026-08-18: 建立镜像并记录历史无上限/秒级覆盖的旧行为。
 - 2026-08-20: 文件名增加毫秒与 GUID，列表改按最后写入时间排序；EditorPage 保存/自动保存改为 PDF 成功后 await 版本写入。
 - 2026-08-21: 版本历史根目录改由 `ProductInfo.GetDataDirectory()` 提供；显式 `OPENNOTES_DATA_ROOT` 可隔离测试 sidecar，默认路径和哈希布局不变。
+- 2026-09-24: 生命周期加固 —— `SaveVersionAsync` 拆为公开包装 + `SaveVersionCoreAsync`，文件 I/O 移出 UI 线程（`Task.Run`），保持成功排序与异常传播不变。| Devin
