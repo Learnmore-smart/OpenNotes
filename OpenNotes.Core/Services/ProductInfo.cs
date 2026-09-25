@@ -11,6 +11,9 @@ public static class ProductInfo
     public const string LegacyAppxIdentity = "WindowsNotesApp";
     public const string RepositoryUrl = "https://github.com/Learnmore-smart/OpenNotes";
     public const string WebsiteUrl = "https://learnmore-smart.github.io/OpenNotes/";
+    // WPF release-line version. Both shells prefer their own assembly
+    // version at runtime (OpenNotes.csproj 5.2.x / OpenNotes.WinUI.csproj
+    // 6.0.0); this constant is only the shared fallback + test anchor.
     public const string Version = "5.2.15";
     public const string DataRootOverrideEnvironmentVariable = "OPENNOTES_DATA_ROOT";
     public static string Description => LocalizationService.Get("Product.Description");

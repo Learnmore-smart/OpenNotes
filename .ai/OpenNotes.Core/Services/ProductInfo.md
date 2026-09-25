@@ -1,4 +1,5 @@
 # OpenNotes.Core/Services/ProductInfo.cs
+> 2026-09-25 GREEN: `Version` documented as the WPF release-line constant — both shells prefer their own assembly version at runtime (WinUI = 6.0.0 via `OpenNotes.WinUI.csproj`); compat identifiers unchanged.
 > Last updated: 2026-09-22 GREEN: visible version is 5.2.15 for the sidebar content-offset fix; every Caelum/WindowsNotesApp identity, data root, and URL remains unchanged.
 > 2026-09-02 GREEN: visible version is 5.2.9 for Edge-PDF compatibility; every Caelum/WindowsNotesApp identity, data root, and URL remains unchanged.
 > 2026-08-31 GREEN: visible version is 5.2.8 for the eraser stylus-crash hotfix; every Caelum/WindowsNotesApp identity, data root, and URL remains unchanged.

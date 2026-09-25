@@ -17,6 +17,14 @@
 #ifndef MyAppExeName
   #define MyAppExeName "OpenNotes.exe"
 #endif
+#ifndef MyAppSourceDir
+  ; Payload directory staged by the CI publish step. The WPF job publishes
+  ; to .\publish (default); the WinUI/V6 job publishes to .\publish-winui
+  ; and invokes ISCC with
+  ;   /DMyAppSourceDir=publish-winui /DMyAppExeName=OpenNotes.WinUI.exe
+  ;   /DMyAppWinUIPayload
+  #define MyAppSourceDir "publish"
+#endif
 #ifndef MyAppOutputBaseFilename
   #define MyAppOutputBaseFilename "OpenNotes-Setup-" + MyAppVersion
 #endif
@@ -54,8 +62,20 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Name: "startmenu"; Description: "Create a Start Menu shortcut"; GroupDescription: "{cm:AdditionalIcons}"
 
 [Files]
-; Install all published files
-Source: "publish\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+; Install all published files (WPF: publish\*, WinUI/V6: publish-winui\* —
+; both are self-contained single-folder outputs including pdfium.dll).
+Source: "{#MyAppSourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+
+#ifdef MyAppWinUIPayload
+[InstallDelete]
+; Same AppId + install dir means a V6 setup upgrades a 5.x (WPF) install
+; in place. Sweep the stale WPF payload so only OpenNotes.WinUI.exe remains.
+Type: files; Name: "{app}\OpenNotes.exe"
+Type: files; Name: "{app}\OpenNotes.dll"
+Type: files; Name: "{app}\OpenNotes.deps.json"
+Type: files; Name: "{app}\OpenNotes.runtimeconfig.json"
+Type: files; Name: "{app}\OpenNotes.pdb"
+#endif
 
 [Icons]
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"

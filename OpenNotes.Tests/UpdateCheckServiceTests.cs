@@ -72,7 +72,9 @@ public sealed class UpdateCheckServiceTests
                 Does.Contain("Learnmore-smart/OpenNotes/releases/latest"));
             Assert.That(captured.Headers.Accept.Select(value => value.MediaType),
                 Does.Contain("application/vnd.github+json"));
-            Assert.That(captured.Headers.UserAgent.ToString(), Is.EqualTo($"OpenNotes/{ProductInfo.Version}"));
+            // The UA announces the caller's installed version (normalized to
+            // four parts), so WPF 5.x and WinUI 6.x requests are distinguishable.
+            Assert.That(captured.Headers.UserAgent.ToString(), Is.EqualTo("OpenNotes/5.2.7.0"));
             Assert.That(captured.Headers.GetValues("X-GitHub-Api-Version"),
                 Is.EqualTo(new[] { "2022-11-28" }));
         });

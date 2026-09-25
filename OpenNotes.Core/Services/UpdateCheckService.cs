@@ -87,6 +87,7 @@ public sealed class UpdateCheckService
         {
             HttpResponseMessage response = await SendLatestReleaseRequestAsync(
                 LatestReleaseApiUri,
+                normalizedInstalled,
                 timeout.Token).ConfigureAwait(false);
             try
             {
@@ -95,6 +96,7 @@ public sealed class UpdateCheckService
                     response.Dispose();
                     response = await SendLatestReleaseRequestAsync(
                         LegacyLatestReleaseApiUri,
+                        normalizedInstalled,
                         timeout.Token).ConfigureAwait(false);
                 }
 
@@ -180,12 +182,16 @@ public sealed class UpdateCheckService
 
     private async Task<HttpResponseMessage> SendLatestReleaseRequestAsync(
         Uri requestUri,
+        Version installedVersion,
         CancellationToken cancellationToken)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, requestUri);
         request.Headers.Accept.Add(
             new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
-        request.Headers.UserAgent.ParseAdd($"OpenNotes/{ProductInfo.Version}");
+        // Announce the caller's real channel: the WPF shell reports its 5.x
+        // assembly version, the WinUI shell its 6.x one — the shared
+        // ProductInfo.Version constant would mislabel the WinUI requests.
+        request.Headers.UserAgent.ParseAdd($"OpenNotes/{installedVersion}");
         request.Headers.Add("X-GitHub-Api-Version", "2022-11-28");
         return await _httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
     }

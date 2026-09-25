@@ -1,4 +1,5 @@
 # installer.iss
+> 2026-09-25 GREEN: V6/WinUI parameterization — `MyAppSourceDir`/`MyAppWinUIPayload` defines added (`publish-winui` payload + `OpenNotes.WinUI.exe` + legacy-payload sweep); defaults keep the WPF 5.x release path byte-identical; AppId, AppName, per-user semantics unchanged.
 > 2026-09-22 GREEN: default installer version is 5.2.15 for the sidebar content-offset fix; AppId, per-user semantics, and upgrade compatibility remain preserved.
 > 2026-09-02 GREEN: default installer version is 5.2.9 for Edge-PDF compatibility; AppId, per-user semantics, and upgrade compatibility remain preserved.
 > 2026-08-31 GREEN: default installer version is 5.2.8; AppId, per-user semantics, and upgrade compatibility are preserved.

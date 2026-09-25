@@ -1,5 +1,5 @@
 # installer.iss
-> Last updated: 2026-08-24（5.0.0 release metadata） | Protection: STANDARD
+> Last updated: 2026-09-25 (V6 WinUI payload parameterization) | Protection: STANDARD
 
 ## Purpose
 
@@ -7,6 +7,8 @@ Defines the Inno Setup package for the OpenNotes Windows desktop application.
 
 ## Open Threads / Resume Context
 
+- **Status:** ready_for_release (6.0.0 WinUI channel wired)
+- `installer.iss` is now parameterized: `[Files]` reads `{#MyAppSourceDir}\*` (default `publish` = WPF leg unchanged); the release.yml `release-winui` job passes `/DMyAppSourceDir=publish-winui /DMyAppExeName=OpenNotes.WinUI.exe /DMyAppWinUIPayload`. `MyAppWinUIPayload` adds `[InstallDelete]` sweeping stale WPF `OpenNotes.*` files since a V6 setup shares the same AppId + `{autopf}\OpenNotes` dir (in-place upgrade). AppId/AppName/`Caelum` data dir preserved.
 - **Status:** ready_for_release (5.2.15 sidebar content-offset fix)
 - Default version is `5.2.15`; tag `v5.2.15` triggers GitHub Actions to publish installer and portable ZIP. AppId and per-user upgrade remain unchanged.
 - **Status:** released (5.2.9 Edge-PDF compatibility release)

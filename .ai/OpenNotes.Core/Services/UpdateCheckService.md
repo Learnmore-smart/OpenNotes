@@ -1,6 +1,6 @@
 # OpenNotes.Core/Services/UpdateCheckService.cs
 
-> Last updated: 2026-09-01 | Protection: STANDARD
+> Last updated: 2026-09-25 (V6: User-Agent reports caller version) | Protection: STANDARD
 
 ## Purpose
 
@@ -28,5 +28,6 @@ Check the latest stable OpenNotes GitHub Release without owning UI, process laun
 
 | Date | Change | Author |
 |---|---|---|
+| 2026-09-25 | V6 Task 10: `SendLatestReleaseRequestAsync` takes the caller's normalized installed version so the `OpenNotes/{version}` User-Agent distinguishes the WPF 5.x and WinUI 6.x channels (previously pinned to `ProductInfo.Version`); `UpdateCheckServiceTests` asserts `OpenNotes/5.2.7.0`. | Devin |
 | 2026-09-01 | Implemented the fail-closed GitHub latest-release service; focused tests pass 22/22. | Codex |
 | 2026-09-01 | Created before the update-check service implementation. | Codex |
