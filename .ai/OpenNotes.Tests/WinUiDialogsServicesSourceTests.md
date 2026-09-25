@@ -35,6 +35,11 @@ Follows the same `Read()`/`ProjectRoot()` helper pattern as
 normalizes line endings).
 
 ## Change History
+- 2026-09-25 Residual pass: SettingsDialog contract now pins `Opened`-deferred
+  subscriptions + `_opened` guards; structural-ops contract pins
+  `TryRollbackStructuralOperationAsync`, the `Editor.DocumentReloadFailed`
+  surface, and ≥8 `BeginStructuralOperation()` occurrences (the snapshot
+  undo/redo boundary is latched too). | Devin
 - 2026-09-25 Task 9 Phase B quality pass: picker contract pins the real
   `Editor.InsertPageDialogTitle`/`Subtitle` keys and bans the
   nonexistent `Editor.PageTemplateTitle`/`Subtitle`; the structural-ops

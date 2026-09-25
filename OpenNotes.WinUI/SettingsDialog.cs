@@ -36,7 +36,11 @@ namespace Caelum
     ///
     /// Theme brushes baked into code-built labels are re-resolved on
     /// <see cref="WinUiThemeService.ThemeApplied"/> so previewed theme changes
-    /// repaint the open dialog like WPF's DynamicResource did.
+    /// repaint the open dialog like WPF's DynamicResource did. Both static
+    /// subscriptions attach in <see cref="ContentDialog.Opened"/> and detach
+    /// in <see cref="ContentDialog.Closed"/> — a <c>ShowAsync</c> that throws
+    /// before opening must not leak them; both handlers also guard on
+    /// <c>_opened</c>.
     /// </summary>
     public sealed class SettingsDialog : ContentDialog
     {
@@ -121,16 +125,27 @@ namespace Caelum
             ApplyLocalization();
             RestoreControlState(currentSettings);
 
-            Opened += (_, _) => _opened = true;
+            // PageTemplatePickerDialog parity: attach to the static change
+            // events only once the dialog is actually open — a ShowAsync that
+            // throws before opening never raises Closed, so ctor-time
+            // subscription would leak the handlers and leave a never-shown
+            // dialog answering language/theme changes.
+            Opened += (_, _) =>
+            {
+                if (_opened)
+                    return; // defensive re-show guard: never double-subscribe
+                _opened = true;
+                LocalizationService.LanguageChanged += OnLanguageChanged;
+                WinUiThemeService.ThemeApplied += OnThemeApplied;
+            };
             PrimaryButtonClick += (_, _) =>
             {
                 SelectedSettings = GetSelectedSettings();
                 _confirmed = true;
             };
-            LocalizationService.LanguageChanged += OnLanguageChanged;
-            WinUiThemeService.ThemeApplied += OnThemeApplied;
             Closed += (_, _) =>
             {
+                _opened = false;
                 LocalizationService.LanguageChanged -= OnLanguageChanged;
                 WinUiThemeService.ThemeApplied -= OnThemeApplied;
                 // WPF CancelButton_Click/CloseButton_Click parity — also covers
@@ -546,6 +561,8 @@ namespace Caelum
 
         private void OnThemeApplied(object sender, EventArgs e)
         {
+            if (!_opened)
+                return;
             foreach (var binding in _themeBindings)
                 binding.Element.SetValue(binding.Property, Res(binding.Key, binding.Fallback));
             // The card swatch border is theme-bound but the swatch fills are

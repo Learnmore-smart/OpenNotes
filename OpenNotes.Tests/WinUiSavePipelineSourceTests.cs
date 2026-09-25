@@ -153,7 +153,7 @@ public sealed class WinUiSavePipelineSourceTests
             // Dirty flush before the binary PDF is rewritten.
             Assert.That(editor.Substring(insert, 2200), Does.Contain("_documentSaveCoordinator.IsDirty"),
                 "Insert must flush a dirty document first");
-            Assert.That(editor.Substring(rotate, 1600), Does.Contain("_documentSaveCoordinator.IsDirty"),
+            Assert.That(editor.Substring(rotate, 2400), Does.Contain("_documentSaveCoordinator.IsDirty"),
                 "Rotate must flush a dirty document first");
         });
     }
@@ -247,10 +247,22 @@ public sealed class WinUiSavePipelineSourceTests
             Assert.That(insertBody, Does.Contain("beforeBookmarks = PageBookmarkService.Load(filePath).ToList();"));
             Assert.That(insertBody, Does.Contain("PageBookmarkService.ApplyPageInsert("));
             Assert.That(insertBody, Does.Contain("PushUndoAction(new DocumentSnapshotAction("));
-            Assert.That(insertBody, Does.Contain("await WriteDocumentBytesAsync(filePath, before, currentLease.Token);"),
-                "insert failure must roll the document bytes back");
-            Assert.That(insertBody, Does.Contain("PageBookmarkService.Replace(filePath, beforeBookmarks ?? new List<PageBookmark>());"),
-                "insert failure must restore the bookmark sidecar");
+            Assert.That(insertBody, Does.Contain("await TryRollbackStructuralOperationAsync("),
+                "insert failure must roll back via the shared helper (re-leases a dead lease)");
+            Assert.That(insertBody, Does.Contain("Editor.DocumentReloadFailed"),
+                "a post-mutation reload failure must surface, not silently return");
+
+            // The shared rollback helper performs the actual byte + sidecar
+            // restore; pin it once at method level.
+            int rollback = editor.IndexOf("private async Task<DocumentOperationLease> RollbackStructuralOperationAsync(", StringComparison.Ordinal);
+            int rollbackEnd = editor.IndexOf("private async Task<(DocumentOperationLease", rollback, StringComparison.Ordinal);
+            Assert.That(rollback, Is.GreaterThanOrEqualTo(0));
+            Assert.That(rollbackEnd, Is.GreaterThan(rollback));
+            string rollbackBody = editor.Substring(rollback, rollbackEnd - rollback);
+            Assert.That(rollbackBody, Does.Contain("await WriteDocumentBytesAsync(filePath, beforeBytes, currentLease.Token);"),
+                "rollback must restore the document bytes");
+            Assert.That(rollbackBody, Does.Contain("PageBookmarkService.Replace(filePath, beforeBookmarks ?? new List<PageBookmark>());"),
+                "rollback must restore the bookmark sidecar");
 
             // Rotate: before/after byte snapshots + snapshot push.
             int rotate = editor.IndexOf("private async void RotateCurrentPage_Click(", StringComparison.Ordinal);
@@ -258,9 +270,11 @@ public sealed class WinUiSavePipelineSourceTests
             int rotateEnd = editor.IndexOf("\n        }", rotate, StringComparison.Ordinal);
             rotateEnd = editor.IndexOf("\n        }", rotateEnd + 1, StringComparison.Ordinal);
             string rotateBody = editor.Substring(rotate, rotateEnd - rotate);
-            Assert.That(rotateBody, Does.Contain("byte[] before = await File.ReadAllBytesAsync(filePath, operationLease.Token);"));
+            Assert.That(rotateBody, Does.Contain("before = await File.ReadAllBytesAsync(filePath, operationLease.Token);"));
             Assert.That(rotateBody, Does.Contain("byte[] after = await File.ReadAllBytesAsync(filePath, operationLease.Token);"));
             Assert.That(rotateBody, Does.Contain("PushUndoAction(new DocumentSnapshotAction(this, before, after, pageIndex, pageIndex));"));
+            Assert.That(rotateBody, Does.Contain("await TryRollbackStructuralOperationAsync("),
+                "rotate post-mutation failure must roll back via the shared helper");
 
             // Undo/redo hand their lease to a snapshot action and validate
             // the lease of the RELOADED session it publishes.

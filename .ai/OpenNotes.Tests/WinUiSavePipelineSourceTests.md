@@ -58,4 +58,11 @@ coordinator/admission/release/navigation types are shared Core services.
 
 ## Open Threads / Resume Context
 
-- **Status:** GREEN — 10/10 pass in the 691-test suite (post spec-fix).
+- **Status:** GREEN — 10/10 pass in the 700-test suite (post residual pass).
+
+## Change History
+- 2026-09-25 Residual pass: insert-rollback asserts repointed at the shared
+  `RollbackStructuralOperationAsync` body (import now calls
+  `TryRollbackStructuralOperationAsync`); rotate body asserts adjusted for
+  hoisted rollback state + gained a `TryRollback` pin; dirty-flush window
+  widened for the hoisted declarations. | Devin

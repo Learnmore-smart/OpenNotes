@@ -43,6 +43,10 @@ Central catalog for English, Simplified Chinese, and French UI strings and cultu
 - 2026-08-24 UI refresh adds EN/ZH/FR Previous/Next page labels and expands workspace labels to White/Paper/Mist/Warm/Slate/Midnight; missing keys still fail catalog verification.
 - 2026-08-24 Sticky editor refresh adds the EN/ZH/FR `Editor.MoveStickyNoteEditor` drag instruction; the visible header continues to reuse the localized Sticky Note tool label.
 - 2026-09-24 Lifecycle hardening adds EN/ZH/FR `Editor.SaveTimedOut` ("Save timed out: {0}") and `Editor.CloseTimedOut` (background close notice) for the close/navigation timeout toasts; placeholder parity preserved. | Devin
+- 2026-09-25 Residual pass adds `Editor.DocumentReloadFailed` (EN/ZH/FR) — the
+  {0} reason each structural op formats into its failure message when a
+  post-mutation `ReloadDocumentForOperationAsync` returns null.
+  | Devin
 - 2026-09-25 Task 9 Phase B quality pass adds `Main.OpenReleaseFailed`
   (EN/ZH/FR) — the WinUI `CheckForUpdates_Click` browser-launch failure
   message (a `Process.Start` failure is NOT an update-check failure).

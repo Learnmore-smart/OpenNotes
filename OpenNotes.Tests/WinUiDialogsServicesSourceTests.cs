@@ -61,11 +61,18 @@ public sealed class WinUiDialogsServicesSourceTests
             Assert.That(dialog, Does.Contain("if (!_confirmed)"));
             Assert.That(dialog, Does.Contain("PreviewSettings(_originalSettings)"));
             // Live language/theme re-localization + repaint subscriptions
-            // are released on close.
+            // attach in Opened (a ShowAsync that throws before opening never
+            // raises Closed — ctor-time subscription would leak them) and are
+            // released on close; both handlers guard on _opened.
+            Assert.That(dialog, Does.Contain("Opened +="));
+            Assert.That(dialog, Does.Contain("_opened = true;"));
+            Assert.That(dialog, Does.Contain("_opened = false;"));
             Assert.That(dialog, Does.Contain("LocalizationService.LanguageChanged += OnLanguageChanged"));
             Assert.That(dialog, Does.Contain("LocalizationService.LanguageChanged -= OnLanguageChanged"));
             Assert.That(dialog, Does.Contain("WinUiThemeService.ThemeApplied += OnThemeApplied"));
             Assert.That(dialog, Does.Contain("WinUiThemeService.ThemeApplied -= OnThemeApplied"));
+            Assert.That(dialog, Does.Contain("if (_opened)"));
+            Assert.That(dialog, Does.Contain("if (!_opened)"));
             // Every WPF-exposed setting row exists (language, autosave,
             // pressure, pen-only, smoothing, theme, performance, backdrop).
             Assert.That(dialog, Does.Contain("_languageComboBox"));
@@ -224,6 +231,17 @@ public sealed class WinUiDialogsServicesSourceTests
             Assert.That(editor, Does.Contain("await _pdfService.DuplicatePageAsync(filePath, pageIndex)"));
             Assert.That(editor, Does.Contain("private IDisposable BeginStructuralOperation()"));
             Assert.That(editor, Does.Contain("private async Task<DocumentOperationLease> RollbackStructuralOperationAsync("));
+            // Residual pass: post-mutation reload failures restore + report
+            // (dead incoming lease is re-captured while the session still owns
+            // the path — a swapped document refuses silently), and the undo/
+            // redo snapshot boundary holds the same structural latch.
+            Assert.That(editor, Does.Contain("TryRollbackStructuralOperationAsync("));
+            Assert.That(editor, Does.Contain("\"Editor.DocumentReloadFailed\""));
+            Assert.That(
+                editor.Split("BeginStructuralOperation()").Length - 1,
+                Is.GreaterThanOrEqualTo(8),
+                "import + rotate + insert + blank-insert + delete + duplicate + " +
+                "ApplyDocumentSnapshotAsync must all hold the structural latch");
         });
 
         string editorXaml = Read("Pages", "EditorPage.xaml");

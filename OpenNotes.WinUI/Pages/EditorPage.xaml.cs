@@ -8962,7 +8962,25 @@ namespace Caelum.Pages
                         return;
                     currentLease = await ReloadDocumentForOperationAsync(filePath, currentLease);
                     if (currentLease == null)
+                    {
+                        // Post-mutation reload failure — the file bytes moved
+                        // but the loaded document didn't. TryRollback re-leases
+                        // when the failed reload retired the lease; a swapped
+                        // document refuses silently (WPF parity), otherwise the
+                        // failure is surfaced instead of silently returning.
+                        var (rolledBack, stillOurs) = await TryRollbackStructuralOperationAsync(
+                            filePath, before, beforeBookmarks, focusBefore,
+                            currentLease, "Import");
+                        if (!stillOurs)
+                            return;
+                        currentLease = rolledBack;
+                        GetMainWindow()?.ShowToast(
+                            LocalizationService.Format(
+                                "Editor.ImportFailed",
+                                LocalizationService.Get("Editor.DocumentReloadFailed")),
+                            "\uE783", 3500);
                         return;
+                    }
                     int focused = Math.Max(0, Math.Min(insertPageIndex, _pageControls.Count - 1));
                     if (!ValidateDocumentOperationLease(currentLease))
                         return;
@@ -8993,38 +9011,24 @@ namespace Caelum.Pages
                 {
                     // A stale import must not roll back or report against the
                     // replacement document. Only the still-live transaction
-                    // may restore its before-bytes and sidecar.
-                    if (!ValidateDocumentOperationLease(currentLease))
-                        return;
-
+                    // may restore its before-bytes and sidecar — TryRollback
+                    // re-leases when the failed reload retired currentLease.
                     if (operationMayHaveChangedDocument && before != null)
                     {
-                        try
-                        {
-                            await WriteDocumentBytesAsync(filePath, before, currentLease.Token);
-                            if (!ValidateDocumentOperationLease(currentLease))
-                                return;
-                            PageBookmarkService.Replace(filePath, beforeBookmarks ?? new List<PageBookmark>());
-                            currentLease = await ReloadDocumentForOperationAsync(filePath, currentLease);
-                            if (currentLease == null)
-                                return;
-                            if (!ValidateDocumentOperationLease(currentLease))
-                                return;
-                            JumpToPage(Math.Max(0, Math.Min(focusBefore, _pageControls.Count - 1)));
-                            RefreshBookmarks(_loadSessionId, filePath, currentLease);
-                        }
-                        catch (OperationCanceledException)
-                        {
+                        var (rolledBack, stillOurs) = await TryRollbackStructuralOperationAsync(
+                            filePath, before, beforeBookmarks, focusBefore,
+                            currentLease, "Import");
+                        if (!stillOurs)
                             return;
-                        }
-                        catch (Exception rollbackException)
-                        {
-                            if (ValidateDocumentOperationLease(currentLease))
-                                System.Diagnostics.Debug.WriteLine($"[Import] Rollback failed: {rollbackException}");
-                        }
+                        currentLease = rolledBack;
                     }
-                    if (ValidateDocumentOperationLease(currentLease))
-                        GetMainWindow()?.ShowToast(LocalizationService.Format("Editor.ImportFailed", ex.Message), "", 3500);
+                    else if (!ValidateDocumentOperationLease(currentLease))
+                    {
+                        return;
+                    }
+
+                    GetMainWindow()?.ShowToast(
+                        LocalizationService.Format("Editor.ImportFailed", ex.Message), "", 3500);
                 }
                 finally
                 {
@@ -9064,6 +9068,13 @@ namespace Caelum.Pages
                     return;
 
                 string filePath = _currentPdfPath;
+                byte[] before = null;
+                int pageIndex = 0;
+                // Rotation doesn't move bookmarks, but the shared rollback
+                // helper restores the persisted sidecar — snapshot it so the
+                // restore is a byte-identical no-op, not a wipe.
+                List<PageBookmark> beforeBookmarks = null;
+                bool operationMayHaveChangedDocument = false;
                 try
                 {
                     if (!ValidateDocumentOperationLease(operationLease))
@@ -9071,10 +9082,12 @@ namespace Caelum.Pages
                     if (_documentSaveCoordinator.IsDirty &&
                         (!await AutoSaveAsync(operationLease) || !ValidateDocumentOperationLease(operationLease)))
                         return;
-                    int pageIndex = GetCurrentPageIndex();
-                    byte[] before = await File.ReadAllBytesAsync(filePath, operationLease.Token);
+                    pageIndex = GetCurrentPageIndex();
+                    before = await File.ReadAllBytesAsync(filePath, operationLease.Token);
                     if (!ValidateDocumentOperationLease(operationLease))
                         return;
+                    beforeBookmarks = PageBookmarkService.Load(filePath).ToList();
+                    operationMayHaveChangedDocument = true;
                     await _pdfService.RotatePageAsync(filePath, pageIndex, 1);
                     if (!ValidateDocumentOperationLease(operationLease))
                         return;
@@ -9083,7 +9096,24 @@ namespace Caelum.Pages
                         return;
                     var refreshedLease = await ReloadDocumentForOperationAsync(filePath, operationLease);
                     if (refreshedLease == null)
+                    {
+                        // Post-mutation reload failure — restore the before
+                        // bytes + sidecar (the failed reload retired
+                        // operationLease; TryRollback re-leases while the
+                        // session still owns this path, refuses on swap).
+                        var (rolledBack, stillOurs) = await TryRollbackStructuralOperationAsync(
+                            filePath, before, beforeBookmarks, pageIndex,
+                            operationLease, "RotatePage");
+                        if (!stillOurs)
+                            return;
+                        rolledBack?.Dispose();
+                        GetMainWindow()?.ShowToast(
+                            LocalizationService.Format(
+                                "Editor.RotateFailed",
+                                LocalizationService.Get("Editor.DocumentReloadFailed")),
+                            "\uE783", 3500);
                         return;
+                    }
                     using (refreshedLease)
                     {
                         if (!ValidateDocumentOperationLease(refreshedLease))
@@ -9100,9 +9130,22 @@ namespace Caelum.Pages
                 }
                 catch (Exception ex)
                 {
-                    if (ValidateDocumentOperationLease(operationLease))
-                        GetMainWindow()?.ShowToast(
-                            LocalizationService.Format("Editor.RotateFailed", ex.Message), "\uE783", 3500);
+                    if (operationMayHaveChangedDocument && before != null)
+                    {
+                        var (rolledBack, stillOurs) = await TryRollbackStructuralOperationAsync(
+                            filePath, before, beforeBookmarks, pageIndex,
+                            operationLease, "RotatePage");
+                        if (!stillOurs)
+                            return;
+                        rolledBack?.Dispose();
+                    }
+                    else if (!ValidateDocumentOperationLease(operationLease))
+                    {
+                        return;
+                    }
+
+                    GetMainWindow()?.ShowToast(
+                        LocalizationService.Format("Editor.RotateFailed", ex.Message), "\uE783", 3500);
                 }
             }
         }
@@ -9235,7 +9278,25 @@ namespace Caelum.Pages
                     return;
                 currentLease = await ReloadDocumentForOperationAsync(filePath, currentLease);
                 if (currentLease == null)
+                {
+                    // Post-mutation reload failure — the file bytes moved but
+                    // the loaded document didn't. Restore via TryRollback
+                    // (re-leases when the failed reload retired currentLease);
+                    // a swapped document refuses silently, otherwise report.
+                    var (rolledBack, stillOurs) = await TryRollbackStructuralOperationAsync(
+                        filePath, beforeBytes, beforeBookmarks, undoFocusIndex,
+                        currentLease, "InsertPage");
+                    if (!stillOurs)
+                        return;
+                    currentLease = rolledBack;
+                    await WinUiDialogService.ShowErrorAsync(
+                        XamlRoot ?? GetMainWindow()?.Content?.XamlRoot,
+                        LocalizationService.Get("Common.Error"),
+                        LocalizationService.Format(
+                            "Editor.AddPageFailed",
+                            LocalizationService.Get("Editor.DocumentReloadFailed")));
                     return;
+                }
 
                 int insertedPageIndex = Math.Max(0, Math.Min(insertIndex, _pageControls.Count - 1));
                 if (!ValidateDocumentOperationLease(currentLease))
@@ -9262,19 +9323,24 @@ namespace Caelum.Pages
             }
             catch (Exception ex)
             {
-                if (!ValidateDocumentOperationLease(currentLease))
-                    return;
                 if (operationMayHaveChangedDocument && beforeBytes != null)
                 {
                     // The post-op read/reload faulted — restore the before
                     // bytes + bookmark sidecar so the file and the loaded
                     // document agree again (WPF import-op rollback parity).
-                    var rolledBack = await RollbackStructuralOperationAsync(
+                    // A failed reload retires currentLease, so TryRollback
+                    // re-leases when the session still owns the path; a
+                    // swapped document refuses silently (stale → no report).
+                    var (rolledBack, stillOurs) = await TryRollbackStructuralOperationAsync(
                         filePath, beforeBytes, beforeBookmarks, undoFocusIndex,
                         currentLease, "InsertPage");
-                    if (rolledBack == null || !ValidateDocumentOperationLease(rolledBack))
+                    if (!stillOurs)
                         return;
                     currentLease = rolledBack;
+                }
+                else if (!ValidateDocumentOperationLease(currentLease))
+                {
+                    return;
                 }
                 await WinUiDialogService.ShowErrorAsync(
                     XamlRoot ?? GetMainWindow()?.Content?.XamlRoot,
@@ -9354,7 +9420,25 @@ namespace Caelum.Pages
                         return;
                     currentLease = await ReloadDocumentForOperationAsync(filePath, currentLease);
                     if (currentLease == null)
+                    {
+                        // Post-mutation reload failure — restore the before
+                        // bytes + sidecar via TryRollback (re-leases when the
+                        // failed reload retired currentLease); swapped →
+                        // silent, otherwise surface instead of returning.
+                        var (rolledBack, stillOurs) = await TryRollbackStructuralOperationAsync(
+                            filePath, beforeBytes, beforeBookmarks, pageIndex,
+                            currentLease, "DeletePage");
+                        if (!stillOurs)
+                            return;
+                        currentLease = rolledBack;
+                        await WinUiDialogService.ShowErrorAsync(
+                            XamlRoot ?? GetMainWindow()?.Content?.XamlRoot,
+                            LocalizationService.Get("Common.Error"),
+                            LocalizationService.Format(
+                                "Editor.DeletePageFailed",
+                                LocalizationService.Get("Editor.DocumentReloadFailed")));
                         return;
+                    }
 
                     int focusAfterDelete = Math.Max(0,
                         Math.Min(pageIndex, _pageControls.Count - 1));
@@ -9382,34 +9466,40 @@ namespace Caelum.Pages
                 }
                 catch (InvalidOperationException)
                 {
-                    if (!ValidateDocumentOperationLease(currentLease))
-                        return;
                     if (operationMayHaveChangedDocument && beforeBytes != null)
                     {
                         // Even the "blocked" fault can land after a partial
-                        // write — restore bytes + sidecar first.
-                        var rolledBack = await RollbackStructuralOperationAsync(
+                        // write — restore bytes + sidecar first. TryRollback
+                        // re-leases when a failed reload retired currentLease;
+                        // a swapped document refuses silently.
+                        var (rolledBack, stillOurs) = await TryRollbackStructuralOperationAsync(
                             filePath, beforeBytes, beforeBookmarks, pageIndex,
                             currentLease, "DeletePage");
-                        if (rolledBack == null || !ValidateDocumentOperationLease(rolledBack))
+                        if (!stillOurs)
                             return;
                         currentLease = rolledBack;
+                    }
+                    else if (!ValidateDocumentOperationLease(currentLease))
+                    {
+                        return;
                     }
                     GetMainWindow()?.ShowToast(
                         LocalizationService.Get("Editor.PageDeleteBlocked"), "\uE783");
                 }
                 catch (Exception ex)
                 {
-                    if (!ValidateDocumentOperationLease(currentLease))
-                        return;
                     if (operationMayHaveChangedDocument && beforeBytes != null)
                     {
-                        var rolledBack = await RollbackStructuralOperationAsync(
+                        var (rolledBack, stillOurs) = await TryRollbackStructuralOperationAsync(
                             filePath, beforeBytes, beforeBookmarks, pageIndex,
                             currentLease, "DeletePage");
-                        if (rolledBack == null || !ValidateDocumentOperationLease(rolledBack))
+                        if (!stillOurs)
                             return;
                         currentLease = rolledBack;
+                    }
+                    else if (!ValidateDocumentOperationLease(currentLease))
+                    {
+                        return;
                     }
                     await WinUiDialogService.ShowErrorAsync(
                         XamlRoot ?? GetMainWindow()?.Content?.XamlRoot,
@@ -9484,7 +9574,24 @@ namespace Caelum.Pages
 
                     currentLease = await ReloadDocumentForOperationAsync(filePath, currentLease);
                     if (currentLease == null)
+                    {
+                        // Post-mutation reload failure — restore the before
+                        // bytes + sidecar via TryRollback (re-leases when the
+                        // failed reload retired currentLease); swapped →
+                        // silent, otherwise surface instead of returning.
+                        var (rolledBack, stillOurs) = await TryRollbackStructuralOperationAsync(
+                            filePath, before, beforeBookmarks, focusBefore,
+                            currentLease, "DuplicatePage");
+                        if (!stillOurs)
+                            return;
+                        currentLease = rolledBack;
+                        GetMainWindow()?.ShowToast(
+                            LocalizationService.Format(
+                                "Editor.PageDuplicateFailed",
+                                LocalizationService.Get("Editor.DocumentReloadFailed")),
+                            "\uE783", 3500);
                         return;
+                    }
                     int focused = Math.Max(0, Math.Min(pageIndex + 1, _pageControls.Count - 1));
                     if (!ValidateDocumentOperationLease(currentLease))
                         return;
@@ -9507,16 +9614,18 @@ namespace Caelum.Pages
                 }
                 catch (Exception ex)
                 {
-                    if (!ValidateDocumentOperationLease(currentLease))
-                        return;
                     if (operationMayHaveChangedDocument && before != null)
                     {
-                        var rolledBack = await RollbackStructuralOperationAsync(
+                        var (rolledBack, stillOurs) = await TryRollbackStructuralOperationAsync(
                             filePath, before, beforeBookmarks, focusBefore,
                             currentLease, "DuplicatePage");
-                        if (rolledBack == null || !ValidateDocumentOperationLease(rolledBack))
+                        if (!stillOurs)
                             return;
                         currentLease = rolledBack;
+                    }
+                    else if (!ValidateDocumentOperationLease(currentLease))
+                    {
+                        return;
                     }
                     GetMainWindow()?.ShowToast(
                         LocalizationService.Format("Editor.PageDuplicateFailed", ex.Message), "\uE783", 3500);
@@ -10354,6 +10463,64 @@ namespace Caelum.Pages
         }
 
         /// <summary>
+        /// Rollback entry point that survives a dead
+        /// <paramref name="currentLease"/>: the failed reload retires the
+        /// incoming lease inside <see cref="ReloadDocumentForOperationAsync"/>'s
+        /// finally, so a caller holding only that lease would skip both the
+        /// restore AND the failure report (the old <c>if (!Validate) return</c>
+        /// guard fired on the dead lease). When the incoming lease no longer
+        /// validates, a fresh lease is captured — but ONLY while the live
+        /// session still owns <paramref name="filePath"/>; a genuinely swapped
+        /// document returns (null, false) and the caller stays silent (WPF
+        /// stale-import parity). When the path is still ours but no lease can
+        /// be established, (null, true) lets the caller surface the failure
+        /// even though no restore could run.
+        /// </summary>
+        private async Task<(DocumentOperationLease Lease, bool StillOwnsDocument)> TryRollbackStructuralOperationAsync(
+            string filePath,
+            byte[] beforeBytes,
+            List<PageBookmark> beforeBookmarks,
+            int focusBefore,
+            DocumentOperationLease currentLease,
+            string operationName)
+        {
+            if (!ValidateDocumentOperationLease(currentLease))
+            {
+                // Dead/stale incoming lease — a path match is the only honest
+                // "still our document" proof a re-leased capture can offer.
+                currentLease?.Dispose();
+                if (!string.Equals(
+                        DocumentOperationSession.NormalizePath(filePath),
+                        DocumentOperationSession.NormalizePath(_currentPdfPath ?? string.Empty),
+                        StringComparison.OrdinalIgnoreCase))
+                    return (null, false);
+                try
+                {
+                    currentLease = CaptureDocumentOperationLease(_pdfService);
+                }
+                catch (Exception)
+                {
+                    // Session disposed/inactive — path still ours → report.
+                    return (null, true);
+                }
+                if (!ValidateDocumentOperationLease(currentLease))
+                {
+                    // The captured lease can't validate against the live
+                    // session — the session is mid-transition; the path is
+                    // still ours, so surface the failure even though the
+                    // restore can't run.
+                    currentLease?.Dispose();
+                    return (null, true);
+                }
+            }
+
+            var rolledBack = await RollbackStructuralOperationAsync(
+                filePath, beforeBytes, beforeBookmarks, focusBefore,
+                currentLease, operationName);
+            return (rolledBack, true);
+        }
+
+        /// <summary>
         /// DocumentSnapshotAction undo/redo boundary (WPF
         /// ApplyDocumentSnapshotAsync): atomically restore the snapshot bytes,
         /// reload the document, restore focus and publish the fresh lease +
@@ -10366,6 +10533,15 @@ namespace Caelum.Pages
         {
             if (string.IsNullOrWhiteSpace(_currentPdfPath) ||
                 !ValidateDocumentOperationLease(operationLease))
+                return null;
+
+            // Structural latch — undo/redo rides the same byte-write + reload
+            // pipeline as the live structural ops, so never overlap them. The
+            // null refusal flows through DocumentSnapshotAction.ApplyAsync as
+            // LastOperationSucceeded=false: PerformUndo/Redo keep the action on
+            // its stack (honest, retryable refusal — never drop it silently).
+            using var structuralScope = BeginStructuralOperation();
+            if (structuralScope == null)
                 return null;
 
             string filePath = _currentPdfPath;

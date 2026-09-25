@@ -9,7 +9,7 @@
 - `SelectedSettings` — populated only on the primary ("Save") button; `null` on Cancel/Esc/light-dismiss. The caller persists via `AppSettingsService.Save` (`MainWindow.ApplySettings`) and toasts `Main.SettingsSaved`.
 - **Live preview:** every control change calls `MainWindow.Current?.PreviewSettings(GetSelectedSettings())` — the WPF owner-call parity. Language changes additionally run `LocalizationService.ApplyLanguage` so the whole shell re-localizes live.
 - **Revert:** `Closed` handler calls `PreviewSettings(_originalSettings)` when `!_confirmed` — covers Cancel, the X button, Esc and light-dismiss (WPF could not be light-dismissed; the revert point is Closed because ContentDialogs can close without a button).
-- **Re-localize/repaint while open:** `LocalizationService.LanguageChanged` → `ApplyLocalization()` (combo indices field-backed and re-stamped); `WinUiThemeService.ThemeApplied` → `_themeBindings` re-resolve (code-built UI can't use `{ThemeResource}`, so brushes are baked at build time and rebound via the `ThemeBinding` ledger). Both subscriptions detach in `Closed`.
+- **Re-localize/repaint while open:** `LocalizationService.LanguageChanged` → `ApplyLocalization()` (combo indices field-backed and re-stamped); `WinUiThemeService.ThemeApplied` → `_themeBindings` re-resolve (code-built UI can't use `{ThemeResource}`, so brushes are baked at build time and rebound via the `ThemeBinding` ledger). Both subscriptions now attach in `Opened` and detach in `Closed` — a `ShowAsync` that throws before opening never raises `Closed`, so ctor-time subscription would leak the handlers (picker parity); both handlers also guard on `_opened`.
 
 ## Controls staged
 `LanguageComboBox` (AppLanguage options via `GetLanguageOptions`), `AutoSaveIntervalComboBox` (15/30/60/120), `PressureCheckBox`, `PenOnlyCheckBox`, `SmoothingComboBox` (0–3), `ThemeComboBox` (Light/Dark/System/HighContrast), `PerformanceModeComboBox` (BatterySaver/Balanced/BestQuality via `PdfRenderPolicy`), `WorkspaceBackdropComboBox` (six backdrops + literal preview swatch — WinUI's selection box can't host per-item swatches, so the swatch tracks the current pick). AutomationIds mirror the WPF `x:Name`s.
@@ -24,4 +24,5 @@
 - **Status:** GREEN — builds 0 err/0 warn; source-pinned by `WinUiDialogsServicesSourceTests.SettingsDialogStagesPreviewsAndRevertsOnDismiss`.
 
 ## Change History
+- 2026-09-25 Residual pass: `LanguageChanged`/`ThemeApplied` subscriptions moved ctor→`Opened` (idempotent, `_opened` reset in `Closed`) — a `ShowAsync` throw before opening would otherwise leak the handlers; `OnThemeApplied` gained the `_opened` guard `OnLanguageChanged` already had. | Devin
 - 2026-09-25 Task 9 Phase B: initial WinUI port (WPF `SettingsWindow.xaml(.cs)` parity). | Devin

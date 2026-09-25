@@ -31,6 +31,7 @@ namespace Caelum.Services
             ["Editor.AddPageTooltip"] = ("Add page", "\u6DFB\u52A0\u9875\u9762", "Ajouter une page"),
             ["Editor.DeletePageFailed"] = ("Failed to delete the page: {0}", "\u65E0\u6CD5\u5220\u9664\u9875\u9762\uFF1A{0}", "\u00C9chec de la suppression de la page : {0}"),
             ["Editor.DeletePageTooltip"] = ("Delete page", "\u5220\u9664\u9875\u9762", "Supprimer la page"),
+            ["Editor.DocumentReloadFailed"] = ("the document could not be reloaded", "\u65E0\u6CD5\u91CD\u65B0\u52A0\u8F7D\u6587\u6863", "impossible de recharger le document"),
             ["Editor.InsertPageDialogTitle"] = ("Insert page", "\u63D2\u5165\u9875\u9762", "Ins\u00E9rer une page"),
             ["Editor.InsertPageDialogSubtitle"] = ("Choose the page style to insert at this position.", "\u9009\u62E9\u8981\u63D2\u5165\u5230\u6B64\u5904\u7684\u9875\u9762\u6837\u5F0F\u3002", "Choisissez le style de page \u00E0 ins\u00E9rer \u00E0 cet emplacement."),
             ["Editor.InsertPageHereTooltip"] = ("Insert page here", "\u5728\u6B64\u5904\u63D2\u5165\u9875\u9762", "Ins\u00E9rer une page ici"),

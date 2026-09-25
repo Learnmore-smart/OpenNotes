@@ -455,6 +455,20 @@ the Task 9 Phase A save/autosave + close/dirty protocol is live (T9-B defers set
   runtime-created print menu item stays `IsEnabled = false`).
 
 ## Change History
+- 2026-09-25 Structural-op residuals: `ApplyDocumentSnapshotAsync` now holds
+  `_structuralOperationInFlight` (undo/redo shares the byte-write+reload
+  pipeline; a held latch refuses via null → `LastOperationSucceeded=false`
+  keeps the action on its stack — honest, retryable). Post-mutation reload
+  failures no longer silent-return: `ReloadDocumentForOperationAsync`
+  retires the incoming lease in its finally, so the new
+  `TryRollbackStructuralOperationAsync` re-captures a fresh lease while the
+  live session still owns the path (swap → silent bail), restores
+  bytes+sidecar via `RollbackStructuralOperationAsync`, and surfaces the op
+  failure (`Editor.DocumentReloadFailed` {0} inside each op's failure key).
+  Rotate gained the same rollback coverage (bookmarks snapshotted so the
+  restore is a no-op, not a wipe). Import's inline rollback was replaced by
+  the shared helper — identical shape (bytes → Replace → reload → focus →
+  bookmark repaint). | Devin
 - 2026-09-25 Task 9 Phase B quality pass: thumbnail `ContextRequested` menu
   (WPF `BuildThumbnailContextMenu` parity — insert-blank-before / duplicate /
   delete, `Editor.Sidebar.Page.*` automation ids, session+path captured at
