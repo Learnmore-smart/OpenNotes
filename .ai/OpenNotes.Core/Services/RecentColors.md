@@ -2,10 +2,10 @@
 > Last updated: 2026-09-25（G4 port — WPF RecordRecentColor/TryParseRecentColor moved to Core for headless tests）| Protection: STANDARD
 
 ## Purpose（一句话）
-每调色板"最近使用颜色"列表的去重/上限/解析原语 —— WPF `EditorPage.RecordRecentColor`/`TryParseRecentColor` 的 Core 移植，供 WPF + WinUI 两个 shell 共用并可直接无头测试。
+每调色板"最近使用颜色"列表的去重/上限/解析原语 —— WPF `EditorPage.RecordRecentColor`/`TryParseRecentColor` 的 Core 移植，供 WinUI shell（WPF 侧仍保留其内置实现 — Pages/EditorPage.xaml.cs:4816+，本文件为移植版） 共用并可直接无头测试。
 
 ## What It Does（关键机制）
-- `MaxRecentColors = 8`：WPF `EditorPage` 常量的唯一权威来源。
+- `MaxRecentColors = 8`：WPF `EditorPage` 常量的WinUI 侧权威来源（WPF 仍用自己的私有副本）。
 - `Record(list, hex)`：`OrdinalIgnoreCase` 去重后插到索引 0，超出 8 项的尾部截断；list/hex 为空时静默返回。列表属于 `AppSettingsService.Load()` 返回的瞬态克隆 —— 调用方负责 `Save()`。
 - `TryParse(hex, out a, r, g, b)`：严格 `#RRGGBB`（记录格式）+ 容忍 `#AARRGGBB`（手工编辑 settings.json），非法输入返回 false 不抛异常。
 

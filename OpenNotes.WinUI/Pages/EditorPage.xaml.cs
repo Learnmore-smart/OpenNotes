@@ -7845,9 +7845,23 @@ namespace Caelum.Pages
         /// </summary>
         private void ShowToolFlyout(Flyout flyout, ToolType owner, FrameworkElement anchor)
         {
+            _toolFlyout?.Hide();
             _toolFlyout = flyout;
             _toolFlyoutTool = ToolFlyoutOwner(owner);
             _transientFlyout = flyout;
+            // Light-dismiss self-closes the flyout — drop the stale refs so the
+            // next CloseToolFlyouts doesn't see ghost ownership and the dead
+            // flyout tree can collect.
+            flyout.Closed += (_, __) =>
+            {
+                if (ReferenceEquals(_toolFlyout, flyout))
+                {
+                    _toolFlyout = null;
+                    _toolFlyoutTool = ToolType.None;
+                }
+                if (ReferenceEquals(_transientFlyout, flyout))
+                    _transientFlyout = null;
+            };
             flyout.ShowAt(anchor);
         }
 

@@ -32,6 +32,8 @@ public sealed class WinUiToolFlyoutsSourceTests
             Assert.That(source, Does.Contain("Maximum = 8,"));
             Assert.That(source, Does.Contain("StepFrequency = 0.25"));
             Assert.That(source, Does.Contain("\"Editor.Pen.Size\""));
+            // Rebuild-per-show freshness: sliders re-read live state.
+            Assert.That(source, Does.Contain("Value = _penSize"));
 
             // Live preview line follows slider + palette picks.
             Assert.That(source, Does.Contain("_penFlyoutSizePreview"));
@@ -221,6 +223,27 @@ public sealed class WinUiToolFlyoutsSourceTests
             Assert.That(core, Does.Contain("StringComparison.OrdinalIgnoreCase"));
             Assert.That(core, Does.Contain("list.Insert(0, hex)"));
             Assert.That(core, Does.Contain("list.RemoveRange(MaxRecentColors"));
+        });
+    }
+
+    [Test]
+    public void ToolFlyoutsRefreshStateOnRebuildAndClearRefsOnDismiss()
+    {
+        string source = Read("Pages", "EditorPage.xaml.cs");
+
+        Assert.Multiple(() =>
+        {
+            // Fresh-state-on-rebuild: every tool slider binds the live field.
+            Assert.That(source, Does.Contain("Value = _penSize"));
+            Assert.That(source, Does.Contain("Value = _highlighterSize"));
+            Assert.That(source, Does.Contain("Value = _eraserSize"));
+            Assert.That(source, Does.Contain("Value = _shapeSize"));
+
+            // Light-dismiss self-close drops the tracked refs (no ghost
+            // ownership / rooted dead flyout tree).
+            Assert.That(source, Does.Contain("flyout.Closed += (_, __) =>"));
+            Assert.That(source, Does.Contain("ReferenceEquals(_toolFlyout, flyout)"));
+            Assert.That(source, Does.Contain("ReferenceEquals(_transientFlyout, flyout)"));
         });
     }
 
