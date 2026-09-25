@@ -1,5 +1,5 @@
 # OpenNotes.WinUI/Pages/EditorPage.xaml(.cs)
-> Last updated: 2026-09-25 (V6 Task 9 Phase B — page structure + version history + settings) | Protection: STANDARD
+> Last updated: 2026-09-25 (V6 Task 9 Phase B quality pass — thumbnail context menu + structural-op hardening) | Protection: STANDARD
 
 ## Purpose
 `Caelum.Pages.EditorPage : Page` — the WinUI editor shell port of the WPF
@@ -444,14 +444,29 @@ the Task 9 Phase A save/autosave + close/dirty protocol is live (T9-B defers set
 - **Status:** GREEN — `tools/winui-editor-smoke.ps1` 60/60; Tasks 7A/7B/
   8A/8B + Task 9 Phase A (save/autosave + close/dirty protocol) + Task 9
   Phase B (page insert/delete chrome, version-history restore flyout,
-  `ApplySettings(AppSettings)` perf-mode re-render) live; WinUI build
-  0 err/0 warn, headless suite 203/203 (known `HwndSubclass` test-host
-  teardown flake is environmental) incl. `WinUiDialogsServicesSourceTests` +
+  `ApplySettings(AppSettings)` perf-mode re-render) + Phase B quality pass
+  (thumbnail context menu, structural-op latch + rollback, picker-key crash
+  fix) live; WinUI build 0 err/0 warn, headless suite green — 695 tests
+  across fixture batches (known `HwndSubclass` test-host teardown flake is
+  environmental) incl. `WinUiDialogsServicesSourceTests` +
   `WinUiLocalizationCoverageTests`.
 - **Deferred (by design):** dormant `promptSaveAsAfterLoad` draft
   flow (no WPF caller); print pipeline (`T9: print pipeline` — the
   runtime-created print menu item stays `IsEnabled = false`).
 
 ## Change History
+- 2026-09-25 Task 9 Phase B quality pass: thumbnail `ContextRequested` menu
+  (WPF `BuildThumbnailContextMenu` parity — insert-blank-before / duplicate /
+  delete, `Editor.Sidebar.Page.*` automation ids, session+path captured at
+  menu-open via `RunThumbnailMenuOperationAsync`); `DuplicatePageAtAsync` +
+  `InsertBlankPageBeforeAsync` added (blank-before inserts directly — WPF
+  routed through the picker; picker stays on the "+" gaps); insert sequence
+  shared via `InsertPageCoreAsync`; mid-op failures roll back bytes +
+  bookmark sidecar + reload via `RollbackStructuralOperationAsync`
+  (import-op parity); `_structuralOperationInFlight` Interlocked latch
+  serializes all five structural ops + `RotateCurrentPage_Click`;
+  hover insert/delete click lambdas gained last-resort `try/catch`;
+  `operationLease = null` default paths removed (dead code — every caller
+  captures a lease). | Devin
 - 2026-09-25 Task 9 Phase B: page delete chrome + insert-gap zones wired (`InsertPageAtAsync`/`DeletePageAtAsync`, template picker under the dialog gate); `VersionHistory_Click` `MenuFlyout` restore flow (reversible snapshot-first semantics); `ApplySettings(AppSettings)` overload with performance-mode re-render; `VersionHistoryButton` enabled in XAML. | Devin
 - 2026-09-24 Lifecycle hardening: unload funnels through `DeferredTeardownAsync` (sync `ReleaseCoreResources` removed); save drain before `LoadPdfAsync` reset; `RecentFilesService.UpdateMetadata` on load; async-void guards on all seven handlers; close-prep error dialog is fire-and-forget; deferred-teardown failures mark `_releaseState` failed; `Editor.SaveTimedOut` label for cancelled close/nav saves. | Devin

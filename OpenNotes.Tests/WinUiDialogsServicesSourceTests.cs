@@ -112,6 +112,13 @@ public sealed class WinUiDialogsServicesSourceTests
             // Theme/language subscriptions released on close.
             Assert.That(dialog, Does.Contain("WinUiThemeService.ThemeApplied -= OnThemeApplied"));
             Assert.That(dialog, Does.Contain("LocalizationService.LanguageChanged -= OnLanguageChanged"));
+            // Insert-mode title/subtitle MUST use the real WPF catalog keys —
+            // the previous Editor.PageTemplateTitle/Subtitle names don't
+            // exist and Get() threw KeyNotFoundException in the ctor path.
+            Assert.That(dialog, Does.Contain("\"Editor.InsertPageDialogTitle\""));
+            Assert.That(dialog, Does.Contain("\"Editor.InsertPageDialogSubtitle\""));
+            Assert.That(dialog, Does.Not.Contain("\"Editor.PageTemplateTitle\""));
+            Assert.That(dialog, Does.Not.Contain("\"Editor.PageTemplateSubtitle\""));
         });
 
         // Both call sites serialize the dialog through the shared gate.
@@ -189,7 +196,10 @@ public sealed class WinUiDialogsServicesSourceTests
             // Dirty flush precedes the binary rewrite (stale-base guard).
             Assert.That(editor, Does.Contain("_documentSaveCoordinator.IsDirty"));
             Assert.That(editor, Does.Contain("await AutoSaveAsync(currentLease)"));
-            Assert.That(editor, Does.Contain("await _pdfService.InsertPageAsync(filePath, insertIndex, picker.SelectedTemplate)"));
+            // The picked template flows into the shared insert core.
+            Assert.That(editor, Does.Contain("await InsertPageCoreAsync(insertIndex, picker.SelectedTemplate, operationLease)"));
+            Assert.That(editor, Does.Contain("private async Task InsertPageCoreAsync("));
+            Assert.That(editor, Does.Contain("await _pdfService.InsertPageAsync(filePath, insertIndex, template)"));
             Assert.That(editor, Does.Contain("await _pdfService.DeletePageAsync(filePath, pageIndex)"));
             Assert.That(editor, Does.Contain("ReloadDocumentForOperationAsync(filePath, currentLease)"));
             Assert.That(editor, Does.Contain("new DocumentSnapshotAction("));
@@ -201,7 +211,24 @@ public sealed class WinUiDialogsServicesSourceTests
             // Hover chrome + insert gaps are runtime-built (WPF parity).
             Assert.That(editor, Does.Contain("private FrameworkElement CreatePageInsertGap(int insertIndex)"));
             Assert.That(editor, Does.Contain("private FrameworkElement CreatePageHost(PdfPageControl pageControl)"));
+            // T9-B quality pass: thumbnail context menu (WPF
+            // BuildThumbnailContextMenu parity — insert-blank-before /
+            // duplicate / delete) + the structural-op latch + mid-op
+            // rollback helper.
+            Assert.That(editor, Does.Contain("private void ThumbnailListBox_ContextRequested("));
+            Assert.That(editor, Does.Contain("\"Editor.InsertBlankPageBefore\""));
+            Assert.That(editor, Does.Contain("\"Editor.DuplicatePage\""));
+            Assert.That(editor, Does.Contain("\"Editor.DeletePage\""));
+            Assert.That(editor, Does.Contain("private async Task InsertBlankPageBeforeAsync("));
+            Assert.That(editor, Does.Contain("private async Task DuplicatePageAtAsync("));
+            Assert.That(editor, Does.Contain("await _pdfService.DuplicatePageAsync(filePath, pageIndex)"));
+            Assert.That(editor, Does.Contain("private IDisposable BeginStructuralOperation()"));
+            Assert.That(editor, Does.Contain("private async Task<DocumentOperationLease> RollbackStructuralOperationAsync("));
         });
+
+        string editorXaml = Read("Pages", "EditorPage.xaml");
+        Assert.That(editorXaml, Does.Contain(
+            "ContextRequested=\"ThumbnailListBox_ContextRequested\""));
     }
 
     [Test]

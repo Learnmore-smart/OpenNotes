@@ -31,4 +31,12 @@ WinUI 3 main-window code-behind (`Caelum.MainWindow : Microsoft.UI.Xaml.Window`,
 - Cross-window tab drag/tear-out and `TabDragCoordinator` are NOT ported (later task); `MainWindow.Current` is `internal static new` (shadows `Window.Current` deliberately).
 
 ## Change History
+- 2026-09-25 Task 9 Phase B quality pass: `PreviewSettings` wraps each editor's
+  `ApplySettings(settings)` in its own try/catch — one faulting editor no
+  longer aborts the preview for the remaining tabs or escapes into the
+  settings dialog's handlers. `CheckForUpdates_Click`: a `Process.Start`
+  browser-launch failure (`Win32Exception`/`FileNotFoundException`) after a
+  successful check now surfaces the new `Main.OpenReleaseFailed` message
+  instead of "update check failed"; `UpdateCheckException` still rethrows
+  as a check failure (untrusted release URI). | Devin
 - 2026-09-24 Lifecycle hardening: tab-creation gates on `AddNewHomeTab`/`OpenFileInNewTab`/`Window_Drop`; `_allowWindowClose` is a single-shot latch armed inside the `TryEnqueue` callback (enqueue failure throws instead of leaving the protocol bypassed); window/tab close failure paths cancel per-item via `TryCancelClosePreparation` and remove already-released zombie tabs; `CloseTab` release-timeout toast now uses `Editor.CloseTimedOut`; `Window_Drop` and `CheckForUpdates_Click` gained last-resort `catch (Exception)` guards (no App.UnhandledException backstop). | Devin

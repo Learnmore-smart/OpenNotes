@@ -35,6 +35,9 @@
 - 目录布局 `{SHA256(path)}\*.json` 是既有历史寻址方式，不能随 OpenNotes 品牌迁移改为新数据目录。
 - 目录根通过 `ProductInfo.GetDataDirectory()` 获取；默认布局和兼容路径不变，只有显式 `OPENNOTES_DATA_ROOT` 测试进程才会重定向。
 - `GetVersions` 必须保持最新在前；序列化形状仍是 `Dictionary<int, PageAnnotation>`。
+- `GetVersionDir` 现在是纯路径计算，绝不触碰文件系统 —— 读取路径
+  （`GetVersions`）不得为枚举而创建目录；目录创建只在写入路径
+  `EnsureVersionDir`（`SaveVersionAsync`）中进行。
 - `SaveVersionAsync` 现在通过 `Task.Run` 把序列化/写入/剪枝放到线程池（EditorPage 的保存管线从 UI dispatcher 调用它）；排序语义不变——调用方仍 await，sidecar 只在原子 PDF 保存成功后落盘。传入的 `annotations` 是每次保存新建的 DTO 快照，可安全跨线程序列化。
 
 ## V5 Completion Status
@@ -45,3 +48,4 @@
 - 2026-08-20: 文件名增加毫秒与 GUID，列表改按最后写入时间排序；EditorPage 保存/自动保存改为 PDF 成功后 await 版本写入。
 - 2026-08-21: 版本历史根目录改由 `ProductInfo.GetDataDirectory()` 提供；显式 `OPENNOTES_DATA_ROOT` 可隔离测试 sidecar，默认路径和哈希布局不变。
 - 2026-09-24: 生命周期加固 —— `SaveVersionAsync` 拆为公开包装 + `SaveVersionCoreAsync`，文件 I/O 移出 UI 线程（`Task.Run`），保持成功排序与异常传播不变。| Devin
+- 2026-09-25: T9-B 质量修复 —— `GetVersionDir` 不再 `Directory.CreateDirectory`（读取路径不得建目录）；新增 `EnsureVersionDir` 供 `SaveVersionAsync` 写入路径使用。| Devin

@@ -309,6 +309,7 @@ namespace Caelum.Services
             ["Main.FileAutoSaved"] = ("File auto-saved", "\u6587\u4EF6\u5DF2\u81EA\u52A8\u4FDD\u5B58", "Fichier enregistr\u00E9 automatiquement"),
             ["Main.HomeTabTitle"] = ("Home", "\u4E3B\u9875", "Accueil"),
             ["Main.NewTabTooltip"] = ("New tab (Ctrl+T)", "\u65B0\u5EFA\u9009\u9879\u5361 (Ctrl+T)", "Nouvel onglet (Ctrl+T)"),
+            ["Main.OpenReleaseFailed"] = ("Couldn't open the release page — no browser is available.", "\u65E0\u6CD5\u6253\u5F00\u53D1\u5E03\u9875\u9762\u2014\u2014\u672A\u627E\u5230\u53EF\u7528\u7684\u6D4F\u89C8\u5668\u3002", "Impossible d'ouvrir la page de la version \u2014 aucun navigateur disponible."),
             ["Main.SearchPlaceholder"] = ("Search library", "\u641C\u7D22\u5E93", "Rechercher dans la biblioth\u00E8que"),
             ["Main.Select"] = ("Select", "\u9009\u62E9", "S\u00E9lection"),
             ["Main.SelectionDisabled"] = ("Select mode disabled", "\u9009\u62E9\u6A21\u5F0F\u5DF2\u5173\u95ED", "Mode s\u00E9lection d\u00E9sactiv\u00E9"),

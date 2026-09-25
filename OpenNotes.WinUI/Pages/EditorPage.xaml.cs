@@ -268,6 +268,12 @@ namespace Caelum.Pages
         private Task<bool> _releaseResourcesInFlight;
         private Task<DocumentSaveResult> _autoSaveInFlight;
         private bool _documentInteractionBlocked;
+        // Structural-op latch: DocumentEditAdmission is a counter, not an
+        // exclusion — two concurrent structural ops (insert/delete/duplicate/
+        // rotate/import) would interleave byte snapshots + reloads against
+        // stale page indices. BeginStructuralOperation() refuses the second
+        // one quietly.
+        private int _structuralOperationInFlight;
         // Debug mirror of the coordinator state — WPF carries the identical
         // write-only pair (EditorPage :158-159) so the pending-save state is
         // inspectable in a debugger without evaluating the locked coordinator.
@@ -999,8 +1005,16 @@ namespace Caelum.Pages
 
             deleteButton.Click += async (_, _) =>
             {
-                using var operationLease = CaptureDocumentOperationLease(_pdfService);
-                await DeletePageAtAsync(pageControl.PageIndex, operationLease);
+                try
+                {
+                    using var operationLease = CaptureDocumentOperationLease(_pdfService);
+                    await DeletePageAtAsync(pageControl.PageIndex, operationLease);
+                }
+                catch (Exception ex)
+                {
+                    // async-void click handler: no App.UnhandledException backstop.
+                    System.Diagnostics.Debug.WriteLine($"[PageChrome] Delete click faulted: {ex}");
+                }
             };
 
             _pageDeleteButtons.Add(deleteButton);
@@ -1071,8 +1085,16 @@ namespace Caelum.Pages
 
             insertButton.Click += async (_, _) =>
             {
-                using var operationLease = CaptureDocumentOperationLease(_pdfService);
-                await InsertPageAtAsync(insertIndex, operationLease);
+                try
+                {
+                    using var operationLease = CaptureDocumentOperationLease(_pdfService);
+                    await InsertPageAtAsync(insertIndex, operationLease);
+                }
+                catch (Exception ex)
+                {
+                    // async-void click handler: no App.UnhandledException backstop.
+                    System.Diagnostics.Debug.WriteLine($"[PageChrome] Insert click faulted: {ex}");
+                }
             };
 
             _pageInsertButtons.Add(insertButton);
@@ -1082,9 +1104,11 @@ namespace Caelum.Pages
         }
 
         /// <summary>
-        /// WPF <c>RefreshPageDeleteButtons</c> parity: single-page documents
-        /// keep the delete chrome collapsed; also re-stamps the localized
-        /// tooltip/label text on language changes.
+        /// WPF <c>RefreshPageDeleteButtons</c> parity — the name is WPF's and
+        /// stays for parity even though the method re-stamps BOTH page-chrome
+        /// sets: delete-button tooltips/labels AND insert-gap "+" tooltips.
+        /// (Single-page delete collapse is driven by the hover-visibility
+        /// handlers in <see cref="CreatePageHost"/>, not here.)
         /// </summary>
         private void RefreshPageDeleteButtons()
         {
@@ -7929,6 +7953,108 @@ namespace Caelum.Pages
                 JumpToPage(item.PageIndex);
         }
 
+        /// <summary>
+        /// WPF <c>ThumbnailListBox_ContextMenuOpening</c> +
+        /// <c>BuildThumbnailContextMenu</c> parity: right-tapping a page
+        /// thumbnail offers Insert-blank-before / Duplicate / Delete. Session
+        /// and path are captured at open time (WPF
+        /// <c>ContextMenuOperationBinding</c> parity) so a document swap while
+        /// the menu is up can't act on the replacement document; the shared
+        /// structural ops re-validate the lease at every await anyway.
+        /// </summary>
+        private void ThumbnailListBox_ContextRequested(UIElement sender, ContextRequestedEventArgs e)
+        {
+            var itemElement = FindAncestor<ListViewItem>(e.OriginalSource as DependencyObject);
+            if (itemElement?.DataContext is not SidebarPageItem model ||
+                !SidebarPageItems.Contains(model) ||
+                string.IsNullOrWhiteSpace(_currentPdfPath))
+                return;
+
+            int menuSessionId = _loadSessionId;
+            string menuPath = _currentPdfPath;
+
+            var flyout = new MenuFlyout();
+            var insertItem = new MenuFlyoutItem
+            {
+                Text = LocalizationService.Get("Editor.InsertBlankPageBefore"),
+            };
+            AutomationProperties.SetAutomationId(insertItem, "Editor.Sidebar.Page.InsertBefore");
+            insertItem.Click += (_, _) => RunThumbnailMenuOperationAsync(
+                model, menuSessionId, menuPath, ThumbnailMenuOperation.InsertBlankBefore);
+
+            var duplicateItem = new MenuFlyoutItem
+            {
+                Text = LocalizationService.Get("Editor.DuplicatePage"),
+            };
+            AutomationProperties.SetAutomationId(duplicateItem, "Editor.Sidebar.Page.Duplicate");
+            duplicateItem.Click += (_, _) => RunThumbnailMenuOperationAsync(
+                model, menuSessionId, menuPath, ThumbnailMenuOperation.Duplicate);
+
+            var deleteItem = new MenuFlyoutItem
+            {
+                Text = LocalizationService.Get("Editor.DeletePage"),
+                // WPF parity: the destructive item keeps the danger brush.
+                Foreground = ResolveThemeBrush("ThemeDangerBrush", Color.FromArgb(0xFF, 0xB4, 0x23, 0x18)),
+            };
+            AutomationProperties.SetAutomationId(deleteItem, "Editor.Sidebar.Page.Delete");
+            deleteItem.Click += (_, _) => RunThumbnailMenuOperationAsync(
+                model, menuSessionId, menuPath, ThumbnailMenuOperation.Delete);
+
+            flyout.Items.Add(insertItem);
+            flyout.Items.Add(duplicateItem);
+            flyout.Items.Add(new MenuFlyoutSeparator());
+            flyout.Items.Add(deleteItem);
+
+            _transientFlyout = flyout;
+            flyout.ShowAt(itemElement);
+            e.Handled = true;
+        }
+
+        private enum ThumbnailMenuOperation
+        {
+            InsertBlankBefore,
+            Duplicate,
+            Delete,
+        }
+
+        /// <summary>
+        /// Runs one thumbnail context-menu op under a session/path-bound
+        /// lease (captured at menu-open; WPF
+        /// <c>ThumbnailContextMenu_*_Click</c> parity). async-void — the
+        /// last-resort guard is inside (no App.UnhandledException backstop).
+        /// </summary>
+        private async void RunThumbnailMenuOperationAsync(
+            SidebarPageItem model,
+            int sessionId,
+            string filePath,
+            ThumbnailMenuOperation operation)
+        {
+            try
+            {
+                using var operationLease = CaptureDocumentOperationLease(sessionId, filePath, _pdfService);
+                if (!ValidateDocumentOperationLease(operationLease) ||
+                    !SidebarPageItems.Contains(model))
+                    return;
+
+                switch (operation)
+                {
+                    case ThumbnailMenuOperation.InsertBlankBefore:
+                        await InsertBlankPageBeforeAsync(model.PageIndex, operationLease);
+                        break;
+                    case ThumbnailMenuOperation.Duplicate:
+                        await DuplicatePageAtAsync(model.PageIndex, operationLease);
+                        break;
+                    case ThumbnailMenuOperation.Delete:
+                        await DeletePageAtAsync(model.PageIndex, operationLease);
+                        break;
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[ThumbnailMenu] {operation} faulted: {ex}");
+            }
+        }
+
         private void UpdateThumbnailSelection(bool forceCenter = false)
         {
             if (ThumbnailListBox == null || ThumbnailListBox.Items.Count == 0)
@@ -8801,6 +8927,12 @@ namespace Caelum.Pages
                 return;
             using (editLease)
             {
+                // Structural latch: imports share the byte-snapshot/reload
+                // pipeline with page insert/delete — never overlap them.
+                using var structuralScope = BeginStructuralOperation();
+                if (structuralScope == null)
+                    return;
+
                 if (string.IsNullOrWhiteSpace(_currentPdfPath))
                     return;
 
@@ -8922,6 +9054,12 @@ namespace Caelum.Pages
             using (operationLease)
             using (editLease)
             {
+                // Structural latch: rapid toolbar clicks could otherwise run
+                // two rotate rewrites against the same before-bytes.
+                using var structuralScope = BeginStructuralOperation();
+                if (structuralScope == null)
+                    return;
+
                 if (string.IsNullOrWhiteSpace(_currentPdfPath) || _pageControls.Count == 0)
                     return;
 
@@ -8975,152 +9113,224 @@ namespace Caelum.Pages
         /// WPF <c>InsertPageAtAsync</c> parity — template pick through
         /// <see cref="PageTemplatePickerDialog"/> behind the shared dialog
         /// gate (replacing the WPF borderless <c>PageTemplatePickerWindow</c>),
-        /// then the lease-guarded sequence: dirty flush → before-snapshot →
-        /// <c>InsertPageAsync</c> → reload under a refreshed session lease →
-        /// jump + recent-files metadata + bookmark remap → undo snapshot →
-        /// toast. A cancelled pick disposes the lease and returns before any
-        /// document state moves.
+        /// then <see cref="InsertPageCoreAsync"/> runs the lease-guarded
+        /// insert sequence. A cancelled pick returns before any document
+        /// state moves. The lease is required (every call site captures one
+        /// before invoking) — the earlier <c>= null</c> "capture + toast"
+        /// fallback was dead code: no caller omitted it, and its side-paths
+        /// hid the lease-lifetime rules.
         /// </summary>
         private async Task InsertPageAtAsync(
             int insertIndex,
-            DocumentOperationLease operationLease = null)
+            DocumentOperationLease operationLease)
         {
             if (!TryBeginDocumentEdit(out var editLease))
                 return;
             using (editLease)
             {
+                // Structural latch — the picker sits inside it so a second
+                // structural gesture can't interleave its snapshots while
+                // the user is still choosing a template.
+                using var structuralScope = BeginStructuralOperation();
+                if (structuralScope == null)
+                    return;
+
                 if (string.IsNullOrWhiteSpace(_currentPdfPath))
                 {
-                    if (operationLease == null)
-                        GetMainWindow()?.ShowToast(LocalizationService.Get("Editor.NoDocumentLoaded"), "");
+                    GetMainWindow()?.ShowToast(LocalizationService.Get("Editor.NoDocumentLoaded"), "\uE783");
                     return;
                 }
 
                 var xamlRoot = XamlRoot ?? GetMainWindow()?.Content?.XamlRoot;
                 if (xamlRoot == null)
-                {
-                    if (operationLease == null)
-                        GetMainWindow()?.ShowToast(LocalizationService.Get("Editor.NoDocumentLoaded"), "");
                     return;
-                }
-
-                string filePath = _currentPdfPath;
-                DocumentOperationLease currentLease =
-                    operationLease ?? CaptureDocumentOperationLease(_pdfService);
 
                 var picker = new PageTemplatePickerDialog { XamlRoot = xamlRoot };
                 await WinUiDialogService.RunUnderDialogGateAsync(
                     () => picker.ShowAsync().AsTask());
                 if (!picker.IsConfirmed)
-                {
-                    if (operationLease == null)
-                        currentLease?.Dispose();
                     return;
-                }
 
-                try
-                {
-                    if (!ValidateDocumentOperationLease(currentLease))
-                        return;
-                    // A dirty document must hit disk BEFORE the binary PDF is
-                    // rewritten — otherwise the insert bakes a stale base and
-                    // the pending annotations are lost (WPF parity).
-                    if (_documentSaveCoordinator.IsDirty &&
-                        (!await AutoSaveAsync(currentLease) ||
-                            !ValidateDocumentOperationLease(currentLease)))
-                        return;
-
-                    byte[] beforeBytes = await File.ReadAllBytesAsync(filePath, currentLease.Token);
-                    if (!ValidateDocumentOperationLease(currentLease))
-                        return;
-                    int undoFocusIndex = Math.Max(0,
-                        Math.Min(insertIndex, Math.Max(_pageControls.Count - 1, 0)));
-                    var beforeBookmarks = PageBookmarkService.Load(filePath).ToList();
-
-                    await _pdfService.InsertPageAsync(filePath, insertIndex, picker.SelectedTemplate);
-                    if (!ValidateDocumentOperationLease(currentLease))
-                        return;
-
-                    byte[] afterBytes = await File.ReadAllBytesAsync(filePath, currentLease.Token);
-                    if (!ValidateDocumentOperationLease(currentLease))
-                        return;
-                    currentLease = await ReloadDocumentForOperationAsync(filePath, currentLease);
-                    if (currentLease == null)
-                        return;
-
-                    int insertedPageIndex = Math.Max(0, Math.Min(insertIndex, _pageControls.Count - 1));
-                    if (!ValidateDocumentOperationLease(currentLease))
-                        return;
-                    JumpToPage(insertedPageIndex);
-                    RecentFilesService.UpdateMetadata(
-                        filePath, _pageControls.Count, File.GetLastWriteTimeUtc(filePath));
-                    var afterBookmarks = PageBookmarkService
-                        .ApplyPageInsert(filePath, insertedPageIndex).ToList();
-                    RefreshBookmarks(_loadSessionId, filePath, currentLease);
-                    if (!ValidateDocumentOperationLease(currentLease))
-                        return;
-                    PushUndoAction(new DocumentSnapshotAction(
-                        this, beforeBytes, afterBytes,
-                        undoFocusIndex, insertedPageIndex,
-                        beforeBookmarks, afterBookmarks));
-                    if (!ValidateDocumentOperationLease(currentLease))
-                        return;
-                    GetMainWindow()?.ShowToast(
-                        LocalizationService.Get("Editor.PageAdded"), "");
-                }
-                catch (OperationCanceledException)
-                {
-                }
-                catch (Exception ex)
-                {
-                    if (!ValidateDocumentOperationLease(currentLease))
-                        return;
-                    await WinUiDialogService.ShowErrorAsync(
-                        XamlRoot ?? GetMainWindow()?.Content?.XamlRoot,
-                        LocalizationService.Get("Common.Error"),
-                        LocalizationService.Format("Editor.AddPageFailed", ex.Message));
-                }
-                finally
-                {
-                    if (operationLease == null)
-                        currentLease?.Dispose();
-                }
+                await InsertPageCoreAsync(insertIndex, picker.SelectedTemplate, operationLease);
             }
         }
 
         /// <summary>
-        /// WPF <c>DeletePageAtAsync</c> parity (invoked by the hover-only page
-        /// delete button): admission lease → dirty flush → byte snapshot →
-        /// <c>DeletePageAsync</c> → reload → focus + metadata + bookmark remap
-        /// → undo snapshot → toast. Single-page documents are blocked before
-        /// any state moves; an <see cref="InvalidOperationException"/> from
-        /// the Core service maps to the same blocked toast.
+        /// Thumbnail context-menu "Insert blank page before" — the
+        /// label-accurate direct blank insert. (WPF routed this item through
+        /// <c>InsertPageAtAsync</c>'s template picker despite the label; the
+        /// picker stays reachable via the insert-gap "+" affordances, so the
+        /// menu item does what it says.) Holds the same admission +
+        /// structural latches, then shares <see cref="InsertPageCoreAsync"/>.
         /// </summary>
-        private async Task DeletePageAtAsync(
+        private async Task InsertBlankPageBeforeAsync(
             int pageIndex,
-            DocumentOperationLease operationLease = null)
+            DocumentOperationLease operationLease)
         {
             if (!TryBeginDocumentEdit(out var editLease))
                 return;
             using (editLease)
             {
+                using var structuralScope = BeginStructuralOperation();
+                if (structuralScope == null)
+                    return;
+
                 if (string.IsNullOrWhiteSpace(_currentPdfPath))
                 {
-                    if (operationLease == null)
-                        GetMainWindow()?.ShowToast(LocalizationService.Get("Editor.NoDocumentLoaded"), "");
+                    GetMainWindow()?.ShowToast(LocalizationService.Get("Editor.NoDocumentLoaded"), "\uE783");
+                    return;
+                }
+
+                await InsertPageCoreAsync(pageIndex, PageInsertTemplate.Blank, operationLease);
+            }
+        }
+
+        /// <summary>
+        /// Shared insert sequence for <see cref="InsertPageAtAsync"/> (picked
+        /// template) and <see cref="InsertBlankPageBeforeAsync"/> (blank).
+        /// Callers hold the admission + structural latches; the sequence is
+        /// lease-guarded dirty flush → before-snapshot →
+        /// <c>InsertPageAsync</c> → reload under a refreshed session lease →
+        /// jump + recent-files metadata + bookmark remap → undo snapshot →
+        /// toast. A mid-operation failure rolls the file bytes + bookmark
+        /// sidecar back before the error surface (import-op rollback parity).
+        /// </summary>
+        private async Task InsertPageCoreAsync(
+            int insertIndex,
+            PageInsertTemplate template,
+            DocumentOperationLease operationLease)
+        {
+            string filePath = _currentPdfPath;
+            DocumentOperationLease currentLease = operationLease;
+            byte[] beforeBytes = null;
+            int undoFocusIndex = 0;
+            List<PageBookmark> beforeBookmarks = null;
+            bool operationMayHaveChangedDocument = false;
+            try
+            {
+                if (!ValidateDocumentOperationLease(currentLease))
+                    return;
+                // A dirty document must hit disk BEFORE the binary PDF is
+                // rewritten — otherwise the insert bakes a stale base and
+                // the pending annotations are lost (WPF parity).
+                if (_documentSaveCoordinator.IsDirty &&
+                    (!await AutoSaveAsync(currentLease) ||
+                        !ValidateDocumentOperationLease(currentLease)))
+                    return;
+
+                beforeBytes = await File.ReadAllBytesAsync(filePath, currentLease.Token);
+                if (!ValidateDocumentOperationLease(currentLease))
+                    return;
+                undoFocusIndex = Math.Max(0,
+                    Math.Min(insertIndex, Math.Max(_pageControls.Count - 1, 0)));
+                beforeBookmarks = PageBookmarkService.Load(filePath).ToList();
+
+                operationMayHaveChangedDocument = true;
+                await _pdfService.InsertPageAsync(filePath, insertIndex, template);
+                if (!ValidateDocumentOperationLease(currentLease))
+                    return;
+
+                byte[] afterBytes = await File.ReadAllBytesAsync(filePath, currentLease.Token);
+                if (!ValidateDocumentOperationLease(currentLease))
+                    return;
+                currentLease = await ReloadDocumentForOperationAsync(filePath, currentLease);
+                if (currentLease == null)
+                    return;
+
+                int insertedPageIndex = Math.Max(0, Math.Min(insertIndex, _pageControls.Count - 1));
+                if (!ValidateDocumentOperationLease(currentLease))
+                    return;
+                JumpToPage(insertedPageIndex);
+                RecentFilesService.UpdateMetadata(
+                    filePath, _pageControls.Count, File.GetLastWriteTimeUtc(filePath));
+                var afterBookmarks = PageBookmarkService
+                    .ApplyPageInsert(filePath, insertedPageIndex).ToList();
+                RefreshBookmarks(_loadSessionId, filePath, currentLease);
+                if (!ValidateDocumentOperationLease(currentLease))
+                    return;
+                PushUndoAction(new DocumentSnapshotAction(
+                    this, beforeBytes, afterBytes,
+                    undoFocusIndex, insertedPageIndex,
+                    beforeBookmarks, afterBookmarks));
+                if (!ValidateDocumentOperationLease(currentLease))
+                    return;
+                GetMainWindow()?.ShowToast(
+                    LocalizationService.Get("Editor.PageAdded"), "\uE710");
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            catch (Exception ex)
+            {
+                if (!ValidateDocumentOperationLease(currentLease))
+                    return;
+                if (operationMayHaveChangedDocument && beforeBytes != null)
+                {
+                    // The post-op read/reload faulted — restore the before
+                    // bytes + bookmark sidecar so the file and the loaded
+                    // document agree again (WPF import-op rollback parity).
+                    var rolledBack = await RollbackStructuralOperationAsync(
+                        filePath, beforeBytes, beforeBookmarks, undoFocusIndex,
+                        currentLease, "InsertPage");
+                    if (rolledBack == null || !ValidateDocumentOperationLease(rolledBack))
+                        return;
+                    currentLease = rolledBack;
+                }
+                await WinUiDialogService.ShowErrorAsync(
+                    XamlRoot ?? GetMainWindow()?.Content?.XamlRoot,
+                    LocalizationService.Get("Common.Error"),
+                    LocalizationService.Format("Editor.AddPageFailed", ex.Message));
+            }
+            finally
+            {
+                // Method-owned: ReloadDocumentForOperationAsync retires the
+                // incoming lease and publishes a fresh one — disposing here
+                // covers both (lease Dispose is idempotent, so a caller's
+                // own `using` on the passed lease stays safe).
+                currentLease?.Dispose();
+            }
+        }
+
+        /// <summary>
+        /// WPF <c>DeletePageAtAsync</c> parity (invoked by the hover-only page
+        /// delete button and the thumbnail context menu): admission lease →
+        /// structural latch → dirty flush → byte snapshot →
+        /// <c>DeletePageAsync</c> → reload → focus + metadata + bookmark
+        /// remap → undo snapshot → toast. Single-page documents are blocked
+        /// before any state moves; an <see cref="InvalidOperationException"/>
+        /// from the Core service maps to the same blocked toast. A
+        /// mid-operation failure rolls the file bytes + bookmark sidecar
+        /// back before the error surface (import-op rollback parity).
+        /// </summary>
+        private async Task DeletePageAtAsync(
+            int pageIndex,
+            DocumentOperationLease operationLease)
+        {
+            if (!TryBeginDocumentEdit(out var editLease))
+                return;
+            using (editLease)
+            {
+                using var structuralScope = BeginStructuralOperation();
+                if (structuralScope == null)
+                    return;
+
+                if (string.IsNullOrWhiteSpace(_currentPdfPath))
+                {
+                    GetMainWindow()?.ShowToast(LocalizationService.Get("Editor.NoDocumentLoaded"), "\uE783");
                     return;
                 }
 
                 if (_pageControls.Count <= 1)
                 {
-                    if (operationLease == null)
-                        GetMainWindow()?.ShowToast(LocalizationService.Get("Editor.PageDeleteBlocked"), "");
+                    GetMainWindow()?.ShowToast(LocalizationService.Get("Editor.PageDeleteBlocked"), "\uE783");
                     return;
                 }
 
                 string filePath = _currentPdfPath;
-                DocumentOperationLease currentLease =
-                    operationLease ?? CaptureDocumentOperationLease(_pdfService);
+                DocumentOperationLease currentLease = operationLease;
+                byte[] beforeBytes = null;
+                List<PageBookmark> beforeBookmarks = null;
+                bool operationMayHaveChangedDocument = false;
                 try
                 {
                     if (!ValidateDocumentOperationLease(currentLease))
@@ -9130,10 +9340,11 @@ namespace Caelum.Pages
                             !ValidateDocumentOperationLease(currentLease)))
                         return;
 
-                    byte[] beforeBytes = await File.ReadAllBytesAsync(filePath, currentLease.Token);
+                    beforeBytes = await File.ReadAllBytesAsync(filePath, currentLease.Token);
                     if (!ValidateDocumentOperationLease(currentLease))
                         return;
-                    var beforeBookmarks = PageBookmarkService.Load(filePath).ToList();
+                    beforeBookmarks = PageBookmarkService.Load(filePath).ToList();
+                    operationMayHaveChangedDocument = true;
                     await _pdfService.DeletePageAsync(filePath, pageIndex);
                     if (!ValidateDocumentOperationLease(currentLease))
                         return;
@@ -9164,21 +9375,42 @@ namespace Caelum.Pages
                     if (!ValidateDocumentOperationLease(currentLease))
                         return;
                     GetMainWindow()?.ShowToast(
-                        LocalizationService.Get("Editor.PageDeleted"), "");
+                        LocalizationService.Get("Editor.PageDeleted"), "\uE74D");
                 }
                 catch (OperationCanceledException)
                 {
                 }
                 catch (InvalidOperationException)
                 {
-                    if (ValidateDocumentOperationLease(currentLease))
-                        GetMainWindow()?.ShowToast(
-                            LocalizationService.Get("Editor.PageDeleteBlocked"), "");
+                    if (!ValidateDocumentOperationLease(currentLease))
+                        return;
+                    if (operationMayHaveChangedDocument && beforeBytes != null)
+                    {
+                        // Even the "blocked" fault can land after a partial
+                        // write — restore bytes + sidecar first.
+                        var rolledBack = await RollbackStructuralOperationAsync(
+                            filePath, beforeBytes, beforeBookmarks, pageIndex,
+                            currentLease, "DeletePage");
+                        if (rolledBack == null || !ValidateDocumentOperationLease(rolledBack))
+                            return;
+                        currentLease = rolledBack;
+                    }
+                    GetMainWindow()?.ShowToast(
+                        LocalizationService.Get("Editor.PageDeleteBlocked"), "\uE783");
                 }
                 catch (Exception ex)
                 {
                     if (!ValidateDocumentOperationLease(currentLease))
                         return;
+                    if (operationMayHaveChangedDocument && beforeBytes != null)
+                    {
+                        var rolledBack = await RollbackStructuralOperationAsync(
+                            filePath, beforeBytes, beforeBookmarks, pageIndex,
+                            currentLease, "DeletePage");
+                        if (rolledBack == null || !ValidateDocumentOperationLease(rolledBack))
+                            return;
+                        currentLease = rolledBack;
+                    }
                     await WinUiDialogService.ShowErrorAsync(
                         XamlRoot ?? GetMainWindow()?.Content?.XamlRoot,
                         LocalizationService.Get("Common.Error"),
@@ -9186,8 +9418,112 @@ namespace Caelum.Pages
                 }
                 finally
                 {
-                    if (operationLease == null)
-                        currentLease?.Dispose();
+                    // Method-owned: the reloaded lease published by
+                    // ReloadDocumentForOperationAsync must be disposed here
+                    // (lease Dispose is idempotent for the caller's own).
+                    currentLease?.Dispose();
+                }
+            }
+        }
+
+        /// <summary>
+        /// WPF <c>DuplicatePageAtAsync</c> parity (thumbnail context menu —
+        /// Core <c>PdfService.DuplicatePageAsync</c> copies the page in place
+        /// right after itself): admission lease → structural latch → dirty
+        /// flush → byte snapshot → duplicate → reload → focus the copy
+        /// (<paramref name="pageIndex"/> + 1) → metadata + bookmark remap →
+        /// undo snapshot. A mid-operation failure rolls the file bytes +
+        /// bookmark sidecar back (import-op rollback parity); failures
+        /// surface as the WPF <c>Editor.PageDuplicateFailed</c> toast.
+        /// </summary>
+        private async Task DuplicatePageAtAsync(
+            int pageIndex,
+            DocumentOperationLease operationLease)
+        {
+            if (!TryBeginDocumentEdit(out var editLease))
+                return;
+            using (editLease)
+            {
+                using var structuralScope = BeginStructuralOperation();
+                if (structuralScope == null)
+                    return;
+
+                if (string.IsNullOrWhiteSpace(_currentPdfPath))
+                {
+                    GetMainWindow()?.ShowToast(LocalizationService.Get("Editor.NoDocumentLoaded"), "\uE783");
+                    return;
+                }
+
+                string filePath = _currentPdfPath;
+                DocumentOperationLease currentLease = operationLease;
+                byte[] before = null;
+                int focusBefore = 0;
+                List<PageBookmark> beforeBookmarks = null;
+                bool operationMayHaveChangedDocument = false;
+                try
+                {
+                    if (!ValidateDocumentOperationLease(currentLease))
+                        return;
+                    if (_documentSaveCoordinator.IsDirty &&
+                        (!await AutoSaveAsync(currentLease) ||
+                            !ValidateDocumentOperationLease(currentLease)))
+                        return;
+
+                    before = await File.ReadAllBytesAsync(filePath, currentLease.Token);
+                    if (!ValidateDocumentOperationLease(currentLease))
+                        return;
+                    focusBefore = GetCurrentPageIndex();
+                    beforeBookmarks = PageBookmarkService.Load(filePath).ToList();
+                    operationMayHaveChangedDocument = true;
+                    await _pdfService.DuplicatePageAsync(filePath, pageIndex);
+                    if (!ValidateDocumentOperationLease(currentLease))
+                        return;
+                    byte[] after = await File.ReadAllBytesAsync(filePath, currentLease.Token);
+                    if (!ValidateDocumentOperationLease(currentLease))
+                        return;
+
+                    currentLease = await ReloadDocumentForOperationAsync(filePath, currentLease);
+                    if (currentLease == null)
+                        return;
+                    int focused = Math.Max(0, Math.Min(pageIndex + 1, _pageControls.Count - 1));
+                    if (!ValidateDocumentOperationLease(currentLease))
+                        return;
+                    JumpToPage(focused);
+                    // WPF omits this; the WinUI insert/delete already refresh
+                    // it and a duplicate changes the page count the same way.
+                    RecentFilesService.UpdateMetadata(
+                        filePath, _pageControls.Count, File.GetLastWriteTimeUtc(filePath));
+                    var afterBookmarks = PageBookmarkService
+                        .ApplyPageInsert(filePath, pageIndex + 1).ToList();
+                    RefreshBookmarks(_loadSessionId, filePath, currentLease);
+                    if (!ValidateDocumentOperationLease(currentLease))
+                        return;
+                    PushUndoAction(new DocumentSnapshotAction(
+                        this, before, after, focusBefore, focused,
+                        beforeBookmarks, afterBookmarks));
+                }
+                catch (OperationCanceledException)
+                {
+                }
+                catch (Exception ex)
+                {
+                    if (!ValidateDocumentOperationLease(currentLease))
+                        return;
+                    if (operationMayHaveChangedDocument && before != null)
+                    {
+                        var rolledBack = await RollbackStructuralOperationAsync(
+                            filePath, before, beforeBookmarks, focusBefore,
+                            currentLease, "DuplicatePage");
+                        if (rolledBack == null || !ValidateDocumentOperationLease(rolledBack))
+                            return;
+                        currentLease = rolledBack;
+                    }
+                    GetMainWindow()?.ShowToast(
+                        LocalizationService.Format("Editor.PageDuplicateFailed", ex.Message), "\uE783", 3500);
+                }
+                finally
+                {
+                    currentLease?.Dispose();
                 }
             }
         }
@@ -9327,7 +9663,6 @@ namespace Caelum.Pages
                 page.ClearAllAnnotations();
             }
         }
-
 
         // ── Keyboard ────────────────────────────────────────────────────────
 
@@ -9971,6 +10306,54 @@ namespace Caelum.Pages
         }
 
         /// <summary>
+        /// Mid-operation rollback for the structural page ops — the same
+        /// sequence <see cref="InsertExternalDocumentAsync"/> runs inline for
+        /// document imports: restore the pre-op PDF bytes + the persisted
+        /// bookmark list, reload under a fresh session lease, refocus, and
+        /// repaint the bookmark rail. Returns the lease the caller must keep
+        /// validating against (<see cref="ReloadDocumentForOperationAsync"/>
+        /// retires the incoming one), or null when the session was replaced
+        /// mid-rollback and the caller must bail silently. A rollback failure
+        /// hands the (possibly dead) lease back — callers re-validate before
+        /// surfacing the original error.
+        /// </summary>
+        private async Task<DocumentOperationLease> RollbackStructuralOperationAsync(
+            string filePath,
+            byte[] beforeBytes,
+            List<PageBookmark> beforeBookmarks,
+            int focusBefore,
+            DocumentOperationLease currentLease,
+            string operationName)
+        {
+            try
+            {
+                await WriteDocumentBytesAsync(filePath, beforeBytes, currentLease.Token);
+                if (!ValidateDocumentOperationLease(currentLease))
+                    return null;
+                PageBookmarkService.Replace(filePath, beforeBookmarks ?? new List<PageBookmark>());
+                currentLease = await ReloadDocumentForOperationAsync(filePath, currentLease);
+                if (currentLease == null)
+                    return null;
+                if (!ValidateDocumentOperationLease(currentLease))
+                    return null;
+                JumpToPage(Math.Max(0, Math.Min(focusBefore, _pageControls.Count - 1)));
+                RefreshBookmarks(_loadSessionId, filePath, currentLease);
+                return currentLease;
+            }
+            catch (OperationCanceledException)
+            {
+                return null;
+            }
+            catch (Exception rollbackException)
+            {
+                if (ValidateDocumentOperationLease(currentLease))
+                    System.Diagnostics.Debug.WriteLine(
+                        $"[{operationName}] Rollback failed: {rollbackException}");
+                return currentLease;
+            }
+        }
+
+        /// <summary>
         /// DocumentSnapshotAction undo/redo boundary (WPF
         /// ApplyDocumentSnapshotAsync): atomically restore the snapshot bytes,
         /// reload the document, restore focus and publish the fresh lease +
@@ -10456,6 +10839,37 @@ namespace Caelum.Pages
                 return false;
 
             return _editAdmission.TryEnter(out lease);
+        }
+
+        /// <summary>
+        /// Structural-operation latch (stronger than WPF needed — its modal
+        /// pickers serialized these gestures for free). The edit admission is
+        /// a shared counter, so two overlapping structural ops (insert /
+        /// delete / duplicate / rotate / external import) could interleave
+        /// their on-disk byte snapshots and reloads and act on stale page
+        /// indices. Returns a scope while the latch is free; null when one is
+        /// already in flight — callers refuse quietly.
+        /// </summary>
+        private IDisposable BeginStructuralOperation()
+        {
+            return Interlocked.CompareExchange(ref _structuralOperationInFlight, 1, 0) == 0
+                ? new StructuralOperationScope(this)
+                : null;
+        }
+
+        private void ExitStructuralOperation()
+        {
+            Interlocked.Exchange(ref _structuralOperationInFlight, 0);
+        }
+
+        private sealed class StructuralOperationScope : IDisposable
+        {
+            private EditorPage _owner;
+
+            public StructuralOperationScope(EditorPage owner) => _owner = owner;
+
+            public void Dispose() =>
+                Interlocked.Exchange(ref _owner, null)?.ExitStructuralOperation();
         }
 
         private void SetDocumentInteractionBlocked(bool blocked)

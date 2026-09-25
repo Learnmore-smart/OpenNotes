@@ -752,6 +752,7 @@
                                  ScrollViewer.VerticalScrollBarVisibility="Auto"
                                  ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                                  SelectionChanged="ThumbnailListBox_SelectionChanged"
+                                 ContextRequested="ThumbnailListBox_ContextRequested"
                                  AutomationProperties.AutomationId="Editor.Sidebar.Thumbnails"/>
                         <!-- T9: thumbnail drag-reorder drop indicator. -->
                         <Border x:Name="ThumbnailDropIndicator"

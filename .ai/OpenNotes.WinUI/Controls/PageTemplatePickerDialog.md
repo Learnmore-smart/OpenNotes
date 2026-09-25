@@ -1,5 +1,5 @@
 # OpenNotes.WinUI/Controls/PageTemplatePickerDialog.cs
-> Last updated: 2026-09-25 (V6 Task 9 Phase B — template picker port) | Protection: STANDARD
+> Last updated: 2026-09-25 (V6 Task 9 Phase B quality pass — real WPF keys + open-deferred subscriptions) | Protection: STANDARD
 
 ## Purpose
 `public sealed class PageTemplatePickerDialog : ContentDialog` (`Caelum.Controls`) — the WinUI port of the WPF `PageTemplatePickerWindow`. A 3×3 card grid where each card carries a code-drawn mini preview sketch (`BuildPreview`/`BuildStaffLines`/`MakeLine`), a localized title and a localized hint.
@@ -12,7 +12,8 @@
 - `SelectedTemplate` (last/confirmed card), `SelectedFolderPath` (notebook mode), `IsConfirmed` (WPF `DialogResult == true` parity).
 - Callers MUST set `XamlRoot` and show via `WinUiDialogService.RunUnderDialogGateAsync` — the dialog itself does not take the gate.
 - `TemplateOptions` lists all nine `PageInsertTemplate` values in WPF card order with their title/hint localization keys; card AutomationIds mirror the WPF `x:Name`s (`BlankCard`, `NotebookCard`, …).
-- `LocalizationService.LanguageChanged` → `ApplyLocalization()` (title/subtitle/cards/folder/buttons); `WinUiThemeService.ThemeApplied` → `Content = BuildContent()` rebuild (theme brushes are baked into code-built content; selection + folder are field-backed and survive the rebuild). Both detach in `Closed`.
+- Insert mode localizes with the WPF catalog pair `Editor.InsertPageDialogTitle`/`Editor.InsertPageDialogSubtitle` — the earlier `Editor.PageTemplateTitle`/`Subtitle` names never existed and `Get()` threw `KeyNotFoundException` inside the ctor's `ApplyLocalization()` (before any caller try/catch → crashed the async-void insert click). `WinUiDialogsServicesSourceTests` pins the real keys + bans the old names.
+- `LocalizationService.LanguageChanged` → `ApplyLocalization()` (title/subtitle/cards/folder/buttons); `WinUiThemeService.ThemeApplied` → `Content = BuildContent()` rebuild (theme brushes are baked into code-built content; selection + folder are field-backed and survive the rebuild). Subscriptions attach in `Opened` (a `ShowAsync` that throws before opening never raises `Closed`, so ctor-time subscription would leak) and detach in `Closed`; `OnLanguageChanged`/`OnThemeApplied` additionally guard on `_opened`. The `Opened` hook is idempotent (re-show cannot double-subscribe).
 - `BrowsePathButton_Click` is async-void by necessity; it has a last-resort `catch` (no App.UnhandledException backstop).
 
 ## Important Notes / NEVER Change
@@ -23,4 +24,5 @@
 - **Status:** GREEN — builds 0 err/0 warn; source-pinned by `WinUiDialogsServicesSourceTests.PageTemplatePickerCoversBothModesBehindTheGate`.
 
 ## Change History
+- 2026-09-25 Task 9 Phase B quality pass: real WPF insert-mode keys (`Editor.InsertPageDialogTitle`/`Subtitle`) replace the nonexistent `Editor.PageTemplateTitle`/`Subtitle` (ctor-path `KeyNotFoundException` → async-void crash); language/theme subscriptions deferred ctor→`Opened` with `_opened` guards (a `ShowAsync` throw must not leak handlers). | Devin
 - 2026-09-25 Task 9 Phase B: initial WinUI port (WPF `PageTemplatePickerWindow` parity); replaced HomePage's compact radio-card stand-in. | Devin

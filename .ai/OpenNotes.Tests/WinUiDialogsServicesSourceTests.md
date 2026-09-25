@@ -35,4 +35,13 @@ Follows the same `Read()`/`ProjectRoot()` helper pattern as
 normalizes line endings).
 
 ## Change History
+- 2026-09-25 Task 9 Phase B quality pass: picker contract pins the real
+  `Editor.InsertPageDialogTitle`/`Subtitle` keys and bans the
+  nonexistent `Editor.PageTemplateTitle`/`Subtitle`; the structural-ops
+  contract now pins `InsertPageCoreAsync`, the thumbnail context menu
+  (`ThumbnailListBox_ContextRequested` + XAML hookup +
+  `Editor.InsertBlankPageBefore`/`DuplicatePage`/`DeletePage` keys),
+  `InsertBlankPageBeforeAsync`, `DuplicatePageAtAsync`,
+  `BeginStructuralOperation` and `RollbackStructuralOperationAsync`.
+  | Devin
 - 2026-09-25 Task 9 Phase B: initial contract set. | Devin

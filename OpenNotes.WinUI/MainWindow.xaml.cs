@@ -1562,7 +1562,16 @@ namespace Caelum
                 .Select(tab => tab?.Frame?.Content)
                 .OfType<EditorPage>())
             {
-                editor.ApplySettings(settings);
+                try
+                {
+                    editor.ApplySettings(settings);
+                }
+                catch (Exception ex)
+                {
+                    // One faulting editor must not fault the preview for the
+                    // remaining tabs (or escape into the dialog's handlers).
+                    Debug.WriteLine($"[MainWindow] PreviewSettings editor apply faulted: {ex}");
+                }
             }
         }
 
@@ -1643,7 +1652,26 @@ namespace Caelum
                     LocalizationService.Get("Common.Cancel"),
                     LocalizationService.Get("Main.ViewRelease"));
                 if (openRelease == true)
-                    OpenTrustedReleasePage(result.ReleaseUri);
+                {
+                    try
+                    {
+                        OpenTrustedReleasePage(result.ReleaseUri);
+                    }
+                    catch (UpdateCheckException)
+                    {
+                        throw; // untrusted release URI — still a check failure
+                    }
+                    catch (Exception ex) when (ex is Win32Exception or FileNotFoundException)
+                    {
+                        // The update CHECK succeeded — Process.Start found no
+                        // browser/association for the release page.
+                        Debug.WriteLine($"[MainWindow] Release page launch failed: {ex}");
+                        await WinUiDialogService.ShowErrorAsync(
+                            xamlRoot,
+                            LocalizationService.Get("Common.Error"),
+                            LocalizationService.Get("Main.OpenReleaseFailed"));
+                    }
+                }
             }
             catch (OperationCanceledException) when (requestCts.IsCancellationRequested)
             {

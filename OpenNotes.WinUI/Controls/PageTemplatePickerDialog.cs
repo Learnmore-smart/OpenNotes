@@ -40,8 +40,11 @@ namespace Caelum.Controls
     /// bound brushes are baked at build time and the whole content grid is
     /// rebuilt on <see cref="WinUiThemeService.ThemeApplied"/> (selection and
     /// folder state are field-backed and survive the rebuild). Text is
-    /// re-localized on <see cref="LocalizationService.LanguageChanged"/>;
-    /// both subscriptions are released in <see cref="ContentDialog.Closed"/>.
+    /// re-localized on <see cref="LocalizationService.LanguageChanged"/>.
+    /// Both subscriptions attach in <see cref="ContentDialog.Opened"/> (a
+    /// <see cref="ContentDialog.ShowAsync"/> that throws before opening never
+    /// raises Closed and would leak them) and are released in
+    /// <see cref="ContentDialog.Closed"/>.
     /// </summary>
     public sealed class PageTemplatePickerDialog : ContentDialog
     {
@@ -67,6 +70,7 @@ namespace Caelum.Controls
         private readonly bool _notebookCreationMode;
         private readonly Dictionary<PageInsertTemplate, Button> _cards = new();
         private readonly Dictionary<PageInsertTemplate, (TextBlock Title, TextBlock Hint)> _cardTexts = new();
+        private bool _opened;
 
         private TextBlock _subtitleText;
         private TextBlock _pathLabelText;
@@ -111,10 +115,22 @@ namespace Caelum.Controls
                 IsConfirmed = true;
             };
 
-            LocalizationService.LanguageChanged += OnLanguageChanged;
-            WinUiThemeService.ThemeApplied += OnThemeApplied;
+            // Subscribe to the static change events only once the dialog is
+            // actually open: a ShowAsync that throws before opening (missing
+            // XamlRoot, a second dialog already up) never raises Closed, so
+            // ctor-time subscription would leak the handlers and leave a
+            // non-shown dialog answering language/theme changes.
+            Opened += (_, _) =>
+            {
+                if (_opened)
+                    return; // defensive re-show guard: never double-subscribe
+                _opened = true;
+                LocalizationService.LanguageChanged += OnLanguageChanged;
+                WinUiThemeService.ThemeApplied += OnThemeApplied;
+            };
             Closed += (_, _) =>
             {
+                _opened = false;
                 LocalizationService.LanguageChanged -= OnLanguageChanged;
                 WinUiThemeService.ThemeApplied -= OnThemeApplied;
             };
@@ -346,14 +362,18 @@ namespace Caelum.Controls
         /// </summary>
         public void ApplyLocalization()
         {
+            // WPF keys (PageTemplatePickerWindow.xaml.cs): the insert mode
+            // reuses the InsertPageDialog* pair — the earlier
+            // Editor.PageTemplateTitle/Subtitle names never existed in the
+            // catalog and Get() threw KeyNotFoundException on open.
             Title = LocalizationService.Get(_notebookCreationMode
                 ? "Home.CreateNotebookDialogTitle"
-                : "Editor.PageTemplateTitle");
+                : "Editor.InsertPageDialogTitle");
             if (_subtitleText != null)
             {
                 _subtitleText.Text = LocalizationService.Get(_notebookCreationMode
                     ? "Home.CreateNotebookDialogSubtitle"
-                    : "Editor.PageTemplateSubtitle");
+                    : "Editor.InsertPageDialogSubtitle");
             }
 
             foreach (var (template, titleKey, hintKey) in TemplateOptions)
@@ -373,10 +393,17 @@ namespace Caelum.Controls
             CloseButtonText = LocalizationService.Get("Common.Cancel");
         }
 
-        private void OnLanguageChanged(object sender, EventArgs e) => ApplyLocalization();
+        private void OnLanguageChanged(object sender, EventArgs e)
+        {
+            // SettingsDialog parity: only a live dialog re-localizes.
+            if (_opened)
+                ApplyLocalization();
+        }
 
         private void OnThemeApplied(object sender, EventArgs e)
         {
+            if (!_opened)
+                return;
             // Theme brushes are baked into the code-built content — rebuild it
             // with the repainted palette (selection + folder are field-backed).
             Content = BuildContent();

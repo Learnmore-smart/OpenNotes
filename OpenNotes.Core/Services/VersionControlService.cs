@@ -14,12 +14,23 @@ namespace Caelum.Services
     {
         public const int MaxVersions = 50;
 
+        /// <summary>
+        /// Version-directory path for a document — pure path math, never
+        /// touches the file system. Read paths (<see cref="GetVersions"/>)
+        /// must not create the directory just to enumerate it.
+        /// </summary>
         private static string GetVersionDir(string filePath)
         {
             var hashBytes = SHA256.HashData(Encoding.UTF8.GetBytes(filePath.ToLowerInvariant()));
             var hash = BitConverter.ToString(hashBytes).Replace("-", "").ToLowerInvariant();
-            var dir = Path.Combine(ProductInfo.GetDataDirectory(), "VersionHistory", hash);
-            if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
+            return Path.Combine(ProductInfo.GetDataDirectory(), "VersionHistory", hash);
+        }
+
+        /// <summary>Write path only: resolve the version dir and create it.</summary>
+        private static string EnsureVersionDir(string filePath)
+        {
+            var dir = GetVersionDir(filePath);
+            Directory.CreateDirectory(dir);
             return dir;
         }
 
@@ -44,7 +55,7 @@ namespace Caelum.Services
             CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var dir = GetVersionDir(filePath);
+            var dir = EnsureVersionDir(filePath);
             // Include milliseconds and a short random suffix so two saves in
             // the same clock tick never overwrite one another.
             var timestamp = DateTime.UtcNow.ToString("yyyyMMdd_HHmmss_fff");
