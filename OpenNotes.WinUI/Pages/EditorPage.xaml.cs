@@ -4434,6 +4434,26 @@ namespace Caelum.Pages
             };
             flyout.Items.Add(selectAll);
 
+            // WPF EnsureBlankContextMenu parity: Refresh sits between
+            // SelectAll and Delete and is always present.
+            var refreshItem = new MenuFlyoutItem
+            {
+                Text = LocalizationService.Get("Editor.Action.RefreshPage"),
+            };
+            AutomationProperties.SetAutomationId(refreshItem, "Editor.Action.RefreshPage");
+            refreshItem.Click += async (_, __) =>
+            {
+                try
+                {
+                    await RefreshCurrentDocumentPreservingEditsAsync();
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[RefreshPage] Failed: {ex.Message}");
+                }
+            };
+            flyout.Items.Add(refreshItem);
+
             if (hasSelection)
             {
                 var deleteItem = new MenuFlyoutItem
@@ -4447,6 +4467,42 @@ namespace Caelum.Pages
 
             _transientFlyout = flyout;
             flyout.ShowAt(PdfScrollViewer);
+        }
+
+        /// <summary>
+        /// WPF RefreshCurrentDocumentPreservingEditsAsync parity for the
+        /// blank-context "Refresh page" item: flush the live edits through
+        /// the shared save pipeline, then reload under a fresh-session lease
+        /// so every pipeline (pages, thumbnails, outline, search) re-reads
+        /// persisted state. Deviation: a failed save aborts the reload —
+        /// WPF reloaded unconditionally, which would discard the in-memory
+        /// edits this command exists to preserve.
+        /// </summary>
+        private async Task RefreshCurrentDocumentPreservingEditsAsync()
+        {
+            if (string.IsNullOrWhiteSpace(_currentPdfPath))
+                return;
+
+            var operationLease = CaptureDocumentOperationLease(_pdfService);
+            try
+            {
+                if (!ValidateDocumentOperationLease(operationLease))
+                    return;
+                if (!await AutoSaveAsync(operationLease) ||
+                    !ValidateDocumentOperationLease(operationLease))
+                    return;
+
+                // ReloadDocumentForOperationAsync retires the incoming lease
+                // inside its own finally — the extra Dispose below is a
+                // documented no-op (lease Dispose is idempotent).
+                var refreshedLease = await ReloadDocumentForOperationAsync(
+                    _currentPdfPath, operationLease);
+                refreshedLease?.Dispose();
+            }
+            finally
+            {
+                operationLease.Dispose();
+            }
         }
 
         /// <summary>
@@ -9421,9 +9477,9 @@ namespace Caelum.Pages
             {
                 Icon = new PathIcon { Data = LucideIcon.GetIconGeometry("Printer") },
                 KeyboardAcceleratorTextOverride = "Ctrl+P",
-                IsEnabled = false // T9: print pipeline.
             };
             AutomationProperties.SetAutomationId(PrintMenuItem, "Editor.ContextMenu.Print");
+            PrintMenuItem.Click += PrintMenuItem_Click;
             _pageContextMenu.Items.Add(PrintMenuItem);
 
             _pageContextMenu.Items.Add(new MenuFlyoutSeparator());
@@ -9597,6 +9653,266 @@ namespace Caelum.Pages
                 encoder.SetSoftwareBitmap(softwareBitmap);
                 await encoder.FlushAsync();
             }
+        }
+
+        // ── Print pipeline (WPF PrintPdfAsync — Win32 GDI backend) ─────────
+
+        /// <summary>
+        /// Page-context-menu Print (WPF ContextMenu_PrintClick parity). The
+        /// WinUI MenuFlyout has no open-time lease binding, so — like the
+        /// export/insert handlers — it captures a fresh lease at click time.
+        /// </summary>
+        private async void PrintMenuItem_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                using var operationLease = CaptureDocumentOperationLease(_pdfService);
+                await PrintPdfAsync(operationLease);
+            }
+            catch (Exception ex)
+            {
+                // PrintPdfAsync owns the PrintFailed UX for its own failures;
+                // this only catches plumbing faults — an async-void handler
+                // must never escape an exception.
+                System.Diagnostics.Debug.WriteLine($"[Print] Menu handler failed: {ex}");
+            }
+        }
+
+        /// <summary>
+        /// WPF PrintPdfAsync parity: lease capture/validation → print sheet
+        /// → PreparingPrint overlay → annotation-baked temp PDF rasterized at
+        /// printer DPI → spool → PrintSent toast, PrintFailed dialog, OCE
+        /// swallow. The WinRT PrintManager task pipeline needs packaged
+        /// CoreWindow plumbing, so the print sheet is the classic Win32
+        /// PrintDlgEx on the MainWindow HWND and pages spool through GDI
+        /// (<see cref="Win32Print"/>) — the same underlying stack WPF's
+        /// PrintDialog sits on. Read-only against the document: an operation
+        /// lease, not the structural latch, is the concurrency boundary.
+        /// </summary>
+        private async Task PrintPdfAsync(DocumentOperationLease operationLease = null)
+        {
+            bool ownsLease = operationLease == null;
+            operationLease ??= CaptureDocumentOperationLease(_pdfService);
+            if (string.IsNullOrWhiteSpace(_currentPdfPath))
+            {
+                if (ownsLease)
+                {
+                    GetMainWindow()?.ShowToast(
+                        LocalizationService.Get("Editor.NoDocumentLoaded"), "\uE783");
+                    operationLease.Dispose();
+                }
+                return;
+            }
+
+            string filePath = _currentPdfPath;
+            if (!ValidateDocumentOperationLease(operationLease))
+            {
+                if (ownsLease)
+                    operationLease.Dispose();
+                return;
+            }
+
+            Win32PrintJob printJob;
+            try
+            {
+                printJob = Win32Print.TryShowPrintDialog(
+                    GetWindowHandle(), Math.Max(1, _pdfService.PageCount));
+            }
+            catch (Exception ex)
+            {
+                // PrintDlgEx surfaces "no default printer" etc. as HRESULTs —
+                // same PrintFailed UX as a mid-spool failure.
+                if (ValidateDocumentOperationLease(operationLease))
+                    await ShowPrintFailureAsync(ex);
+                if (ownsLease)
+                    operationLease.Dispose();
+                return;
+            }
+
+            if (printJob == null || !ValidateDocumentOperationLease(operationLease))
+            {
+                printJob?.Dispose();
+                if (ownsLease)
+                    operationLease.Dispose();
+                return;
+            }
+
+            string originalLoadingText = LoadingText.Text;
+            LoadingText.Text = LocalizationService.Get("Editor.PreparingPrint");
+            LoadingOverlay.Visibility = Visibility.Visible;
+
+            try
+            {
+                var pages = await BuildPrintablePagesAsync(
+                    includeAnnotations: true,
+                    printerDpi: printJob.PrinterDpi,
+                    pageIndexes: printJob.OrderedPageIndexes(),
+                    operationLease: operationLease,
+                    filePath: filePath);
+                if (!ValidateDocumentOperationLease(operationLease))
+                    return;
+                if (pages.Count == 0)
+                    throw new InvalidOperationException(
+                        LocalizationService.Get("Editor.NoPagesToPrint"));
+
+                // Spool off the UI thread — StartDoc/StretchDIBits block while
+                // the driver consumes each page.
+                await Task.Run(() => Win32Print.PrintPages(
+                    printJob, pages, Path.GetFileName(filePath), operationLease.Token));
+                if (ValidateDocumentOperationLease(operationLease))
+                    GetMainWindow()?.ShowToast(
+                        LocalizationService.Get("Editor.PrintSent"), "\uE749", 1500);
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            catch (Exception ex)
+            {
+                if (!ValidateDocumentOperationLease(operationLease))
+                    return;
+                await ShowPrintFailureAsync(ex);
+            }
+            finally
+            {
+                if (ValidateDocumentOperationLease(operationLease))
+                {
+                    LoadingText.Text = originalLoadingText;
+                    LoadingOverlay.Visibility = Visibility.Collapsed;
+                }
+                printJob?.Dispose();
+                if (ownsLease)
+                    operationLease.Dispose();
+            }
+        }
+
+        private async Task ShowPrintFailureAsync(Exception ex)
+        {
+            string message = LocalizationService.Format("Editor.PrintFailed", ex.Message);
+            if (XamlRoot != null)
+            {
+                await WinUiDialogService.ShowErrorAsync(
+                    XamlRoot, LocalizationService.Get("Common.Error"), message);
+            }
+            else
+            {
+                GetMainWindow()?.ShowToast(message, "\uE783", 3500);
+            }
+        }
+
+        /// <summary>
+        /// WPF BuildPrintablePagesAsync parity: atomically copies the live
+        /// PDF into %TEMP%\Caelum\Print, bakes the in-memory annotation set
+        /// in via PdfService.SaveAnnotationsToPdfAsync, then rasterizes the
+        /// selected pages off the UI thread. The temp copy keeps the printed
+        /// bytes stable against a mid-print autosave; it is always deleted
+        /// in the finally.
+        /// </summary>
+        private async Task<IReadOnlyList<PrintablePageImage>> BuildPrintablePagesAsync(
+            bool includeAnnotations,
+            int printerDpi,
+            IReadOnlyList<int> pageIndexes,
+            DocumentOperationLease operationLease = null,
+            string filePath = null)
+        {
+            string tempPrintPath = null;
+            bool ownsLease = operationLease == null;
+            operationLease ??= CaptureDocumentOperationLease(_pdfService);
+            filePath ??= _currentPdfPath;
+
+            try
+            {
+                if (!ValidateDocumentOperationLease(operationLease))
+                    return Array.Empty<PrintablePageImage>();
+                string renderPath = filePath;
+                if (includeAnnotations)
+                {
+                    string tempDirectory = Path.Combine(
+                        Path.GetTempPath(), "Caelum", "Print");
+                    Directory.CreateDirectory(tempDirectory);
+                    tempPrintPath = Path.Combine(
+                        tempDirectory, $"{Guid.NewGuid():N}.pdf");
+                    PdfAtomicFile.CopyFile(filePath, tempPrintPath);
+                    await _pdfService.SaveAnnotationsToPdfAsync(
+                        tempPrintPath, CollectAnnotations());
+                    if (!ValidateDocumentOperationLease(operationLease))
+                        return Array.Empty<PrintablePageImage>();
+                    renderPath = tempPrintPath;
+                }
+
+                var pages = await Task.Run(() => RenderPrintablePages(
+                    renderPath, includeAnnotations, printerDpi, pageIndexes));
+                if (!ValidateDocumentOperationLease(operationLease))
+                    return Array.Empty<PrintablePageImage>();
+                return pages;
+            }
+            catch (OperationCanceledException)
+            {
+                return Array.Empty<PrintablePageImage>();
+            }
+            finally
+            {
+                if (!string.IsNullOrEmpty(tempPrintPath) && File.Exists(tempPrintPath))
+                {
+                    try { File.Delete(tempPrintPath); } catch { }
+                }
+                if (ownsLease)
+                    operationLease.Dispose();
+            }
+        }
+
+        /// <summary>
+        /// WPF RenderPrintablePages parity — pdfium BGRA rasterization of the
+        /// annotation-baked print source at the resolved print DPI. The WPF
+        /// twin wrapped each buffer in a frozen BitmapSource; the GDI spool
+        /// path consumes the raw BGRA (a <see cref="PrintablePageImage"/>).
+        /// </summary>
+        private static IReadOnlyList<PrintablePageImage> RenderPrintablePages(
+            string filePath,
+            bool includeAnnotations,
+            int printerDpi,
+            IReadOnlyList<int> pageIndexes)
+        {
+            using var rasterizer = PdfiumRasterizerFactory.Shared.LoadFromFile(filePath);
+            var sizes = rasterizer.PageSizes;
+
+            // The DPI resolver needs the total selected-page area in points.
+            double totalAreaPoints = 0;
+            foreach (int index in pageIndexes)
+            {
+                if (index >= 0 && index < sizes.Count)
+                {
+                    var s = sizes[index];
+                    totalAreaPoints += (double)s.Width * s.Height;
+                }
+            }
+            int renderDpi = PrintPageGeometry.ResolvePrintRenderDpi(
+                printerDpi, totalAreaPoints);
+
+            var pages = new List<PrintablePageImage>(pageIndexes.Count);
+            foreach (int index in pageIndexes)
+            {
+                if (index < 0 || index >= rasterizer.PageCount)
+                    continue;
+                var pageSize = sizes[index];
+                int width = Math.Max(1, (int)Math.Ceiling(pageSize.Width * renderDpi / 72.0));
+                int height = Math.Max(1, (int)Math.Ceiling(pageSize.Height * renderDpi / 72.0));
+
+                // FFLDraw annotation pass — WPF's PdfRenderFlags.Annotations
+                // equivalent (includeAnnotations == true).
+                var rendered = rasterizer.RenderPageBgra(index, width, height, includeAnnotations);
+                pages.Add(new PrintablePageImage
+                {
+                    PageIndex = index,
+                    Bgra = rendered.Bgra,
+                    PixelWidth = rendered.Width,
+                    PixelHeight = rendered.Height,
+                    Stride = rendered.Stride,
+                    WidthPoints = pageSize.Width,
+                    HeightPoints = pageSize.Height,
+                });
+            }
+
+            return pages;
         }
 
         // ── Insert pages / rotate ───────────────────────────────────────────
@@ -10639,6 +10955,16 @@ namespace Caelum.Pages
             {
                 e.Handled = true;
                 _ = SaveAnnotationsToPdfAsync();
+                return;
+            }
+
+            // WPF Ctrl+P — document print, ahead of the text-focus gate like
+            // Ctrl+S (WPF ran it from the same ungated else-if chain; the
+            // context-menu item advertises the same accelerator).
+            if (ctrl && e.Key == VirtualKey.P)
+            {
+                e.Handled = true;
+                _ = PrintPdfAsync();
                 return;
             }
 

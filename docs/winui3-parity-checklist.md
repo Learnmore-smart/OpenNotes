@@ -3,6 +3,7 @@
 > Audit date: 2026-09-25 · Branch: `v6/winui3` · Compares WPF `OpenNotes` (5.2.x channel)
 > vs `OpenNotes.WinUI` (6.0.0 channel). Source of truth: WPF `Pages/EditorPage.xaml(.cs)`,
 > `MainWindow.xaml(.cs)`, `Pages/HomePage*.cs`, `docs/checklist.md` vs the current WinUI tree.
+> **G1/G8 closed 2026-09-26** (Win32 GDI print + RefreshPage item) — see rows.
 >
 > **Status legend:** ✅ ported · 🟡 partial (works, surface reduced) · ⏸ deferred (code path
 > exists/stubbed, intentionally off) · ❌ dropped (with reason) · — not applicable to WinUI.
@@ -12,14 +13,14 @@
 
 | # | Gap | Severity | Plan |
 |---|---|---|---|
-| G1 | **Print pipeline** — `OpenNotes.WinUI/Pages/EditorPage.xaml.cs:8611` `PrintMenuItem` exists with `IsEnabled = false` (`// T9: print pipeline`); no WinUI print implementation | feature missing | Implement `RenderPrintablePages` equivalent (rasterize `IPdfRasterizer` + print dialog) or drop the menu item |
+| G1 | **Print pipeline** — ✅ **ported** (`[manual]`): `PrintMenuItem` (`Editor.ContextMenu.Print`) enabled + Ctrl+P accelerates `PrintPdfAsync` — same lease/validation/`Editor.PreparingPrint` overlay/`Editor.PrintSent` `\uE749` toast/`Editor.PrintFailed` dialog/OCE-swallow flow as WPF. `BuildPrintablePagesAsync` keeps the atomic `%TEMP%\Caelum\Print\{guid}.pdf` copy + `SaveAnnotationsToPdfAsync` bake + temp cleanup; `RenderPrintablePages` rasterizes via `PdfiumRasterizerFactory.Shared` at the **printer's** DPI (Core `PrintPageGeometry.ResolvePrintRenderDpi`: min(X,Y) clamped to 96–600, then shrunk under a 250 MP total-job raster budget). Backend swap: the WinRT `PrintManager` task pipeline needs packaged CoreWindow plumbing, so `Services/Win32Print.cs` runs the classic Win32 `PrintDlgEx` sheet on the MainWindow HWND (printer choice + copies + collate + PD_PAGENUMS ranges) and spools BGRA pages through `CreateDC`/`StartDoc`/`StretchDIBits` — copies/collate are lifted out of the DEVMODE into a managed loop so no driver can double-replicate. `PrintablePageImage` now carries raw BGRA + page points (no BitmapSource) | closed | GDI spool is `[manual]`-verified only — no headless printer |
 | G2 | **Pen tool flyout** — ✅ **ported** (`ShowPenFlyout`): size slider 0.5–8/0.25 (`Editor.Pen.Size`), `Editor.PopupPreview` live stroke, recents row + HSV palette, Pressure/Ink Simulation/Shape Recognition toggles (`Editor.Pen.Pressure`/`InkSimulation`/`ShapeRecognition`, persisted via `SaveSetting`), Off–High smoothing (`Editor.Pen.Smoothing.{i}`). Residual: flyout light-dismisses on first ink press (WPF's `StaysOpen`+gesture-arm kept the popup up mid-stroke); `XamlRoot.Size` stands in for `SystemParameters.WorkArea` in the scroll cap | closed | `ShowPenFlyout` + `BuildSettingToggleButton`/`WrapToolFlyoutContent` helpers |
 | G3 | **Eraser mode flyout** — ✅ **ported** (`ShowEraserFlyout`): `Editor.Eraser.Pixel`/`Editor.Eraser.WholeStroke` mode row (persisted `WholeStrokeEraser`) above the 4–80 `Editor.Eraser.Size` slider; slider drags flash `EraserSizePreviewEllipse` for ~1.2 s (WPF `ShowEraserSizePreview`) | closed | eraser flyout opened from `EraserToolButton` like WPF `ToggleToolButton` |
 | G4 | **Recent-colors row** — ✅ **ported**: `RefreshRecentColorsRow`/`BuildRecentColorsSection` render the «最近 Recent» swatch row (`Editor.Color.Recent.{i}`) above the palette in the pen + highlighter + text flyouts; recording/dedupe/cap live in new Core `RecentColors` (`MaxRecentColors=8`, `Record`, `TryParse`); the cached text flyout refreshes on `FlyoutBase.Opening` (WPF `popup.Opened`). Shape flyout intentionally has none — WPF keeps shape colours session-only | closed | pen/highlighter rebuilt per show ⇒ per-show refresh; text flyout `Opening` hook |
 | G5 | **Sidebar thumbnail drag-reorder** — WPF `ThumbnailListBox` drag/drop + `ThumbnailDropPlacement.ResolveFinalIndex` reorders pages; WinUI `ThumbnailListBox` (`EditorPage.xaml:745`) leaves `CanDragItems`/`CanReorderItems`/`AllowDrop` unset (all default `false`, so drag-inert); `ThumbnailDropIndicator` is present but unused | feature missing | Implement ListView `DragItems` or the WPF custom payload path + `MovePageAsync` |
 | G6 | **F11 immersive fullscreen** — WPF hides toolbar chrome on F11/Esc; no WinUI equivalent | feature missing | Toggle toolbar/sidebar visibility + `AppWindowPresenterKind.FullScreen` |
 | G7 | **Scrollbar track click-to-jump** — WPF hooks `ScrollBar` template parts (`ScrollBarTrackJump_MouseLeftButtonDown`) so a track click centers the thumb; WinUI `ScrollViewer` does not expose that template surface | UX regression | Requires custom `ScrollBar` template or input hook — deferred by design |
-| G8 | **`Editor.Action.RefreshPage`** blank-context-menu item (reload document preserving edits) — not in the WinUI blank flyout | minor | Add menu item → reload via fresh-session lease |
+| G8 | **`Editor.Action.RefreshPage`** — ✅ **ported**: `ShowBlankContextMenu` adds the item between SelectAll and Delete (WPF order) → `RefreshCurrentDocumentPreservingEditsAsync` = `AutoSaveAsync` flush → `ReloadDocumentForOperationAsync` fresh-session reload. Deviation: a failed save **aborts** the reload — WPF reloaded unconditionally, which would discard the in-memory edits the command exists to preserve | closed | save→reload under fresh-session lease |
 | G9 | **Handwriting-to-text** — WPF ships no handwriting-to-text UI either (the `Editor.InkAnalysisUnavailable` degradation entry point was removed in Wave 3; no `InkAnalyzer` exists in either shell). WinUI *could* implement it via the WinRT API that WASDK exposes, but no code exists | parity-with-WPF-degraded | Optional: `Windows.UI.Input.Inking.Analysis` is reachable from WinUI 3 — a V6-only upgrade |
 | G10 | **`releases/latest` update channel** — `UpdateCheckService` reads `/releases/latest`; after a v6.0.0 publish, a 5.2.x WPF install will be offered V6 (intended cutover path — same installer AppId upgrades in place). If a 5.x release ships *after* v6, `latest` regresses and 6.x installs see "no update" | release-channel caveat | Per-channel feed or tag-prefix filtering is a follow-up decision |
 
@@ -72,8 +73,8 @@ Already-handled contract items (for the record):
 | Bookmarks: Ctrl+M toggle, list jump/remove, persisted | ✅ | `PageBookmarkService` (Core) |
 | Ctrl+F search + results + F3/Shift+F3 cycle + Esc | ✅ | `PdfSearchPanel`, `MovePdfSearchSelection` |
 | Loading overlay | ✅ | `LoadingOverlay` |
-| Blank-area context menu (copy/paste/select-all/delete) | 🟡 | `Editor.Action.RefreshPage` missing (G8) |
-| Page context menu (rotate/export-PNG/insert-PDF/insert-image/print) | 🟡 | Print disabled (G1); rotate via `RotatePageAsync` + reload |
+| Blank-area context menu (copy/paste/select-all/refresh/delete) | ✅ | `Editor.Action.RefreshPage` ported (G8) |
+| Page context menu (print/rotate/export-PNG/insert-PDF/insert-image) | ✅ `[manual]` | print live via Win32 GDI (G1); rotate via `RotatePageAsync` + reload |
 | Scrollbar track click-to-jump | ❌ G7 | WPF template-part hook has no WinUI equivalent |
 
 ### Ink engine (custom, replaces InkCanvas)
@@ -131,7 +132,7 @@ Already-handled contract items (for the record):
 | Structural-op snapshot undo (insert/delete/duplicate/rotate) | ✅ | private `DocumentSnapshotAction`, `LeavesDocumentDirty=false` |
 | Version history (cap 50, pre-restore auto-save) | ✅ `[manual]` | `VersionControlService` + `VersionHistoryButton` flyout |
 | Notebook draft Save-As flow | — | dormant in WPF (no caller); documented T9 deviation |
-| Print | ❌ G1 | menu stub disabled |
+| Print | ✅ `[manual]` (G1 closed) | `PrintDlgEx` + GDI `StretchDIBits` spool; annotations baked via temp-copy save |
 
 ### Dialogs & services
 | Feature | Status | Notes |
@@ -172,7 +173,11 @@ The V6 suite is a strict superset of the WPF suite plus new fixtures.
 ### C. WinUI shell — new V6 source-contract fixtures
 `WinUiSavePipelineSourceTests`, `WinUiDialogsServicesSourceTests`,
 `WinUiLocalizationCoverageTests`, **`WinUiParitySourceTests`** (added this task: sidebar/zoom/jump,
-tab-shell close protocol, theme, update wiring, home library, render lifecycle, packaging).
+tab-shell close protocol, theme, update wiring, home library, render lifecycle, packaging),
+**`WinUiPrintSourceTests`** (G1/G8, 2026-09-26: enabled Print item + Ctrl+P →
+lease-guarded `PrintPdfAsync` → `Win32Print` PrintDlgEx/GDI spool, temp-copy bake,
+blank-menu `Editor.Action.RefreshPage` ordering + save→reload path) +
+**`PrintPageGeometryTests`** (Core behavioural half: fit math + raster-DPI budget).
 
 ### D. WPF-UI-coupled fixtures — stay WPF-only by design
 These instantiate WPF controls/STA or pin WPF source text; the WinUI equivalents are covered
@@ -218,8 +223,8 @@ by §B/§C source contracts + `tools/winui-*.ps1` smoke scripts at runtime:
 
 ## What is needed for the actual `v6.0.0` release (explicit user consent required)
 
-1. Close or consciously accept gap list G1–G10 (G1 print and G5 reorder are the
-   user-visible ones).
+1. Close or consciously accept gap list G1–G10 (G1/G8 closed 2026-09-26;
+   G5 reorder remains the largest user-visible one).
 2. Manual run of the four `tools/winui-*.ps1` smokes on a real desktop session.
 3. `git tag v6.0.0` + push → `release-winui` job builds setup + portable zip.
    ⚠ Tag push and release publish are **not** performed by this task.

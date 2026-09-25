@@ -1,5 +1,5 @@
 # OpenNotes.WinUI/Pages/EditorPage.xaml(.cs)
-> Last updated: 2026-09-25 (V6 Task 9 Phase B quality pass — thumbnail context menu + structural-op hardening) | Protection: STANDARD
+> Last updated: 2026-09-26 (G1/G8 — Win32 GDI print pipeline + blank-menu RefreshPage) | Protection: STANDARD
 
 ## Purpose
 `Caelum.Pages.EditorPage : Page` — the WinUI editor shell port of the WPF
@@ -77,7 +77,21 @@ the Task 9 Phase A save/autosave + close/dirty protocol is live (T9-B defers set
 - **Context menu:** code-built `MenuFlyout` on `PdfScrollViewer.ContextFlyout`
   — Rotate current page (`RotatePageAsync` + reload + re-jump), Export current
   page PNG incl. 1× (`RenderPageBgraAsync` → PNG encode → save picker),
-  print + page ops entries (insert/delete/duplicate/reorder) wired to Core.
+  **Print (live: `PrintPdfAsync` → `Win32Print` PrintDlgEx + GDI spool,
+  Ctrl+P too)** + page ops entries (insert/delete/duplicate/reorder) wired to
+  Core. Blank-area flyout carries Copy/Paste/SelectAll/**RefreshPage**
+  (save→`ReloadDocumentForOperationAsync`)/Delete.
+- **Print (G1):** `PrintPdfAsync` ports the WPF lease/validation/
+  `Editor.PreparingPrint` overlay/`PrintSent` toast/`PrintFailed` dialog/OCE
+  flow. `BuildPrintablePagesAsync` atomically copies the PDF into
+  `%TEMP%\Caelum\Print\{guid}.pdf`, bakes annotations via
+  `SaveAnnotationsToPdfAsync`, and `RenderPrintablePages` rasterizes the
+  selected pages at the printer's DPI through `PdfiumRasterizerFactory` —
+  bounded by Core `PrintPageGeometry.ResolvePrintRenderDpi` (96–600 DPI,
+  250 MP job budget). `Services/Win32Print.cs` owns the `PrintDlgEx` sheet +
+  `CreateDC`/`StartDoc`/`StretchDIBits` spool (managed copies/collate —
+  DEVMODE fields lifted then reset so drivers can't double-replicate);
+  WinRT `PrintManager` intentionally not used (needs packaged CoreWindow).
 - **Lifecycle:** `DocumentOperationSession`/`lease` validation guards every
   async continuation (`ValidateDocumentOperationLease`,
   `IsSidebarLoadCurrent`, `_loadSessionId`); `ShutdownEditor()` →
@@ -483,10 +497,19 @@ the Task 9 Phase A save/autosave + close/dirty protocol is live (T9-B defers set
   environmental) incl. `WinUiDialogsServicesSourceTests` +
   `WinUiLocalizationCoverageTests`.
 - **Deferred (by design):** dormant `promptSaveAsAfterLoad` draft
-  flow (no WPF caller); print pipeline (`T9: print pipeline` — the
-  runtime-created print menu item stays `IsEnabled = false`).
+  flow (no WPF caller).
 
 ## Change History
+- 2026-09-26 G1/G8 port: print pipeline live via `Services/Win32Print.cs`
+  (Win32 `PrintDlgEx` sheet on the MainWindow HWND → patched-DEVMODE
+  `CreateDC` → per-page `StretchDIBits` of pdfium BGRA at printer DPI; the
+  WinRT PrintManager pipeline was rejected — packaged CoreWindow plumbing is
+  fragile unpackaged). `PrintMenuItem` enabled + `Ctrl+P` parity; blank
+  context menu gained `Editor.Action.RefreshPage` →
+  `RefreshCurrentDocumentPreservingEditsAsync` (autosave flush → fresh-session
+  reload; unlike WPF a failed save aborts the reload so edits can't be
+  dropped). Pure fit/DPI math in Core `PrintPageGeometry`; source pins in
+  `WinUiPrintSourceTests`, behaviour in `PrintPageGeometryTests`. | Devin
 - 2026-09-25 Structural-op residuals: `ApplyDocumentSnapshotAsync` now holds
   `_structuralOperationInFlight` (undo/redo shares the byte-write+reload
   pipeline; a held latch refuses via null → `LastOperationSucceeded=false`
