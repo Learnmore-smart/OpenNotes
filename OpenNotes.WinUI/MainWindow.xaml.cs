@@ -521,12 +521,65 @@ namespace Caelum
             RefreshSelectButtonVisualState();
         }
 
+        // ── Window-scoped pen service (WPF WindowsPenService parity) ──────
+        //
+        // Exactly ONE PenService per window: it subclasses this HWND once
+        // and owns the Win+F19/F20 RegisterHotKey pair. The earlier
+        // per-EditorPage construction raced every page onto the same HWND —
+        // duplicate hotkey ids fail for tabs 2+ (leaving them without
+        // hotkeys, and the owning tab's teardown killed the registration
+        // app-wide) while every subclass proc still observed the shared
+        // WM_HOTKEY, so the eraser toggle landed on inactive editors.
+
+        private PenService _penService;
+
+        /// <summary>
+        /// The single window-owned <see cref="PenService"/> — created and
+        /// HWND-initialized on first access (<c>Initialize</c> is
+        /// idempotent, so a HWND that wasn't ready yet simply retries on the
+        /// next call), disposed in <see cref="MainWindow_Closed"/>. Editor
+        /// pages pull it to feed pen probing; this window routes its events
+        /// to the ACTIVE editor only.
+        /// </summary>
+        internal PenService GetOrCreatePenService()
+        {
+            if (_penService == null)
+            {
+                _penService = new PenService();
+                _penService.ToolToggleRequested += PenService_ToolToggleRequested;
+                _penService.PenDeviceDetected += PenService_PenDeviceDetected;
+            }
+            _penService.Initialize(this);
+            return _penService;
+        }
+
+        /// <summary>
+        /// Huawei M-Pencil double-tap → eraser toggle on the ACTIVE editor
+        /// only — the window-level half of WPF's IsActiveEditorPage gate
+        /// (the editor re-checks its host-active/released state inside the
+        /// queued callback).
+        /// </summary>
+        private void PenService_ToolToggleRequested(object sender, EventArgs e)
+            => (_activeTab?.Frame?.Content as EditorPage)?.HandlePenToolToggle();
+
+        /// <summary>
+        /// First-pen-packet toast — routed to the ACTIVE editor only. When
+        /// no editor tab is active (Home tab) WPF's IsActiveEditorPage gate
+        /// dropped the toast entirely; same here.
+        /// </summary>
+        private void PenService_PenDeviceDetected(object sender, PenDeviceInfo info)
+            => (_activeTab?.Frame?.Content as EditorPage)?.HandlePenDeviceDetected(info);
+
         private void MainWindow_Closed(object sender, WindowEventArgs args)
         {
             WinUiThemeService.ThemeApplied -= WinUiThemeService_ThemeApplied;
             LocalizationService.LanguageChanged -= LocalizationService_LanguageChanged;
             _updateCheckCts?.Cancel();
             _toastCts?.Cancel();
+            // The window owns the single PenService — drop the HWND
+            // subclass + Win+F19/F20 registrations with the window.
+            _penService?.Dispose();
+            _penService = null;
             _windowCloseCts?.Dispose();
             _windowCloseCts = null;
             if (ReferenceEquals(Current, this))

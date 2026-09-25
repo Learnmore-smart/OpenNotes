@@ -22,6 +22,13 @@ namespace Caelum.Services
     ///     <see cref="PointerPointProperties.HasUsage"/> — the WinRT analog
     ///     of WPF's TabletDevice.SupportedStylusPointProperties probing.
     ///
+    /// Ownership: exactly ONE instance per window, created/disposed by
+    /// <c>MainWindow</c> (GetOrCreatePenService) — the service subclasses
+    /// the window HWND and registers Win+F19/F20 on it, so per-EditorPage
+    /// construction raced every page onto the same HWND (duplicate
+    /// hotkey ids fail; every subclass proc saw the shared WM_HOTKEY).
+    /// MainWindow routes both events to the ACTIVE editor only.
+    ///
     /// Deliberate difference: WinUI's pointer stack exposes no stable
     /// per-device identity (PointerPoint has PointerDeviceType only), so
     /// detection is an aggregate "first pen seen" model rather than a

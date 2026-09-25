@@ -129,12 +129,19 @@ the Task 9 Phase A save/autosave + close/dirty protocol is live (T9-B defers set
   `UpdateUndoRedoButtons` refreshes `IsEnabled` after every mutation).
   `CancelInteraction` runs on every page before viewport re-renders/tab
   teardown so a stroke in progress can't strand pointer capture. Pen
-  service: `_penService` is one `Caelum.Services.PenService` PER editor
-  page — `InitializePenService` (on `Loaded`) subclasses the window HWND
-  for Win+F19/F20, `ToolToggleRequested` → `ToggleEraserMode` (eraser ↔
-  `_previousTool`), and `PushPenServiceToPages` feeds each surface's
-  `SetPenService`; the surfaces' `ProbePointer` calls accumulate
-  `Capabilities` → `PenDeviceDetected` toast.
+  service: `_penService` is a REFERENCE to the single window-scoped
+  `Caelum.Services.PenService` owned by `MainWindow` —
+  `InitializePenService` (on `Loaded`) only pulls
+  `GetMainWindow()?.GetOrCreatePenService()` and
+  `PushPenServiceToPages` feeds each surface's `SetPenService`; the
+  surfaces' `ProbePointer` calls accumulate `Capabilities` →
+  `PenDeviceDetected`. The window routes `ToolToggleRequested` to the
+  ACTIVE editor's `internal HandlePenToolToggle()` → `ToggleEraserMode`
+  (eraser ↔ `_previousTool`) and the first-pen event to
+  `HandlePenDeviceDetected(info)` — both gated on
+  `!_isHostActive || _resourcesReleased` pre-enqueue AND inside the
+  callback (WPF `IsActiveEditorPage()` parity). `ReleaseResources`
+  clears the reference only — it never disposes the shared instance.
 - **Localization:** `ApplyLocalization()` refreshes chrome/tooltips/context
   menu labels AND re-stamps page-chrome tooltips via `RefreshPageDeleteButtons()`
   (per-page delete + insert-gap buttons); validation message strings `Editor.PageJump*`. The page

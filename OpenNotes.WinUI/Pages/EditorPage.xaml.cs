@@ -288,7 +288,9 @@ namespace Caelum.Pages
         private readonly Stack<IUndoAction> _undoStack = new();
         private readonly Stack<IUndoAction> _redoStack = new();
 
-        // Pen hardware service (Huawei hotkey toggle + capability probing).
+        // Pen hardware service (Huawei hotkey toggle + capability probing)
+        // — a reference to the single WINDOW-scoped instance owned by
+        // MainWindow (see InitializePenService); never disposed here.
         private Caelum.Services.PenService _penService;
 
         // ── Pages/rendering ─────────────────────────────────────────────────
@@ -507,24 +509,23 @@ namespace Caelum.Pages
         }
 
         /// <summary>
-        /// WinUI port of the WPF pen-service init: one service per editor
-        /// page (the WPF window-scoped instance shared the HWND subclass —
-        /// here each page subclasses its own window; duplicate hotkey
-        /// registrations on the same HWND are idempotent per id).
+        /// WinUI port of the WPF pen-service init: the service itself is
+        /// WINDOW-scoped — <see cref="MainWindow"/> owns exactly one
+        /// <see cref="Caelum.Services.PenService"/> per HWND (one subclass +
+        /// one Win+F19/F20 registration pair however many editor tabs are
+        /// open; duplicate RegisterHotKey ids on the same HWND fail, so
+        /// per-page services left later tabs without hotkeys AND every
+        /// subclass proc saw the shared WM_HOTKEY). This page only grabs
+        /// the shared instance to feed pen-probing on its ink surfaces;
+        /// MainWindow routes the events to the ACTIVE editor through
+        /// <see cref="HandlePenToolToggle"/>/<see cref="HandlePenDeviceDetected"/>.
         /// </summary>
         private void InitializePenService()
         {
             if (_penService != null)
                 return;
 
-            var window = GetMainWindow();
-            if (window == null)
-                return;
-
-            _penService = new Caelum.Services.PenService();
-            _penService.ToolToggleRequested += PenService_ToolToggleRequested;
-            _penService.PenDeviceDetected += PenService_PenDeviceDetected;
-            _penService.Initialize(window);
+            _penService = GetMainWindow()?.GetOrCreatePenService();
             PushPenServiceToPages();
         }
 
@@ -537,21 +538,40 @@ namespace Caelum.Pages
         }
 
         /// <summary>
-        /// Huawei M-Pencil double-tap (Win+F19/F20 via the HWND subclass) →
-        /// eraser toggle, marshalled to the UI thread. WPF parity.
+        /// Huawei M-Pencil double-tap (Win+F19/F20 via the window HWND
+        /// subclass) → eraser toggle, marshalled to the UI thread.
+        /// <see cref="MainWindow"/> owns the single PenService and routes
+        /// the event to the ACTIVE editor only — the host-active/released
+        /// rechecks are the WPF IsActiveEditorPage() gates (pre-dispatch
+        /// and inside the callback), so a queued toggle can't land on a
+        /// hidden or released editor.
         /// </summary>
-        private void PenService_ToolToggleRequested(object sender, EventArgs e)
+        internal void HandlePenToolToggle()
         {
-            DispatcherQueue.TryEnqueue(ToggleEraserMode);
+            if (!_isHostActive || _resourcesReleased)
+                return;
+            DispatcherQueue.TryEnqueue(() =>
+            {
+                if (!_isHostActive || _resourcesReleased)
+                    return;
+                ToggleEraserMode();
+            });
         }
 
-        private void PenService_PenDeviceDetected(object sender, Caelum.Services.PenDeviceInfo info)
+        /// <summary>
+        /// First-pen-packet toast, routed from the window-scoped PenService
+        /// by <see cref="MainWindow"/> to the ACTIVE editor — WPF shows it
+        /// only on the active editor page.
+        /// </summary>
+        internal void HandlePenDeviceDetected(Caelum.Services.PenDeviceInfo info)
         {
+            if (!_isHostActive || _resourcesReleased)
+                return;
             // Packet probing fires on the UI thread already; the guard keeps
             // the toast honest if the service ever moves off it.
             DispatcherQueue.TryEnqueue(() =>
             {
-                if (info == null)
+                if (!_isHostActive || _resourcesReleased || info == null)
                     return;
                 var featureLabels = new List<string>();
                 if (info.SupportsPressure)
@@ -11422,7 +11442,8 @@ namespace Caelum.Pages
                     _languageChangedSubscribed = false;
                 }
 
-                _penService?.Dispose();
+                // Window-owned shared service — release the reference
+                // only; MainWindow disposes the single instance on Closed.
                 _penService = null;
 
                 DeselectTextBox();
