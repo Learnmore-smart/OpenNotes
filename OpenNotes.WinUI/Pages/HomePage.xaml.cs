@@ -4,6 +4,7 @@ using System.Collections.ObjectModel;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
+using Caelum.Controls;
 using Caelum.Models;
 using Caelum.Services;
 using Microsoft.UI.Input;
@@ -836,141 +837,31 @@ namespace Caelum.Pages
         }
 
         /// <summary>
-        /// Compact ContentDialog stand-in for the WPF
-        /// <c>PageTemplatePickerWindow</c> notebook-creation mode (the full
-        /// picker port is scheduled for Task 9): 9 template radio cards with
-        /// localized title+hint, a "save to" folder row driven by
-        /// <see cref="FolderPicker"/>, and Create/Cancel. Returns
-        /// (template, folderPath) or null when dismissed.
+        /// WPF <c>PageTemplatePickerWindow</c> notebook-creation mode via the
+        /// shared <see cref="PageTemplatePickerDialog"/> (Task 9 full port —
+        /// replaces the earlier compact stand-in): 3×3 card grid with
+        /// localized title+hint, the "save to" folder row, and a Create
+        /// button gated on a chosen folder. Returns (template, folderPath)
+        /// or null when dismissed.
         /// </summary>
         private async Task<(PageInsertTemplate Template, string FolderPath)?> PickNotebookTemplateAsync()
         {
             var xamlRoot = XamlRoot;
-            var mainWindow = GetMainWindow();
-            if (xamlRoot == null || mainWindow == null)
+            if (xamlRoot == null || GetMainWindow() == null)
                 return null;
 
-            var selectedTemplate = PageInsertTemplate.Blank;
-            string folderPath = GetDefaultNotebookDirectory();
-
-            var radioPanel = new StackPanel { Spacing = 4 };
-            foreach (var (template, titleKey, hintKey) in NotebookTemplateOptions)
-            {
-                var option = template;
-                var radio = new RadioButton
-                {
-                    GroupName = "NotebookTemplate",
-                    IsChecked = template == selectedTemplate,
-                    Content = new StackPanel
-                    {
-                        Children =
-                        {
-                            new TextBlock { Text = LocalizationService.Get(titleKey), FontSize = 14, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold },
-                            new TextBlock { Text = LocalizationService.Get(hintKey), FontSize = 12, TextWrapping = TextWrapping.Wrap,
-                                            Foreground = ResolveThemeBrush("ThemeSubtleForegroundBrush", "#4B5563") }
-                        }
-                    }
-                };
-                radio.Checked += (_, _) => selectedTemplate = option;
-                radioPanel.Children.Add(radio);
-            }
-
-            var folderPathText = new TextBlock
-            {
-                Text = folderPath,
-                FontSize = 12,
-                TextTrimming = TextTrimming.CharacterEllipsis,
-                Foreground = ResolveThemeBrush("ThemeSubtleForegroundBrush", "#4B5563"),
-                VerticalAlignment = VerticalAlignment.Center
-            };
-            var browseButton = new Button
-            {
-                Content = LocalizationService.Get("Home.CreateNotebookBrowseFolder"),
-                VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(8, 0, 0, 0)
-            };
-            browseButton.Click += async (_, _) =>
-            {
-                var folderPicker = new FolderPicker
-                {
-                    SuggestedStartLocation = PickerLocationId.DocumentsLibrary,
-                    CommitButtonText = LocalizationService.Get("Home.CreateNotebookBrowseFolder")
-                };
-                folderPicker.FileTypeFilter.Add("*");
-                InitializeWithWindow.Initialize(folderPicker, WindowNative.GetWindowHandle(mainWindow));
-                var folder = await folderPicker.PickSingleFolderAsync();
-                if (folder != null)
-                {
-                    folderPath = folder.Path;
-                    folderPathText.Text = folder.Path;
-                }
-            };
-
-            var dialog = new ContentDialog
+            var dialog = new PageTemplatePickerDialog(GetDefaultNotebookDirectory())
             {
                 XamlRoot = xamlRoot,
-                Title = LocalizationService.Get("Home.CreateNotebookDialogTitle"),
-                PrimaryButtonText = LocalizationService.Get("Home.CreateNotebookAction"),
-                CloseButtonText = LocalizationService.Get("Common.Cancel"),
-                DefaultButton = ContentDialogButton.Primary,
-                Content = new ScrollViewer
-                {
-                    MaxHeight = 520,
-                    VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-                    Content = new StackPanel
-                    {
-                        Spacing = 10,
-                        Children =
-                        {
-                            new TextBlock
-                            {
-                                Text = LocalizationService.Get("Home.CreateNotebookDialogSubtitle"),
-                                FontSize = 13,
-                                TextWrapping = TextWrapping.Wrap,
-                                Foreground = ResolveThemeBrush("ThemeSubtleForegroundBrush", "#4B5563")
-                            },
-                            radioPanel,
-                            new StackPanel
-                            {
-                                Orientation = Orientation.Horizontal,
-                                Children =
-                                {
-                                    new TextBlock
-                                    {
-                                        Text = LocalizationService.Get("Home.CreateNotebookPathLabel"),
-                                        FontSize = 13,
-                                        VerticalAlignment = VerticalAlignment.Center
-                                    },
-                                    folderPathText,
-                                    browseButton
-                                }
-                            }
-                        }
-                    }
-                }
             };
-
             // Gate: ContentDialog allows only one open instance per XamlRoot —
             // serialize with the WinUiDialogService dialogs.
-            var result = await WinUiDialogService.RunUnderDialogGateAsync(() => dialog.ShowAsync().AsTask());
-            if (result != ContentDialogResult.Primary || string.IsNullOrWhiteSpace(folderPath))
+            await WinUiDialogService.RunUnderDialogGateAsync(() => dialog.ShowAsync().AsTask());
+            if (!dialog.IsConfirmed || string.IsNullOrWhiteSpace(dialog.SelectedFolderPath))
                 return null;
 
-            return (selectedTemplate, folderPath);
+            return (dialog.SelectedTemplate, dialog.SelectedFolderPath);
         }
-
-        private static readonly (PageInsertTemplate Template, string TitleKey, string HintKey)[] NotebookTemplateOptions =
-        {
-            (PageInsertTemplate.Blank, "Editor.PageTemplateBlank", "Editor.PageTemplateBlankHint"),
-            (PageInsertTemplate.Notebook, "Editor.PageTemplateNotebook", "Editor.PageTemplateNotebookHint"),
-            (PageInsertTemplate.Lined, "Editor.PageTemplateLined", "Editor.PageTemplateLinedHint"),
-            (PageInsertTemplate.Quadrille, "Editor.PageTemplateQuadrille", "Editor.PageTemplateQuadrilleHint"),
-            (PageInsertTemplate.Dotted, "PageTemplate.DottedTitle", "PageTemplate.DottedHint"),
-            (PageInsertTemplate.Music, "PageTemplate.MusicTitle", "PageTemplate.MusicHint"),
-            (PageInsertTemplate.Cornell, "PageTemplate.CornellTitle", "PageTemplate.CornellHint"),
-            (PageInsertTemplate.Checklist, "PageTemplate.ChecklistTitle", "PageTemplate.ChecklistHint"),
-            (PageInsertTemplate.TwoColumn, "PageTemplate.TwoColumnTitle", "PageTemplate.TwoColumnHint")
-        };
 
         private async Task CreateEmptyNotebookAsync()
         {

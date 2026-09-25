@@ -1,5 +1,5 @@
 # OpenNotes.WinUI/Services/WinUiDialogService.cs
-> Last updated: 2026-09-23 (V6 Task 5 — ContentDialog service) | Protection: STANDARD
+> Last updated: 2026-09-25 (V6 Task 9 Phase B — z-order no-port note) | Protection: STANDARD
 
 ## Purpose
 `public static class WinUiDialogService` — the WinUI replacement for the WPF `DialogService`/`MahApps`-style dialogs used by HomePage/MainWindow flows. Wraps `ContentDialog` with an explicit `XamlRoot` (required for unpackaged/self-contained WinUI).
@@ -15,3 +15,4 @@
 - A process-wide `SemaphoreSlim` serializes dialogs: WinUI allows only ONE live `ContentDialog` per `XamlRoot` — a second `ShowAsync` throws `InvalidOperationException`. Keep the semaphore around every show; the private `ShowDialogAsync` ALSO catches `InvalidOperationException` → `null` as defense-in-depth against any dialog that bypassed the gate.
 - `xamlRoot` may arrive null (window mid-close): every method no-ops to `false`/`null` in that case — never throw.
 - All call-site text flows through `LocalizationService` — this class itself keeps no literal strings.
+- **Popup z-order (T9-B assessment — WPF `PopupZOrderHelper` deliberately NOT ported):** WPF popups are HWND-backed, so `PopupZOrderHelper` called `SetWindowPos(HWND_TOPMOST)` on each ContextMenu/ComboBox-dropdown hwnd to keep them above the owner. WinUI `MenuFlyout`/`Flyout`/`ContentDialog` are XamlRoot-scoped visuals composited inside the app's swap chain — they can't be clipped by sibling HWNDs and expose no HWND to reorder, so showing on the current XamlRoot IS the topmost guarantee. The class doc comment records this mapping; no code crosses over.

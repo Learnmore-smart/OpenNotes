@@ -1530,7 +1530,77 @@ namespace Caelum
             }
         }
 
-        // ── More menu: updates + about (WPF ports) ─────────────────────────
+        // ── More menu: settings + updates + about (WPF ports) ──────────────
+
+        private async void Settings_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                await OpenSettingsDialogAsync();
+            }
+            catch (Exception ex)
+            {
+                // async-void menu handler: no App.UnhandledException backstop.
+                Debug.WriteLine($"[MainWindow] Settings dialog faulted: {ex}");
+            }
+        }
+
+        /// <summary>
+        /// WPF <c>PreviewSettings</c> parity: pushes a staged settings
+        /// snapshot live — language, theme/backdrop and every open editor's
+        /// tool state — without persisting. The settings dialog calls this on
+        /// each control change and again with the original snapshot when it
+        /// closes unconfirmed.
+        /// </summary>
+        public void PreviewSettings(AppSettings settings)
+        {
+            if (settings == null)
+                return;
+            LocalizationService.ApplyLanguage(settings.Language);
+            WinUiThemeService.Apply(settings.Theme, workspaceBackdrop: settings.WorkspaceBackdrop);
+            foreach (var editor in _tabs
+                .Select(tab => tab?.Frame?.Content)
+                .OfType<EditorPage>())
+            {
+                editor.ApplySettings(settings);
+            }
+        }
+
+        /// <summary>WPF <c>ApplySettings</c> parity: persist → live-apply.</summary>
+        private void ApplySettings(AppSettings settings)
+        {
+            var savedSettings = AppSettingsService.Save(settings);
+            PreviewSettings(savedSettings);
+        }
+
+        /// <summary>
+        /// WPF <c>OpenSettingsDialog</c> parity — the WPF borderless
+        /// <c>SettingsWindow</c> becomes a gated <see cref="SettingsDialog"/>
+        /// (ContentDialog); confirm persists + toasts, cancel/dismiss was
+        /// already reverted by the dialog's Closed handler and the final
+        /// <see cref="PreviewSettings"/> keeps the post-cancel restore
+        /// ordering identical to WPF.
+        /// </summary>
+        private async Task OpenSettingsDialogAsync()
+        {
+            var xamlRoot = RootGrid?.XamlRoot;
+            if (xamlRoot == null)
+                return;
+
+            var originalSettings = AppSettingsService.Load();
+            var dialog = new SettingsDialog(originalSettings) { XamlRoot = xamlRoot };
+            await WinUiDialogService.RunUnderDialogGateAsync(
+                () => dialog.ShowAsync().AsTask());
+
+            if (dialog.SelectedSettings != null)
+            {
+                ApplySettings(dialog.SelectedSettings);
+                ShowToast(LocalizationService.Get("Main.SettingsSaved"), "");
+                return;
+            }
+
+            PreviewSettings(originalSettings);
+        }
 
         private async void CheckForUpdates_Click(object sender, RoutedEventArgs e)
         {

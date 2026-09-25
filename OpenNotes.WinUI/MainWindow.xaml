@@ -296,9 +296,7 @@
                     <FontIcon Glyph="&#xE712;" FontSize="14" Foreground="{ThemeResource ThemeSubtleForegroundBrush}"/>
                     <Button.Flyout>
                         <MenuFlyout>
-                            <!-- Settings is disabled: the SettingsWindow port
-                                 lands with the Task 9 dialogs task. -->
-                            <MenuFlyoutItem x:Name="SettingsMenuItem" IsEnabled="False"
+                            <MenuFlyoutItem x:Name="SettingsMenuItem" Click="Settings_Click"
                                             AutomationProperties.AutomationId="SettingsMenuItem"/>
                             <MenuFlyoutItem x:Name="CheckForUpdatesMenuItem" Click="CheckForUpdates_Click"
                                             AutomationProperties.AutomationId="CheckForUpdatesMenuItem"/>

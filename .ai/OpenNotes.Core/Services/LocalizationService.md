@@ -43,3 +43,4 @@ Central catalog for English, Simplified Chinese, and French UI strings and cultu
 - 2026-08-24 UI refresh adds EN/ZH/FR Previous/Next page labels and expands workspace labels to White/Paper/Mist/Warm/Slate/Midnight; missing keys still fail catalog verification.
 - 2026-08-24 Sticky editor refresh adds the EN/ZH/FR `Editor.MoveStickyNoteEditor` drag instruction; the visible header continues to reuse the localized Sticky Note tool label.
 - 2026-09-24 Lifecycle hardening adds EN/ZH/FR `Editor.SaveTimedOut` ("Save timed out: {0}") and `Editor.CloseTimedOut` (background close notice) for the close/navigation timeout toasts; placeholder parity preserved. | Devin
+- 2026-09-25 Task 9 Phase B adds `Editor.ColorTooltip` ("Color"/颜色/Couleur) — the WinUI editor's text-color fallback key that the WinUI localization coverage test surfaced as referenced-but-missing. `WinUiLocalizationCoverageTests` now pins every literal WinUI key to the catalog in all three languages. | Devin

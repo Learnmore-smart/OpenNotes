@@ -1,5 +1,5 @@
 # OpenNotes.WinUI/Controls/PdfPageControl.xaml(.cs)
-> Last updated: 2026-09-24 (V6 Task 8 Phase B — images/highlights/markups/area highlights/PDF text selection) | Protection: STANDARD
+> Last updated: 2026-09-25 (V6 Task 9 Phase B — ClearAllAnnotations for version restore) | Protection: STANDARD
 
 ## Purpose
 `Caelum.Controls.PdfPageControl : UserControl` — the per-page frame stacked in
@@ -260,6 +260,12 @@
   decides mask removal (whole mask, never fragments).
 - Deferred: overlay-swap animation (`PdfImageOverlay` staged swap), text/sticky
   hit overlays (T8).
+- `ClearAllAnnotations()` (T9-B, WPF parity — version-restore path):
+  cancels in-flight sticky drags/area-highlight preview + selection/PDF-text
+  selection, then sweeps `Ink.Store`/`HiddenInkStore` (their Cleared
+  notifications rebuild the ink/hidden-ink visuals + stop reveal timers) and
+  clears `TextOverlayCanvas`/`ImageOverlayCanvas`/`HighlightsCanvas` plus
+  `_overlayData`/`_imageDataById`/`_imageContainers`/`_highlights`/`_selectedTextContainers`.
 
 ## Open Threads / Resume Context
 - **Status:** GREEN — Phase A ink (pen/highlighter/eraser, pressure, scribble
@@ -268,3 +274,6 @@
   surface, quiet mutators, `IAnnotationContainerHost`) + Task 8 Phase B
   (image annotations, persistent highlights, text markups, area highlights,
   real PDF text selection) live; renders BGRA pages.
+
+## Change History
+- 2026-09-25 Task 9 Phase B: `ClearAllAnnotations()` added for the version-history restore sweep. | Devin

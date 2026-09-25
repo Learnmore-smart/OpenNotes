@@ -494,10 +494,10 @@
                                                  Stroke="{ThemeResource ThemeForegroundBrush}"/>
                         </Button>
 
-                        <!-- Version History (T9) -->
-                        <Button x:Name="VersionHistoryButton"
+                        <!-- Version History (T9-B: wired to the restore flyout) -->
+                        <Button x:Name="VersionHistoryButton" Click="VersionHistory_Click"
                                 Style="{StaticResource ToolbarButtonStyle}"
-                                Width="36" Height="36" Margin="1,0" IsEnabled="False"
+                                Width="36" Height="36" Margin="1,0"
                                 AutomationProperties.AutomationId="Editor.VersionHistoryButton">
                             <controls:LucideIcon Kind="History" Width="18" Height="18"
                                                  Stroke="{ThemeResource ThemeForegroundBrush}"/>

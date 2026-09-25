@@ -1094,6 +1094,41 @@ namespace Caelum.Controls
         }
 
         /// <summary>
+        /// Wipes every annotation layer + payload map (WPF ClearAllAnnotations,
+        /// used by the version-restore path before the sidecar snapshot is
+        /// repainted). Transient interaction state is closed first so no
+        /// pointer/session keeps referencing a detached container: sticky
+        /// drag, area-highlight drag preview, selection + PDF text selection.
+        /// The stores clear quietly (their Cleared notifications rebuild the
+        /// ink/hidden-ink visuals); the container canvases and the payload
+        /// dictionaries are swept directly like the WPF implementation.
+        /// </summary>
+        public void ClearAllAnnotations()
+        {
+            if (_stickyDragContainer != null)
+                EndStickyPointer(_stickyDragContainer, canceled: true);
+            if (_isAreaHighlightDragging)
+            {
+                _isAreaHighlightDragging = false;
+                ClearAreaHighlightPreview();
+            }
+            ClearSelection();
+            ClearPdfTextSelection();
+
+            Ink.Store.Clear();
+            HiddenInkStore.Clear();
+
+            TextOverlayCanvas.Children.Clear();
+            _selectedTextContainers.Clear();
+            ImageOverlayCanvas.Children.Clear();
+            _imageContainers.Clear();
+            _imageDataById.Clear();
+            _overlayData.Clear();
+            _highlights.Clear();
+            HighlightsCanvas.Children.Clear();
+        }
+
+        /// <summary>
         /// Every store stroke sharing this stroke's ShapeGroupId (itself
         /// included) — or just the stroke when it is ordinary ink.
         /// </summary>

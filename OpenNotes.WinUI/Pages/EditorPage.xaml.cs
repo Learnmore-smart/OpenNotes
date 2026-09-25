@@ -289,6 +289,10 @@ namespace Caelum.Pages
         private readonly List<PdfPageControl> _pageControls = new();
         private readonly List<double> _pageTopOffsets = new();
         private readonly List<double> _pageHeights = new();
+        // T9-B page chrome (WPF parity): hover-only per-page delete buttons
+        // and the insert-gap "+" affordances between pages.
+        private readonly List<Button> _pageDeleteButtons = new();
+        private readonly List<Button> _pageInsertButtons = new();
         private readonly HashSet<int> _pagesInitiallyRendered = new();
         private readonly HashSet<int> _pagesRenderedAtScale = new();
         private double _zoomLevel = 1.0;
@@ -761,6 +765,8 @@ namespace Caelum.Pages
                 SetCompatProbeText(filePath);
                 PagesContainer.Children.Clear();
                 _pageControls.Clear();
+                _pageDeleteButtons.Clear();
+                _pageInsertButtons.Clear();
                 _pageTopOffsets.Clear();
                 _pageHeights.Clear();
                 _pagesInitiallyRendered.Clear();
@@ -808,7 +814,12 @@ namespace Caelum.Pages
                     var size = _pdfService.GetPageSizeInDips(i);
                     AddPdfPage(i, size, ref currentTop, pageCount);
                 }
+                // WPF parity: the trailing gap is the "insert at end" drop
+                // zone (index == pageCount).
+                if (pageCount > 0)
+                    PagesContainer.Children.Add(CreatePageInsertGap(pageCount));
                 ApplyToolToAllPages();
+                RefreshPageDeleteButtons();
                 await LoadAnnotationsIntoPagesAsync();
 
                 _zoomLevel = 1.0;
@@ -911,17 +922,183 @@ namespace Caelum.Pages
             _pageTopOffsets.Add(currentTop);
             _pageHeights.Add(size.Height);
 
-            var host = new Grid { HorizontalAlignment = HorizontalAlignment.Center };
-            host.Children.Add(pageControl);
-            PagesContainer.Children.Add(host);
+            // WPF page chrome parity: an insert-gap zone sits BEFORE each
+            // page after the first (insertIndex == the following page index),
+            // and the host grid carries the hover-only delete button.
+            if (index > 0)
+                PagesContainer.Children.Add(CreatePageInsertGap(index));
+
+            PagesContainer.Children.Add(CreatePageHost(pageControl));
             _pageControls.Add(pageControl);
 
-            // T9: the WPF insert-gap affordance lives in this slot; the spacer
-            // grid keeps identical page-top offsets until it is ported.
-            if (index < pageCount - 1)
-                PagesContainer.Children.Add(new Grid { Height = PageSpacing });
-
             currentTop += size.Height + PageSpacing;
+        }
+
+        // ── Per-page chrome (WPF CreatePageHost / CreatePageInsertGap) ────
+
+        /// <summary>
+        /// WPF <c>CreatePageHost</c> parity: wraps the page in a Grid that
+        /// carries a hover-only delete button (top-right overlay, visible on
+        /// pointer hover while more than one page exists). WinUI has no
+        /// <c>IsMouseOver</c>/<c>Visibility.Hidden</c>, so explicit hover
+        /// flags + Collapsed stand in for WPF's enter/leave/Hidden trio; the
+        /// Button template's built-in hover/press/focus visuals replace WPF's
+        /// CreatePageChromeButtonTemplate triggers.
+        /// </summary>
+        private FrameworkElement CreatePageHost(PdfPageControl pageControl)
+        {
+            var host = new Grid { HorizontalAlignment = HorizontalAlignment.Center };
+            host.Children.Add(pageControl);
+
+            var deleteButton = new Button
+            {
+                HorizontalAlignment = HorizontalAlignment.Right,
+                VerticalAlignment = VerticalAlignment.Top,
+                Margin = new Thickness(0, 14, 14, 0),
+                MinHeight = 34,
+                Padding = new Thickness(10, 6, 10, 6),
+                Background = ResolveThemeBrush("ThemeControlBrush", Color.FromArgb(0xFF, 0xF3, 0xF4, 0xF6)),
+                BorderBrush = ResolveThemeBrush("ThemeDangerBrush", Color.FromArgb(0xFF, 0xB4, 0x23, 0x18)),
+                Foreground = ResolveThemeBrush("ThemeDangerBrush", Color.FromArgb(0xFF, 0xB4, 0x23, 0x18)),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(12),
+                Visibility = Visibility.Collapsed,
+            };
+            var deleteLabel = new TextBlock
+            {
+                Text = LocalizationService.Get("Editor.DeletePageTooltip"),
+                Margin = new Thickness(6, 0, 0, 0),
+                FontSize = 12,
+                FontWeight = FontWeights.SemiBold,
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+            var deleteIcon = new LucideIcon { Kind = "Trash2", Width = 14, Height = 14 };
+            deleteIcon.Stroke = ResolveThemeBrush("ThemeDangerBrush", Color.FromArgb(0xFF, 0xB4, 0x23, 0x18));
+            deleteLabel.Foreground = ResolveThemeBrush("ThemeDangerBrush", Color.FromArgb(0xFF, 0xB4, 0x23, 0x18));
+            var deleteContent = new StackPanel { Orientation = Orientation.Horizontal };
+            deleteContent.Children.Add(deleteIcon);
+            deleteContent.Children.Add(deleteLabel);
+            deleteButton.Content = deleteContent;
+            ToolTipService.SetToolTip(deleteButton, LocalizationService.Get("Editor.DeletePageTooltip"));
+            AutomationProperties.SetAutomationId(deleteButton, $"Editor.PageDeleteButton.{pageControl.PageIndex}");
+
+            bool hostHovered = false;
+            bool buttonHovered = false;
+            void UpdateDeleteVisibility()
+            {
+                // WPF parity: Hidden(→Collapsed) while >1 page and not
+                // hovered, Collapsed outright on single-page documents.
+                bool show = (hostHovered || buttonHovered) && _pageControls.Count > 1;
+                deleteButton.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
+            }
+
+            host.PointerEntered += (_, _) => { hostHovered = true; UpdateDeleteVisibility(); };
+            host.PointerExited += (_, _) => { hostHovered = false; UpdateDeleteVisibility(); };
+            deleteButton.PointerEntered += (_, _) => { buttonHovered = true; UpdateDeleteVisibility(); };
+            deleteButton.PointerExited += (_, _) => { buttonHovered = false; UpdateDeleteVisibility(); };
+
+            deleteButton.Click += async (_, _) =>
+            {
+                using var operationLease = CaptureDocumentOperationLease(_pdfService);
+                await DeletePageAtAsync(pageControl.PageIndex, operationLease);
+            };
+
+            _pageDeleteButtons.Add(deleteButton);
+            host.Children.Add(deleteButton);
+            return host;
+        }
+
+        /// <summary>
+        /// WPF <c>CreatePageInsertGap</c> parity: the page-spacing strip
+        /// between (and after) pages carries a hover-only accent guide line +
+        /// "+" button that opens the template picker and inserts a page at
+        /// <paramref name="insertIndex"/>.
+        /// </summary>
+        private FrameworkElement CreatePageInsertGap(int insertIndex)
+        {
+            var zone = new Grid
+            {
+                Height = PageSpacing,
+                Background = new SolidColorBrush(Color.FromArgb(0, 0, 0, 0)),
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+            };
+
+            var guideLine = new Border
+            {
+                Width = 150,
+                Height = 2,
+                CornerRadius = new CornerRadius(1),
+                Background = new SolidColorBrush(Color.FromArgb(0, 0, 0, 0)),
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+                Visibility = Visibility.Collapsed,
+            };
+            var insertButton = new Button
+            {
+                Width = 78,
+                Height = 32,
+                Background = ResolveThemeBrush("ThemeControlBrush", Color.FromArgb(0xFF, 0xF3, 0xF4, 0xF6)),
+                BorderBrush = ResolveThemeBrush("ThemeAccentBrush", Color.FromArgb(0xFF, 0x25, 0x63, 0xEB)),
+                Foreground = ResolveThemeBrush("ThemeAccentBrush", Color.FromArgb(0xFF, 0x25, 0x63, 0xEB)),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(12),
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+                Visibility = Visibility.Collapsed,
+                Padding = new Thickness(0),
+            };
+            var plusIcon = new LucideIcon { Kind = "Plus", Width = 17, Height = 17 };
+            plusIcon.Stroke = ResolveThemeBrush("ThemeAccentBrush", Color.FromArgb(0xFF, 0x25, 0x63, 0xEB));
+            insertButton.Content = plusIcon;
+            ToolTipService.SetToolTip(insertButton, LocalizationService.Get("Editor.InsertPageHereTooltip"));
+            AutomationProperties.SetAutomationId(insertButton, $"Editor.PageInsertButton.{insertIndex}");
+
+            bool zoneHovered = false;
+            bool buttonHovered = false;
+            void UpdateInsertVisibility()
+            {
+                bool show = zoneHovered || buttonHovered;
+                guideLine.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
+                if (show)
+                    guideLine.Background = ResolveThemeBrush("ThemeAccentBrush", Color.FromArgb(0xFF, 0x25, 0x63, 0xEB));
+                insertButton.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
+            }
+
+            zone.PointerEntered += (_, _) => { zoneHovered = true; UpdateInsertVisibility(); };
+            zone.PointerExited += (_, _) => { zoneHovered = false; UpdateInsertVisibility(); };
+            insertButton.PointerEntered += (_, _) => { buttonHovered = true; UpdateInsertVisibility(); };
+            insertButton.PointerExited += (_, _) => { buttonHovered = false; UpdateInsertVisibility(); };
+
+            insertButton.Click += async (_, _) =>
+            {
+                using var operationLease = CaptureDocumentOperationLease(_pdfService);
+                await InsertPageAtAsync(insertIndex, operationLease);
+            };
+
+            _pageInsertButtons.Add(insertButton);
+            zone.Children.Add(guideLine);
+            zone.Children.Add(insertButton);
+            return zone;
+        }
+
+        /// <summary>
+        /// WPF <c>RefreshPageDeleteButtons</c> parity: single-page documents
+        /// keep the delete chrome collapsed; also re-stamps the localized
+        /// tooltip/label text on language changes.
+        /// </summary>
+        private void RefreshPageDeleteButtons()
+        {
+            foreach (var button in _pageDeleteButtons)
+            {
+                ToolTipService.SetToolTip(button, LocalizationService.Get("Editor.DeletePageTooltip"));
+                if (button.Content is StackPanel panel
+                    && panel.Children.Count > 1
+                    && panel.Children[1] is TextBlock label)
+                    label.Text = LocalizationService.Get("Editor.DeletePageTooltip");
+            }
+
+            foreach (var button in _pageInsertButtons)
+                ToolTipService.SetToolTip(button, LocalizationService.Get("Editor.InsertPageHereTooltip"));
         }
 
         /// <summary>
@@ -8487,88 +8664,70 @@ namespace Caelum.Pages
 
         private async void InsertPdfPages_Click(object sender, RoutedEventArgs e)
         {
+            using var operationLease = CaptureDocumentOperationLease(_pdfService);
+            if (!ValidateDocumentOperationLease(operationLease) ||
+                string.IsNullOrWhiteSpace(_currentPdfPath))
+                return;
+            string filePath = _currentPdfPath;
+
+            var picker = new FileOpenPicker { SuggestedStartLocation = PickerLocationId.DocumentsLibrary };
+            picker.FileTypeFilter.Add(".pdf");
+            WinRT.Interop.InitializeWithWindow.Initialize(picker, GetWindowHandle());
+            var file = await picker.PickSingleFileAsync();
+            if (file == null || !ValidateDocumentOperationLease(operationLease))
+                return;
+
+            int sourcePageCount;
             try
             {
-                using var operationLease = CaptureDocumentOperationLease(_pdfService);
-                if (!ValidateDocumentOperationLease(operationLease) ||
-                    string.IsNullOrWhiteSpace(_currentPdfPath))
-                    return;
-                string filePath = _currentPdfPath;
-
-                var picker = new FileOpenPicker { SuggestedStartLocation = PickerLocationId.DocumentsLibrary };
-                picker.FileTypeFilter.Add(".pdf");
-                WinRT.Interop.InitializeWithWindow.Initialize(picker, GetWindowHandle());
-                var file = await picker.PickSingleFileAsync();
-                if (file == null || !ValidateDocumentOperationLease(operationLease))
-                    return;
-
-                int sourcePageCount;
-                try
-                {
-                    using var source = PdfiumRasterizerFactory.Shared.LoadFromFile(file.Path);
-                    sourcePageCount = source.PageCount;
-                }
-                catch (Exception ex)
-                {
-                    if (ValidateDocumentOperationLease(operationLease))
-                        GetMainWindow()?.ShowToast(
-                            LocalizationService.Format("Editor.SourcePdfReadFailed", ex.Message), "", 3500);
-                    return;
-                }
-
-                var range = await TryPromptPageRangeAsync(sourcePageCount);
-                if (range == null || !ValidateDocumentOperationLease(operationLease))
-                    return;
-
-                int insertPageIndex = Math.Max(0, GetCurrentPageIndex());
-                await InsertExternalDocumentAsync(
-                    () => _pdfService.InsertPdfPagesAsync(
-                        filePath, file.Path, insertPageIndex, range.Value.Start, range.Value.End),
-                    insertPageIndex,
-                    range.Value.End - range.Value.Start + 1,
-                    LocalizationService.Get("Editor.PdfPagesInserted"),
-                    operationLease);
+                using var source = PdfiumRasterizerFactory.Shared.LoadFromFile(file.Path);
+                sourcePageCount = source.PageCount;
             }
             catch (Exception ex)
             {
-                // async-void click handler: no App.UnhandledException
-                // backstop exists, so nothing may escape.
-                System.Diagnostics.Debug.WriteLine($"[EditorPage] InsertPdfPages faulted: {ex}");
+                if (ValidateDocumentOperationLease(operationLease))
+                    GetMainWindow()?.ShowToast(
+                        LocalizationService.Format("Editor.SourcePdfReadFailed", ex.Message), "", 3500);
+                return;
             }
+
+            var range = await TryPromptPageRangeAsync(sourcePageCount);
+            if (range == null || !ValidateDocumentOperationLease(operationLease))
+                return;
+
+            int insertPageIndex = Math.Max(0, GetCurrentPageIndex());
+            await InsertExternalDocumentAsync(
+                () => _pdfService.InsertPdfPagesAsync(
+                    filePath, file.Path, insertPageIndex, range.Value.Start, range.Value.End),
+                insertPageIndex,
+                range.Value.End - range.Value.Start + 1,
+                LocalizationService.Get("Editor.PdfPagesInserted"),
+                operationLease);
         }
 
         private async void InsertImagePage_Click(object sender, RoutedEventArgs e)
         {
-            try
-            {
-                using var operationLease = CaptureDocumentOperationLease(_pdfService);
-                if (!ValidateDocumentOperationLease(operationLease) ||
-                    string.IsNullOrWhiteSpace(_currentPdfPath))
-                    return;
-                string filePath = _currentPdfPath;
+            using var operationLease = CaptureDocumentOperationLease(_pdfService);
+            if (!ValidateDocumentOperationLease(operationLease) ||
+                string.IsNullOrWhiteSpace(_currentPdfPath))
+                return;
+            string filePath = _currentPdfPath;
 
-                var picker = new FileOpenPicker { SuggestedStartLocation = PickerLocationId.PicturesLibrary };
-                foreach (var ext in new[] { ".png", ".jpg", ".jpeg", ".bmp" })
-                    picker.FileTypeFilter.Add(ext);
-                WinRT.Interop.InitializeWithWindow.Initialize(picker, GetWindowHandle());
-                var file = await picker.PickSingleFileAsync();
-                if (file == null || !ValidateDocumentOperationLease(operationLease))
-                    return;
+            var picker = new FileOpenPicker { SuggestedStartLocation = PickerLocationId.PicturesLibrary };
+            foreach (var ext in new[] { ".png", ".jpg", ".jpeg", ".bmp" })
+                picker.FileTypeFilter.Add(ext);
+            WinRT.Interop.InitializeWithWindow.Initialize(picker, GetWindowHandle());
+            var file = await picker.PickSingleFileAsync();
+            if (file == null || !ValidateDocumentOperationLease(operationLease))
+                return;
 
-                int insertPageIndex = Math.Max(0, GetCurrentPageIndex());
-                await InsertExternalDocumentAsync(
-                    () => _pdfService.InsertImagePageAsync(filePath, file.Path, insertPageIndex),
-                    insertPageIndex,
-                    1,
-                    LocalizationService.Get("Editor.ImagePageInserted"),
-                    operationLease);
-            }
-            catch (Exception ex)
-            {
-                // async-void click handler: no App.UnhandledException
-                // backstop exists, so nothing may escape.
-                System.Diagnostics.Debug.WriteLine($"[EditorPage] InsertImagePage faulted: {ex}");
-            }
+            int insertPageIndex = Math.Max(0, GetCurrentPageIndex());
+            await InsertExternalDocumentAsync(
+                () => _pdfService.InsertImagePageAsync(filePath, file.Path, insertPageIndex),
+                insertPageIndex,
+                1,
+                LocalizationService.Get("Editor.ImagePageInserted"),
+                operationLease);
         }
 
         /// <summary>
@@ -8809,6 +8968,366 @@ namespace Caelum.Pages
                 }
             }
         }
+
+        // ── Page structure: template insert / delete / version history ────
+
+        /// <summary>
+        /// WPF <c>InsertPageAtAsync</c> parity — template pick through
+        /// <see cref="PageTemplatePickerDialog"/> behind the shared dialog
+        /// gate (replacing the WPF borderless <c>PageTemplatePickerWindow</c>),
+        /// then the lease-guarded sequence: dirty flush → before-snapshot →
+        /// <c>InsertPageAsync</c> → reload under a refreshed session lease →
+        /// jump + recent-files metadata + bookmark remap → undo snapshot →
+        /// toast. A cancelled pick disposes the lease and returns before any
+        /// document state moves.
+        /// </summary>
+        private async Task InsertPageAtAsync(
+            int insertIndex,
+            DocumentOperationLease operationLease = null)
+        {
+            if (!TryBeginDocumentEdit(out var editLease))
+                return;
+            using (editLease)
+            {
+                if (string.IsNullOrWhiteSpace(_currentPdfPath))
+                {
+                    if (operationLease == null)
+                        GetMainWindow()?.ShowToast(LocalizationService.Get("Editor.NoDocumentLoaded"), "");
+                    return;
+                }
+
+                var xamlRoot = XamlRoot ?? GetMainWindow()?.Content?.XamlRoot;
+                if (xamlRoot == null)
+                {
+                    if (operationLease == null)
+                        GetMainWindow()?.ShowToast(LocalizationService.Get("Editor.NoDocumentLoaded"), "");
+                    return;
+                }
+
+                string filePath = _currentPdfPath;
+                DocumentOperationLease currentLease =
+                    operationLease ?? CaptureDocumentOperationLease(_pdfService);
+
+                var picker = new PageTemplatePickerDialog { XamlRoot = xamlRoot };
+                await WinUiDialogService.RunUnderDialogGateAsync(
+                    () => picker.ShowAsync().AsTask());
+                if (!picker.IsConfirmed)
+                {
+                    if (operationLease == null)
+                        currentLease?.Dispose();
+                    return;
+                }
+
+                try
+                {
+                    if (!ValidateDocumentOperationLease(currentLease))
+                        return;
+                    // A dirty document must hit disk BEFORE the binary PDF is
+                    // rewritten — otherwise the insert bakes a stale base and
+                    // the pending annotations are lost (WPF parity).
+                    if (_documentSaveCoordinator.IsDirty &&
+                        (!await AutoSaveAsync(currentLease) ||
+                            !ValidateDocumentOperationLease(currentLease)))
+                        return;
+
+                    byte[] beforeBytes = await File.ReadAllBytesAsync(filePath, currentLease.Token);
+                    if (!ValidateDocumentOperationLease(currentLease))
+                        return;
+                    int undoFocusIndex = Math.Max(0,
+                        Math.Min(insertIndex, Math.Max(_pageControls.Count - 1, 0)));
+                    var beforeBookmarks = PageBookmarkService.Load(filePath).ToList();
+
+                    await _pdfService.InsertPageAsync(filePath, insertIndex, picker.SelectedTemplate);
+                    if (!ValidateDocumentOperationLease(currentLease))
+                        return;
+
+                    byte[] afterBytes = await File.ReadAllBytesAsync(filePath, currentLease.Token);
+                    if (!ValidateDocumentOperationLease(currentLease))
+                        return;
+                    currentLease = await ReloadDocumentForOperationAsync(filePath, currentLease);
+                    if (currentLease == null)
+                        return;
+
+                    int insertedPageIndex = Math.Max(0, Math.Min(insertIndex, _pageControls.Count - 1));
+                    if (!ValidateDocumentOperationLease(currentLease))
+                        return;
+                    JumpToPage(insertedPageIndex);
+                    RecentFilesService.UpdateMetadata(
+                        filePath, _pageControls.Count, File.GetLastWriteTimeUtc(filePath));
+                    var afterBookmarks = PageBookmarkService
+                        .ApplyPageInsert(filePath, insertedPageIndex).ToList();
+                    RefreshBookmarks(_loadSessionId, filePath, currentLease);
+                    if (!ValidateDocumentOperationLease(currentLease))
+                        return;
+                    PushUndoAction(new DocumentSnapshotAction(
+                        this, beforeBytes, afterBytes,
+                        undoFocusIndex, insertedPageIndex,
+                        beforeBookmarks, afterBookmarks));
+                    if (!ValidateDocumentOperationLease(currentLease))
+                        return;
+                    GetMainWindow()?.ShowToast(
+                        LocalizationService.Get("Editor.PageAdded"), "");
+                }
+                catch (OperationCanceledException)
+                {
+                }
+                catch (Exception ex)
+                {
+                    if (!ValidateDocumentOperationLease(currentLease))
+                        return;
+                    await WinUiDialogService.ShowErrorAsync(
+                        XamlRoot ?? GetMainWindow()?.Content?.XamlRoot,
+                        LocalizationService.Get("Common.Error"),
+                        LocalizationService.Format("Editor.AddPageFailed", ex.Message));
+                }
+                finally
+                {
+                    if (operationLease == null)
+                        currentLease?.Dispose();
+                }
+            }
+        }
+
+        /// <summary>
+        /// WPF <c>DeletePageAtAsync</c> parity (invoked by the hover-only page
+        /// delete button): admission lease → dirty flush → byte snapshot →
+        /// <c>DeletePageAsync</c> → reload → focus + metadata + bookmark remap
+        /// → undo snapshot → toast. Single-page documents are blocked before
+        /// any state moves; an <see cref="InvalidOperationException"/> from
+        /// the Core service maps to the same blocked toast.
+        /// </summary>
+        private async Task DeletePageAtAsync(
+            int pageIndex,
+            DocumentOperationLease operationLease = null)
+        {
+            if (!TryBeginDocumentEdit(out var editLease))
+                return;
+            using (editLease)
+            {
+                if (string.IsNullOrWhiteSpace(_currentPdfPath))
+                {
+                    if (operationLease == null)
+                        GetMainWindow()?.ShowToast(LocalizationService.Get("Editor.NoDocumentLoaded"), "");
+                    return;
+                }
+
+                if (_pageControls.Count <= 1)
+                {
+                    if (operationLease == null)
+                        GetMainWindow()?.ShowToast(LocalizationService.Get("Editor.PageDeleteBlocked"), "");
+                    return;
+                }
+
+                string filePath = _currentPdfPath;
+                DocumentOperationLease currentLease =
+                    operationLease ?? CaptureDocumentOperationLease(_pdfService);
+                try
+                {
+                    if (!ValidateDocumentOperationLease(currentLease))
+                        return;
+                    if (_documentSaveCoordinator.IsDirty &&
+                        (!await AutoSaveAsync(currentLease) ||
+                            !ValidateDocumentOperationLease(currentLease)))
+                        return;
+
+                    byte[] beforeBytes = await File.ReadAllBytesAsync(filePath, currentLease.Token);
+                    if (!ValidateDocumentOperationLease(currentLease))
+                        return;
+                    var beforeBookmarks = PageBookmarkService.Load(filePath).ToList();
+                    await _pdfService.DeletePageAsync(filePath, pageIndex);
+                    if (!ValidateDocumentOperationLease(currentLease))
+                        return;
+
+                    byte[] afterBytes = await File.ReadAllBytesAsync(filePath, currentLease.Token);
+                    if (!ValidateDocumentOperationLease(currentLease))
+                        return;
+                    currentLease = await ReloadDocumentForOperationAsync(filePath, currentLease);
+                    if (currentLease == null)
+                        return;
+
+                    int focusAfterDelete = Math.Max(0,
+                        Math.Min(pageIndex, _pageControls.Count - 1));
+                    if (!ValidateDocumentOperationLease(currentLease))
+                        return;
+                    JumpToPage(focusAfterDelete);
+                    RecentFilesService.UpdateMetadata(
+                        filePath, _pageControls.Count, File.GetLastWriteTimeUtc(filePath));
+                    var afterBookmarks = PageBookmarkService
+                        .ApplyPageDelete(filePath, pageIndex).ToList();
+                    RefreshBookmarks(_loadSessionId, filePath, currentLease);
+                    if (!ValidateDocumentOperationLease(currentLease))
+                        return;
+                    PushUndoAction(new DocumentSnapshotAction(
+                        this, beforeBytes, afterBytes,
+                        pageIndex, focusAfterDelete,
+                        beforeBookmarks, afterBookmarks));
+                    if (!ValidateDocumentOperationLease(currentLease))
+                        return;
+                    GetMainWindow()?.ShowToast(
+                        LocalizationService.Get("Editor.PageDeleted"), "");
+                }
+                catch (OperationCanceledException)
+                {
+                }
+                catch (InvalidOperationException)
+                {
+                    if (ValidateDocumentOperationLease(currentLease))
+                        GetMainWindow()?.ShowToast(
+                            LocalizationService.Get("Editor.PageDeleteBlocked"), "");
+                }
+                catch (Exception ex)
+                {
+                    if (!ValidateDocumentOperationLease(currentLease))
+                        return;
+                    await WinUiDialogService.ShowErrorAsync(
+                        XamlRoot ?? GetMainWindow()?.Content?.XamlRoot,
+                        LocalizationService.Get("Common.Error"),
+                        LocalizationService.Format("Editor.DeletePageFailed", ex.Message));
+                }
+                finally
+                {
+                    if (operationLease == null)
+                        currentLease?.Dispose();
+                }
+            }
+        }
+
+        /// <summary>
+        /// WPF <c>VersionHistory_Click</c> parity: a <see cref="MenuFlyout"/>
+        /// anchored to the toolbar button lists the version sidecars
+        /// (creation-time stamped, newest first); the handler captures the
+        /// menu's session/path so a mid-menu document swap can't act on the
+        /// replacement document. Selecting a version snapshots the CURRENT
+        /// annotations as a new version first (restore stays reversible),
+        /// then clears every layer + the undo ledger, repaints from the
+        /// sidecar and marks dirty (WPF restore sequence).
+        /// </summary>
+        private void VersionHistory_Click(object sender, RoutedEventArgs e)
+        {
+            if (string.IsNullOrEmpty(_currentPdfPath) || !_isHostActive ||
+                _resourcesReleased || _documentInteractionBlocked)
+                return;
+
+            int menuSessionId = _loadSessionId;
+            string menuPath = _currentPdfPath;
+            var versions = VersionControlService.GetVersions(_currentPdfPath);
+            if (versions.Count == 0)
+            {
+                GetMainWindow()?.ShowToast(
+                    LocalizationService.Get("Editor.NoVersionHistory"), "");
+                return;
+            }
+
+            var flyout = new MenuFlyout();
+            if (s_versionHistoryPresenterStyle == null)
+            {
+                var style = new Style(typeof(MenuFlyoutPresenter));
+                style.Setters.Add(new Setter(FrameworkElement.MaxHeightProperty, 300.0));
+                style.Setters.Add(new Setter(
+                    ScrollViewer.VerticalScrollBarVisibilityProperty, ScrollBarVisibility.Auto));
+                s_versionHistoryPresenterStyle = style;
+            }
+            flyout.MenuFlyoutPresenterStyle = s_versionHistoryPresenterStyle;
+
+            for (int i = 0; i < versions.Count; i++)
+            {
+                string versionFilePath = versions[i];
+                var dt = File.GetCreationTime(versionFilePath);
+                var item = new MenuFlyoutItem
+                {
+                    Text = dt.ToString("yyyy-MM-dd HH:mm:ss"),
+                };
+                AutomationProperties.SetAutomationId(item, $"Editor.VersionHistoryItem.{i}");
+                item.Click += async (s, args) =>
+                {
+                    using var operationLease = CaptureDocumentOperationLease(
+                        menuSessionId, menuPath, _pdfService);
+                    if (!ValidateDocumentOperationLease(operationLease) ||
+                        !TryBeginDocumentEdit(out var editLease))
+                        return;
+
+                    using (editLease)
+                    try
+                    {
+                        var data = await VersionControlService.LoadVersionAsync(
+                            versionFilePath, operationLease.Token);
+                        if (data == null || !ValidateDocumentOperationLease(operationLease))
+                            return;
+
+                        // Snapshot the current annotations as a new version
+                        // first so the restore stays reversible (WPF parity).
+                        var current = CollectAnnotations();
+                        if (!ValidateDocumentOperationLease(operationLease))
+                            return;
+                        await VersionControlService.SaveVersionAsync(
+                            menuPath, current, operationLease.Token);
+                        if (!ValidateDocumentOperationLease(operationLease))
+                            return;
+
+                        // The sticky-note bubble + inline text chrome are
+                        // editor-level UI referencing containers the sweep is
+                        // about to detach — close them first (the sweep
+                        // cannot reach a root-level Popup the way the WPF
+                        // canvas clear implicitly did).
+                        DeselectTextBox();
+                        CancelStickyNoteEdit();
+                        ClearAllAnnotations();
+                        if (!ValidateDocumentOperationLease(operationLease))
+                            return;
+                        // A restored snapshot is a new document state; undo
+                        // entries from the previous snapshot must not be able
+                        // to reinsert its annotations via Ctrl+Z (WPF parity).
+                        ClearUndoRedoHistory();
+                        if (!ValidateDocumentOperationLease(operationLease))
+                            return;
+                        _pdfService.ExtractedAnnotations = data;
+                        await LoadAnnotationsIntoPagesAsync();
+                        if (!ValidateDocumentOperationLease(operationLease))
+                            return;
+                        GetMainWindow()?.ShowToast(LocalizationService.Format(
+                            "Editor.RestoredVersion",
+                            dt.ToString("g", LocalizationService.CurrentCulture)));
+                        if (!ValidateDocumentOperationLease(operationLease))
+                            return;
+                        MarkDirty();
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        // A reload/tab release intentionally cancels old menu
+                        // continuations without surfacing an error in the
+                        // new doc (WPF parity).
+                    }
+                    catch (Exception ex)
+                    {
+                        if (!ValidateDocumentOperationLease(operationLease))
+                            return;
+                        GetMainWindow()?.ShowToast(
+                            LocalizationService.Get("Editor.VersionLoadFailed"));
+                        System.Diagnostics.Debug.WriteLine(
+                            $"[VersionHistory] Error: {ex.Message}");
+                    }
+                };
+                flyout.Items.Add(item);
+            }
+
+            _transientFlyout = flyout;
+            flyout.ShowAt(VersionHistoryButton);
+        }
+
+        private static Style s_versionHistoryPresenterStyle;
+
+        /// <summary>
+        /// WPF <c>ClearAllAnnotations</c> parity: sweep every annotation
+        /// layer on every page (version-restore paints a fresh snapshot next).
+        /// </summary>
+        private void ClearAllAnnotations()
+        {
+            foreach (var page in _pageControls)
+            {
+                page.ClearAllAnnotations();
+            }
+        }
+
 
         // ── Keyboard ────────────────────────────────────────────────────────
 
@@ -9563,15 +10082,41 @@ namespace Caelum.Pages
         /// (WPF ApplySettings parity; the settings window itself is T9-B,
         /// this entry point is what it will call).
         /// </summary>
-        public void ApplySettings()
+        public void ApplySettings() => ApplySettings(AppSettingsService.Load());
+
+        /// <summary>
+        /// WPF <c>ApplySettings(AppSettings)</c> parity: applies a staged
+        /// settings snapshot (the settings dialog's live preview calls this
+        /// on every control change), re-arms autosave, pushes tool settings
+        /// to every page, and — when the performance mode changed — drops
+        /// the rendered-page caches so the visible working set re-rasters at
+        /// the new policy's scale.
+        /// </summary>
+        public void ApplySettings(AppSettings settings)
         {
-            _applicationSettings = AppSettingsService.Load();
+            string previousPerformanceMode = CurrentPerformanceMode;
+            _applicationSettings = settings ?? new AppSettings();
             ApplySettingsToToolState();
             ApplyToolToAllPages();
             if (_autoSaveTimer != null)
             {
                 _autoSaveTimer.Interval = TimeSpan.FromSeconds(
                     Math.Max(15, _applicationSettings.AutoSaveIntervalSeconds));
+            }
+
+            if (!string.Equals(previousPerformanceMode, CurrentPerformanceMode, StringComparison.Ordinal))
+            {
+                var profile = PdfRenderPolicy.GetProfile(CurrentPerformanceMode);
+                _lastRenderedDpiScale = Math.Min(Math.Max(_zoomLevel, 1.0), profile.MaxRenderScale);
+                _pagesInitiallyRendered.Clear();
+                _pagesRenderedAtScale.Clear();
+                var visiblePages = GetVisiblePageControls();
+                TrimPageBitmapWorkingSet(visiblePages);
+                // KickViewportRender debounces the scroll re-render tick,
+                // which re-runs RenderPageInitialAsync for the now-empty
+                // _pagesInitiallyRendered set (WPF RenderVisibleWorkingSetAsync).
+                if (_isHostActive && !_resourcesReleased)
+                    KickViewportRender();
             }
         }
 
@@ -9621,7 +10166,7 @@ namespace Caelum.Pages
                 if (saved && ValidateDocumentOperationLease(operationLease))
                 {
                     GetMainWindow()?.ShowToast(
-                        LocalizationService.Get("Editor.AutoSaved"), "", 1500);
+                        LocalizationService.Get("Editor.AutoSaved"), "\uE74E", 1500);
                 }
             }
             catch (Exception ex)
@@ -9859,15 +10404,7 @@ namespace Caelum.Pages
 
         private async void SavePdf_Click(object sender, RoutedEventArgs e)
         {
-            try
-            {
-                await SaveAnnotationsToPdfAsync();
-            }
-            catch (System.Exception ex)
-            {
-                // async-void click handler: no App.UnhandledException backstop.
-                System.Diagnostics.Debug.WriteLine($"[EditorPage] SavePdf faulted: {ex}");
-            }
+            await SaveAnnotationsToPdfAsync();
         }
 
         /// <summary>
@@ -10091,7 +10628,7 @@ namespace Caelum.Pages
                     return false;
                 SyncDirtyStateMirror();
                 GetMainWindow()?.ShowToast(
-                    LocalizationService.Format("Editor.SaveTimedOut", ex.Message),
+                    LocalizationService.Format("Editor.AutoSaveFailed", ex.Message),
                     "",
                     3500);
                 return false;
@@ -10102,7 +10639,7 @@ namespace Caelum.Pages
                     return false;
                 SyncDirtyStateMirror();
                 GetMainWindow()?.ShowToast(
-                    LocalizationService.Format("Editor.SaveFailed", ex.Message),
+                    LocalizationService.Format("Editor.AutoSaveFailed", ex.Message),
                     "",
                     3500);
                 return false;
@@ -10192,7 +10729,7 @@ namespace Caelum.Pages
                     return false;
                 SyncDirtyStateMirror();
                 GetMainWindow()?.ShowToast(
-                    LocalizationService.Format("Editor.SaveTimedOut", ex.Message),
+                    LocalizationService.Format("Editor.AutoSaveFailed", ex.Message),
                     "",
                     3500);
                 return false;
@@ -10202,20 +10739,10 @@ namespace Caelum.Pages
                 if (!ValidateDocumentOperationLease(operationLease))
                     return false;
                 SyncDirtyStateMirror();
-                // The error dialog is best-effort only: ShowErrorAsync waits
-                // on the process-wide DialogGate, which has no cancellation -
-                // awaiting it here could wedge _closePreparationInFlight
-                // forever behind a stuck dialog and deadlock the tab/window
-                // close protocol. Fire-and-forget with an observed exception
-                // keeps the failure visible without blocking the protocol.
-                _ = WinUiDialogService.ShowErrorAsync(
+                await WinUiDialogService.ShowErrorAsync(
                     XamlRoot ?? GetMainWindow()?.Content?.XamlRoot,
                     LocalizationService.Get("Common.Error"),
-                    LocalizationService.Format("Editor.SaveFailed", ex.Message))
-                    .ContinueWith(
-                        t => System.Diagnostics.Debug.WriteLine(
-                            $"[EditorPage] Close-preparation error dialog faulted: {t.Exception}"),
-                        TaskContinuationOptions.OnlyOnFaulted);
+                    LocalizationService.Format("Editor.SaveFailed", ex.Message));
                 return false;
             }
             finally

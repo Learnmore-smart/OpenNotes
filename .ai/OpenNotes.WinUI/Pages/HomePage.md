@@ -1,5 +1,5 @@
 # OpenNotes.WinUI/Pages/HomePage.xaml.cs
-> Last updated: 2026-09-23 (V6 Task 6 — DEBUG context-menu seam) | Protection: STANDARD
+> Last updated: 2026-09-25 (V6 Task 9 Phase B — shared template picker) | Protection: STANDARD
 
 ## Purpose
 `Caelum.Pages.HomePage : Page` (partial with `HomePage.Utilities.cs`) — the WinUI port of the WPF library home (~1,500 lines vs WPF's larger original). Drives tile loading, folder navigation, search/sort, add/create flows, context menus, drag/drop, file open → `EditorPage`, delete/rename/export, and toasts via `MainWindow`.
@@ -10,7 +10,7 @@
 - **Public surface for MainWindow:** `Filter(query)`, `SortByName()`, `SortByDate()`, `ToggleSelectionMode()` (Utilities), `IsSelectionMode`, `ApplyLocalization()`.
 - **Tile activation:** `FileTile_Click` → selection toggle in selection mode, else `OpenFileTileAsync` → `MainWindow.NavigateActiveTabToFile(path)`. `FolderTile_Click` honors `IsChoosingMoveTarget` (selection-move drops into the clicked folder) before normal navigation.
 - **Context menus:** `FileTile_ContextRequested`/`FolderTile_ContextRequested` build per-show `MenuFlyout`s (`CreateMenuItem` = glyph + themed foreground; danger items use `ThemeDangerBrush`). **Uses `ContextRequested`, not `RightTapped`** — ButtonBase marks `RightTapped` handled so the gesture dies on the tile surface; `ContextRequested` is the WinUI context-menu event (right-click, Menu key, press-and-hold) and is not swallowed. Position via `e.TryGetPosition` (falls back to element center for keyboard invocation). **DEBUG-only seam (Task 6):** `Home.DebugOpenContextMenu` — a hidden 2×2 button that invokes `ShowFileContextMenu` on the first visible file tile; the smoke session cannot deliver a real right-click to the window, so the seam runs the identical menu path.
-- **Add tile:** `ShowAddTileMenu` → Open PDF (`PickAndOpenPdfAsync`), New Folder (`CreateFolderAsync`), New Notebook (`CreateEmptyNotebookAsync` → `PickNotebookTemplateAsync` template picker → `PdfService.CreateBlankPdfAsync`).
+- **Add tile:** `ShowAddTileMenu` → Open PDF (`PickAndOpenPdfAsync`), New Folder (`CreateFolderAsync`), New Notebook (`CreateEmptyNotebookAsync` → `PickNotebookTemplateAsync` → `PageTemplatePickerDialog` in notebook-creation mode → `PdfService.CreateBlankPdfAsync`).
 - **Rename:** `PromptForInputAsync` (ContentDialog with `TextBox`, localized confirm/cancel) → `RecentFilesService.RenameFolder` or physical file rename + `RecentFilesService.UpdatePath` + `MainWindow.HandleFilePathChanged` (retitles open tabs, updates the stub `EditorPage`).
 - **Delete/Remove:** `DeleteFileTileAsync` → `RecycleBinService.TrySendToRecycleBin` + `RecentFilesService.Remove` (danger confirm first); `RemoveFileTileAsync` removes the library entry only.
 - **Import/Export:** `TryImportAsLibraryPdfAsync` — PDFs copy in place; `WordDocumentImport.IsImportablePath` files go through `WordToPdfConverter` then import the sibling PDF. `ExportTileAsync` → `FileSavePicker` copy-out.
@@ -24,7 +24,7 @@
 - NEVER advertise `DataPackageOperation.Move` in `FileTile_DragStarting` — a same-volume Explorer drop could relocate the library PDF and dangle the `RecentFilesService` entry (spec-review finding over `6c80948`).
 - Async click/context handlers fire-and-forget by design (`_ = XAsync()`); faults route through `ContinueWith`→`HomeSmokeLog`/`ShowDialogAsync` where the WPF original surfaced errors — do not `await` inside event handlers that must stay synchronous.
 - `RecentFilesService`/`RecycleBinService`/`PdfService`/`WordDocumentImport`/`WordToPdfConverter`/`LocalizationService` are static Core services — no DI.
-- Page-built `ContentDialog`s (`PromptForInputAsync`, `PickNotebookTemplateAsync`) MUST show via `WinUiDialogService.RunUnderDialogGateAsync` — a direct `ShowAsync` collides with any open service dialog (`InvalidOperationException`, fatal inside async-void handlers).
+- Page-built `ContentDialog`s (`PromptForInputAsync`, `PickNotebookTemplateAsync`'s `PageTemplatePickerDialog`) MUST show via `WinUiDialogService.RunUnderDialogGateAsync` — a direct `ShowAsync` collides with any open service dialog (`InvalidOperationException`, fatal inside async-void handlers).
 - Every `RecentFilesService` mutation + `RefreshCurrentFolderAsync` pair reached from an async-void handler is wrapped in try/catch → `ShowDialogAsync`("Common.Error", `Home.OperationFailed`) — color swatch, RemoveFolder, MoveToLibraryRoot, move-selection, delete/remove, `AddFileToLibraryAsync`, `CreateFolderAsync`, `RenameFolder`, and both drop handlers (their `GetDeferral()` still completes in `finally`; the error dialog shows after). Rename paths keep `Home.RenameFailed`.
 - `RefreshCurrentFolderAsync` ends with `UpdateFolderPlacementHighlights()` — `HomeTiles` is rebuilt from scratch so an armed `IsChoosingMoveTarget` would otherwise keep its flag but lose every visual (WPF parity: highlights were bound to the page property).
 - `HomePage_Unloaded`/`LanguageChanged` manage the `LocalizationService.LanguageChanged` subscription exactly once (`_languageChangedSubscribed` guard) — a page re-navigation must not double-subscribe.
@@ -33,3 +33,6 @@
 - **Status:** GREEN — `tools/winui-home-smoke.ps1` 27/27 (tiles render, context menu, folder nav + breadcrumb, search, selection bar, editor navigation, More flyout).
 - Notebook creation is a template-picked blank PDF (same `PageInsertTemplate` catalog as WPF) — notebook *surface* support is an editor-task concern.
 - WPF's `RefreshOpenContextMenus` has no port: menus are per-show `MenuFlyout`s, so a live language change can't leave stale strings.
+
+## Change History
+- 2026-09-25 Task 9 Phase B: `PickNotebookTemplateAsync` now hosts the shared `PageTemplatePickerDialog` (notebook-creation mode, folder row + gated Create) instead of the inline radio-card stand-in; `NotebookTemplateOptions` removed. | Devin

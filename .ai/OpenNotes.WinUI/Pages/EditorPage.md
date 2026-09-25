@@ -1,5 +1,5 @@
 # OpenNotes.WinUI/Pages/EditorPage.xaml(.cs)
-> Last updated: 2026-09-24 (V6 Task 9 Phase A — save/autosave pipeline + close/dirty protocol) | Protection: STANDARD
+> Last updated: 2026-09-25 (V6 Task 9 Phase B — page structure + version history + settings) | Protection: STANDARD
 
 ## Purpose
 `Caelum.Pages.EditorPage : Page` — the WinUI editor shell port of the WPF
@@ -399,17 +399,58 @@ the Task 9 Phase A save/autosave + close/dirty protocol is live (T9-B defers set
   `_documentSaveCoordinator.Reset()` runs on each document load;
   `EditorPage_PreviewKeyDown` swallows all shortcuts while
   `_documentInteractionBlocked`.
+- **Page chrome + structural ops (T9-B, WPF `CreatePageHost`/
+  `CreatePageInsertGap` parity):** `AddPdfPage` wraps each page in a host
+  Grid carrying a hover-only delete button (`Editor.PageDelete` AutomationId
+  family) and inserts a `CreatePageInsertGap` zone BEFORE every page after
+  the first plus one trailing gap (`Editor.PageInsertButton.{index}`) — the
+  hover "+" opens `PageTemplatePickerDialog` (insert mode, dialog-gate
+  serialized). `InsertPageAtAsync`/`DeletePageAtAsync` run the same
+  lease-guarded sequence as insert-external/rotate: edit admission → dirty
+  `AutoSaveAsync` flush → before/after byte snapshot → Core `InsertPageAsync`/
+  `DeletePageAsync` → `ReloadDocumentForOperationAsync` (fresh-session lease)
+  → `JumpToPage` + `RecentFilesService.UpdateMetadata` +
+  `PageBookmarkService.ApplyPageInsert/Delete` + `RefreshBookmarks` →
+  `DocumentSnapshotAction` undo → toast. Single-page documents refuse delete
+  up front (`Editor.PageDeleteBlocked`); a cancelled picker disposes the
+  lease without touching the document.
+- **Version history (T9-B, WPF `VersionHistory_Click` parity):**
+  `VersionHistoryButton` (enabled in XAML) opens a `MenuFlyout` listing
+  `VersionControlService.GetVersions` entries (creation-time stamped, newest
+  first, `MaxHeight=300` presenter + vertical scrollbar, `MaxVersions=50`
+  sidecars). The handler captures `menuSessionId`/`menuPath` at open so a
+  mid-menu document swap can't act on the replacement document. Each item's
+  async click captures a `DocumentOperationLease` bound to that snapshot,
+  then: `LoadVersionAsync` → `SaveVersionAsync(current annotations)` FIRST
+  (restore stays reversible) → `DeselectTextBox`/`CancelStickyNoteEdit`/
+  `ClearAllAnnotations()` (per-page sweep: stores clear quietly, overlay
+  canvases + payload maps wiped — sticky/text chrome is closed first because
+  the sweep cannot reach a root-level Popup like the WPF canvas clear did) →
+  `ClearUndoRedoHistory` (old undo entries must not reinsert pre-restore
+  annotations) → `_pdfService.ExtractedAnnotations = data` →
+  `LoadAnnotationsIntoPagesAsync` → `Editor.RestoredVersion` toast →
+  `MarkDirty`. `OperationCanceledException` and stale leases exit silently.
+  The flyout registers as `_transientFlyout` so `CloseTransientUi` retires it.
+- **Settings (T9-B):** `ApplySettings()` delegates to the new
+  `ApplySettings(AppSettings)` overload (staged snapshot — the settings
+  dialog's live preview calls this on every control change). On a
+  performance-mode change it resets `_lastRenderedDpiScale`, clears
+  `_pagesInitiallyRendered`/`_pagesRenderedAtScale`, trims the working set
+  and `KickViewportRender()`s a re-raster under the new `PdfRenderPolicy`
+  profile (WPF `RenderVisibleWorkingSetAsync` parity).
 
 ## Open Threads / Resume Context
 - **Status:** GREEN — `tools/winui-editor-smoke.ps1` 60/60; Tasks 7A/7B/
-  8A/8B + Task 9 Phase A (save/autosave + close/dirty protocol) live +
-  spec-fix (dirty tracking on every mutation path, `DocumentSnapshotAction`
-  undo for insert/rotate); WinUI build 0 err/0 warn, headless suite
-  691/691 incl. `WinUiSavePipelineSourceTests` 10/10 +
-  `DocumentSaveCoordinatorTests` 19/19.
-- **Deferred (by design):** `SettingsWindow`/page-template dialogs,
-  `VersionControlService` UI, dormant `promptSaveAsAfterLoad` draft
-  flow (no WPF caller), update-check UI (T9-B+).
+  8A/8B + Task 9 Phase A (save/autosave + close/dirty protocol) + Task 9
+  Phase B (page insert/delete chrome, version-history restore flyout,
+  `ApplySettings(AppSettings)` perf-mode re-render) live; WinUI build
+  0 err/0 warn, headless suite 203/203 (known `HwndSubclass` test-host
+  teardown flake is environmental) incl. `WinUiDialogsServicesSourceTests` +
+  `WinUiLocalizationCoverageTests`.
+- **Deferred (by design):** dormant `promptSaveAsAfterLoad` draft
+  flow (no WPF caller); print pipeline (`T9: print pipeline` — the
+  runtime-created print menu item stays `IsEnabled = false`).
 
 ## Change History
+- 2026-09-25 Task 9 Phase B: page delete chrome + insert-gap zones wired (`InsertPageAtAsync`/`DeletePageAtAsync`, template picker under the dialog gate); `VersionHistory_Click` `MenuFlyout` restore flow (reversible snapshot-first semantics); `ApplySettings(AppSettings)` overload with performance-mode re-render; `VersionHistoryButton` enabled in XAML. | Devin
 - 2026-09-24 Lifecycle hardening: unload funnels through `DeferredTeardownAsync` (sync `ReleaseCoreResources` removed); save drain before `LoadPdfAsync` reset; `RecentFilesService.UpdateMetadata` on load; async-void guards on all seven handlers; close-prep error dialog is fire-and-forget; deferred-teardown failures mark `_releaseState` failed; `Editor.SaveTimedOut` label for cancelled close/nav saves. | Devin

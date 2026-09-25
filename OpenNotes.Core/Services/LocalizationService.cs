@@ -169,6 +169,7 @@ namespace Caelum.Services
             ["Editor.SmallerText"] = ("Smaller text", "\u51CF\u5C0F\u6587\u5B57", "Texte plus petit"),
             ["Editor.BiggerText"] = ("Bigger text", "\u589E\u5927\u6587\u5B57", "Texte plus grand"),
             ["Editor.TextColorTooltip"] = ("Text color", "\u6587\u5B57\u989C\u8272", "Couleur du texte"),
+            ["Editor.ColorTooltip"] = ("Color", "\u989C\u8272", "Couleur"),
             ["Editor.BoldTooltip"] = ("Bold", "\u7C97\u4F53", "Gras"),
             ["Editor.ItalicTooltip"] = ("Italic", "\u659C\u4F53", "Italique"),
             ["Editor.FontFamilyTooltip"] = ("Font family", "\u5B57\u4F53", "Famille de polices"),

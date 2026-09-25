@@ -22,6 +22,17 @@ namespace Caelum.Services
     /// ContentDialog only allows one open instance per XamlRoot — a process-
     /// wide semaphore serializes calls so a second dialog awaited during the
     /// first never throws <c>InvalidOperationException</c>.
+    ///
+    /// <para><b>Popup z-order (WPF PopupZOrderHelper — deliberately not
+    /// ported).</b> WPF popups are HWND-backed: <c>ContextMenu</c> and
+    /// ComboBox dropdowns could be clipped or dropped under the window when
+    /// the owner HWND lost topmost, so <c>PopupZOrderHelper</c> called
+    /// SetWindowPos(HWND_TOPMOST) on each popup hwnd. WinUI
+    /// <see cref="MenuFlyout"/>/<see cref="Flyout"/>/<see cref="ContentDialog"/>
+    /// are XamlRoot-scoped visuals composited inside the app's own swap
+    /// chain — they cannot be clipped by sibling HWNDs and offer no HWND to
+    /// reorder, so the equivalent of "fixed topmost" is simply showing the
+    /// flyout/dialog on the current XamlRoot. No code maps over.</para>
     /// </summary>
     public static class WinUiDialogService
     {
