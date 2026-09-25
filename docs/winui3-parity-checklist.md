@@ -16,11 +16,11 @@
 | G2 | **Pen tool flyout** — WPF pen popup (size slider + preview, palette, recent colors, Pressure / Ink Simulation / Shape Recognition toggles, smoothing levels) has no WinUI counterpart; pen color/size only editable via Settings defaults | UX regression | Add `ShowPenFlyout` mirroring `ShowHighlighterFlyout` |
 | G3 | **Eraser mode flyout** — WPF eraser popup (pixel vs whole-stroke toggle, `Editor.Eraser.WholeStroke` id) missing; mode only via Settings | UX regression | Add eraser flyout or fold mode into a shared tool flyout |
 | G4 | **Recent-colors row** — WPF palettes show a «recent» row (max 8, persisted, `RecentPenColors`/`RecentHighlighterColors`/`RecentTextColors`); WinUI `BuildColorPalette` does not render it | UX regression | Reuse Core settings lists in `BuildColorPalette` |
-| G5 | **Sidebar thumbnail drag-reorder** — WPF `ThumbnailListBox` drag/drop + `ThumbnailDropPlacement.ResolveFinalIndex` reorders pages; WinUI ListView sets `CanReorderItems="False"`/`CanDragItems="False"`, `ThumbnailDropIndicator` is present but unused | feature missing | Implement ListView `DragItems` or the WPF custom payload path + `MovePageAsync` |
+| G5 | **Sidebar thumbnail drag-reorder** — WPF `ThumbnailListBox` drag/drop + `ThumbnailDropPlacement.ResolveFinalIndex` reorders pages; WinUI `ThumbnailListBox` (`EditorPage.xaml:745`) leaves `CanDragItems`/`CanReorderItems`/`AllowDrop` unset (all default `false`, so drag-inert); `ThumbnailDropIndicator` is present but unused | feature missing | Implement ListView `DragItems` or the WPF custom payload path + `MovePageAsync` |
 | G6 | **F11 immersive fullscreen** — WPF hides toolbar chrome on F11/Esc; no WinUI equivalent | feature missing | Toggle toolbar/sidebar visibility + `AppWindowPresenterKind.FullScreen` |
 | G7 | **Scrollbar track click-to-jump** — WPF hooks `ScrollBar` template parts (`ScrollBarTrackJump_MouseLeftButtonDown`) so a track click centers the thumb; WinUI `ScrollViewer` does not expose that template surface | UX regression | Requires custom `ScrollBar` template or input hook — deferred by design |
 | G8 | **`Editor.Action.RefreshPage`** blank-context-menu item (reload document preserving edits) — not in the WinUI blank flyout | minor | Add menu item → reload via fresh-session lease |
-| G9 | **Handwriting-to-text** — WPF ships the documented "visible degradation" spike result (no `InkAnalyzer` in WPF; see `.ai/Task28-InkAnalysis.md`). WinUI *could* implement it via the WinRT API that WASDK exposes, but no code exists | parity-with-WPF-degraded | Optional: `Windows.UI.Input.Inking.Analysis` is reachable from WinUI 3 — a V6-only upgrade |
+| G9 | **Handwriting-to-text** — WPF ships no handwriting-to-text UI either (the `Editor.InkAnalysisUnavailable` degradation entry point was removed in Wave 3; no `InkAnalyzer` exists in either shell). WinUI *could* implement it via the WinRT API that WASDK exposes, but no code exists | parity-with-WPF-degraded | Optional: `Windows.UI.Input.Inking.Analysis` is reachable from WinUI 3 — a V6-only upgrade |
 | G10 | **`releases/latest` update channel** — `UpdateCheckService` reads `/releases/latest`; after a v6.0.0 publish, a 5.2.x WPF install will be offered V6 (intended cutover path — same installer AppId upgrades in place). If a 5.x release ships *after* v6, `latest` regresses and 6.x installs see "no update" | release-channel caveat | Per-channel feed or tag-prefix filtering is a follow-up decision |
 
 Already-handled contract items (for the record):
@@ -34,12 +34,12 @@ Already-handled contract items (for the record):
 | Feature | Status | Notes |
 |---|---|---|
 | Single window + tab strip (new/close/middle-click/drag-reorder) | ✅ | `ObservableCollection<AppTab>` + `ListView CanReorderItems`; `MoveTab` keeps WPF index math |
-| Custom title bar / caption buttons | ✅ | `ExtendsContentIntoTitleBar` + `OverlappedPresenter` (WPF `WindowStyle=None` parity) |
+| Custom title bar / caption buttons | ✅ `[manual]` | `ExtendsContentIntoTitleBar` + `OverlappedPresenter` (WPF `WindowStyle=None` parity) |
 | Nav Back/Forward/Home | ✅ | `NavigationCloseCoordinator` in Core; prepare-barrier replaces WPF journal (WinUI destroys pages — documented deviation) |
 | Keyboard: Ctrl+T / Ctrl+W / Ctrl+Tab / Ctrl+Shift+Tab | ✅ | `RootGrid_PreviewKeyDown` |
 | Window close intercept → per-tab release, 30 s timeout | ✅ | `AppWindow_Closing` + `_allowWindowClose` latch + `_tabCloseWorkflows` |
-| Toasts (autosave, stylus detect, errors) | ✅ | `MainWindow.ShowToast` |
-| Drag file onto window → import/open | ✅ | `MainWindow.Window_Drop` (PDF passthrough + Word→PDF) |
+| Toasts (autosave, stylus detect, errors) | ✅ `[manual]` | `MainWindow.ShowToast` |
+| Drag file onto window → import/open | ✅ `[manual]` | `MainWindow.Window_Drop` (PDF passthrough + Word→PDF) |
 | F11 immersive fullscreen | ❌ G6 | not implemented |
 | Popup cross-app z-order | — | WinUI popups can't leak apps (XamlRoot-scoped) |
 
@@ -51,23 +51,23 @@ Already-handled contract items (for the record):
 | Selection mode bar (select all / move / delete / done) | ✅ | `SelectButton` + selection action bar |
 | Folder colors (8 swatches) | ✅ | `RecentFilesService.SetFolderColor` |
 | Context menus (open/rename/color/move/delete/export/copy-path/remove) | ✅ | code-built `MenuFlyout`s via `ContextRequested` |
-| Drag-out to Explorer | ✅ | Copy-only `DataPackageOperation.Copy` (WPF invariant) |
-| Drag-into-folder + move-to-root | ✅ | `FolderTile_Drop`/`FileTile_DropCompleted` |
-| Recycle-bin delete | ✅ | `RecycleBinService.TrySendToRecycleBin` |
-| Word import (.doc/.docx → PDF convert + toast) | ✅ | `WordToPdfConverter` (LibreOffice/COM, Core) |
+| Drag-out to Explorer | ✅ `[manual]` | Copy-only `DataPackageOperation.Copy` (WPF invariant) |
+| Drag-into-folder + move-to-root | ✅ `[manual]` | `FolderTile_Drop`/`FileTile_DropCompleted` |
+| Recycle-bin delete | ✅ `[manual]` | `RecycleBinService.TrySendToRecycleBin` |
+| Word import (.doc/.docx → PDF convert + toast) | ✅ `[manual]` | `WordToPdfConverter` (LibreOffice/COM, Core) |
 | New notebook / open file / create folder | ✅ | `Home.Menu.*` |
 
 ### Editor shell
 | Feature | Status | Notes |
 |---|---|---|
 | PDF render (pdfium BGRA → `SoftwareBitmapSource`) | ✅ | Core `PdfiumRasterizer`, DPI-aware baseline |
-| Scroll + anchored zoom (0.25–8, ±0.1, ctrl+wheel, pinch) | ✅ | `ZoomAroundPoint`→`ChangeView`; `ZoomMode=Enabled` pinch |
+| Scroll + anchored zoom (0.25–8, ±0.1, ctrl+wheel, pinch) | ✅ `[manual]` | `ZoomAroundPoint`→`ChangeView`; `ZoomMode=Enabled` pinch |
 | Zoom label + editable % input (Enter/LostFocus, `%` strip, range check) | ✅ | `ApplyZoomFromTextBox` |
 | Debounced re-render + working-set trim | ✅ | `DispatcherQueueTimer` ×2, `PdfRenderPolicy`, `PageSource=null` reclaim |
 | Page jump field + prev/next + PgUp/PgDn/Home/End | ✅ | `Editor.PageJump*` ids preserved |
 | Sidebar: Pages/Outline/Bookmarks tabs, 184/38 DIP rail, 228/32 content offset, ≤375 auto-collapse | ✅ | `SetSidebarTab`/`SetSidebarCollapsed`/`AutoCollapseSidebarForNarrowLayout` |
 | Sidebar thumbnails (lazy), current-page highlight+scroll sync | ✅ | `ThumbnailListBox` ListView |
-| Sidebar thumbnail drag-reorder | ❌ G5 | `CanDragItems="False"`; context menu keeps insert/duplicate/delete |
+| Sidebar thumbnail drag-reorder | ❌ G5 | drag attrs unset (framework-default inert); context menu keeps insert/duplicate/delete |
 | Outline tree jump | ✅ | `TreeView` binds `TreeViewNode.Content` |
 | Bookmarks: Ctrl+M toggle, list jump/remove, persisted | ✅ | `PageBookmarkService` (Core) |
 | Ctrl+F search + results + F3/Shift+F3 cycle + Esc | ✅ | `PdfSearchPanel`, `MovePdfSearchSelection` |
@@ -81,14 +81,14 @@ Already-handled contract items (for the record):
 |---|---|---|
 | Pen/highlighter strokes, pressure capture, `[x,y,p]` persistence | ✅ | `InkSurface` + `StrokeRenderer`; legacy `[x,y]`→p=0.5 read |
 | Point eraser (square-stamp parity) + whole-stroke eraser | ✅ | Core `StrokeGeometry`; `WpfCoreEraserParityTests` (23-case cross-validation vs `Stroke.GetEraseResult`) |
-| Barrel button / pen-inversion erase; Win+F19/20 hotkeys | ✅ | `PenService` HWND subclass |
-| Pen-only mode (blocks finger/mouse ink, panning allowed) | ✅ | `PenOnlyButton` + `PenOnlyInputTests` |
+| Barrel button / pen-inversion erase; Win+F19/20 hotkeys | ✅ `[manual]` | `PenService` HWND subclass |
+| Pen-only mode (blocks finger/mouse ink, panning allowed) | ✅ `[manual]` | `PenOnlyButton` + `PenOnlyInputTests` |
 | Shape tools: 9 kinds, dashed, Shift 45°/square/circle snap, `ShapeGroupId` grouping | ✅ | `ShowShapeFlyout` ports all WPF options |
 | Scribble → shape recognition (toggle from Settings) | 🟡 | engine works (`StrokeGeometry.TryRecognizeShape`); the pen-popup toggle surface is missing (G2) |
 | Ink simulation + smoothing levels | 🟡 | wired from `AppSettings`; pen-popup toggles missing (G2) |
 | Hidden ink masks (draw/tap-reveal 3 s/erase/undo, `wna_hidden_` persist) | ✅ | `HiddenInkStore`, separate ledger |
-| Laser pointer (0.15 s hold + 0.9 s fade, never persisted) | ✅ | `LaserInkCanvas` |
-| Ruler (drag/rotate 15°-snap/resize, constrains strokes) | ✅ | `RulerOverlayCanvas`, `ConstrainPointsToRuler` |
+| Laser pointer (0.15 s hold + 0.9 s fade, never persisted) | ✅ `[manual]` | `LaserInkCanvas` |
+| Ruler (drag/rotate 15°-snap/resize, constrains strokes) | ✅ `[manual]` | `RulerOverlayCanvas`, `ConstrainPointsToRuler` |
 | Eraser mode toggle UI | ❌ G3 | setting exists (`WholeStrokeEraser`), no flyout |
 | Pen flyout (size/color/pressure/sim/recognition/smoothing) | ❌ G2 | settings defaults only |
 | Recent colors row | ❌ G4 | settings lists exist in Core, not rendered |
@@ -96,9 +96,9 @@ Already-handled contract items (for the record):
 ### Selection & clipboard
 | Feature | Status | Notes |
 |---|---|---|
-| Marquee + lasso select (60%/70% rules), marching-ants outlines | ✅ | `IsStrokeInsidePolygon`/`IsStrokeInsideRect` |
+| Marquee + lasso select (60%/70% rules), marching-ants outlines | ✅ `[manual]` | `IsStrokeInsidePolygon`/`IsStrokeInsideRect` |
 | Ctrl+click multi-select / toggle | ✅ | `HandleCtrlClickToggle` |
-| Move/rotate/scale (8 handles + rotate stem), opposite-anchor scale | ✅ | Core `TranslateSpinePoints`/`ScaleSpinePoints`/`RotateSpinePoints` |
+| Move/rotate/scale (8 handles + rotate stem), opposite-anchor scale | ✅ `[manual]` | Core `TranslateSpinePoints`/`ScaleSpinePoints`/`RotateSpinePoints` |
 | Cross-page move | ✅ | `InkSelectionCrossPageMoveAction` |
 | Copy/paste (strokes+text+sticky+image), Ctrl+D duplicate, Delete | ✅ | `Ctrl+D` at `EditorPage.xaml.cs:9891` |
 | Paste at last-clicked point (incl. cross-page) | ✅ | `_lastClickedPage` |
@@ -110,16 +110,16 @@ Already-handled contract items (for the record):
 | Text boxes (create/edit session/8-pt resize/drag/nudge/min-size) | ✅ | `TextOverlayCanvas` widgets |
 | Inline text toolbar (bold/italic/font/size/align/color/delete) | ✅ | `EnsureInlineTextBoxToolbar`, `Editor.TextToolbar.*` ids |
 | Sticky notes (marker, Save/Cancel/Delete bubble, drag) | ✅ | `CommitStickyNoteEdit`/`CancelStickyNoteEdit`/`StickyNoteDeletedAction` |
-| Image annotations (clipboard PNG/bitmap/EMF incl. Excel charts, drag-in) | ✅ | `ClipboardImageDecoder` + Core `EnhMetafileRasterizer` |
+| Image annotations (clipboard PNG/bitmap/EMF incl. Excel charts, drag-in) | ✅ `[manual]` | `ClipboardImageDecoder` + Core `EnhMetafileRasterizer` |
 | Persistent highlights (120-alpha) + area highlights | ✅ | `AddHighlightAnnotation`, `InkSurfaceTool.AreaHighlight` |
-| Text markups (underline/strikeout/squiggly) | ✅ | `PdfTextSelectionGeometry` relative rects |
+| Text markups (underline/strikeout/squiggly) | ✅ `[manual]` | `PdfTextSelectionGeometry` relative rects |
 | Full undo ledger (`IUndoAction`, `DocumentSnapshotAction`) | ✅ | Core `AnnotationUndoActions.cs`/`InkUndoActions.cs` |
 | CJK text export correctness | ✅ | `PdfServiceAnnotationSavingTests` (unchanged Core path) |
 
 ### PDF text selection
 | Feature | Status | Notes |
 |---|---|---|
-| Drag-select text, rects via `PdfTextSelectionGeometry` | ✅ | real implementation (WPF stub superseded — see plan T8-B) |
+| Drag-select text, rects via `PdfTextSelectionGeometry` | ✅ `[manual]` | real implementation (WPF stub superseded — see plan T8-B) |
 | Copy + markups (highlight/underline/strikeout/squiggly) | ✅ | `BuildPdfTextSelectionRects` + markup actions |
 
 ### Save / lifecycle
@@ -129,18 +129,18 @@ Already-handled contract items (for the record):
 | Atomic PDF write + version sidecar ordering | ✅ | `PdfAtomicFile` temp→flush→move; sidecar after save |
 | Dirty-close/tab-close prompt protocol | ✅ | `PrepareForCloseAsync`/`SaveUntilCleanAsync`/`DocumentEditAdmission` |
 | Structural-op snapshot undo (insert/delete/duplicate/rotate) | ✅ | private `DocumentSnapshotAction`, `LeavesDocumentDirty=false` |
-| Version history (cap 50, pre-restore auto-save) | ✅ | `VersionControlService` + `VersionHistoryButton` flyout |
+| Version history (cap 50, pre-restore auto-save) | ✅ `[manual]` | `VersionControlService` + `VersionHistoryButton` flyout |
 | Notebook draft Save-As flow | — | dormant in WPF (no caller); documented T9 deviation |
 | Print | ❌ G1 | menu stub disabled |
 
 ### Dialogs & services
 | Feature | Status | Notes |
 |---|---|---|
-| Settings (language/autosave/pressure/smoothing/pen-only/perf/theme/backdrop) | ✅ | `SettingsDialog` — stage/preview/revert contract |
+| Settings (language/autosave/pressure/smoothing/pen-only/perf/theme/backdrop) | ✅ `[manual]` | `SettingsDialog` — stage/preview/revert contract |
 | Page template picker (all 9 templates: blank/notebook/lined/quadrille/dotted/music/Cornell/checklist/two-column) | ✅ | `PageTemplatePickerDialog` |
-| Update check (menu entry, GitHub latest-release, open release page) | ✅ | assembly-version aware (6.0.0); UA now reports caller version |
+| Update check (menu entry, GitHub latest-release, open release page) | ✅ `[manual]` | assembly-version aware (6.0.0); UA now reports caller version |
 | About | ✅ | `WinUiDialogService` |
-| Themes: Light/Dark/System/HighContrast + workspace backdrop + animation/opacity tokens | ✅ | `WinUiThemeService` (per-window `RequestedTheme` + `UISettings`/`AccessibilitySettings`/HKCU) |
+| Themes: Light/Dark/System/HighContrast + workspace backdrop + animation/opacity tokens | ✅ `[manual]` | `WinUiThemeService` (per-window `RequestedTheme` + `UISettings`/`AccessibilitySettings`/HKCU) |
 | i18n (EN/zh/FR catalog, live language switch) | ✅ | shared `LocalizationService`; `WinUiLocalizationCoverageTests` pins coverage |
 | Recycle bin | ✅ | `SHFileOperation` unchanged (Core) |
 | Word→PDF converter | ✅ | unchanged (Core) |

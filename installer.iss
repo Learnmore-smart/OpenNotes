@@ -70,11 +70,13 @@ Source: "{#MyAppSourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesub
 [InstallDelete]
 ; Same AppId + install dir means a V6 setup upgrades a 5.x (WPF) install
 ; in place. Sweep the stale WPF payload so only OpenNotes.WinUI.exe remains.
+; InstallDelete runs before [Files] extraction, so sweeping *.dll/*.pdb is
+; safe — the new payload re-extracts every shared dependency.
+Type: files; Name: "{app}\*.dll"
+Type: files; Name: "{app}\*.pdb"
 Type: files; Name: "{app}\OpenNotes.exe"
-Type: files; Name: "{app}\OpenNotes.dll"
 Type: files; Name: "{app}\OpenNotes.deps.json"
 Type: files; Name: "{app}\OpenNotes.runtimeconfig.json"
-Type: files; Name: "{app}\OpenNotes.pdb"
 #endif
 
 [Icons]
