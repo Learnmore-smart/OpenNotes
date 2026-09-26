@@ -13002,14 +13002,20 @@ namespace Caelum.Pages
             return new SolidColorBrush(fallback);
         }
 
-        /// <summary>T13-A: x:Double radius token → CornerRadius for chrome
-        /// built imperatively (flyout cards, floating toolbars, editor
-        /// popups) — same geometry language as the XAML surfaces.</summary>
+        /// <summary>T13-A: radius token → CornerRadius for chrome built
+        /// imperatively (flyout cards, floating toolbars, editor popups) —
+        /// same geometry language as the XAML surfaces. The theme tokens
+        /// are <see cref="CornerRadius"/> resources in App.xaml; a bare
+        /// <c>x:Double</c> is also accepted so a uniform scalar token still
+        /// resolves.</summary>
         private static CornerRadius ResolveThemeCornerRadius(string key, double fallback)
         {
-            if (Application.Current?.Resources?.TryGetValue(key, out var value) == true
-                && value is double radius)
-                return new CornerRadius(radius);
+            if (Application.Current?.Resources?.TryGetValue(key, out var value) != true)
+                return new CornerRadius(fallback);
+            if (value is CornerRadius radius)
+                return radius;
+            if (value is double uniform)
+                return new CornerRadius(uniform);
             return new CornerRadius(fallback);
         }
 
