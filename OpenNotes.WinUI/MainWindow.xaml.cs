@@ -253,6 +253,22 @@ namespace Caelum
         }
 
         /// <summary>
+        /// Window-side half of the editor's F11 immersive mode (WPF
+        /// <c>ToggleImmersiveMode</c> hid page chrome; the WPF window itself
+        /// was already borderless so no presenter swap existed there).
+        /// <see cref="AppWindowPresenterKind.FullScreen"/> covers the
+        /// taskbar; Default restores the pre-immersive placement.
+        /// <see cref="AppWindow_Changed"/> re-applies the custom chrome +
+        /// minimum size on each presenter swap (<c>DidPresenterChange</c>).
+        /// </summary>
+        internal void SetImmersiveFullscreen(bool immersive)
+        {
+            _appWindow?.SetPresenter(immersive
+                ? AppWindowPresenterKind.FullScreen
+                : AppWindowPresenterKind.Default);
+        }
+
+        /// <summary>
         /// WPF OnClosing parity: the first close attempt is cancelled and the
         /// save/release protocol completes before Close() is requested again
         /// — the process cannot exit while a snapshot is still in flight.

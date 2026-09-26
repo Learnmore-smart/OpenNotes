@@ -4,12 +4,13 @@
 > vs `OpenNotes.WinUI` (6.0.0 channel). Source of truth: WPF `Pages/EditorPage.xaml(.cs)`,
 > `MainWindow.xaml(.cs)`, `Pages/HomePage*.cs`, `docs/checklist.md` vs the current WinUI tree.
 > **G1/G8 closed 2026-09-26** (Win32 GDI print + RefreshPage item) — see rows.
+> **G5/G6 closed 2026-09-26** (thumbnail drag-reorder + F11 immersive) — see rows.
 >
 > **Status legend:** ✅ ported · 🟡 partial (works, surface reduced) · ⏸ deferred (code path
 > exists/stubbed, intentionally off) · ❌ dropped (with reason) · — not applicable to WinUI.
 > `[manual]` = needs a real-device/desktop-session check; headless evidence only today.
 
-## Headline gaps (open at audit time; G2/G3/G4 closed 2026-09-25 — see rows)
+## Headline gaps (open at audit time; G2/G3/G4 closed 2026-09-25, G5/G6 closed 2026-09-26 — see rows)
 
 | # | Gap | Severity | Plan |
 |---|---|---|---|
@@ -17,8 +18,8 @@
 | G2 | **Pen tool flyout** — ✅ **ported** (`ShowPenFlyout`): size slider 0.5–8/0.25 (`Editor.Pen.Size`), `Editor.PopupPreview` live stroke, recents row + HSV palette, Pressure/Ink Simulation/Shape Recognition toggles (`Editor.Pen.Pressure`/`InkSimulation`/`ShapeRecognition`, persisted via `SaveSetting`), Off–High smoothing (`Editor.Pen.Smoothing.{i}`). Residual: flyout light-dismisses on first ink press (WPF's `StaysOpen`+gesture-arm kept the popup up mid-stroke); `XamlRoot.Size` stands in for `SystemParameters.WorkArea` in the scroll cap | closed | `ShowPenFlyout` + `BuildSettingToggleButton`/`WrapToolFlyoutContent` helpers |
 | G3 | **Eraser mode flyout** — ✅ **ported** (`ShowEraserFlyout`): `Editor.Eraser.Pixel`/`Editor.Eraser.WholeStroke` mode row (persisted `WholeStrokeEraser`) above the 4–80 `Editor.Eraser.Size` slider; slider drags flash `EraserSizePreviewEllipse` for ~1.2 s (WPF `ShowEraserSizePreview`) | closed | eraser flyout opened from `EraserToolButton` like WPF `ToggleToolButton` |
 | G4 | **Recent-colors row** — ✅ **ported**: `RefreshRecentColorsRow`/`BuildRecentColorsSection` render the «最近 Recent» swatch row (`Editor.Color.Recent.{i}`) above the palette in the pen + highlighter + text flyouts; recording/dedupe/cap live in new Core `RecentColors` (`MaxRecentColors=8`, `Record`, `TryParse`); the cached text flyout refreshes on `FlyoutBase.Opening` (WPF `popup.Opened`). Shape flyout intentionally has none — WPF keeps shape colours session-only | closed | pen/highlighter rebuilt per show ⇒ per-show refresh; text flyout `Opening` hook |
-| G5 | **Sidebar thumbnail drag-reorder** — WPF `ThumbnailListBox` drag/drop + `ThumbnailDropPlacement.ResolveFinalIndex` reorders pages; WinUI `ThumbnailListBox` (`EditorPage.xaml:745`) leaves `CanDragItems`/`CanReorderItems`/`AllowDrop` unset (all default `false`, so drag-inert); `ThumbnailDropIndicator` is present but unused | feature missing | Implement ListView `DragItems` or the WPF custom payload path + `MovePageAsync` |
-| G6 | **F11 immersive fullscreen** — WPF hides toolbar chrome on F11/Esc; no WinUI equivalent | feature missing | Toggle toolbar/sidebar visibility + `AppWindowPresenterKind.FullScreen` |
+| G5 | **Sidebar thumbnail drag-reorder** — ✅ **ported** (`[manual]`): the rail runs the WPF manual-payload path, NOT built-in `CanReorderItems` (which stays `False` — it would mutate `SidebarPageItems` before the lease pipeline validates the move). `PointerPressed`/`PointerMoved` (attached `handledEventsToo` — ListViewItem marks the press handled for selection) arm an immutable `ThumbnailDragPayload` (SourceIndex + session + normalized path + item ref) and lift `StartDragAsync` past the 4-DIP threshold; `DragStarting` stamps it under `Caelum.ThumbnailDragPayload`. `DragEnter`/`DragOver` re-validate (`IsCurrentThumbnailDragPayload`: host-active + session + path + ref-identity), resolve the slot via `TryResolveThumbnailDropSlot` (container-walk half-item split — replaces the WPF `e.OriginalSource` ancestor probe so inter-item gaps clamp to the nearest slot instead of "past end"), and raise `ThumbnailDropIndicator`; `Drop` → `MovePageAsync` reuses the structural-op pipeline (payload-bound lease → edit admission → structural latch → dirty flush → `ReorderPagesAsync` → fresh-session reload → focus moved page → `ApplyPageMove` bookmark remap → `DocumentSnapshotAction` undo) with bytes+sidecar rollback on post-write failure; `Editor.PageReorderFailed` toast on error. Escape cancels the OS drag natively; `CloseTransientUi`/`LoadPdfAsync`/`SetHostActive` sweep armed state + indicator | closed | drop UX/indicator are `[manual]`-verified only; non-thumbnail drags bubble to the window file-import path |
+| G6 | **F11 immersive fullscreen** — ✅ **ported** (`[manual]`): `ToggleImmersiveMode` hides `ToolbarBorder`/`DocumentSidebar`/`PdfSearchPanel` via Opacity=0 + IsHitTestVisible=false (overlay chrome — zero reflow; writing/scroll/page-jump/Ctrl+Z keep working), resets `PagesContainer.Margin` to the default, and swaps the window to `AppWindowPresenterKind.FullScreen` via `MainWindow.SetImmersiveFullscreen` (the piece WPF's borderless window got free); exit restores the recorded chrome + `Default` presenter — `AppWindow_Changed` re-applies custom chrome + min-size on each swap. `EditorPage_PreviewKeyDown` keeps WPF order: F11 gated on `!textInputFocused`, immersive-Escape ahead of resize/tool-reset Escape. `SetHostActive(false)` also exits — the presenter is window-global, unlike WPF's page-local chrome | closed | presenter swap + chrome restore are `[manual]`-verified only |
 | G7 | **Scrollbar track click-to-jump** — WPF hooks `ScrollBar` template parts (`ScrollBarTrackJump_MouseLeftButtonDown`) so a track click centers the thumb; WinUI `ScrollViewer` does not expose that template surface | UX regression | Requires custom `ScrollBar` template or input hook — deferred by design |
 | G8 | **`Editor.Action.RefreshPage`** — ✅ **ported**: `ShowBlankContextMenu` adds the item between SelectAll and Delete (WPF order) → `RefreshCurrentDocumentPreservingEditsAsync` = `AutoSaveAsync` flush → `ReloadDocumentForOperationAsync` fresh-session reload. Deviation: a failed save **aborts** the reload — WPF reloaded unconditionally, which would discard the in-memory edits the command exists to preserve | closed | save→reload under fresh-session lease |
 | G9 | **Handwriting-to-text** — WPF ships no handwriting-to-text UI either (the `Editor.InkAnalysisUnavailable` degradation entry point was removed in Wave 3; no `InkAnalyzer` exists in either shell). WinUI *could* implement it via the WinRT API that WASDK exposes, but no code exists | parity-with-WPF-degraded | Optional: `Windows.UI.Input.Inking.Analysis` is reachable from WinUI 3 — a V6-only upgrade |
@@ -41,7 +42,7 @@ Already-handled contract items (for the record):
 | Window close intercept → per-tab release, 30 s timeout | ✅ | `AppWindow_Closing` + `_allowWindowClose` latch + `_tabCloseWorkflows` |
 | Toasts (autosave, stylus detect, errors) | ✅ `[manual]` | `MainWindow.ShowToast` |
 | Drag file onto window → import/open | ✅ `[manual]` | `MainWindow.Window_Drop` (PDF passthrough + Word→PDF) |
-| F11 immersive fullscreen | ❌ G6 | not implemented |
+| F11 immersive fullscreen | ✅ | `VirtualKey.F11`/`VirtualKey.Escape` gates in `EditorPage_PreviewKeyDown` → `ToggleImmersiveMode` → `SetImmersiveFullscreen` (FullScreen presenter); tab deactivate exits |
 | Popup cross-app z-order | — | WinUI popups can't leak apps (XamlRoot-scoped) |
 
 ### Home library
@@ -68,7 +69,7 @@ Already-handled contract items (for the record):
 | Page jump field + prev/next + PgUp/PgDn/Home/End | ✅ | `Editor.PageJump*` ids preserved |
 | Sidebar: Pages/Outline/Bookmarks tabs, 184/38 DIP rail, 228/32 content offset, ≤375 auto-collapse | ✅ | `SetSidebarTab`/`SetSidebarCollapsed`/`AutoCollapseSidebarForNarrowLayout` |
 | Sidebar thumbnails (lazy), current-page highlight+scroll sync | ✅ | `ThumbnailListBox` ListView |
-| Sidebar thumbnail drag-reorder | ❌ G5 | drag attrs unset (framework-default inert); context menu keeps insert/duplicate/delete |
+| Sidebar thumbnail drag-reorder | ✅ | manual `StartDragAsync` payload drag (WPF parity) → `MovePageAsync` under the structural latch; `ThumbnailDropIndicator` renders at the resolved slot; context menu keeps insert/duplicate/delete |
 | Outline tree jump | ✅ | `TreeView` binds `TreeViewNode.Content` |
 | Bookmarks: Ctrl+M toggle, list jump/remove, persisted | ✅ | `PageBookmarkService` (Core) |
 | Ctrl+F search + results + F3/Shift+F3 cycle + Esc | ✅ | `PdfSearchPanel`, `MovePdfSearchSelection` |
@@ -223,8 +224,8 @@ by §B/§C source contracts + `tools/winui-*.ps1` smoke scripts at runtime:
 
 ## What is needed for the actual `v6.0.0` release (explicit user consent required)
 
-1. Close or consciously accept gap list G1–G10 (G1/G8 closed 2026-09-26;
-   G5 reorder remains the largest user-visible one).
+1. Close or consciously accept gap list G1–G10 (G1/G8 + G5/G6 closed
+   2026-09-26; G7 deferred by design, G9/G10 are follow-up decisions).
 2. Manual run of the four `tools/winui-*.ps1` smokes on a real desktop session.
 3. `git tag v6.0.0` + push → `release-winui` job builds setup + portable zip.
    ⚠ Tag push and release publish are **not** performed by this task.

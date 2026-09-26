@@ -1,5 +1,5 @@
 # OpenNotes.WinUI/Pages/EditorPage.xaml(.cs)
-> Last updated: 2026-09-26 (G1/G8 — Win32 GDI print pipeline + blank-menu RefreshPage) | Protection: STANDARD
+> Last updated: 2026-09-26 (G5/G6 — thumbnail drag-reorder + F11 immersive mode) | Protection: STANDARD
 
 ## Purpose
 `Caelum.Pages.EditorPage : Page` — the WinUI editor shell port of the WPF
@@ -61,6 +61,25 @@ the Task 9 Phase A save/autosave + close/dirty protocol is live (T9-B defers set
   `_bookmarksCachePath`), never `PageBookmarkService.Load` per scroll tick;
   `RefreshBookmarks` re-warms the cache, `InvalidateBookmarkCache` clears it
   on load/rename.
+- **Thumbnail drag-reorder (G5, WPF parity):** `ThumbnailListBox` is a MANUAL
+  drag surface — `CanDragItems`/`CanReorderItems` stay `False` (built-in
+  reorder would mutate `SidebarPageItems` before the lease pipeline can
+  validate). `PointerPressed`/`PointerMoved` (attached `handledEventsToo` —
+  ListViewItem marks presses handled) arm a `ThumbnailDragPayload`
+  (SourceIndex + session + normalized path + item ref) and lift
+  `StartDragAsync` past a 4-DIP threshold; `DragStarting` stamps it into the
+  package under `Caelum.ThumbnailDragPayload`. `DragOver`/`DragEnter`
+  re-validate (`IsCurrentThumbnailDragPayload`) and resolve the slot via
+  `TryResolveThumbnailDropSlot` — a container-walk half-item split (replaces
+  the WPF `e.OriginalSource` ancestor probe; inter-item gaps now clamp to
+  the nearest slot instead of "past end") — then raise
+  `ThumbnailDropIndicator`. `Drop` → `MovePageAsync` runs the shared
+  structural-op pipeline (payload lease → edit admission → structural latch
+  → dirty flush → `ReorderPagesAsync` → fresh-session reload → focus moved
+  page → `ApplyPageMove` → `DocumentSnapshotAction` undo) with
+  bytes+sidecar rollback on post-write failure. Escape cancels the OS drag
+  natively; `CloseTransientUi`/`LoadPdfAsync`/`SetHostActive` sweep armed
+  state + indicator. Failure toast `Editor.PageReorderFailed` + `\uE783`.
 - **Navigation:** prev/next buttons, editable one-based `Editor.PageJump`
   TextBox (`ApplyPageJumpFromTextBox` — parse/clamp/validation message/
   `JumpToPage`/`EndPageJumpEdit` — renamed from the misleading
@@ -81,6 +100,17 @@ the Task 9 Phase A save/autosave + close/dirty protocol is live (T9-B defers set
   Ctrl+P too)** + page ops entries (insert/delete/duplicate/reorder) wired to
   Core. Blank-area flyout carries Copy/Paste/SelectAll/**RefreshPage**
   (save→`ReloadDocumentForOperationAsync`)/Delete.
+- **Immersive fullscreen (G6, WPF Task 16 parity):** `ToggleImmersiveMode`
+  hides `ToolbarBorder`/`DocumentSidebar`/`PdfSearchPanel` via Opacity=0 +
+  IsHitTestVisible=false (overlay chrome — zero reflow), resets
+  `PagesContainer.Margin` to `PagesContainerDefaultMargin`, and swaps the
+  window presenter via `MainWindow.SetImmersiveFullscreen`
+  (`AppWindowPresenterKind.FullScreen` covers the taskbar — the piece WPF's
+  borderless window got free; Default restores placement, `AppWindow_Changed`
+  re-applies custom chrome/min-size). `EditorPage_PreviewKeyDown` keeps WPF
+  order: F11 gated on `!textInputFocused`, immersive-Escape ahead of
+  resize/tool-reset Escape; `SetHostActive(false)` also exits (the presenter
+  is window-global — WPF's immersive chrome was page-local).
 - **Print (G1):** `PrintPdfAsync` ports the WPF lease/validation/
   `Editor.PreparingPrint` overlay/`PrintSent` toast/`PrintFailed` dialog/OCE
   flow. `BuildPrintablePagesAsync` atomically copies the PDF into
@@ -500,6 +530,27 @@ the Task 9 Phase A save/autosave + close/dirty protocol is live (T9-B defers set
   flow (no WPF caller).
 
 ## Change History
+- 2026-09-26 G5/G6 port: thumbnail drag-reorder live — manual
+  `StartDragAsync` payload drag (NOT built-in `CanReorderItems`, which would
+  mutate `SidebarPageItems` ahead of the lease pipeline): `PointerPressed`/
+  `PointerMoved` arm a `ThumbnailDragPayload` record (source index + session
+  + normalized path + item ref), `DragStarting` stamps it under
+  `Caelum.ThumbnailDragPayload`, `DragOver` re-validates + resolves the slot
+  (`TryResolveThumbnailDropSlot` — container-walk half-item split; gaps
+  clamp to the nearest slot, not "past end" like WPF's OriginalSource probe)
+  and raises `ThumbnailDropIndicator`. `Drop` → `MovePageAsync`: the WPF
+  commit sequence verbatim (payload lease → autosave-dirty flush → byte +
+  bookmark snapshot → `ReorderPagesAsync` → `ReloadDocumentForOperationAsync`
+  → `JumpToPage(moved)` → `ApplyPageMove` → `DocumentSnapshotAction` undo)
+  PLUS the WinUI structural latch + `TryRollbackStructuralOperationAsync`
+  bytes+sidecar restore shared with insert/delete/duplicate. Escape cancels
+  natively; `CloseTransientUi`/`LoadPdfAsync`/`SetHostActive` clear armed
+  state + indicator. F11 immersive live: `ToggleImmersiveMode` ports the WPF
+  Opacity/hit-test chrome hide (toolbar/sidebar/search + default pages
+  margin) and adds the window presenter swap (`SetImmersiveFullscreen` →
+  `AppWindowPresenterKind.FullScreen`/`Default`); Escape exits first,
+  `SetHostActive(false)` exits on tab switch. Source pins:
+  `WinUiThumbnailReorderAndImmersiveSourceTests`. | Devin
 - 2026-09-26 G1/G8 port: print pipeline live via `Services/Win32Print.cs`
   (Win32 `PrintDlgEx` sheet on the MainWindow HWND → patched-DEVMODE
   `CreateDC` → per-page `StretchDIBits` of pdfium BGRA at printer DPI; the

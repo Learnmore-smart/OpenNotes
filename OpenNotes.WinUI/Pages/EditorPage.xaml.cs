@@ -337,6 +337,43 @@ namespace Caelum.Pages
         private bool _isRefreshingThumbnails;
         private bool _isSynchronizingThumbnailSelection;
 
+        // ── Sidebar thumbnail drag-reorder (WPF :7870-8147 parity) ────────
+        // App-local DataPackage format marker — WPF used
+        // typeof(ThumbnailDragPayload) as the DataObject format; an in-app
+        // drag never crosses a process boundary so a string id suffices.
+        private const string ThumbnailDragFormatId = "Caelum.ThumbnailDragPayload";
+        // WPF SystemParameters.MinimumHorizontal/VerticalDragDistance (~4 DIP).
+        private const double ThumbnailDragThreshold = 4.0;
+        private Point _thumbnailDragStartPoint;
+        private ThumbnailDragPayload _thumbnailDragPayload;
+        // The WPF DoDragDrop loop was modal so reentry was impossible;
+        // StartDragAsync awaits, so the flag covers the in-flight span.
+        private bool _thumbnailDragInFlight;
+        private int _thumbnailDropSlot = -1;
+
+        // The WinUI drag loop is asynchronous, but the Drop callback can
+        // begin an asynchronous document operation before StartDragAsync
+        // resumes (WPF :1917-1922 parity). Keep the complete source identity
+        // in one immutable value so clearing editor gesture state cannot
+        // make the drop stale by accident.
+        private sealed record ThumbnailDragPayload(
+            int SourceIndex,
+            int SessionId,
+            string FilePath,
+            SidebarPageItem Source);
+
+        // ── Immersive fullscreen (WPF :102-108 parity) ────────────────────
+        // The recorded pre-immersive chrome state lets repeated toggles
+        // restore cleanly — the overlays are hidden purely visually
+        // (Opacity 0 + IsHitTestVisible false), so nothing reflows.
+        private bool _isImmersiveMode;
+        private double _preImmersiveToolbarOpacity = 1.0;
+        private bool _preImmersiveToolbarHitTestVisible = true;
+        private double _preImmersiveSidebarOpacity = 1.0;
+        private bool _preImmersiveSidebarHitTestVisible = true;
+        private double _preImmersiveSearchOpacity = 1.0;
+        private bool _preImmersiveSearchHitTestVisible = true;
+
         // ── Search ──────────────────────────────────────────────────────────
         private readonly List<PdfSearchResult> _pdfSearchResults = new();
         private CancellationTokenSource _pdfSearchCts;
@@ -407,6 +444,26 @@ namespace Caelum.Pages
             EditorRootGrid.AllowDrop = true;
             EditorRootGrid.DragOver += EditorPage_DragOver;
             EditorRootGrid.Drop += EditorPage_Drop;
+            // WPF ThumbnailListBox drag wiring parity — a manual
+            // StartDragAsync drag (built-in CanReorderItems would mutate
+            // SidebarPageItems before the lease pipeline could validate the
+            // move). ListViewItem marks PointerPressed handled for
+            // selection, so the arm/threshold hooks attach with
+            // handledEventsToo; the drag/drop events are safe on the
+            // ListView itself (CanReorderItems stays off — XAML).
+            ThumbnailListBox.AddHandler(
+                PointerPressedEvent,
+                new PointerEventHandler(ThumbnailListBox_PointerPressed),
+                handledEventsToo: true);
+            ThumbnailListBox.AddHandler(
+                PointerMovedEvent,
+                new PointerEventHandler(ThumbnailListBox_PointerMoved),
+                handledEventsToo: true);
+            ThumbnailListBox.DragStarting += ThumbnailListBox_DragStarting;
+            ThumbnailListBox.DragEnter += ThumbnailListBox_DragOver;
+            ThumbnailListBox.DragOver += ThumbnailListBox_DragOver;
+            ThumbnailListBox.DragLeave += ThumbnailListBox_DragLeave;
+            ThumbnailListBox.Drop += ThumbnailListBox_Drop;
             ApplyLocalization();
             // Expanded is the default state — same as the WPF shell — so the
             // pages margin starts at the 228 DIP offset.
@@ -772,6 +829,10 @@ namespace Caelum.Pages
 
         private async Task LoadPdfAsync(string filePath)
         {
+            // WPF LoadPdf head: retire an armed/in-flight thumbnail drag
+            // before the new session supersedes every lease it validated.
+            ClearThumbnailDropIndicator();
+            ResetThumbnailDragState();
             var sessionId = Interlocked.Increment(ref _loadSessionId);
             _documentOperationSession.Begin(sessionId, filePath, _pdfService);
             using var operationLease = _documentOperationSession.Capture(sessionId, filePath, _pdfService);
@@ -8571,6 +8632,54 @@ namespace Caelum.Pages
 #endif
         }
 
+        /// <summary>
+        /// WPF <c>ToggleImmersiveMode</c> parity (Task 16): F11 toggles,
+        /// Escape always leaves first. Entering sweeps the tool flyouts and
+        /// visually hides the floating toolbar + document sidebar + search
+        /// panel via Opacity=0 + IsHitTestVisible=false — overlay chrome, so
+        /// nothing reflows (writing, scrolling, page jumps and Ctrl+Z keep
+        /// working). The window side is the piece WPF got free from its
+        /// borderless window: <see cref="MainWindow.SetImmersiveFullscreen"/>
+        /// swaps the AppWindow to the FullScreen presenter (covers the
+        /// taskbar) and back to Default on exit. Leaving restores the
+        /// recorded chrome state; repeated toggles leave no residue.
+        /// </summary>
+        private void ToggleImmersiveMode()
+        {
+            CloseToolFlyouts();
+            _isImmersiveMode = !_isImmersiveMode;
+
+            if (_isImmersiveMode)
+            {
+                _preImmersiveToolbarOpacity = ToolbarBorder.Opacity;
+                _preImmersiveToolbarHitTestVisible = ToolbarBorder.IsHitTestVisible;
+                _preImmersiveSidebarOpacity = DocumentSidebar.Opacity;
+                _preImmersiveSidebarHitTestVisible = DocumentSidebar.IsHitTestVisible;
+                _preImmersiveSearchOpacity = PdfSearchPanel.Opacity;
+                _preImmersiveSearchHitTestVisible = PdfSearchPanel.IsHitTestVisible;
+                ToolbarBorder.Opacity = 0;
+                ToolbarBorder.IsHitTestVisible = false;
+                DocumentSidebar.Opacity = 0;
+                DocumentSidebar.IsHitTestVisible = false;
+                PdfSearchPanel.Opacity = 0;
+                PdfSearchPanel.IsHitTestVisible = false;
+                if (PagesContainer != null)
+                    PagesContainer.Margin = PagesContainerDefaultMargin;
+            }
+            else
+            {
+                ToolbarBorder.Opacity = _preImmersiveToolbarOpacity;
+                ToolbarBorder.IsHitTestVisible = _preImmersiveToolbarHitTestVisible;
+                DocumentSidebar.Opacity = _preImmersiveSidebarOpacity;
+                DocumentSidebar.IsHitTestVisible = _preImmersiveSidebarHitTestVisible;
+                PdfSearchPanel.Opacity = _preImmersiveSearchOpacity;
+                PdfSearchPanel.IsHitTestVisible = _preImmersiveSearchHitTestVisible;
+                UpdatePagesContainerMarginForSidebar();
+            }
+
+            GetMainWindow()?.SetImmersiveFullscreen(_isImmersiveMode);
+        }
+
         private void EditorPage_SizeChanged(object sender, SizeChangedEventArgs e)
         {
             if (ToolbarBorder != null)
@@ -8921,6 +9030,420 @@ namespace Caelum.Pages
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"[ThumbnailMenu] {operation} faulted: {ex}");
+            }
+        }
+
+        // -- Thumbnail drag-reorder (WPF ThumbnailListBox drag/drop) -------
+
+        /// <summary>
+        /// WPF <c>ThumbnailListBox_PreviewMouseLeftButtonDown</c> parity:
+        /// arm the drag payload on a primary press over a real page row.
+        /// Attached with handledEventsToo — ListViewItem marks the press
+        /// handled for selection. Touch stays reserved for rail panning
+        /// (WPF armed on the mouse channel; pen tip-down arrives as a left
+        /// press in both shells).
+        /// </summary>
+        private void ThumbnailListBox_PointerPressed(object sender, PointerRoutedEventArgs e)
+        {
+            var point = e.GetCurrentPoint(ThumbnailListBox);
+            if (e.Pointer.PointerDeviceType == PointerDeviceType.Touch ||
+                !point.Properties.IsLeftButtonPressed)
+                return;
+
+            if (FindAncestor<ListViewItem>(e.OriginalSource as DependencyObject) is ListViewItem item &&
+                item.DataContext is SidebarPageItem page &&
+                SidebarPageItems.Contains(page) &&
+                !string.IsNullOrWhiteSpace(_currentPdfPath))
+            {
+                _thumbnailDragStartPoint = point.Position;
+                _thumbnailDragPayload = new ThumbnailDragPayload(
+                    page.PageIndex,
+                    _loadSessionId,
+                    DocumentOperationSession.NormalizePath(_currentPdfPath),
+                    page);
+            }
+            else
+                ResetThumbnailDragState();
+        }
+
+        /// <summary>
+        /// WPF <c>ThumbnailListBox_PreviewMouseMove</c> parity: once the
+        /// pointer crosses the system drag distance the armed payload starts
+        /// a real OS drag via <see cref="UIElement.StartDragAsync"/> (the
+        /// WinUI stand-in for the synchronous <c>DragDrop.DoDragDrop</c>
+        /// loop — Escape cancels natively and the task completes on drop or
+        /// cancel). The finally mirrors WPF's post-DoDragDrop cleanup.
+        /// </summary>
+        private async void ThumbnailListBox_PointerMoved(object sender, PointerRoutedEventArgs e)
+        {
+            if (_thumbnailDragPayload == null || _thumbnailDragInFlight)
+                return;
+
+            var point = e.GetCurrentPoint(ThumbnailListBox);
+            if (!point.Properties.IsLeftButtonPressed)
+                return;
+
+            var current = point.Position;
+            if (Math.Abs(current.X - _thumbnailDragStartPoint.X) < ThumbnailDragThreshold &&
+                Math.Abs(current.Y - _thumbnailDragStartPoint.Y) < ThumbnailDragThreshold)
+                return;
+
+            _thumbnailDragInFlight = true;
+            try
+            {
+                await ThumbnailListBox.StartDragAsync(point);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[ThumbnailDrag] StartDragAsync failed: {ex}");
+            }
+            finally
+            {
+                _thumbnailDragInFlight = false;
+                ResetThumbnailDragState();
+                ClearThumbnailDropIndicator();
+            }
+        }
+
+        /// <summary>
+        /// Fires on the drag source when <c>StartDragAsync</c> lifts off —
+        /// stamps the payload into the package so the drop can re-validate
+        /// identity independent of gesture state (WPF DataObject parity).
+        /// </summary>
+        private void ThumbnailListBox_DragStarting(object sender, DragStartingEventArgs e)
+        {
+            var payload = _thumbnailDragPayload;
+            if (payload == null || _documentInteractionBlocked || _resourcesReleased)
+            {
+                e.Cancel = true;
+                return;
+            }
+            e.AllowedOperations = DataPackageOperation.Move;
+            e.Data.RequestedOperation = DataPackageOperation.Move;
+            e.Data.SetData(ThumbnailDragFormatId, payload);
+        }
+
+        /// <summary>
+        /// WPF <c>IsCurrentThumbnailDragPayload</c> parity — the armed
+        /// payload only stays meaningful while the same session, document
+        /// path and row object are live (a reload swaps every lease).
+        /// </summary>
+        private bool IsCurrentThumbnailDragPayload(ThumbnailDragPayload payload)
+        {
+            return payload != null && payload.Source != null &&
+                _isHostActive && !_resourcesReleased && !_documentInteractionBlocked &&
+                payload.SessionId == _loadSessionId &&
+                string.Equals(
+                    DocumentOperationSession.NormalizePath(payload.FilePath ?? string.Empty),
+                    DocumentOperationSession.NormalizePath(_currentPdfPath ?? string.Empty),
+                    StringComparison.OrdinalIgnoreCase) &&
+                payload.SourceIndex >= 0 &&
+                payload.SourceIndex < SidebarPageItems.Count &&
+                ReferenceEquals(SidebarPageItems[payload.SourceIndex], payload.Source);
+        }
+
+        private bool TryGetThumbnailDragPayload(
+            DataPackageView data,
+            out ThumbnailDragPayload payload)
+        {
+            payload = null;
+            if (data == null || !data.Contains(ThumbnailDragFormatId))
+                return false;
+
+            payload = _thumbnailDragPayload;
+            return IsCurrentThumbnailDragPayload(payload);
+        }
+
+        /// <summary>
+        /// WPF <c>TryResolveThumbnailDropSlot</c> parity — half-item split:
+        /// pointer above a row's midline inserts before it, below inserts
+        /// after; under the last realized row is the past-end slot (the
+        /// container walk replaces the WPF e.OriginalSource ancestor probe,
+        /// which cannot see row bounds over inter-item gaps). Indicator
+        /// position is returned in ThumbnailListBox space for
+        /// <see cref="ShowThumbnailDropIndicator"/>.
+        /// </summary>
+        private bool TryResolveThumbnailDropSlot(
+            DragEventArgs e,
+            int pageCount,
+            out int slot,
+            out double indicatorTop)
+        {
+            slot = -1;
+            indicatorTop = 0;
+            if (ThumbnailListBox == null || pageCount <= 0)
+                return false;
+
+            Point pointer = e.GetPosition(ThumbnailListBox);
+            bool resolved = false;
+            double lastBottom = -1;
+            for (int index = 0; index < pageCount; index++)
+            {
+                if (ThumbnailListBox.ContainerFromIndex(index) is not ListViewItem container)
+                    continue;
+                Point origin = container.TransformToVisual(ThumbnailListBox)
+                    .TransformPoint(new Point(0, 0));
+                double height = container.ActualHeight > 0
+                    ? container.ActualHeight
+                    : Math.Max(1, container.DesiredSize.Height);
+                if (pointer.Y < origin.Y + (height / 2.0))
+                {
+                    slot = index;
+                    indicatorTop = origin.Y;
+                    resolved = true;
+                    break;
+                }
+                if (pointer.Y <= origin.Y + height)
+                {
+                    slot = index + 1;
+                    indicatorTop = origin.Y + height;
+                    resolved = true;
+                    break;
+                }
+                lastBottom = origin.Y + height;
+            }
+
+            if (!resolved)
+            {
+                slot = pageCount;
+                indicatorTop = lastBottom >= 0
+                    ? lastBottom
+                    : Math.Max(0, ThumbnailListBox.ActualHeight);
+            }
+
+            slot = Math.Clamp(slot, 0, pageCount);
+            indicatorTop = Math.Max(0, indicatorTop);
+            return true;
+        }
+
+        private void ShowThumbnailDropIndicator(double top)
+        {
+            if (ThumbnailDropIndicator == null)
+                return;
+
+            ThumbnailDropIndicator.Margin = new Thickness(0, top, 0, 0);
+            ThumbnailDropIndicator.Visibility = Visibility.Visible;
+        }
+
+        private void ClearThumbnailDropIndicator()
+        {
+            _thumbnailDropSlot = -1;
+            if (ThumbnailDropIndicator == null)
+                return;
+
+            ThumbnailDropIndicator.Visibility = Visibility.Collapsed;
+            ThumbnailDropIndicator.Margin = new Thickness(0);
+        }
+
+        private void ResetThumbnailDragState()
+        {
+            _thumbnailDragPayload = null;
+        }
+
+        /// <summary>
+        /// WPF <c>ThumbnailListBox_DragOver</c> parity (also handles
+        /// DragEnter): a validated payload resolves the live drop slot and
+        /// raises the indicator; anything else (e.g. an Explorer file over
+        /// the rail) declines and stays unhandled so the window-level import
+        /// path still sees it.
+        /// </summary>
+        private void ThumbnailListBox_DragOver(object sender, DragEventArgs e)
+        {
+            if (!TryGetThumbnailDragPayload(e.DataView, out _) ||
+                !TryResolveThumbnailDropSlot(e, SidebarPageItems.Count, out int slot, out double top))
+            {
+                ClearThumbnailDropIndicator();
+                e.AcceptedOperation = DataPackageOperation.None;
+                return;
+            }
+
+            _thumbnailDropSlot = slot;
+            ShowThumbnailDropIndicator(top);
+            e.AcceptedOperation = DataPackageOperation.Move;
+            e.Handled = true;
+        }
+
+        private void ThumbnailListBox_DragLeave(object sender, DragEventArgs e)
+        {
+            ClearThumbnailDropIndicator();
+        }
+
+        /// <summary>
+        /// WPF <c>ThumbnailListBox_Drop</c> parity — commit half lives in
+        /// <see cref="MovePageAsync"/>. Everything the args object owns is
+        /// harvested synchronously (the deferral keeps the drag session
+        /// alive across the awaits); the resolved slot is recomputed from
+        /// the drop position because the pointer can drift after the last
+        /// DragOver — the indicator slot is the fallback, exactly as WPF.
+        /// </summary>
+        private async void ThumbnailListBox_Drop(object sender, DragEventArgs e)
+        {
+            e.Handled = true;
+            var deferral = e.GetDeferral();
+            int indicatorSlot = _thumbnailDropSlot;
+            ClearThumbnailDropIndicator();
+            bool slotResolved = TryResolveThumbnailDropSlot(
+                e, SidebarPageItems.Count, out int resolvedSlot, out _);
+            int pageCount = SidebarPageItems.Count;
+            try
+            {
+                // The drop's payload comes from the package, not the armed
+                // field (WPF TryGetThumbnailDragPayload parity — a swept
+                // gesture cannot make a landed drop stale by accident).
+                var payload = e.DataView.Contains(ThumbnailDragFormatId)
+                    ? await e.DataView.GetDataAsync(ThumbnailDragFormatId) as ThumbnailDragPayload
+                    : null;
+                if (!IsCurrentThumbnailDragPayload(payload))
+                    return;
+                ResetThumbnailDragState();
+                await MovePageAsync(
+                    payload, slotResolved ? resolvedSlot : indicatorSlot, pageCount);
+            }
+            finally
+            {
+                deferral.Complete();
+            }
+        }
+
+        /// <summary>
+        /// WPF <c>ThumbnailListBox_Drop</c>'s document-operation half —
+        /// page move via <c>PdfService.ReorderPagesAsync</c> through the
+        /// shared structural-op pipeline: payload-bound lease → edit
+        /// admission → structural latch → dirty flush → byte/bookmark
+        /// snapshot → reorder → fresh-session reload → focus the moved page
+        /// → persisted bookmark remap → <see cref="DocumentSnapshotAction"/>
+        /// undo (all WPF-verbatim). WinUI adds the house invariants the
+        /// other page ops carry: the structural latch and the bytes+sidecar
+        /// rollback (<see cref="TryRollbackStructuralOperationAsync"/>) when
+        /// a failure lands after the file write. Failure surfaces as the WPF
+        /// <c>Editor.PageReorderFailed</c> toast.
+        /// </summary>
+        private async Task MovePageAsync(
+            ThumbnailDragPayload payload,
+            int slot,
+            int pageCount)
+        {
+            DocumentOperationLease currentLease = CaptureDocumentOperationLease(
+                payload.SessionId, payload.FilePath, payload.Source);
+            if (!ValidateDocumentOperationLease(currentLease, payload.Source))
+            {
+                currentLease.Dispose();
+                return;
+            }
+
+            if (!TryBeginDocumentEdit(out var editLease))
+            {
+                currentLease.Dispose();
+                return;
+            }
+
+            using (editLease)
+            {
+                using var structuralScope = BeginStructuralOperation();
+                if (structuralScope == null)
+                {
+                    currentLease.Dispose();
+                    return;
+                }
+
+                string filePath = _currentPdfPath;
+                byte[] before = null;
+                int focusBefore = 0;
+                List<PageBookmark> beforeBookmarks = null;
+                bool operationMayHaveChangedDocument = false;
+                try
+                {
+                    if (pageCount <= 0 || payload.SourceIndex < 0 ||
+                        payload.SourceIndex >= pageCount || slot < 0)
+                        return;
+                    int finalIndex = ThumbnailDropPlacement.ResolveFinalIndex(
+                        payload.SourceIndex, slot, pageCount);
+                    if (finalIndex < 0 || finalIndex == payload.SourceIndex)
+                        return;
+
+                    if (string.IsNullOrWhiteSpace(filePath) ||
+                        !ValidateDocumentOperationLease(currentLease, payload.Source))
+                        return;
+                    if (_documentSaveCoordinator.IsDirty &&
+                        (!await AutoSaveAsync(currentLease) ||
+                         !ValidateDocumentOperationLease(currentLease, payload.Source)))
+                        return;
+
+                    before = await File.ReadAllBytesAsync(filePath, currentLease.Token);
+                    if (!ValidateDocumentOperationLease(currentLease, payload.Source))
+                        return;
+                    focusBefore = GetCurrentPageIndex();
+                    beforeBookmarks = PageBookmarkService.Load(filePath).ToList();
+                    operationMayHaveChangedDocument = true;
+                    await _pdfService.ReorderPagesAsync(filePath, payload.SourceIndex, finalIndex);
+                    if (!ValidateDocumentOperationLease(currentLease, payload.Source))
+                        return;
+                    byte[] after = await File.ReadAllBytesAsync(filePath, currentLease.Token);
+                    if (!ValidateDocumentOperationLease(currentLease, payload.Source))
+                        return;
+
+                    currentLease = await ReloadDocumentForOperationAsync(filePath, currentLease);
+                    if (currentLease == null)
+                    {
+                        // Post-mutation reload failure — same restore path
+                        // as insert/delete/duplicate (re-leases when the
+                        // failed reload retired the incoming lease).
+                        var (rolledBack, stillOurs) = await TryRollbackStructuralOperationAsync(
+                            filePath, before, beforeBookmarks, focusBefore,
+                            currentLease, "MovePage");
+                        if (!stillOurs)
+                            return;
+                        currentLease = rolledBack;
+                        GetMainWindow()?.ShowToast(
+                            LocalizationService.Format(
+                                "Editor.PageReorderFailed",
+                                LocalizationService.Get("Editor.DocumentReloadFailed")),
+                            "", 3500);
+                        return;
+                    }
+
+                    int focused = Math.Max(0, Math.Min(finalIndex, _pageControls.Count - 1));
+                    if (!ValidateDocumentOperationLease(currentLease))
+                        return;
+                    JumpToPage(focused);
+                    var afterBookmarks = PageBookmarkService.ApplyPageMove(
+                        filePath, payload.SourceIndex, finalIndex).ToList();
+                    RefreshBookmarks(_loadSessionId, filePath, currentLease);
+                    if (!ValidateDocumentOperationLease(currentLease))
+                        return;
+                    PushUndoAction(new DocumentSnapshotAction(
+                        this, before, after, focusBefore, focused,
+                        beforeBookmarks, afterBookmarks));
+                }
+                catch (OperationCanceledException)
+                {
+                }
+                catch (Exception ex)
+                {
+                    if (operationMayHaveChangedDocument && before != null)
+                    {
+                        // Restore pre-op bytes + sidecar before surfacing —
+                        // a fault can land after the partial write.
+                        var (rolledBack, stillOurs) = await TryRollbackStructuralOperationAsync(
+                            filePath, before, beforeBookmarks, focusBefore,
+                            currentLease, "MovePage");
+                        if (!stillOurs)
+                            return;
+                        currentLease = rolledBack;
+                    }
+                    else if (!ValidateDocumentOperationLease(currentLease))
+                    {
+                        return;
+                    }
+                    GetMainWindow()?.ShowToast(
+                        LocalizationService.Format("Editor.PageReorderFailed", ex.Message),
+                        "", 3500);
+                }
+                finally
+                {
+                    currentLease?.Dispose();
+                    ClearThumbnailDropIndicator();
+                }
             }
         }
 
@@ -10921,6 +11444,24 @@ namespace Caelum.Pages
             // below intentionally run regardless of focus.
             bool textInputFocused = FocusManager.GetFocusedElement(XamlRoot) is TextBox;
 
+            // WPF Task 16 ordering (:6682-6694): F11 toggles immersive
+            // fullscreen (never while a text box is being edited); Escape
+            // leaves it ahead of every other Escape branch — the tool-reset
+            // branch only runs once immersive is off.
+            if (e.Key == VirtualKey.F11 && !textInputFocused)
+            {
+                ToggleImmersiveMode();
+                e.Handled = true;
+                return;
+            }
+
+            if (e.Key == VirtualKey.Escape && _isImmersiveMode)
+            {
+                ToggleImmersiveMode();
+                e.Handled = true;
+                return;
+            }
+
             // WPF: Escape restores an in-flight text resize before any other
             // branch (including while the embedded TextBox owns focus).
             if (e.Key == VirtualKey.Escape && _resizingTextContainer != null)
@@ -11401,6 +11942,11 @@ namespace Caelum.Pages
             // any captured sticky-marker drag.
             CancelTextBoxDrag(restoreBounds: true);
             CancelTextResize(restoreBounds: true);
+            // WPF CancelInteraction parity — an armed thumbnail drag and the
+            // drop indicator are transient gesture state too (the in-flight
+            // StartDragAsync finally clears the OS side).
+            ResetThumbnailDragState();
+            ClearThumbnailDropIndicator();
             foreach (var page in _pageControls)
                 page.CancelInteraction();
 
@@ -11446,9 +11992,16 @@ namespace Caelum.Pages
         {
             // WPF runs the transient sweep BEFORE the no-op early return —
             // repeated SetHostActive(false) calls still close anything that
-            // opened since the last gate.
+            // opened since the last gate. Immersive mode exits too: the
+            // WinUI FullScreen presenter is window-global, so an inactive
+            // editor must not pin the window chrome-less (WPF's immersive
+            // chrome was page-local and simply stayed drawn).
             if (!isActive)
+            {
+                if (_isImmersiveMode)
+                    ToggleImmersiveMode();
                 CloseTransientUi("inactive editor");
+            }
 
             // A releasing/failed editor stays non-interactive — the T9
             // close protocol owns its input state until a retry succeeds.

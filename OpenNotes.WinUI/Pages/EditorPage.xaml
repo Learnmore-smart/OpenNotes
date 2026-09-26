@@ -751,6 +751,9 @@
                                  ItemsSource="{x:Bind SidebarPageItems, Mode=OneWay}"
                                  ScrollViewer.VerticalScrollBarVisibility="Auto"
                                  ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                 AllowDrop="True"
+                                 CanDragItems="False"
+                                 CanReorderItems="False"
                                  SelectionChanged="ThumbnailListBox_SelectionChanged"
                                  ContextRequested="ThumbnailListBox_ContextRequested"
                                  AutomationProperties.AutomationId="Editor.Sidebar.Thumbnails"/>
