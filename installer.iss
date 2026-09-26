@@ -12,7 +12,7 @@
   #define MyAppPublisher "Learnmore_smart"
 #endif
 #ifndef MyAppURL
-  #define MyAppURL "https://github.com/Learnmore-smart/Windows-Notes"
+  #define MyAppURL "https://github.com/Learnmore-smart/OpenNotes"
 #endif
 #ifndef MyAppExeName
   #define MyAppExeName "OpenNotes.exe"
@@ -88,3 +88,52 @@ Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChang
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}"
+
+[Code]
+// T13-H hotfix: repair stale "OpenNotes" shortcuts left behind by 5.x
+// (WPF) installs. A 5.x link targets {app}\OpenNotes.exe, which the WinUI
+// payload no longer installs — the dead link shows a blank generic icon
+// and won't launch. The 5.x installer could also have written shortcuts
+// into the common (all-users) desktop/Start Menu while this install runs
+// per-user (PrivilegesRequired=lowest), and [Icons] only rewrites this
+// install's own {auto*} scope, so stale copies can survive in the other
+// scope's folders.
+//
+// Inno can't read a .lnk's target, so use the removed exe as the proxy:
+// once {app}\OpenNotes.exe is gone, every "OpenNotes.lnk" on disk either
+// predates the new exe layout (stale -> repair) or was just written by
+// [Icons] against {#MyAppExeName} (delete + recreate is an identical
+// no-op). With the WPF payload OpenNotes.exe exists, so nothing runs.
+procedure CurStepChanged(CurStep: TSetupStep);
+var
+  ShortcutDirs: array[0..3] of String;
+  AppDir, ExePath, LnkPath: String;
+  I: Integer;
+begin
+  if CurStep <> ssPostInstall then
+    Exit;
+  AppDir := ExpandConstant('{app}');
+  if FileExists(AppDir + '\OpenNotes.exe') then
+    Exit;
+  ShortcutDirs[0] := ExpandConstant('{userdesktop}');
+  ShortcutDirs[1] := ExpandConstant('{commondesktop}');
+  ShortcutDirs[2] := ExpandConstant('{userprograms}');
+  ShortcutDirs[3] := ExpandConstant('{commonprograms}');
+  ExePath := AppDir + '\{#MyAppExeName}';
+  for I := 0 to 3 do
+  begin
+    LnkPath := ShortcutDirs[I] + '\{#MyAppName}.lnk';
+    if FileExists(LnkPath) then
+    begin
+      DeleteFile(LnkPath);
+      // CreateShellLink raises on failure (e.g. a common-scope link under
+      // a per-user install); swallow it — worst case the stale link
+      // remains, no worse than before this fix.
+      try
+        CreateShellLink(LnkPath, '', ExePath, '', AppDir, ExePath, 0,
+          SW_SHOWNORMAL);
+      except
+      end;
+    end;
+  end;
+end;
