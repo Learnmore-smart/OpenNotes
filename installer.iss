@@ -106,7 +106,7 @@ Type: filesandordirs; Name: "{app}"
 // no-op). With the WPF payload OpenNotes.exe exists, so nothing runs.
 procedure CurStepChanged(CurStep: TSetupStep);
 var
-  ShortcutDirs: array[0..3] of String;
+  ShortcutDirs: array[0..4] of String;
   AppDir, ExePath, LnkPath: String;
   I: Integer;
 begin
@@ -119,20 +119,25 @@ begin
   ShortcutDirs[1] := ExpandConstant('{commondesktop}');
   ShortcutDirs[2] := ExpandConstant('{userprograms}');
   ShortcutDirs[3] := ExpandConstant('{commonprograms}');
+  // Pinned taskbar links live in the per-user Quick Launch store. The dir
+  // may not exist — FileExists on a .lnk inside it safely returns false.
+  ShortcutDirs[4] := ExpandConstant('{userappdata}') +
+    '\Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar';
   ExePath := AppDir + '\{#MyAppExeName}';
-  for I := 0 to 3 do
+  for I := 0 to 4 do
   begin
     LnkPath := ShortcutDirs[I] + '\{#MyAppName}.lnk';
     if FileExists(LnkPath) then
     begin
       DeleteFile(LnkPath);
       // CreateShellLink raises on failure (e.g. a common-scope link under
-      // a per-user install); swallow it — worst case the stale link
-      // remains, no worse than before this fix.
+      // a per-user install); log it and move on — worst case the stale
+      // link remains, no worse than before this fix.
       try
         CreateShellLink(LnkPath, '', ExePath, '', AppDir, ExePath, 0,
           SW_SHOWNORMAL);
       except
+        Log('OpenNotes setup: could not repair shortcut ' + LnkPath);
       end;
     end;
   end;
