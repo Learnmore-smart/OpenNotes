@@ -36,6 +36,7 @@ namespace Caelum.Models
         private string _filePath;
         private Frame _frame;
         private bool _isActive;
+        private bool _isPointerOver;
         private bool _isCloseButtonVisible = true;
 
         public string Id { get; } = Guid.NewGuid().ToString("N");
@@ -109,6 +110,27 @@ namespace Caelum.Models
                 OnPropertyChanged(nameof(TabForeground));
                 OnPropertyChanged(nameof(TitleFontWeight));
                 OnPropertyChanged(nameof(CloseButtonOpacity));
+                OnPropertyChanged(nameof(CloseButtonHitTestVisible));
+                OnPropertyChanged(nameof(AccentBarVisibility));
+            }
+        }
+
+        /// <summary>
+        /// Set by the pill template's PointerEntered/Exited — drives the
+        /// hover-reveal close chrome (inactive tabs show their close button
+        /// only while hovered; the active tab always shows it).
+        /// </summary>
+        public bool IsPointerOver
+        {
+            get => _isPointerOver;
+            set
+            {
+                if (_isPointerOver == value)
+                    return;
+                _isPointerOver = value;
+                OnPropertyChanged();
+                OnPropertyChanged(nameof(CloseButtonOpacity));
+                OnPropertyChanged(nameof(CloseButtonHitTestVisible));
             }
         }
 
@@ -125,6 +147,7 @@ namespace Caelum.Models
                 _isCloseButtonVisible = value;
                 OnPropertyChanged();
                 OnPropertyChanged(nameof(CloseButtonVisibility));
+                OnPropertyChanged(nameof(CloseButtonHitTestVisible));
             }
         }
 
@@ -137,8 +160,13 @@ namespace Caelum.Models
         /// <summary>Segoe Fluent/MDL2 stand-in for <see cref="Icon"/>.</summary>
         public string IconGlyph => IconGlyphFor(_icon);
 
+        /// <summary>
+        /// Fluent pill: the active tab gets the elevated surface brush so it
+        /// reads as a card floating on the Mica/acrylic chrome band;
+        /// inactive pills stay transparent over the band.
+        /// </summary>
         public Brush TabBackground =>
-            _isActive ? ResolveBrush("ThemeSurfaceAltBrush", "#F8F9FA") : TransparentBrush;
+            _isActive ? ResolveBrush("ThemeSurfaceBrush", "#FFFFFF") : TransparentBrush;
 
         public Brush TabBorderBrush =>
             _isActive ? ResolveBrush("ThemeBorderBrush", "#D1D5DB") : TransparentBrush;
@@ -150,7 +178,23 @@ namespace Caelum.Models
         public FontWeight TitleFontWeight =>
             _isActive ? FontWeights.Medium : FontWeights.Normal;
 
-        public double CloseButtonOpacity => _isActive ? 1 : 0.72;
+        /// <summary>Accent underline under the active pill (Fluent tab cue).</summary>
+        public Visibility AccentBarVisibility =>
+            _isActive ? Visibility.Visible : Visibility.Collapsed;
+
+        /// <summary>
+        /// Hover-reveal close chrome: always visible on the active tab,
+        /// shown on inactive tabs only while the pointer is over the pill.
+        /// </summary>
+        public double CloseButtonOpacity => _isActive || _isPointerOver ? 1 : 0;
+
+        /// <summary>
+        /// An opacity-0 element still hit-tests by default — without this
+        /// gate an invisible close button on an inactive, unhovered pill
+        /// could swallow a click aimed at selecting the tab.
+        /// </summary>
+        public bool CloseButtonHitTestVisible =>
+            _isCloseButtonVisible && (_isActive || _isPointerOver);
 
         public Visibility CloseButtonVisibility =>
             _isCloseButtonVisible ? Visibility.Visible : Visibility.Collapsed;
@@ -171,7 +215,9 @@ namespace Caelum.Models
             OnPropertyChanged(nameof(TabForeground));
             OnPropertyChanged(nameof(TitleFontWeight));
             OnPropertyChanged(nameof(CloseButtonOpacity));
+            OnPropertyChanged(nameof(CloseButtonHitTestVisible));
             OnPropertyChanged(nameof(CloseButtonVisibility));
+            OnPropertyChanged(nameof(AccentBarVisibility));
             OnPropertyChanged(nameof(CloseTooltip));
         }
 

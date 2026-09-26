@@ -385,6 +385,18 @@ namespace Caelum.Services
                     : CreateBrush(HighContrastPalette["ThemeSelectionBrush"]))
                 : CreateBrush(IsDark ? "#FFFF8A8A" : "#FFB42318");
 
+            // Fluent chrome-band tint (T12-A): the MainWindow chrome row
+            // resolves this brush only while a system backdrop (Mica or
+            // desktop acrylic) is installed, so it stays translucent enough
+            // for the material to read through (~70% opacity). Under high
+            // contrast or reduced transparency translucency is wrong — the
+            // band falls back to the fully opaque toolbar brush. Windows
+            // without a backdrop never resolve this key at all (opaque
+            // ThemeToolbarBrush is applied instead).
+            resources["ThemeChromeBrush"] = IsHighContrast || ReduceTransparency
+                ? resources["ThemeToolbarBrush"]
+                : CreateBrush(IsDark ? "#B317212C" : "#B3FFFFFF");
+
             // These tokens let custom controls opt into accessibility settings
             // without hard-coding animation or opacity values in every view.
             resources["ThemeAnimationDuration"] = new Duration(

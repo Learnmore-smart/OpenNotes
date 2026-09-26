@@ -1,5 +1,5 @@
 # OpenNotes.WinUI/Services/WinUiThemeService.cs
-> Last updated: 2026-09-23 (V6 Task 4 Step 3 — theme port) | Protection: STANDARD
+> Last updated: 2026-09-26 (T12-A — ThemeChromeBrush band tint) | Protection: STANDARD
 
 ## Purpose
 WinUI 3 counterpart of the WPF `Services/ThemeService.cs` — owns the runtime-swappable application chrome palette (`Theme*Brush` keys) for the shell, future editor/settings surfaces. The rendered PDF bitmap is never tinted.
@@ -7,6 +7,7 @@ WinUI 3 counterpart of the WPF `Services/ThemeService.cs` — owns the runtime-s
 ## What It Does
 - `Apply(theme, reduceMotion, reduceTransparency, workspaceBackdrop)` normalizes `Light`/`Dark`/`System`/`HighContrast`, sets `CurrentTheme`/`IsDark`/`IsHighContrast`/`CurrentWorkspaceBackdrop`/`ReduceMotion`/`ReduceTransparency`, then rewrites every palette brush inside `Application.Current.Resources` — same key names as WPF so ported XAML binds unchanged.
 - The three palettes are copied 1:1 from WPF `ThemeService` (`LightPalette`/`DarkPalette`/`HighContrastPalette`), plus the semantic aliases (`ThemeWindowBrush`, `ThemeWorkspaceBrush`, `ThemeSidebarBrush`, `ThemeToolbarBrush`, `ThemeControlBrush`, `ThemeTextBrush`, `ThemeSubtleTextBrush`, `ThemeDangerBrush`, `ThemeWindowOutlineBrush`), the six material tokens, `ThemeFocusBrush`, `ThemeAnimationDuration`, `ThemeSurfaceOpacity`, `ThemeShadowOpacity`, and the six `WorkspaceBackdrop` colors.
+- `ThemeChromeBrush` (T12-A): the MainWindow chrome band resolves this key only while a `SystemBackdrop` is installed — `Apply` writes a ~70%-opacity tint (`#B3FFFFFF` light / `#B317212C` dark) so Mica/acrylic reads through, and flips it to the opaque `ThemeToolbarBrush` object under `IsHighContrast || ReduceTransparency` (translucency is wrong there). Windows with no backdrop never resolve the key — `ApplyChromeSurface` applies `ThemeToolbarBrush` directly instead.
 - Fluent theme switching: WinUI has no runtime app-level `RequestedTheme`, so `RegisterWindow(window)` tracks windows and `Apply` sets `RequestedTheme` on each window's content root (`ElementTheme.Dark` for Dark AND for explicit HighContrast — `ElementTheme` cannot express HC; real OS high contrast is handled by Fluent itself).
 - XAML consumes keys via `{ThemeResource}`, which re-resolves both on theme changes AND on in-place resource replacement — the WinUI equivalent of WPF `DynamicResource`/`SetResourceReference`.
 - System inputs use `UISettings` (`GetColorValue(Background)` dark probe, `AnimationsEnabled`, `AdvancedEffectsEnabled`, `ColorValuesChanged`) and `AccessibilitySettings` (`HighContrast`, `HighContrastChanged`), with the WPF HKCU `AppsUseLightTheme` registry probe as dark fallback. OS-HC resource repainting maps to `UIColorType` (Background/Foreground/Accent/Complement) — the closest public surface to WPF `SystemColors`.

@@ -67,6 +67,10 @@ namespace Caelum
         private AppWindow _appWindow;
         private OverlappedPresenter _presenter;
         private double _appliedScale = 1.0;
+        // True while a system backdrop (Mica/acrylic) is installed — the
+        // chrome band then resolves the translucent ThemeChromeBrush;
+        // otherwise it must stay opaque ThemeToolbarBrush.
+        private bool _systemBackdropInstalled;
 
         // DIP intents — converted to physical px by the rasterization scale.
         private const int StartupWidthDips = 1280;
@@ -80,11 +84,15 @@ namespace Caelum
             Current = this;
 
             InitializeAppWindow();
+            // Subscribe BEFORE the first Apply so the chrome band + tab
+            // chrome resolve the persisted palette (a Dark startup would
+            // otherwise paint the default-Light chrome tint until the next
+            // theme change).
+            WinUiThemeService.ThemeApplied += WinUiThemeService_ThemeApplied;
             ApplyStartupSettings();
             ApplyLocalization();
 
             WinUiThemeService.RegisterWindow(this);
-            WinUiThemeService.ThemeApplied += WinUiThemeService_ThemeApplied;
             LocalizationService.LanguageChanged += LocalizationService_LanguageChanged;
             this.Closed += MainWindow_Closed;
             // WPF MainWindow_Deactivated parity: sweep transient UI + cancel
@@ -127,10 +135,17 @@ namespace Caelum
                 _appWindow.Closing += AppWindow_Closing;
             }
 
-            // Full client area; the XAML grid below draws the 40px title row
+            // Full client area; the XAML grid below draws the chrome band
             // and AppTitleBar becomes the real caption/drag rect.
             ExtendsContentIntoTitleBar = true;
             SetTitleBar(AppTitleBar);
+
+            // Fluent depth (T12-A): the system backdrop paints the window
+            // canvas behind transparent pixels. Only the chrome band stays
+            // (semi-)transparent so Mica/acrylic reads through there — the
+            // opaque content area keeps the material off the workspace.
+            TrySetSystemBackdrop();
+            ApplyChromeSurface();
         }
 
         private void RootGrid_Loaded(object sender, RoutedEventArgs e)
@@ -233,6 +248,63 @@ namespace Caelum
             presenter?.SetBorderAndTitleBar(hasBorder: true, hasTitleBar: false);
         }
 
+        /// <summary>
+        /// Installs the system backdrop for the window canvas: Mica on
+        /// Windows 11 22H2+ (<see cref="MicaBackdrop.IsSupported"/>), desktop
+        /// acrylic as the graceful fallback, and no backdrop at all on
+        /// older/compositor-failed hosts — the app then simply paints the
+        /// opaque themed chrome band (<see cref="ApplyChromeSurface"/>), so
+        /// the window stays fully functional with zero translucency.
+        /// </summary>
+        private void TrySetSystemBackdrop()
+        {
+            try
+            {
+                // Support probing lives on the controllers; the XAML
+                // *Backdrop classes themselves are capability-neutral.
+                if (Microsoft.UI.Composition.SystemBackdrops.MicaController.IsSupported())
+                {
+                    this.SystemBackdrop = new MicaBackdrop();
+                }
+                else if (Microsoft.UI.Composition.SystemBackdrops.DesktopAcrylicController.IsSupported())
+                {
+                    this.SystemBackdrop = new DesktopAcrylicBackdrop();
+                }
+                else
+                {
+                    this.SystemBackdrop = null;
+                }
+                _systemBackdropInstalled = this.SystemBackdrop != null;
+            }
+            catch (Exception ex)
+            {
+                // A compositor failure must never take the window down —
+                // fall back to plain opaque themed chrome.
+                Debug.WriteLine($"[MainWindow] System backdrop unavailable: {ex}");
+                this.SystemBackdrop = null;
+                _systemBackdropInstalled = false;
+            }
+        }
+
+        /// <summary>
+        /// Resolves the chrome band surface. With a system backdrop the band
+        /// uses the semi-transparent <c>ThemeChromeBrush</c> tint (the
+        /// material shows through; the service itself flips that key opaque
+        /// under high contrast/reduce-transparency). Without a backdrop the
+        /// band must be opaque — translucent pixels would composite as
+        /// black — so it falls back to <c>ThemeToolbarBrush</c>. Re-resolved
+        /// on every <c>ThemeApplied</c> because the service replaces the
+        /// brush objects in place.
+        /// </summary>
+        private void ApplyChromeSurface()
+        {
+            if (ChromeBand == null)
+                return;
+            ChromeBand.Background = ResolveThemeBrush(
+                _systemBackdropInstalled ? "ThemeChromeBrush" : "ThemeToolbarBrush",
+                "#FFFFFF");
+        }
+
         private void AppWindow_Changed(AppWindow sender, AppWindowChangedEventArgs args)
         {
             if (args.DidPresenterChange)
@@ -270,6 +342,13 @@ namespace Caelum
 
         private void MainWindow_Activated(object sender, Microsoft.UI.Xaml.WindowActivatedEventArgs args)
         {
+            // Fluent chrome cue: caption buttons dim while the window is
+            // inactive (gated fade, same convention as the tab hover tint).
+            if (CaptionButtonsPanel != null)
+            {
+                AnimateChromeOpacity(CaptionButtonsPanel,
+                    args.WindowActivationState == WindowActivationState.Deactivated ? 0.55 : 1.0);
+            }
             if (args.WindowActivationState != WindowActivationState.Deactivated)
                 return;
             // Sweep every tab's editor (hidden tabs are already input-gated,
@@ -561,6 +640,14 @@ namespace Caelum
 
         private void WinUiThemeService_ThemeApplied(object sender, EventArgs e)
         {
+            // The service replaced the brush objects in place — re-resolve
+            // the chrome band tint/opaque surface. (The system backdrop
+            // itself derives its light/dark configuration from the root
+            // element's RequestedTheme via
+            // SystemBackdrop.GetDefaultSystemBackdropConfiguration, so the
+            // ApplyRequestedThemeTo flip already keeps the material on the
+            // app theme; the ThemeChromeBrush tint adds the brand cohesion.)
+            ApplyChromeSurface();
             // Tab chrome binds to brush values computed by AppTab; re-resolve
             // them so a palette swap cannot leave stale brushes painted.
             foreach (var tab in _tabs)
@@ -1019,8 +1106,17 @@ namespace Caelum
 
         private void TabItem_PointerPressed(object sender, PointerRoutedEventArgs e)
         {
-            // Middle-click to close (WPF border.MouseDown parity).
             var point = e.GetCurrentPoint(sender as UIElement);
+            // Fluent press feedback: subtle 0.97 pill scale on any primary
+            // press (does not consume the gesture — ListViewItem drag-
+            // reorder still owns the move path).
+            if (sender is Border pressedPill &&
+                (point.Properties.IsLeftButtonPressed || point.Properties.IsMiddleButtonPressed))
+            {
+                AnimatePillScale(pressedPill, 0.97);
+            }
+
+            // Middle-click to close (WPF border.MouseDown parity).
             if (!point.Properties.IsMiddleButtonPressed || _tabs.Count <= 1)
                 return;
             if ((sender as FrameworkElement)?.DataContext is not AppTab tab)
@@ -1030,25 +1126,100 @@ namespace Caelum
             CloseTab(tab);
         }
 
+        private void TabItem_PointerReleased(object sender, PointerRoutedEventArgs e)
+            => AnimatePillScale(sender as Border, 1.0);
+
+        private void TabItem_PointerCaptureLost(object sender, PointerRoutedEventArgs e)
+            => AnimatePillScale(sender as Border, 1.0);
+
         private void TabItem_PointerEntered(object sender, PointerRoutedEventArgs e)
         {
-            // WPF hover: inactive tabs get the control-hover brush.
-            if (sender is not Border border ||
-                border.DataContext is not AppTab tab ||
-                ReferenceEquals(tab, _activeTab))
+            // Fluent hover: inactive pills fade in their StateLayer tint and
+            // reveal the close button; the ACTIVE pill keeps its surface.
+            if (sender is not Border border || border.DataContext is not AppTab tab)
                 return;
 
-            border.Background = ResolveThemeBrush("ThemeControlHoverBrush", "#EEF0F2");
+            tab.IsPointerOver = true;
+            if (!ReferenceEquals(tab, _activeTab))
+                AnimateChromeOpacity(border.FindName("TabHoverTint") as UIElement, 1.0);
         }
 
         private void TabItem_PointerExited(object sender, PointerRoutedEventArgs e)
         {
-            // ClearValue would null the pill (x:Bind has no BindingExpression
-            // to restore) and strip the ACTIVE tab's surface brush after one
-            // hover. Re-apply the computed brush — for the active tab that is
-            // ThemeSurfaceAltBrush, for inactive ones the inactive brush.
             if (sender is Border border && border.DataContext is AppTab tab)
+            {
+                tab.IsPointerOver = false;
+                AnimateChromeOpacity(border.FindName("TabHoverTint") as UIElement, 0.0);
+                AnimatePillScale(border, 1.0);
+                // ClearValue would null the pill (x:Bind has no
+                // BindingExpression to restore) and strip the ACTIVE tab's
+                // surface brush. Re-apply the computed brush — for the
+                // active tab that is ThemeSurfaceBrush, for inactive ones
+                // the inactive brush.
                 border.SetValue(Border.BackgroundProperty, tab.TabBackground);
+            }
+        }
+
+        /// <summary>
+        /// Opacity fade gated by <see cref="WinUiThemeService.ShouldAnimate"/>
+        /// + the <c>ThemeAnimationDuration</c> resource — the XAML-side
+        /// VisualTransitions stay at fixed ≤200 ms durations (XAML cannot
+        /// bind Duration to a resource), so the code-driven fades are the
+        /// ones that fully honor Reduce Motion by snapping instantly.
+        /// </summary>
+        private static void AnimateChromeOpacity(UIElement target, double to)
+        {
+            if (target == null)
+                return;
+            var duration = WinUiThemeService.GetAnimationDuration(TimeSpan.FromMilliseconds(160));
+            if (!WinUiThemeService.ShouldAnimate || duration <= TimeSpan.Zero)
+            {
+                target.Opacity = to;
+                return;
+            }
+            var animation = new DoubleAnimation
+            {
+                To = to,
+                Duration = duration,
+                EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
+            };
+            Storyboard.SetTarget(animation, target);
+            Storyboard.SetTargetProperty(animation, "Opacity");
+            var storyboard = new Storyboard();
+            storyboard.Children.Add(animation);
+            storyboard.Begin();
+        }
+
+        /// <summary>
+        /// Pill press-scale (~0.97) / restore on the template's
+        /// <see cref="ScaleTransform"/> — same Reduce-Motion gating as
+        /// <see cref="AnimateChromeOpacity"/>.
+        /// </summary>
+        private static void AnimatePillScale(Border pill, double to)
+        {
+            if (pill?.RenderTransform is not ScaleTransform scale)
+                return;
+            var duration = WinUiThemeService.GetAnimationDuration(TimeSpan.FromMilliseconds(90));
+            if (!WinUiThemeService.ShouldAnimate || duration <= TimeSpan.Zero)
+            {
+                scale.ScaleX = to;
+                scale.ScaleY = to;
+                return;
+            }
+            var storyboard = new Storyboard();
+            foreach (var property in new[] { "ScaleX", "ScaleY" })
+            {
+                var animation = new DoubleAnimation
+                {
+                    To = to,
+                    Duration = duration,
+                    EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
+                };
+                Storyboard.SetTarget(animation, scale);
+                Storyboard.SetTargetProperty(animation, property);
+                storyboard.Children.Add(animation);
+            }
+            storyboard.Begin();
         }
 
         private void TabCloseButton_PointerPressed(object sender, PointerRoutedEventArgs e)

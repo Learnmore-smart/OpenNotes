@@ -1,5 +1,5 @@
 # OpenNotes.WinUI/App.xaml
-> Last updated: 2026-09-23 (V6 Task 4 — theme token port; dead ThemeDictionaries removed) | Protection: STANDARD
+> Last updated: 2026-09-26 (T12-A — Fluent chrome tokens) | Protection: STANDARD
 
 ## Purpose
 WinUI 3 `Microsoft.UI.Xaml.Application` markup — merges `XamlControlsResources` for Fluent control themes and carries the ported WPF chrome palette.
@@ -7,6 +7,7 @@ WinUI 3 `Microsoft.UI.Xaml.Application` markup — merges `XamlControlsResources
 ## What It Contains
 - `AppGlass*` overlay brushes at root level (theme-independent — WPF defines them identically and never switches them).
 - All `Theme*Brush` keys at root level with **ThemeService LightPalette** values (pure-white #FFFFFF window/surface — NOT the #F3F4F6/#E5E7EB pre-theme placeholder the WPF App.xaml root carries; at runtime WPF overwrites those placeholders with the same LightPalette values used here), plus semantic aliases + `ThemeDangerBrush`, `ThemeAnimationDuration` (`Duration`), `ThemeSurfaceOpacity`/`ThemeShadowOpacity` (`x:Double`). `WinUiThemeService.Apply` replaces these in place, exactly like the WPF `ThemeService` does — that in-place rewrite is the ONLY palette-switch mechanism.
+- **T12-A Fluent chrome tokens:** `ThemeChromeBrush` (semi-transparent `#B3FFFFFF` chrome-band tint — resolved by `MainWindow.ApplyChromeSurface` ONLY while a `SystemBackdrop` is installed; `Apply` rewrites it per palette and flips it to the opaque toolbar brush under high contrast / ReduceTransparency) and the static `ThemeRadiusControl` (8) / `ThemeRadiusCard` (10) / `ThemeRadiusPill` (12) `CornerRadius` geometry set shared by chrome + control styles.
 
 ## Important Notes / NEVER Change
 - **NO `ResourceDictionary.ThemeDictionaries` for these keys, deliberately.** Root-level keys always win `{ThemeResource}` lookup (Current → Merged → Theme), so dictionaries holding the same keys were unreachable dead code — a `RequestedTheme` flip could never resolve them. Do not re-add theme dictionaries for `Theme*` keys; `WinUiThemeService.Apply` writing root resources is the sole switch path (Fluent control defaults still theme-switch via `XamlControlsResources`'s own dictionaries — those stay).

@@ -1,5 +1,5 @@
 # OpenNotes.WinUI/Models/AppTab.cs
-> Last updated: 2026-09-23 (V6 Task 4 Step 4 — tab model) | Protection: STANDARD
+> Last updated: 2026-09-26 (T12-A — Fluent pill chrome: hover-reveal close + accent bar) | Protection: STANDARD
 
 ## Purpose
 One tab in the WinUI shell — the counterpart of the WPF `Models/AppTab.cs`. Owns its live `Microsoft.UI.Xaml.Controls.Frame` (the navigation journal host), `Title`, `Icon` (Lucide name), `FilePath`, `IsHome`, `IsActive`.
@@ -8,7 +8,8 @@ One tab in the WinUI shell — the counterpart of the WPF `Models/AppTab.cs`. Ow
 - **Lives in OpenNotes.WinUI, not Core.** The plan's "AppTab moves to Core minus Frame" was dropped: a Frame-free AppTab carries almost nothing (the Frame IS the payload) and would force a second synced type. Documented in the type's XML doc.
 - `Id` is stable for the tab's lifetime (drag-payload fallback identity, same contract as WPF).
 - `IsHome` derives from `FilePath`, never from frame content — the `FilePath` setter raises `PropertyChanged` for BOTH itself and `IsHome` (derived property must notify or bindings go stale).
-- **Computed chrome properties** (`TabBackground`, `TabBorderBrush`, `TabForeground`, `TitleFontWeight`, `CloseButtonOpacity`, `CloseButtonVisibility`, `DisplayTitle`, `IconGlyph`, `CloseTooltip`) resolve theme brushes at get-time; the tab template binds them so active/inactive visuals stay declarative (replaces WPF's code-built tab chrome + `ApplyTabChrome`). `RefreshVisualState()` re-raises them after each palette swap (driven by `WinUiThemeService.ThemeApplied`).
+- **Computed chrome properties** (`TabBackground`, `TabBorderBrush`, `TabForeground`, `TitleFontWeight`, `CloseButtonOpacity`, `CloseButtonHitTestVisible`, `CloseButtonVisibility`, `AccentBarVisibility`, `DisplayTitle`, `IconGlyph`, `CloseTooltip`) resolve theme brushes at get-time; the tab template binds them so active/inactive visuals stay declarative (replaces WPF's code-built tab chrome + `ApplyTabChrome`). `RefreshVisualState()` re-raises them after each palette swap (driven by `WinUiThemeService.ThemeApplied`).
+- T12-A Fluent pill: `TabBackground` = `ThemeSurfaceBrush` when active (elevated card over the Mica band), transparent inactive; `AccentBarVisibility` = accent underline on the active pill only; `IsPointerOver` (set by the template's PointerEntered/Exited) drives `CloseButtonOpacity` 0→1 on inactive pills (active pill always shows close). `CloseButtonHitTestVisible` = `_isCloseButtonVisible && (_isActive || _isPointerOver)` — REQUIRED because an Opacity-0 element still hit-tests; without it the invisible close button would swallow a click meant to select the tab.
 - `IconGlyph` maps the Lucide name to a Segoe Fluent/MDL2 glyph — interim until the icon port lands (`Home`→E80F, `FileText`/`File`→E8A5).
 - `IsCloseButtonVisible` hides the close button while only one tab exists (WPF parity).
 - `DisplayTitle` truncates >20 chars to 17+"..." (WPF parity); template also trims at 132 DIP.

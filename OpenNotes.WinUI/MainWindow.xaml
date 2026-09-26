@@ -6,45 +6,69 @@
     Title="OpenNotes">
 
     <!--
-        V6 chrome: ExtendsContentIntoTitleBar + SetTitleBar(AppTitleBar) replaces
-        the WPF WindowChrome(CaptionHeight=40). The AppTitleBar grid is the drag
-        surface (double-click maximize and system menu come free with the real
-        caption rect); interactive controls placed over it get input through the
-        framework's automatic passthrough regions. Caption buttons are custom
-        buttons driven by AppWindow/OverlappedPresenter, mirroring the WPF
-        WindowStyle=None custom chrome. ExtendsContentIntoTitleBar alone leaves
-        the SYSTEM caption buttons rendered topmost over the right edge -
-        code-behind ApplyCustomChrome() calls
+        V6 chrome (T12-A Fluent pass): ExtendsContentIntoTitleBar +
+        SetTitleBar(AppTitleBar) + code-behind
         OverlappedPresenter.SetBorderAndTitleBar(hasBorder: true,
-        hasTitleBar: false) so these XAML buttons are the only caption UI.
+        hasTitleBar: false) — the XAML caption buttons are the only caption
+        UI (system buttons dropped, re-applied on DidPresenterChange).
+
+        The window's SystemBackdrop (Mica → desktop-acrylic fallback, set
+        in code) is the ONLY thing painted behind transparent pixels:
+        RootGrid stays transparent, ChromeBand resolves a semi-transparent
+        theme tint, and the content area is opaque ThemeWindowBrush so the
+        material shows ONLY in the chrome band — never over the document
+        workspace.
+
+        One unified chrome row (Windows Terminal/Files style): brand + nav
+        cluster on the left, the tab strip + NewTabButton filling the
+        middle, MoreButton + caption buttons on the right. AppTitleBar is
+        the SetTitleBar drag surface spanning the row; interactive children
+        are automatically carved out of the caption rect by the
+        framework's passthrough handling, so every control stays clickable
+        while the empty band space drags the window (double-click
+        maximize + system menu come free with the real caption rect).
+        HomeToolbarPanel keeps its own chrome-band row under the chrome
+        row, visible only while the active tab hosts HomePage.
     -->
 
-    <Grid x:Name="RootGrid" Background="{ThemeResource ThemeWindowBrush}" PreviewKeyDown="RootGrid_PreviewKeyDown"
+    <Grid x:Name="RootGrid" Background="Transparent" PreviewKeyDown="RootGrid_PreviewKeyDown"
           AllowDrop="True" DragOver="Window_DragOver" Drop="Window_Drop">
         <Grid.Resources>
-            <!-- 28px pill toolbar button (WPF NavButtonStyle). -->
+            <!-- 32x32 Fluent tool button (WPF NavButtonStyle). Hover/press
+                 paint a StateLayer whose Opacity is interpolated by the
+                 generated VisualTransitions — brush objects themselves
+                 can't animate, and mutating a shared theme brush would
+                 tint every consumer. -->
             <Style x:Key="NavButtonStyle" TargetType="Button">
                 <Setter Property="Background" Value="Transparent"/>
                 <Setter Property="BorderThickness" Value="0"/>
                 <Setter Property="Width" Value="32"/>
-                <Setter Property="Height" Value="28"/>
+                <Setter Property="Height" Value="32"/>
                 <Setter Property="Padding" Value="0"/>
                 <Setter Property="Foreground" Value="{ThemeResource ThemeSubtleForegroundBrush}"/>
                 <Setter Property="Template">
                     <Setter.Value>
                         <ControlTemplate TargetType="Button">
-                            <Border x:Name="Root" Background="{TemplateBinding Background}" CornerRadius="16" Padding="{TemplateBinding Padding}">
+                            <Border x:Name="Root" Background="{TemplateBinding Background}" CornerRadius="{ThemeResource ThemeRadiusControl}" Padding="{TemplateBinding Padding}">
                                 <VisualStateManager.VisualStateGroups>
                                     <VisualStateGroup x:Name="CommonStates">
+                                        <VisualStateGroup.Transitions>
+                                            <VisualTransition To="PointerOver" GeneratedDuration="0:0:0.15"/>
+                                            <VisualTransition To="Normal" GeneratedDuration="0:0:0.15"/>
+                                            <VisualTransition To="Pressed" GeneratedDuration="0:0:0.08"/>
+                                            <VisualTransition To="Disabled" GeneratedDuration="0:0:0.15"/>
+                                        </VisualStateGroup.Transitions>
                                         <VisualState x:Name="Normal"/>
                                         <VisualState x:Name="PointerOver">
                                             <VisualState.Setters>
-                                                <Setter Target="Root.Background" Value="{ThemeResource ThemeControlHoverBrush}"/>
+                                                <Setter Target="StateLayer.Background" Value="{ThemeResource ThemeControlHoverBrush}"/>
+                                                <Setter Target="StateLayer.Opacity" Value="1"/>
                                             </VisualState.Setters>
                                         </VisualState>
                                         <VisualState x:Name="Pressed">
                                             <VisualState.Setters>
-                                                <Setter Target="Root.Background" Value="{ThemeResource ThemeControlPressedBrush}"/>
+                                                <Setter Target="StateLayer.Background" Value="{ThemeResource ThemeControlPressedBrush}"/>
+                                                <Setter Target="StateLayer.Opacity" Value="1"/>
                                             </VisualState.Setters>
                                         </VisualState>
                                         <VisualState x:Name="Disabled">
@@ -54,19 +78,68 @@
                                         </VisualState>
                                     </VisualStateGroup>
                                 </VisualStateManager.VisualStateGroups>
-                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                <Grid>
+                                    <Border x:Name="StateLayer" CornerRadius="{ThemeResource ThemeRadiusControl}" Opacity="0"/>
+                                    <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                </Grid>
                             </Border>
                         </ControlTemplate>
                     </Setter.Value>
                 </Setter>
             </Style>
 
-            <!-- 46x40 caption button (WPF TitleBarButtonStyle). -->
+            <!-- Compact tab-close button (20px glyph in a 24px hit area). -->
+            <Style x:Key="TabCloseButtonStyle" TargetType="Button">
+                <Setter Property="Background" Value="Transparent"/>
+                <Setter Property="BorderThickness" Value="0"/>
+                <Setter Property="Padding" Value="0"/>
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="Button">
+                            <Border x:Name="Root" Background="{TemplateBinding Background}" CornerRadius="4">
+                                <VisualStateManager.VisualStateGroups>
+                                    <VisualStateGroup x:Name="CommonStates">
+                                        <VisualStateGroup.Transitions>
+                                            <VisualTransition To="PointerOver" GeneratedDuration="0:0:0.1"/>
+                                            <VisualTransition To="Normal" GeneratedDuration="0:0:0.1"/>
+                                            <VisualTransition To="Pressed" GeneratedDuration="0:0:0.06"/>
+                                        </VisualStateGroup.Transitions>
+                                        <VisualState x:Name="Normal"/>
+                                        <VisualState x:Name="PointerOver">
+                                            <VisualState.Setters>
+                                                <Setter Target="StateLayer.Background" Value="{ThemeResource ThemeControlPressedBrush}"/>
+                                                <Setter Target="StateLayer.Opacity" Value="1"/>
+                                            </VisualState.Setters>
+                                        </VisualState>
+                                        <VisualState x:Name="Pressed">
+                                            <VisualState.Setters>
+                                                <Setter Target="StateLayer.Background" Value="{ThemeResource ThemeBorderBrush}"/>
+                                                <Setter Target="StateLayer.Opacity" Value="1"/>
+                                            </VisualState.Setters>
+                                        </VisualState>
+                                        <VisualState x:Name="Disabled">
+                                            <VisualState.Setters>
+                                                <Setter Target="Root.Opacity" Value="0.3"/>
+                                            </VisualState.Setters>
+                                        </VisualState>
+                                    </VisualStateGroup>
+                                </VisualStateManager.VisualStateGroups>
+                                <Grid>
+                                    <Border x:Name="StateLayer" CornerRadius="4" Opacity="0"/>
+                                    <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                </Grid>
+                            </Border>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+
+            <!-- 46-wide Fluent caption button; fills the 44px chrome row
+                 vertically (WPF TitleBarButtonStyle). -->
             <Style x:Key="TitleBarButtonStyle" TargetType="Button">
                 <Setter Property="Background" Value="Transparent"/>
                 <Setter Property="BorderThickness" Value="0"/>
                 <Setter Property="Width" Value="46"/>
-                <Setter Property="Height" Value="40"/>
                 <Setter Property="Padding" Value="0"/>
                 <Setter Property="Foreground" Value="{ThemeResource ThemeSubtleForegroundBrush}"/>
                 <Setter Property="VerticalAlignment" Value="Stretch"/>
@@ -76,15 +149,23 @@
                             <Border x:Name="Root" Background="{TemplateBinding Background}" Padding="{TemplateBinding Padding}">
                                 <VisualStateManager.VisualStateGroups>
                                     <VisualStateGroup x:Name="CommonStates">
+                                        <VisualStateGroup.Transitions>
+                                            <VisualTransition To="PointerOver" GeneratedDuration="0:0:0.12"/>
+                                            <VisualTransition To="Normal" GeneratedDuration="0:0:0.12"/>
+                                            <VisualTransition To="Pressed" GeneratedDuration="0:0:0.08"/>
+                                            <VisualTransition To="Disabled" GeneratedDuration="0:0:0.12"/>
+                                        </VisualStateGroup.Transitions>
                                         <VisualState x:Name="Normal"/>
                                         <VisualState x:Name="PointerOver">
                                             <VisualState.Setters>
-                                                <Setter Target="Root.Background" Value="{ThemeResource ThemeControlHoverBrush}"/>
+                                                <Setter Target="StateLayer.Background" Value="{ThemeResource ThemeControlHoverBrush}"/>
+                                                <Setter Target="StateLayer.Opacity" Value="1"/>
                                             </VisualState.Setters>
                                         </VisualState>
                                         <VisualState x:Name="Pressed">
                                             <VisualState.Setters>
-                                                <Setter Target="Root.Background" Value="{ThemeResource ThemeControlPressedBrush}"/>
+                                                <Setter Target="StateLayer.Background" Value="{ThemeResource ThemeControlPressedBrush}"/>
+                                                <Setter Target="StateLayer.Opacity" Value="1"/>
                                             </VisualState.Setters>
                                         </VisualState>
                                         <VisualState x:Name="Disabled">
@@ -94,15 +175,20 @@
                                         </VisualState>
                                     </VisualStateGroup>
                                 </VisualStateManager.VisualStateGroups>
-                                <ContentPresenter x:Name="Content" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                <Grid>
+                                    <Border x:Name="StateLayer" Opacity="0"/>
+                                    <ContentPresenter x:Name="Content" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                </Grid>
                             </Border>
                         </ControlTemplate>
                     </Setter.Value>
                 </Setter>
             </Style>
 
-            <!-- Red-hover close button (WPF CloseButtonStyle). ContentPresenter
-                 Foreground drives the glyph to white on hover/pressed. -->
+            <!-- Red-hover close button (WPF CloseButtonStyle). The
+                 ContentPresenter Foreground drives the glyph to white on
+                 hover/pressed; the top-right radius matches the rounded
+                 window corner. -->
             <Style x:Key="CloseButtonStyle" TargetType="Button" BasedOn="{StaticResource TitleBarButtonStyle}">
                 <Setter Property="Template">
                     <Setter.Value>
@@ -110,16 +196,23 @@
                             <Border x:Name="Root" Background="{TemplateBinding Background}" Padding="{TemplateBinding Padding}" CornerRadius="0,8,0,0">
                                 <VisualStateManager.VisualStateGroups>
                                     <VisualStateGroup x:Name="CommonStates">
+                                        <VisualStateGroup.Transitions>
+                                            <VisualTransition To="PointerOver" GeneratedDuration="0:0:0.12"/>
+                                            <VisualTransition To="Normal" GeneratedDuration="0:0:0.12"/>
+                                            <VisualTransition To="Pressed" GeneratedDuration="0:0:0.08"/>
+                                        </VisualStateGroup.Transitions>
                                         <VisualState x:Name="Normal"/>
                                         <VisualState x:Name="PointerOver">
                                             <VisualState.Setters>
-                                                <Setter Target="Root.Background" Value="#C42B1C"/>
+                                                <Setter Target="StateLayer.Background" Value="#C42B1C"/>
+                                                <Setter Target="StateLayer.Opacity" Value="1"/>
                                                 <Setter Target="Content.Foreground" Value="White"/>
                                             </VisualState.Setters>
                                         </VisualState>
                                         <VisualState x:Name="Pressed">
                                             <VisualState.Setters>
-                                                <Setter Target="Root.Background" Value="#B22A1B"/>
+                                                <Setter Target="StateLayer.Background" Value="#B22A1B"/>
+                                                <Setter Target="StateLayer.Opacity" Value="1"/>
                                                 <Setter Target="Content.Foreground" Value="White"/>
                                             </VisualState.Setters>
                                         </VisualState>
@@ -130,7 +223,10 @@
                                         </VisualState>
                                     </VisualStateGroup>
                                 </VisualStateManager.VisualStateGroups>
-                                <ContentPresenter x:Name="Content" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                <Grid>
+                                    <Border x:Name="StateLayer" CornerRadius="0,8,0,0" Opacity="0"/>
+                                    <ContentPresenter x:Name="Content" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                </Grid>
                             </Border>
                         </ControlTemplate>
                     </Setter.Value>
@@ -156,100 +252,214 @@
                 </Setter>
             </Style>
 
-            <!-- One tab pill: icon + title + close button. Chrome binds to the
+            <!-- One Fluent tab pill: icon + title + hover-revealed close
+                 button over a StateLayer tint; the active pill paints an
+                 elevated surface + accent underline. Chrome binds to the
                  AppTab's computed properties so active/inactive state stays
-                 declarative (WPF ApplyTabChrome equivalent). -->
+                 declarative (WPF ApplyTabChrome equivalent). Hover fade +
+                 press scale run from code-behind so they honor
+                 WinUiThemeService.ShouldAnimate/ThemeAnimationDuration. -->
             <DataTemplate x:Key="TabItemTemplate" x:DataType="models:AppTab">
-                <Border Height="32" MinWidth="72" CornerRadius="10" Margin="0,0,4,0"
-                        Padding="10,0,4,0" BorderThickness="1"
+                <Border Height="32" MinWidth="90" CornerRadius="{ThemeResource ThemeRadiusControl}" Margin="0,0,4,0"
+                        BorderThickness="1"
                         Background="{x:Bind TabBackground, Mode=OneWay}"
                         BorderBrush="{x:Bind TabBorderBrush, Mode=OneWay}"
                         AutomationProperties.AutomationId="AppTab"
                         AutomationProperties.Name="{x:Bind Title, Mode=OneWay}"
                         ToolTipService.ToolTip="{x:Bind Title, Mode=OneWay}"
+                        RenderTransformOrigin="0.5,0.5"
                         PointerPressed="TabItem_PointerPressed"
+                        PointerReleased="TabItem_PointerReleased"
+                        PointerCaptureLost="TabItem_PointerCaptureLost"
                         PointerEntered="TabItem_PointerEntered"
                         PointerExited="TabItem_PointerExited">
-                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                        <FontIcon Glyph="{x:Bind IconGlyph, Mode=OneWay}" FontSize="12"
-                                  Margin="0,0,6,0" VerticalAlignment="Center"
-                                  Foreground="{x:Bind TabForeground, Mode=OneWay}"/>
-                        <TextBlock Text="{x:Bind DisplayTitle, Mode=OneWay}" FontSize="13"
-                                   MaxWidth="132" TextTrimming="CharacterEllipsis"
-                                   VerticalAlignment="Center"
-                                   FontWeight="{x:Bind TitleFontWeight, Mode=OneWay}"
-                                   Foreground="{x:Bind TabForeground, Mode=OneWay}"/>
-                        <Button x:Name="TabCloseButton" Width="24" Height="24" Padding="0"
-                                Margin="2,0,-4,0"
-                                Background="Transparent" BorderThickness="0"
-                                VerticalAlignment="Center"
-                                Visibility="{x:Bind CloseButtonVisibility, Mode=OneWay}"
-                                Opacity="{x:Bind CloseButtonOpacity, Mode=OneWay}"
-                                AutomationProperties.AutomationId="TabCloseButton"
-                                AutomationProperties.Name="{x:Bind CloseTooltip, Mode=OneWay}"
-                                ToolTipService.ToolTip="{x:Bind CloseTooltip, Mode=OneWay}"
-                                PointerPressed="TabCloseButton_PointerPressed"
-                                Click="TabCloseButton_Click">
-                            <FontIcon Glyph="&#xE711;" FontSize="9"
+                    <Border.RenderTransform>
+                        <ScaleTransform/>
+                    </Border.RenderTransform>
+                    <Grid>
+                        <Border x:Name="TabHoverTint" Background="{ThemeResource ThemeControlHoverBrush}"
+                                CornerRadius="{ThemeResource ThemeRadiusControl}" Opacity="0"/>
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="10,0,6,0">
+                            <FontIcon Glyph="{x:Bind IconGlyph, Mode=OneWay}" FontSize="12"
+                                      Margin="0,0,6,0" VerticalAlignment="Center"
                                       Foreground="{x:Bind TabForeground, Mode=OneWay}"/>
-                        </Button>
-                    </StackPanel>
+                            <TextBlock Text="{x:Bind DisplayTitle, Mode=OneWay}" FontSize="13"
+                                       MaxWidth="132" TextTrimming="CharacterEllipsis"
+                                       VerticalAlignment="Center"
+                                       FontWeight="{x:Bind TitleFontWeight, Mode=OneWay}"
+                                       Foreground="{x:Bind TabForeground, Mode=OneWay}"/>
+                            <Button x:Name="TabCloseButton" Width="24" Height="24" Padding="0"
+                                    Style="{StaticResource TabCloseButtonStyle}"
+                                    VerticalAlignment="Center"
+                                    Visibility="{x:Bind CloseButtonVisibility, Mode=OneWay}"
+                                    Opacity="{x:Bind CloseButtonOpacity, Mode=OneWay}"
+                                    IsHitTestVisible="{x:Bind CloseButtonHitTestVisible, Mode=OneWay}"
+                                    AutomationProperties.AutomationId="TabCloseButton"
+                                    AutomationProperties.Name="{x:Bind CloseTooltip, Mode=OneWay}"
+                                    ToolTipService.ToolTip="{x:Bind CloseTooltip, Mode=OneWay}"
+                                    PointerPressed="TabCloseButton_PointerPressed"
+                                    Click="TabCloseButton_Click">
+                                <FontIcon Glyph="&#xE711;" FontSize="9"
+                                          Foreground="{x:Bind TabForeground, Mode=OneWay}"/>
+                            </Button>
+                        </StackPanel>
+                        <Border Background="{ThemeResource ThemeAccentBrush}" Height="2" CornerRadius="1"
+                                VerticalAlignment="Bottom" Margin="8,0,8,2"
+                                Visibility="{x:Bind AccentBarVisibility, Mode=OneWay}"/>
+                    </Grid>
                 </Border>
             </DataTemplate>
         </Grid.Resources>
         <Grid.RowDefinitions>
-            <RowDefinition Height="40"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
 
-        <!-- Custom title bar row (WPF TitleBarBorder). AppTitleBar is the
-             SetTitleBar drag surface; the buttons are overlay siblings so the
-             framework keeps them hit-testable over the caption rect. -->
-        <Grid x:Name="TitleBarGrid" Grid.Row="0" Background="{ThemeResource ThemeToolbarBrush}">
-            <!-- Drag surface (SetTitleBar target): brand visuals + nav cluster
-                 flow left-to-right exactly like the WPF title bar. Interactive
-                 children are automatically excluded from the caption rect by
-                 the framework's passthrough handling. -->
-            <Grid x:Name="AppTitleBar" AutomationProperties.AutomationId="AppTitleBar">
-                <Border x:Name="BrandMarginRail"
-                        Width="3"
-                        Margin="8,8,0,8"
-                        HorizontalAlignment="Left"
-                        Background="{ThemeResource ThemeMarginBrush}"
-                        CornerRadius="2"/>
-                <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,138,0">
-                    <TextBlock x:Name="ProductNameTextBlock" Text="OpenNotes" FontSize="13"
-                               Foreground="{ThemeResource ThemeForegroundBrush}"
-                               Margin="14,0,12,0" VerticalAlignment="Center" FontWeight="SemiBold"/>
-                    <Button x:Name="NavBackButton" Click="NavBack_Click" Style="{StaticResource NavButtonStyle}"
-                            IsEnabled="False" AutomationProperties.AutomationId="NavBackButton"
-                            AutomationProperties.Name="Back">
-                        <FontIcon Glyph="&#xE72B;" FontSize="12" Foreground="{ThemeResource ThemeSubtleForegroundBrush}"/>
-                    </Button>
-                    <Button x:Name="NavForwardButton" Click="NavForward_Click" Style="{StaticResource NavButtonStyle}"
-                            IsEnabled="False" Margin="2,0,0,0" AutomationProperties.AutomationId="NavForwardButton"
-                            AutomationProperties.Name="Forward">
-                        <FontIcon Glyph="&#xE72A;" FontSize="12" Foreground="{ThemeResource ThemeSubtleForegroundBrush}"/>
-                    </Button>
-                    <Button x:Name="NavHomeButton" Click="NavHome_Click" Style="{StaticResource NavButtonStyle}"
-                            Margin="2,0,0,0" AutomationProperties.AutomationId="NavHomeButton"
-                            AutomationProperties.Name="Home">
-                        <FontIcon Glyph="&#xE80F;" FontSize="13" Foreground="{ThemeResource ThemeSubtleForegroundBrush}"/>
-                    </Button>
-                </StackPanel>
-            </Grid>
+        <!-- Chrome band: the ONLY translucent region — the system backdrop
+             (Mica/acrylic) reads through it. Code-behind resolves the band
+             surface per Apply (ThemeChromeBrush when a backdrop exists,
+             opaque ThemeToolbarBrush otherwise). -->
+        <Border x:Name="ChromeBand" Grid.Row="0" Background="{ThemeResource ThemeToolbarBrush}"
+                BorderBrush="{ThemeResource ThemeBorderBrush}" BorderThickness="0,0,0,1">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
 
-            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                <!-- Home-toolbar cluster (WPF title-bar cluster port): search /
-                     select / sort, visible only while the active tab shows
-                     HomePage. MoreButton stays always visible. -->
-                <StackPanel x:Name="HomeToolbarPanel" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,8,0" Visibility="Collapsed"
-                        AutomationProperties.AutomationId="HomeToolbarPanel">
+                <!-- Unified chrome row (WPF TitleBarBorder + TabBar merged).
+                     AppTitleBar is the SetTitleBar drag surface spanning all
+                     three columns; interactive children keep input through
+                     the framework's automatic passthrough regions. -->
+                <Grid x:Name="AppTitleBar" Grid.Row="0" Height="44"
+                      AutomationProperties.AutomationId="AppTitleBar">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+
+                    <!-- Brand + nav cluster (left). -->
+                    <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center" Margin="10,0,0,0">
+                        <Border x:Name="BrandMarginRail"
+                                Width="3" Height="16"
+                                Margin="0,0,8,0"
+                                Background="{ThemeResource ThemeMarginBrush}"
+                                CornerRadius="2"/>
+                        <TextBlock x:Name="ProductNameTextBlock" Text="OpenNotes" FontSize="13"
+                                   Foreground="{ThemeResource ThemeForegroundBrush}"
+                                   Margin="0,0,10,0" VerticalAlignment="Center" FontWeight="SemiBold"/>
+                        <Button x:Name="NavBackButton" Click="NavBack_Click" Style="{StaticResource NavButtonStyle}"
+                                IsEnabled="False" AutomationProperties.AutomationId="NavBackButton"
+                                AutomationProperties.Name="Back">
+                            <FontIcon Glyph="&#xE72B;" FontSize="12" Foreground="{ThemeResource ThemeSubtleForegroundBrush}"/>
+                        </Button>
+                        <Button x:Name="NavForwardButton" Click="NavForward_Click" Style="{StaticResource NavButtonStyle}"
+                                IsEnabled="False" Margin="2,0,0,0" AutomationProperties.AutomationId="NavForwardButton"
+                                AutomationProperties.Name="Forward">
+                            <FontIcon Glyph="&#xE72A;" FontSize="12" Foreground="{ThemeResource ThemeSubtleForegroundBrush}"/>
+                        </Button>
+                        <Button x:Name="NavHomeButton" Click="NavHome_Click" Style="{StaticResource NavButtonStyle}"
+                                Margin="2,0,0,0" AutomationProperties.AutomationId="NavHomeButton"
+                                AutomationProperties.Name="Home">
+                            <FontIcon Glyph="&#xE80F;" FontSize="13" Foreground="{ThemeResource ThemeSubtleForegroundBrush}"/>
+                        </Button>
+                    </StackPanel>
+
+                    <!-- Tab strip filling the middle column. The ScrollViewer
+                         hugs the content (HorizontalAlignment=Left) so the
+                         remaining column space stays part of the drag
+                         region; once the pills overflow it scrolls
+                         horizontally. -->
+                    <Grid Grid.Column="1" Margin="8,0">
+                        <ScrollViewer VerticalAlignment="Stretch" HorizontalAlignment="Left"
+                                      HorizontalScrollBarVisibility="Hidden" VerticalScrollBarVisibility="Disabled"
+                                      HorizontalScrollMode="Auto" VerticalScrollMode="Disabled">
+                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                <ListView x:Name="TabStrip"
+                                          ItemsSource="{x:Bind _tabs, Mode=OneTime}"
+                                          SelectionMode="Single"
+                                          CanDragItems="True"
+                                          AllowDrop="True"
+                                          CanReorderItems="True"
+                                          IsItemClickEnabled="True"
+                                          VerticalAlignment="Center"
+                                          ItemTemplate="{StaticResource TabItemTemplate}"
+                                          ItemContainerStyle="{StaticResource TabListViewItemStyle}"
+                                          ScrollViewer.HorizontalScrollMode="Disabled"
+                                          ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                          ScrollViewer.VerticalScrollMode="Disabled"
+                                          ScrollViewer.VerticalScrollBarVisibility="Disabled"
+                                          SelectionChanged="TabStrip_SelectionChanged"
+                                          DragItemsStarting="TabStrip_DragItemsStarting"
+                                          DragItemsCompleted="TabStrip_DragItemsCompleted"
+                                          AutomationProperties.AutomationId="TabStrip">
+                                    <ListView.ItemsPanel>
+                                        <ItemsPanelTemplate>
+                                            <ItemsStackPanel Orientation="Horizontal"/>
+                                        </ItemsPanelTemplate>
+                                    </ListView.ItemsPanel>
+                                    <ListView.ItemContainerTransitions>
+                                        <TransitionCollection>
+                                            <AddDeleteThemeTransition/>
+                                            <RepositionThemeTransition/>
+                                            <ContentThemeTransition/>
+                                        </TransitionCollection>
+                                    </ListView.ItemContainerTransitions>
+                                </ListView>
+                                <Button x:Name="NewTabButton" Click="NewTab_Click" Style="{StaticResource NavButtonStyle}"
+                                        VerticalAlignment="Center" Width="32" Height="32" Margin="4,0,0,0"
+                                        AutomationProperties.AutomationId="NewTabButton" AutomationProperties.Name="New tab">
+                                    <FontIcon Glyph="&#xE710;" FontSize="14" Foreground="{ThemeResource ThemeSubtleForegroundBrush}"/>
+                                </Button>
+                            </StackPanel>
+                        </ScrollViewer>
+                    </Grid>
+
+                    <!-- Right cluster: More flyout then the caption buttons
+                         (the real caption UI — the system title bar is
+                         removed by ApplyCustomChrome). -->
+                    <StackPanel x:Name="CaptionButtonsPanel" Grid.Column="2" Orientation="Horizontal">
+                        <Button x:Name="MoreButton" Style="{StaticResource NavButtonStyle}" Margin="0,0,8,0"
+                                VerticalAlignment="Center"
+                                AutomationProperties.AutomationId="MoreButton" AutomationProperties.Name="More">
+                            <FontIcon Glyph="&#xE712;" FontSize="14" Foreground="{ThemeResource ThemeSubtleForegroundBrush}"/>
+                            <Button.Flyout>
+                                <MenuFlyout>
+                                    <MenuFlyoutItem x:Name="SettingsMenuItem" Click="Settings_Click"
+                                                    AutomationProperties.AutomationId="SettingsMenuItem"/>
+                                    <MenuFlyoutItem x:Name="CheckForUpdatesMenuItem" Click="CheckForUpdates_Click"
+                                                    AutomationProperties.AutomationId="CheckForUpdatesMenuItem"/>
+                                    <MenuFlyoutItem x:Name="AboutMenuItem" Click="About_Click"
+                                                    AutomationProperties.AutomationId="AboutMenuItem"/>
+                                </MenuFlyout>
+                            </Button.Flyout>
+                        </Button>
+                        <Button x:Name="MinimizeButton" Click="MinimizeButton_Click" Style="{StaticResource TitleBarButtonStyle}"
+                                AutomationProperties.AutomationId="MinimizeButton" AutomationProperties.Name="Minimize">
+                            <FontIcon Glyph="&#xE921;" FontSize="10"/>
+                        </Button>
+                        <Button x:Name="MaximizeButton" Click="MaximizeButton_Click" Style="{StaticResource TitleBarButtonStyle}"
+                                AutomationProperties.AutomationId="MaximizeButton" AutomationProperties.Name="Maximize">
+                            <FontIcon x:Name="MaximizeIcon" Glyph="&#xE922;" FontSize="10"/>
+                        </Button>
+                        <Button x:Name="CloseButton" Click="CloseButton_Click" Style="{StaticResource CloseButtonStyle}"
+                                AutomationProperties.AutomationId="CloseButton" AutomationProperties.Name="Close">
+                            <FontIcon Glyph="&#xE8BB;" FontSize="10"/>
+                        </Button>
+                    </StackPanel>
+                </Grid>
+
+                <!-- Home-toolbar row (WPF title-bar cluster port): search /
+                     select / sort, its own band under the chrome row and
+                     visible only while the active tab shows HomePage. -->
+                <StackPanel x:Name="HomeToolbarPanel" Grid.Row="1" Orientation="Horizontal" VerticalAlignment="Center"
+                            Margin="12,0,12,8" Visibility="Collapsed"
+                            AutomationProperties.AutomationId="HomeToolbarPanel">
                     <Border x:Name="SearchBoxBorder"
                             Background="{ThemeResource ThemePaperBrush}"
                             BorderBrush="{ThemeResource ThemeBorderBrush}"
-                            BorderThickness="1" CornerRadius="8" Margin="0,0,8,0"
+                            BorderThickness="1" CornerRadius="{ThemeResource ThemeRadiusControl}" Margin="0,0,8,0"
                             Height="28" VerticalAlignment="Center">
                         <Grid>
                             <Grid.ColumnDefinitions>
@@ -291,81 +501,17 @@
                         </Button.Flyout>
                     </Button>
                 </StackPanel>
-                <Button x:Name="MoreButton" Style="{StaticResource NavButtonStyle}" Margin="0,0,8,0"
-                        AutomationProperties.AutomationId="MoreButton" AutomationProperties.Name="More">
-                    <FontIcon Glyph="&#xE712;" FontSize="14" Foreground="{ThemeResource ThemeSubtleForegroundBrush}"/>
-                    <Button.Flyout>
-                        <MenuFlyout>
-                            <MenuFlyoutItem x:Name="SettingsMenuItem" Click="Settings_Click"
-                                            AutomationProperties.AutomationId="SettingsMenuItem"/>
-                            <MenuFlyoutItem x:Name="CheckForUpdatesMenuItem" Click="CheckForUpdates_Click"
-                                            AutomationProperties.AutomationId="CheckForUpdatesMenuItem"/>
-                            <MenuFlyoutItem x:Name="AboutMenuItem" Click="About_Click"
-                                            AutomationProperties.AutomationId="AboutMenuItem"/>
-                        </MenuFlyout>
-                    </Button.Flyout>
-                </Button>
-                <Button x:Name="MinimizeButton" Click="MinimizeButton_Click" Style="{StaticResource TitleBarButtonStyle}"
-                        AutomationProperties.AutomationId="MinimizeButton" AutomationProperties.Name="Minimize">
-                    <FontIcon Glyph="&#xE921;" FontSize="10"/>
-                </Button>
-                <Button x:Name="MaximizeButton" Click="MaximizeButton_Click" Style="{StaticResource TitleBarButtonStyle}"
-                        AutomationProperties.AutomationId="MaximizeButton" AutomationProperties.Name="Maximize">
-                    <FontIcon x:Name="MaximizeIcon" Glyph="&#xE922;" FontSize="10"/>
-                </Button>
-                <Button x:Name="CloseButton" Click="CloseButton_Click" Style="{StaticResource CloseButtonStyle}"
-                        AutomationProperties.AutomationId="CloseButton" AutomationProperties.Name="Close">
-                    <FontIcon Glyph="&#xE8BB;" FontSize="10"/>
-                </Button>
-            </StackPanel>
-        </Grid>
-
-        <!-- Tab strip (WPF TabBar): horizontal ListView gives in-place
-             drag-reorder; activation rides on single selection. -->
-        <Border Grid.Row="1" Background="{ThemeResource ThemePaperBrush}"
-                BorderBrush="{ThemeResource ThemeBorderBrush}" BorderThickness="0,0,0,1" Padding="8,4,8,4">
-            <ScrollViewer Height="32" HorizontalScrollBarVisibility="Hidden" VerticalScrollBarVisibility="Disabled"
-                          HorizontalScrollMode="Auto" VerticalScrollMode="Disabled">
-                <StackPanel Orientation="Horizontal">
-                    <ListView x:Name="TabStrip"
-                              ItemsSource="{x:Bind _tabs, Mode=OneTime}"
-                              SelectionMode="Single"
-                              CanDragItems="True"
-                              AllowDrop="True"
-                              CanReorderItems="True"
-                              IsItemClickEnabled="True"
-                              ItemTemplate="{StaticResource TabItemTemplate}"
-                              ItemContainerStyle="{StaticResource TabListViewItemStyle}"
-                              ScrollViewer.HorizontalScrollMode="Disabled"
-                              ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                              ScrollViewer.VerticalScrollMode="Disabled"
-                              ScrollViewer.VerticalScrollBarVisibility="Disabled"
-                              SelectionChanged="TabStrip_SelectionChanged"
-                              DragItemsStarting="TabStrip_DragItemsStarting"
-                              DragItemsCompleted="TabStrip_DragItemsCompleted"
-                              AutomationProperties.AutomationId="TabStrip">
-                        <ListView.ItemsPanel>
-                            <ItemsPanelTemplate>
-                                <ItemsStackPanel Orientation="Horizontal"/>
-                            </ItemsPanelTemplate>
-                        </ListView.ItemsPanel>
-                    </ListView>
-                    <Button x:Name="NewTabButton" Click="NewTab_Click" Style="{StaticResource NavButtonStyle}"
-                            VerticalAlignment="Center" Width="32" Height="32" Margin="6,0,0,0"
-                            AutomationProperties.AutomationId="NewTabButton" AutomationProperties.Name="New tab">
-                        <FontIcon Glyph="&#xE710;" FontSize="14" Foreground="{ThemeResource ThemeSubtleForegroundBrush}"/>
-                    </Button>
-                </StackPanel>
-            </ScrollViewer>
+            </Grid>
         </Border>
 
         <!-- Per-tab navigation hosts (WPF TabContentArea): one Frame per tab,
-             only the active one visible. -->
-        <Grid x:Name="TabContentArea" Grid.Row="2"/>
+             only the active one visible. The opaque themed background here
+             is what confines Mica/acrylic to the chrome band. -->
+        <Grid x:Name="TabContentArea" Grid.Row="1" Background="{ThemeResource ThemeWindowBrush}"/>
 
         <!-- Toast overlay (WPF ToastBorder port): dark pill + icon + message,
              fades in over the content area and auto-fades after ~2.2 s. -->
-        <Border x:Name="ToastBorder" Grid.Row="2"
+        <Border x:Name="ToastBorder" Grid.Row="1"
                 HorizontalAlignment="Center" VerticalAlignment="Bottom"
                 Margin="0,0,0,80" Padding="20,10" CornerRadius="10"
                 Visibility="Collapsed" Opacity="0" IsHitTestVisible="False"
