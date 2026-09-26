@@ -1,6 +1,7 @@
 using System;
 using System.Threading;
 using System.Threading.Tasks;
+using Caelum.Controls;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
@@ -42,12 +43,14 @@ namespace Caelum.Services
 
         public static async Task ShowInfoAsync(XamlRoot xamlRoot, string title, string content)
         {
-            await ShowDialogAsync(xamlRoot, title, content, null, LocalizationService.Get("Common.OK"));
+            await ShowDialogAsync(xamlRoot, title, content, null, LocalizationService.Get("Common.OK"),
+                dangerConfirm: false, iconKind: "Info", iconBrushKey: "ThemeAccentBrush");
         }
 
         public static async Task ShowErrorAsync(XamlRoot xamlRoot, string title, string content)
         {
-            await ShowDialogAsync(xamlRoot, title, content, null, LocalizationService.Get("Common.OK"));
+            await ShowDialogAsync(xamlRoot, title, content, null, LocalizationService.Get("Common.OK"),
+                dangerConfirm: false, iconKind: "AlertCircle", iconBrushKey: "ThemeDangerBrush");
         }
 
         public static async Task<bool?> ShowDialogAsync(
@@ -67,7 +70,8 @@ namespace Caelum.Services
             string cancelButtonText,
             string confirmButtonText)
         {
-            return await ShowDialogAsync(xamlRoot, title, content, cancelButtonText, confirmButtonText, dangerConfirm: true);
+            return await ShowDialogAsync(xamlRoot, title, content, cancelButtonText, confirmButtonText, dangerConfirm: true,
+                iconKind: "AlertTriangle", iconBrushKey: "ThemeDangerBrush");
         }
 
         private static async Task<bool?> ShowDialogAsync(
@@ -76,7 +80,9 @@ namespace Caelum.Services
             string content,
             string cancelButtonText,
             string okButtonText,
-            bool dangerConfirm)
+            bool dangerConfirm,
+            string iconKind = null,
+            string iconBrushKey = null)
         {
             if (xamlRoot == null)
                 return null;
@@ -85,12 +91,38 @@ namespace Caelum.Services
             {
                 Text = content ?? string.Empty,
                 TextWrapping = TextWrapping.Wrap,
-                FontSize = 14
+                FontSize = 14,
+                LineHeight = 20
             };
             if (Application.Current?.Resources?.TryGetValue("ThemeSubtleForegroundBrush", out var fg) == true &&
                 fg is Brush subtleBrush)
             {
                 contentText.Foreground = subtleBrush;
+            }
+
+            // T13-B severity glyph: a 22-DIP Lucide icon beside the body —
+            // accent Info / danger AlertCircle / danger AlertTriangle —
+            // so error + danger-confirm dialogs read differently from a
+            // plain info box at a glance.
+            UIElement body = contentText;
+            if (!string.IsNullOrEmpty(iconKind))
+            {
+                var icon = new LucideIcon
+                {
+                    Kind = iconKind,
+                    Width = 22,
+                    Height = 22,
+                    Stroke = ResolveDialogBrush(iconBrushKey, "#6B7280"),
+                    VerticalAlignment = VerticalAlignment.Top,
+                    Margin = new Thickness(0, 1, 0, 0)
+                };
+                var row = new Grid { ColumnSpacing = 12 };
+                row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                row.ColumnDefinitions.Add(new ColumnDefinition());
+                row.Children.Add(icon);
+                Grid.SetColumn(contentText, 1);
+                row.Children.Add(contentText);
+                body = row;
             }
 
             var dialog = new ContentDialog
@@ -99,7 +131,7 @@ namespace Caelum.Services
                 Title = title ?? string.Empty,
                 Content = new ScrollViewer
                 {
-                    Content = contentText,
+                    Content = body,
                     MaxHeight = 360,
                     VerticalScrollBarVisibility = ScrollBarVisibility.Auto
                 },
@@ -158,6 +190,20 @@ namespace Caelum.Services
             {
                 DialogGate.Release();
             }
+        }
+
+        /// <summary>
+        /// Resolves a theme brush for code-built dialog chrome; falls back
+        /// to a literal hex when the key is absent (mirrors the pages'
+        /// ResolveThemeBrush helper).
+        /// </summary>
+        private static Brush ResolveDialogBrush(string key, string fallbackHex)
+        {
+            if (!string.IsNullOrEmpty(key)
+                && Application.Current?.Resources?.TryGetValue(key, out var value) == true
+                && value is Brush brush)
+                return brush;
+            return WinUiThemeService.CreateBrush(fallbackHex);
         }
 
         /// <summary>

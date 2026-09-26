@@ -41,12 +41,16 @@ namespace Caelum.Controls
             [((char)0xE70F).ToString()] = "Pencil",
             [((char)0xE710).ToString()] = "Plus",
             [((char)0xE713).ToString()] = "Settings",
+            [((char)0xE721).ToString()] = "Search",
+            [((char)0xE72A).ToString()] = "ArrowRight",
+            [((char)0xE72B).ToString()] = "ArrowLeft",
             [((char)0xE73E).ToString()] = "Check",
             [((char)0xE749).ToString()] = "Printer",
             [((char)0xE74D).ToString()] = "Trash2",
             [((char)0xE74E).ToString()] = "Save",
             [((char)0xE762).ToString()] = "ListFilter",
             [((char)0xE783).ToString()] = "AlertCircle",
+            [((char)0xE790).ToString()] = "Palette",
             [((char)0xE7AD).ToString()] = "RotateCw",
             [((char)0xE7C3).ToString()] = "FileText",
             [((char)0xE80F).ToString()] = "Home",
@@ -55,6 +59,7 @@ namespace Caelum.Controls
             [((char)0xE8BB).ToString()] = "X",
             [((char)0xE8C6).ToString()] = "Scissors",
             [((char)0xE8C8).ToString()] = "Copy",
+            [((char)0xE8CB).ToString()] = "ArrowUpDown",
             [((char)0xE8DE).ToString()] = "Move",
             [((char)0xE8E5).ToString()] = "FileText",
             [((char)0xE946).ToString()] = "History",
@@ -172,6 +177,20 @@ namespace Caelum.Controls
                 ["RotateCw"] = "M20,4 V10 H14 M19,15 A8,8 0 1 1 18,7",
                 ["LoaderCircle"] = "M12,3 A9,9 0 0 1 21,12 M12,21 A9,9 0 0 1 3,12",
                 ["Move"] = "M12,3 V21 M8,7 L12,3 L16,7 M8,17 L12,21 L16,17 M3,12 H21 M7,8 L3,12 L7,16 M17,8 L21,12 L17,16",
+                // T13-B home/dialog coverage: import tray, info + clock
+                // badges, folder-with-plus, sort glyphs, remove/minus
+                // variants, palette, and a warn triangle for danger
+                // confirms (the latter two power menu/dialog icons where a
+                // FontIcon used to stand in).
+                ["Import"] = "M12,3 V15 M8,11 L12,15 L16,11 M8,5 H4 A2,2 0 0 0 2,7 V17 A2,2 0 0 0 4,19 H20 A2,2 0 0 0 22,17 V7 A2,2 0 0 0 20,5 H16",
+                ["FolderPlus"] = "M12,10 V16 M9,13 H15 M20,20 A2,2 0 0 0 22,18 V8 A2,2 0 0 0 20,6 H12.1 A2,2 0 0 1 10.41,5.1 L9.6,3.9 A2,2 0 0 0 7.93,3 H4 A2,2 0 0 0 2,5 V18 A2,2 0 0 0 4,20 Z",
+                ["FolderMinus"] = "M9,13 H15 M20,20 A2,2 0 0 0 22,18 V8 A2,2 0 0 0 20,6 H12.1 A2,2 0 0 1 10.41,5.1 L9.6,3.9 A2,2 0 0 0 7.93,3 H4 A2,2 0 0 0 2,5 V18 A2,2 0 0 0 4,20 Z",
+                ["FileMinus"] = "M6,2 H14 L20,8 V22 H6 Z M14,2 V8 H20 M9,15 H15",
+                ["Info"] = "M22,12 A10,10 0 1 1 2,12 A10,10 0 1 1 22,12 M12,16 V12 M12,8 L12.01,8",
+                ["Clock"] = "M22,12 A10,10 0 1 1 2,12 A10,10 0 1 1 22,12 M12,6 L12,12 L16,14",
+                ["ArrowDownAZ"] = "M3,16 L7,20 L11,16 M7,20 V4 M20,8 H15 M15,10 V6.5 A2.5,2.5 0 0 1 20,6.5 V10 M15,13 H20 L15,19 H20",
+                ["AlertTriangle"] = "M21.73,18 L13.73,4 A2,2 0 0 0 10.27,4 L2.27,18 A2,2 0 0 0 4,21 H20 A2,2 0 0 0 21.73,18 M12,9 V13 M12,17 L12.01,17",
+                ["Palette"] = "M12,2 C6.5,2 2,6.5 2,12 C2,17.5 6.5,22 12,22 C12.93,22 13.65,21.25 13.65,20.31 C13.65,19.87 13.47,19.48 13.21,19.19 C12.92,18.9 12.77,18.53 12.77,18.06 A1.64,1.64 0 0 1 14.44,16.4 L16.44,16.4 C19.49,16.4 21.99,13.9 21.99,10.84 C21.97,6.01 17.46,2 12,2 Z M14.5,6.5 A1,1 0 1 1 12.5,6.5 A1,1 0 1 1 14.5,6.5 M18.5,10.5 A1,1 0 1 1 16.5,10.5 A1,1 0 1 1 18.5,10.5 M9.5,7.5 A1,1 0 1 1 7.5,7.5 A1,1 0 1 1 9.5,7.5 M7.5,12.5 A1,1 0 1 1 5.5,12.5 A1,1 0 1 1 7.5,12.5",
                 // T13-A menu coverage: refresh / paste / select-all /
                 // export-current / export-all / bookmark-remove.
                 ["RefreshCw"] = "M3,12 A9,9 0 0 1 18.74,5.26 L21,8 M21,3 V8 H16 M21,12 A9,9 0 0 1 5.26,18.74 L3,16 M8,16 H3 V21",

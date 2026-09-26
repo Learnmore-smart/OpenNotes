@@ -11215,14 +11215,16 @@ namespace Caelum.Pages
 
             var input = new TextBox
             {
-                Text = pageCount > 0 ? $"1-{pageCount}" : "1",
-                Margin = new Thickness(0, 10, 0, 0)
+                Text = pageCount > 0 ? $"1-{pageCount}" : "1"
             };
-            var panel = new StackPanel();
+            var panel = new StackPanel { Spacing = 10 };
             panel.Children.Add(new TextBlock
             {
                 Text = LocalizationService.Format("Editor.PageRangePrompt", pageCount),
-                TextWrapping = TextWrapping.Wrap
+                TextWrapping = TextWrapping.Wrap,
+                // T13-B dialog-body convention: 14px subtle-foreground body.
+                FontSize = 14,
+                Foreground = ResolveThemeBrush("ThemeSubtleForegroundBrush", Color.FromArgb(0xFF, 0x6B, 0x72, 0x80)),
             });
             panel.Children.Add(input);
 

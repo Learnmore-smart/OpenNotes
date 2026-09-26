@@ -3,6 +3,7 @@
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:models="using:Caelum.Models"
+    xmlns:controls="using:Caelum.Controls"
     Title="OpenNotes">
 
     <!--
@@ -281,9 +282,9 @@
                         <Border x:Name="TabHoverTint" Background="{ThemeResource ThemeControlHoverBrush}"
                                 CornerRadius="{ThemeResource ThemeRadiusControl}" Opacity="0"/>
                         <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="10,0,6,0">
-                            <FontIcon Glyph="{x:Bind IconGlyph, Mode=OneWay}" FontSize="12"
-                                      Margin="0,0,6,0" VerticalAlignment="Center"
-                                      Foreground="{x:Bind TabForeground, Mode=OneWay}"/>
+                            <controls:LucideIcon Kind="{x:Bind Icon, Mode=OneWay}" Width="13" Height="13"
+                                                 Stroke="{x:Bind TabForeground, Mode=OneWay}"
+                                                 Margin="0,0,6,0" VerticalAlignment="Center"/>
                             <TextBlock Text="{x:Bind DisplayTitle, Mode=OneWay}" FontSize="13"
                                        MaxWidth="132" TextTrimming="CharacterEllipsis"
                                        VerticalAlignment="Center"
@@ -301,8 +302,8 @@
                                     ToolTipService.ToolTip="{x:Bind CloseTooltip, Mode=OneWay}"
                                     PointerPressed="TabCloseButton_PointerPressed"
                                     Click="TabCloseButton_Click">
-                                <FontIcon Glyph="&#xE711;" FontSize="9"
-                                          Foreground="{x:Bind TabForeground, Mode=OneWay}"/>
+                                <controls:LucideIcon Kind="X" Width="9" Height="9" StrokeThickness="2"
+                                                     Stroke="{x:Bind TabForeground, Mode=OneWay}"/>
                             </Button>
                         </StackPanel>
                         <Border Background="{ThemeResource ThemeAccentBrush}" Height="2" CornerRadius="1"
@@ -347,23 +348,30 @@
                                 Margin="0,0,8,0"
                                 Background="{ThemeResource ThemeMarginBrush}"
                                 CornerRadius="2"/>
+                        <!-- T13-B: app glyph beside the product name — the
+                             cheap brand mark the WPF window carried as its
+                             .ico image (WinUI renders the Lucide PenLine
+                             mark in accent). -->
+                        <controls:LucideIcon Kind="PenLine" Width="15" Height="15"
+                                             Stroke="{ThemeResource ThemeAccentBrush}"
+                                             VerticalAlignment="Center" Margin="0,0,7,0"/>
                         <TextBlock x:Name="ProductNameTextBlock" Text="OpenNotes" FontSize="13"
                                    Foreground="{ThemeResource ThemeForegroundBrush}"
                                    Margin="0,0,10,0" VerticalAlignment="Center" FontWeight="SemiBold"/>
                         <Button x:Name="NavBackButton" Click="NavBack_Click" Style="{StaticResource NavButtonStyle}"
                                 IsEnabled="False" AutomationProperties.AutomationId="NavBackButton"
                                 AutomationProperties.Name="Back">
-                            <FontIcon Glyph="&#xE72B;" FontSize="12" Foreground="{ThemeResource ThemeSubtleForegroundBrush}"/>
+                            <controls:LucideIcon Kind="ArrowLeft" Width="14" Height="14" Stroke="{ThemeResource ThemeSubtleForegroundBrush}"/>
                         </Button>
                         <Button x:Name="NavForwardButton" Click="NavForward_Click" Style="{StaticResource NavButtonStyle}"
                                 IsEnabled="False" Margin="2,0,0,0" AutomationProperties.AutomationId="NavForwardButton"
                                 AutomationProperties.Name="Forward">
-                            <FontIcon Glyph="&#xE72A;" FontSize="12" Foreground="{ThemeResource ThemeSubtleForegroundBrush}"/>
+                            <controls:LucideIcon Kind="ArrowRight" Width="14" Height="14" Stroke="{ThemeResource ThemeSubtleForegroundBrush}"/>
                         </Button>
                         <Button x:Name="NavHomeButton" Click="NavHome_Click" Style="{StaticResource NavButtonStyle}"
                                 Margin="2,0,0,0" AutomationProperties.AutomationId="NavHomeButton"
                                 AutomationProperties.Name="Home">
-                            <FontIcon Glyph="&#xE80F;" FontSize="13" Foreground="{ThemeResource ThemeSubtleForegroundBrush}"/>
+                            <controls:LucideIcon Kind="Home" Width="15" Height="15" Stroke="{ThemeResource ThemeSubtleForegroundBrush}"/>
                         </Button>
                     </StackPanel>
 
@@ -411,7 +419,7 @@
                                 <Button x:Name="NewTabButton" Click="NewTab_Click" Style="{StaticResource NavButtonStyle}"
                                         VerticalAlignment="Center" Width="32" Height="32" Margin="4,0,0,0"
                                         AutomationProperties.AutomationId="NewTabButton" AutomationProperties.Name="New tab">
-                                    <FontIcon Glyph="&#xE710;" FontSize="14" Foreground="{ThemeResource ThemeSubtleForegroundBrush}"/>
+                                    <controls:LucideIcon Kind="Plus" Width="15" Height="15" Stroke="{ThemeResource ThemeSubtleForegroundBrush}"/>
                                 </Button>
                             </StackPanel>
                         </ScrollViewer>
@@ -424,7 +432,7 @@
                         <Button x:Name="MoreButton" Style="{StaticResource NavButtonStyle}" Margin="0,0,8,0"
                                 VerticalAlignment="Center"
                                 AutomationProperties.AutomationId="MoreButton" AutomationProperties.Name="More">
-                            <FontIcon Glyph="&#xE712;" FontSize="14" Foreground="{ThemeResource ThemeSubtleForegroundBrush}"/>
+                            <controls:LucideIcon Kind="Ellipsis" Width="15" Height="15" Stroke="{ThemeResource ThemeSubtleForegroundBrush}"/>
                             <Button.Flyout>
                                 <MenuFlyout>
                                     <MenuFlyoutItem x:Name="SettingsMenuItem" Click="Settings_Click"
@@ -457,24 +465,30 @@
                 <StackPanel x:Name="HomeToolbarPanel" Grid.Row="1" Orientation="Horizontal" VerticalAlignment="Center"
                             Margin="12,0,12,8" Visibility="Collapsed"
                             AutomationProperties.AutomationId="HomeToolbarPanel">
+                    <!-- T13-B: the search chrome now follows the Fluent
+                         TextBox metrics — 32px control height, 13px body,
+                         accent border while focused (code-behind focus
+                         handlers repaint the hairline; the stock TextBox
+                         focus underline can't ride this custom chrome). -->
                     <Border x:Name="SearchBoxBorder"
                             Background="{ThemeResource ThemePaperBrush}"
                             BorderBrush="{ThemeResource ThemeBorderBrush}"
                             BorderThickness="1" CornerRadius="{ThemeResource ThemeRadiusControl}" Margin="0,0,8,0"
-                            Height="28" VerticalAlignment="Center">
+                            Height="32" VerticalAlignment="Center">
                         <Grid>
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="Auto"/>
-                                <ColumnDefinition Width="120"/>
+                                <ColumnDefinition Width="180"/>
                             </Grid.ColumnDefinitions>
-                            <FontIcon Glyph="&#xE721;" FontSize="12"
-                                      Foreground="{ThemeResource ThemeSubtleForegroundBrush}"
-                                      VerticalAlignment="Center" Margin="8,0,4,0"/>
+                            <controls:LucideIcon Kind="Search" Width="14" Height="14"
+                                                 Stroke="{ThemeResource ThemeSubtleForegroundBrush}"
+                                                 VerticalAlignment="Center" Margin="10,0,4,0"/>
                             <TextBox x:Name="SearchBox" Grid.Column="1"
                                      Background="Transparent" BorderThickness="0"
-                                     VerticalAlignment="Center" FontSize="12" Padding="2,0,6,0"
+                                     VerticalAlignment="Center" FontSize="13" Padding="2,0,8,0"
                                      MinHeight="0"
                                      TextChanged="SearchBox_TextChanged"
+                                     GotFocus="SearchBox_GotFocus" LostFocus="SearchBox_LostFocus"
                                      AutomationProperties.AutomationId="SearchBox"/>
                         </Grid>
                     </Border>
@@ -482,16 +496,16 @@
                             Width="Auto" MinWidth="56" Padding="8,0" Margin="0,0,2,0"
                             AutomationProperties.AutomationId="SelectButton" AutomationProperties.Name="Select">
                         <StackPanel Orientation="Horizontal">
-                            <FontIcon x:Name="SelectButtonIcon" Glyph="&#xE762;" FontSize="12"
-                                      Foreground="{ThemeResource ThemeSubtleForegroundBrush}" VerticalAlignment="Center"/>
-                            <TextBlock x:Name="SelectButtonLabel" FontSize="12"
+                            <controls:LucideIcon x:Name="SelectButtonIcon" Kind="ListFilter" Width="13" Height="13"
+                                                 Stroke="{ThemeResource ThemeSubtleForegroundBrush}" VerticalAlignment="Center"/>
+                            <TextBlock x:Name="SelectButtonLabel" FontSize="13"
                                        Foreground="{ThemeResource ThemeSubtleForegroundBrush}"
-                                       Margin="5,0,0,0" VerticalAlignment="Center"/>
+                                       Margin="6,0,0,0" VerticalAlignment="Center"/>
                         </StackPanel>
                     </Button>
                     <Button x:Name="SortButton" Style="{StaticResource NavButtonStyle}" Margin="0,0,2,0"
                             AutomationProperties.AutomationId="SortButton" AutomationProperties.Name="Sort">
-                        <FontIcon Glyph="&#xE8CB;" FontSize="13" Foreground="{ThemeResource ThemeSubtleForegroundBrush}"/>
+                        <controls:LucideIcon Kind="ArrowUpDown" Width="15" Height="15" Stroke="{ThemeResource ThemeSubtleForegroundBrush}"/>
                         <Button.Flyout>
                             <MenuFlyout>
                                 <MenuFlyoutItem x:Name="SortByNameMenuItem" Click="SortByName_Click"
@@ -511,17 +525,29 @@
         <Grid x:Name="TabContentArea" Grid.Row="1" Background="{ThemeResource ThemeWindowBrush}"/>
 
         <!-- Toast overlay (WPF ToastBorder port): dark pill + icon + message,
-             fades in over the content area and auto-fades after ~2.2 s. -->
+             fades in over the content area and auto-fades after ~2.2 s.
+             T13-B: Fluent chrome — ThemeRadiusPill, floating ThemeShadow +
+             Translation lift, Lucide icon, and a short rise on show (code-
+             behind animates ToastRiseTransform together with the fade; the
+             transform resets when the toast dismisses). -->
         <Border x:Name="ToastBorder" Grid.Row="1"
                 HorizontalAlignment="Center" VerticalAlignment="Bottom"
-                Margin="0,0,0,80" Padding="20,10" CornerRadius="10"
+                Margin="0,0,0,80" Padding="20,10"
+                CornerRadius="{ThemeResource ThemeRadiusPill}"
                 Visibility="Collapsed" Opacity="0" IsHitTestVisible="False"
+                Translation="0,0,16"
                 Background="{ThemeResource ThemeForegroundBrush}"
                 AutomationProperties.AutomationId="ToastBorder">
+            <Border.RenderTransform>
+                <TranslateTransform x:Name="ToastRiseTransform" X="0" Y="0"/>
+            </Border.RenderTransform>
+            <Border.Shadow>
+                <ThemeShadow/>
+            </Border.Shadow>
             <StackPanel Orientation="Horizontal">
-                <FontIcon x:Name="ToastIcon" Glyph="&#xE73E;" FontSize="14"
-                          Foreground="{ThemeResource ThemeAccentBrush}"
-                          VerticalAlignment="Center" Margin="0,0,10,0"/>
+                <controls:LucideIcon x:Name="ToastIcon" Kind="Check" Width="15" Height="15"
+                                     Stroke="{ThemeResource ThemeAccentBrush}" StrokeThickness="2.2"
+                                     VerticalAlignment="Center" Margin="0,0,10,0"/>
                 <TextBlock x:Name="ToastText" Text="" FontSize="13"
                            Foreground="{ThemeResource ThemeWindowBackgroundBrush}"
                            VerticalAlignment="Center"

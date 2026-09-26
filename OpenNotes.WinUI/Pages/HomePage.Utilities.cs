@@ -151,6 +151,9 @@ namespace Caelum.Pages
 
             UpdateHeaderText();
             RefreshSelectionState();
+            // T13-B: the empty-state copy is bound — re-raise so a language
+            // swap repaints title/hint/CTA while the panel is on screen.
+            RefreshEmptyState();
             // No RefreshOpenContextMenus port: menus are MenuFlyouts built
             // per-show, so they always open already localized.
         }

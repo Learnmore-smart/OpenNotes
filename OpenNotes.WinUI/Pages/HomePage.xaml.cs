@@ -534,6 +534,84 @@ namespace Caelum.Pages
             }
         }
 
+        // ── Empty state (T13-B Fluent pattern) ──────────────────────────
+        // Two variants share one bound panel: library-empty (no content
+        // tiles at all — icon FolderOpen + "open or create" CTA hosting the
+        // same flyout the add tile shows) and search-no-results (icon Search
+        // + "No matches for 'x'" + Clear search). The tiles repeater
+        // collapses while the panel shows so the lone add tile can't leak
+        // through under the copy.
+
+        /// <summary>True when no folder/file tiles are visible (add tile aside).</summary>
+        private bool HasContentTiles => VisibleTiles.Any(t => !t.IsAddTile);
+
+        /// <summary>True while a trimmed search query is active.</summary>
+        private bool HasActiveSearch => _searchQuery.Length != 0;
+
+        public Visibility EmptyStateVisibility =>
+            HasContentTiles ? Visibility.Collapsed : Visibility.Visible;
+
+        /// <summary>Repeater hides whenever the empty state owns the surface.</summary>
+        public Visibility TilesRepeaterVisibility =>
+            HasContentTiles ? Visibility.Visible : Visibility.Collapsed;
+
+        public Visibility EmptyStateLibraryIconVisibility =>
+            HasActiveSearch ? Visibility.Collapsed : Visibility.Visible;
+
+        public Visibility EmptyStateSearchIconVisibility =>
+            HasActiveSearch ? Visibility.Visible : Visibility.Collapsed;
+
+        public string EmptyStateTitle => HasActiveSearch
+            ? LocalizationService.Format("Home.Empty.SearchTitle", _searchQuery)
+            : LocalizationService.Get("Home.Empty.LibraryTitle");
+
+        public string EmptyStateHint => HasActiveSearch
+            ? LocalizationService.Get("Home.Empty.SearchHint")
+            : LocalizationService.Get("Home.Empty.LibraryHint");
+
+        public string EmptyStateActionText =>
+            LocalizationService.Get("Home.Empty.LibraryAction");
+
+        public string EmptyStateClearText =>
+            LocalizationService.Get("Home.Empty.SearchClear");
+
+        public Visibility EmptyStateActionVisibility =>
+            HasActiveSearch ? Visibility.Collapsed : Visibility.Visible;
+
+        public Visibility EmptyStateClearVisibility =>
+            HasActiveSearch ? Visibility.Visible : Visibility.Collapsed;
+
+        /// <summary>
+        /// Re-raises the bound empty-state surface after <see cref="VisibleTiles"/>
+        /// or the localization catalog changes. Property-setter pattern: the
+        /// panel only repaints when the underlying state actually moved.
+        /// </summary>
+        private void RefreshEmptyState()
+        {
+            OnPropertyChanged(nameof(EmptyStateVisibility));
+            OnPropertyChanged(nameof(TilesRepeaterVisibility));
+            OnPropertyChanged(nameof(EmptyStateLibraryIconVisibility));
+            OnPropertyChanged(nameof(EmptyStateSearchIconVisibility));
+            OnPropertyChanged(nameof(EmptyStateTitle));
+            OnPropertyChanged(nameof(EmptyStateHint));
+            OnPropertyChanged(nameof(EmptyStateActionText));
+            OnPropertyChanged(nameof(EmptyStateClearText));
+            OnPropertyChanged(nameof(EmptyStateActionVisibility));
+            OnPropertyChanged(nameof(EmptyStateClearVisibility));
+        }
+
+        private void EmptyStateAction_Click(object sender, RoutedEventArgs e)
+        {
+            // Same flyout the add tile hosts — one affordance, two surfaces.
+            if (sender is FrameworkElement placementTarget)
+                ShowAddTileMenu(placementTarget);
+        }
+
+        private void EmptyStateClearSearch_Click(object sender, RoutedEventArgs e)
+        {
+            GetMainWindow()?.ClearHomeSearch();
+        }
+
 
         /// <summary>
         /// Debug-only diagnostic log for the home smoke driver — the
@@ -707,6 +785,7 @@ namespace Caelum.Pages
             VisibleTiles.Clear();
             foreach (var tile in ordered)
                 VisibleTiles.Add(tile);
+            RefreshEmptyState();
         }
 
         // ── Tile activation + context menus ─────────────────────────────────
@@ -721,15 +800,15 @@ namespace Caelum.Pages
         {
             var menu = new MenuFlyout();
 
-            var openItem = CreateMenuItem(LocalizationService.Get("Home.Menu.OpenFile"), "\uE8E5");
+            var openItem = CreateMenuItem(LocalizationService.Get("Home.Menu.OpenFile"), "FileText");
             openItem.Click += async (_, _) => await PickAndOpenPdfAsync();
             menu.Items.Add(openItem);
 
-            var createFolderItem = CreateMenuItem(LocalizationService.Get("Home.Menu.CreateFolder"), "\uE8B7");
+            var createFolderItem = CreateMenuItem(LocalizationService.Get("Home.Menu.CreateFolder"), "FolderPlus");
             createFolderItem.Click += async (_, _) => await CreateFolderAsync();
             menu.Items.Add(createFolderItem);
 
-            var createNotebookItem = CreateMenuItem(LocalizationService.Get("Home.Menu.CreateNotebook"), "\uE70B");
+            var createNotebookItem = CreateMenuItem(LocalizationService.Get("Home.Menu.CreateNotebook"), "FilePlus");
             createNotebookItem.Click += async (_, _) => await CreateEmptyNotebookAsync();
             menu.Items.Add(createNotebookItem);
 
@@ -806,15 +885,15 @@ namespace Caelum.Pages
         {
             var menu = new MenuFlyout();
 
-            var openItem = CreateMenuItem(LocalizationService.Get("Home.Context.Open"), "\uE7C3");
+            var openItem = CreateMenuItem(LocalizationService.Get("Home.Context.Open"), "FileText");
             openItem.Click += async (_, _) => await OpenFileTileAsync(tile);
             menu.Items.Add(openItem);
 
-            var renameItem = CreateMenuItem(LocalizationService.Get("Home.Context.Rename"), "\uE70F");
+            var renameItem = CreateMenuItem(LocalizationService.Get("Home.Context.Rename"), "Pencil");
             renameItem.Click += async (_, _) => await RenameTileAsync(tile);
             menu.Items.Add(renameItem);
 
-            var selectItem = CreateMenuItem(LocalizationService.Get("Home.Context.Select"), "\uE762");
+            var selectItem = CreateMenuItem(LocalizationService.Get("Home.Context.Select"), "SquareCheck");
             selectItem.Click += (_, _) =>
             {
                 if (!IsSelectionMode)
@@ -825,7 +904,7 @@ namespace Caelum.Pages
 
             if (IsInsideFolder)
             {
-                var moveToRootItem = CreateMenuItem(LocalizationService.Get("Home.Context.MoveToLibrary"), "\uE8DE");
+                var moveToRootItem = CreateMenuItem(LocalizationService.Get("Home.Context.MoveToLibrary"), "Move");
                 moveToRootItem.Click += async (_, _) =>
                 {
                     try
@@ -842,7 +921,7 @@ namespace Caelum.Pages
                 menu.Items.Add(moveToRootItem);
             }
 
-            var copyItem = CreateMenuItem(LocalizationService.Get("Home.Context.CopyPath"), "\uE8C8");
+            var copyItem = CreateMenuItem(LocalizationService.Get("Home.Context.CopyPath"), "Copy");
             copyItem.Click += (_, _) =>
             {
                 try
@@ -859,21 +938,21 @@ namespace Caelum.Pages
             };
             menu.Items.Add(copyItem);
 
-            var openFolderItem = CreateMenuItem(LocalizationService.Get("Home.Context.OpenFolder"), "\uE838");
+            var openFolderItem = CreateMenuItem(LocalizationService.Get("Home.Context.OpenFolder"), "FolderOpen");
             openFolderItem.Click += (_, _) => OpenContainingFolder(tile);
             menu.Items.Add(openFolderItem);
 
-            var exportItem = CreateMenuItem(LocalizationService.Get("Home.Context.Export"), "\uEDE1");
+            var exportItem = CreateMenuItem(LocalizationService.Get("Home.Context.Export"), "Download");
             exportItem.Click += async (_, _) => await ExportTileAsync(tile);
             menu.Items.Add(exportItem);
 
             menu.Items.Add(new MenuFlyoutSeparator());
 
-            var deleteItem = CreateMenuItem(LocalizationService.Get("Home.Context.Delete"), "\uE74D", foregroundResourceKey: "ThemeDangerBrush");
+            var deleteItem = CreateMenuItem(LocalizationService.Get("Home.Context.Delete"), "Trash2", foregroundResourceKey: "ThemeDangerBrush");
             deleteItem.Click += async (_, _) => await DeleteFileTileAsync(tile);
             menu.Items.Add(deleteItem);
 
-            var removeItem = CreateMenuItem(LocalizationService.Get("Home.Context.Remove"), "\uE74D", foregroundResourceKey: "ThemeDangerBrush");
+            var removeItem = CreateMenuItem(LocalizationService.Get("Home.Context.Remove"), "FileMinus", foregroundResourceKey: "ThemeDangerBrush");
             removeItem.Click += async (_, _) => await RemoveFileTileAsync(tile);
             menu.Items.Add(removeItem);
 
@@ -884,7 +963,7 @@ namespace Caelum.Pages
         {
             var menu = new MenuFlyout();
 
-            var openItem = CreateMenuItem(LocalizationService.Get("Home.Context.Open"), "\uE8B7");
+            var openItem = CreateMenuItem(LocalizationService.Get("Home.Context.Open"), "FolderOpen");
             openItem.Click += (_, _) =>
             {
                 _currentFolderId = tile.Id;
@@ -893,15 +972,30 @@ namespace Caelum.Pages
             };
             menu.Items.Add(openItem);
 
-            var renameItem = CreateMenuItem(LocalizationService.Get("Home.Context.Rename"), "\uE70F");
+            var renameItem = CreateMenuItem(LocalizationService.Get("Home.Context.Rename"), "Pencil");
             renameItem.Click += async (_, _) => await RenameTileAsync(tile);
             menu.Items.Add(renameItem);
 
             // Folder color submenu (WPF nested MenuItem → MenuFlyoutSubItem).
+            // T13-B: the parent glyph is a dot in the tile's current color —
+            // it doubles as a state readout and matches the swatch language
+            // of the submenu rows below.
             var colorItem = new MenuFlyoutSubItem
             {
                 Text = LocalizationService.Get("Home.Context.Color"),
-                Icon = new FontIcon { Glyph = "\uE790", FontSize = 14 }
+                Icon = new PathIcon
+                {
+                    Data = new EllipseGeometry
+                    {
+                        Center = new Windows.Foundation.Point(8, 8),
+                        RadiusX = 7,
+                        RadiusY = 7
+                    },
+                    Foreground = WinUiThemeService.CreateBrush(
+                        string.IsNullOrWhiteSpace(tile.Color) ? FolderColorSwatches[0].Hex : tile.Color),
+                    Width = 16,
+                    Height = 16
+                }
             };
             foreach (var swatch in FolderColorSwatches)
             {
@@ -944,7 +1038,7 @@ namespace Caelum.Pages
 
             menu.Items.Add(new MenuFlyoutSeparator());
 
-            var removeItem = CreateMenuItem(LocalizationService.Get("Home.Context.RemoveFolder"), "\uE74D", foregroundResourceKey: "ThemeDangerBrush");
+            var removeItem = CreateMenuItem(LocalizationService.Get("Home.Context.RemoveFolder"), "FolderMinus", foregroundResourceKey: "ThemeDangerBrush");
             removeItem.Click += async (_, _) =>
             {
                 try
@@ -964,18 +1058,20 @@ namespace Caelum.Pages
         }
 
         /// <summary>
-        /// Builds a flyout item with a Segoe glyph icon + themed foreground —
-        /// the WinUI stand-in for WPF <c>CreateMenuItem</c> (Lucide icons land
-        /// with the Task 6 icon port; the glyph stand-ins keep AutomationIds
-        /// and layout stable). Menus are built per-show, so they localize on
-        /// construction and no open-menu refresh pass is needed.
+        /// Builds a flyout item with a Lucide <see cref="PathIcon"/> + themed
+        /// foreground — the WinUI port of WPF <c>CreateMenuItem</c>. The Icon
+        /// slot requires an <see cref="IconElement"/>, so the shape-based
+        /// <c>LucideIcon</c> control can't host it; PathIcon +
+        /// <see cref="LucideIcon.GetIconGeometry"/> is the T13-A convention.
+        /// Menus are built per-show, so they localize on construction and no
+        /// open-menu refresh pass is needed.
         /// </summary>
-        private MenuFlyoutItem CreateMenuItem(string text, string iconGlyph, Brush foreground = null, string foregroundResourceKey = null)
+        private MenuFlyoutItem CreateMenuItem(string text, string iconKind, Brush foreground = null, string foregroundResourceKey = null)
         {
             var item = new MenuFlyoutItem
             {
                 Text = text,
-                Icon = new FontIcon { Glyph = iconGlyph, FontSize = 14 }
+                Icon = MenuIcon(iconKind)
             };
 
             if (foreground != null)
@@ -996,6 +1092,19 @@ namespace Caelum.Pages
 
             return item;
         }
+
+        /// <summary>
+        /// T13-B shared menu glyph (T13-A convention): a 16-DIP PathIcon
+        /// carrying the Lucide geometry. Foreground is left to
+        /// value-inheritance so destructive items (danger Foreground) tint
+        /// their icon automatically.
+        /// </summary>
+        private static PathIcon MenuIcon(string kind) => new()
+        {
+            Data = LucideIcon.GetIconGeometry(kind),
+            Width = 16,
+            Height = 16,
+        };
 
         // ── Rename / create / open flows ────────────────────────────────────
 
@@ -1082,12 +1191,16 @@ namespace Caelum.Pages
             };
             inputBox.Loaded += (_, _) => inputBox.SelectAll();
 
+            // T13-B: prompt label rides the subtle text brush like the shared
+            // dialog service body — the only body typography the chrome-free
+            // ContentDialog gets.
             var dialog = new ContentDialog
             {
                 XamlRoot = xamlRoot,
                 Title = title,
                 Content = new StackPanel
                 {
+                    Spacing = 10,
                     Children =
                     {
                         new TextBlock
@@ -1095,7 +1208,7 @@ namespace Caelum.Pages
                             Text = prompt,
                             FontSize = 14,
                             TextWrapping = TextWrapping.Wrap,
-                            Margin = new Thickness(0, 0, 0, 10)
+                            Foreground = ResolveThemeBrush("ThemeSubtleForegroundBrush", "#6B7280")
                         },
                         inputBox
                     }

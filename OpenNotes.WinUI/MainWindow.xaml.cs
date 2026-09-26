@@ -7,6 +7,7 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Caelum.Controls;
 using Caelum.Models;
 using Caelum.Pages;
 using Caelum.Services;
@@ -45,6 +46,8 @@ namespace Caelum
         private bool _isUpdateCheckInProgress;
         private CancellationTokenSource _updateCheckCts;
         private CancellationTokenSource _toastCts;
+        /// <summary>Retained toast fade/rise storyboard — stopped before a re-show so its HoldEnd values cannot freeze a recycled toast.</summary>
+        private Storyboard _toastStoryboard;
 
         // ── T9 close/dirty workflow markers (WPF MainWindow parity) ──────
         // A tab/window close is a save-then-release workflow: while any of
@@ -635,16 +638,44 @@ namespace Caelum
             if (SelectButtonLabel != null)
                 SelectButtonLabel.Text = LocalizationService.Get("Main.Select");
             if (SortByNameMenuItem != null)
+            {
                 SortByNameMenuItem.Text = LocalizationService.Get("Main.SortByName");
+                SortByNameMenuItem.Icon ??= MenuIcon("ArrowDownAZ");
+            }
             if (SortByDateMenuItem != null)
+            {
                 SortByDateMenuItem.Text = LocalizationService.Get("Main.SortByDate");
+                SortByDateMenuItem.Icon ??= MenuIcon("Clock");
+            }
             if (SettingsMenuItem != null)
+            {
                 SettingsMenuItem.Text = LocalizationService.Get("Main.Settings");
-            if (CheckForUpdatesMenuItem != null && !_isUpdateCheckInProgress)
-                CheckForUpdatesMenuItem.Text = LocalizationService.Get("Main.CheckForUpdates");
+                SettingsMenuItem.Icon ??= MenuIcon("Settings");
+            }
+            if (CheckForUpdatesMenuItem != null)
+            {
+                CheckForUpdatesMenuItem.Icon ??= MenuIcon("RefreshCw");
+                if (!_isUpdateCheckInProgress)
+                    CheckForUpdatesMenuItem.Text = LocalizationService.Get("Main.CheckForUpdates");
+            }
             if (AboutMenuItem != null)
+            {
                 AboutMenuItem.Text = LocalizationService.Get("Main.About");
+                AboutMenuItem.Icon ??= MenuIcon("Info");
+            }
         }
+
+        /// <summary>
+        /// T13-B shell-menu glyph (T13-A convention): a 16-DIP PathIcon
+        /// carrying the Lucide geometry. Foreground inherits the menu item's
+        /// themed foreground.
+        /// </summary>
+        private static PathIcon MenuIcon(string kind) => new()
+        {
+            Data = LucideIcon.GetIconGeometry(kind),
+            Width = 16,
+            Height = 16,
+        };
 
         private void LocalizationService_LanguageChanged(object sender, EventArgs e)
         {
@@ -686,6 +717,9 @@ namespace Caelum
             foreach (var tab in _tabs)
                 ApplyNavigationTransitions(tab.Frame);
             RefreshSelectButtonVisualState();
+            // The focused search hairline is code-painted (the custom chrome
+            // replaces the stock TextBox underline) — re-resolve on Apply.
+            UpdateSearchBoxBorder();
         }
 
         // ── Window-scoped pen service (WPF WindowsPenService parity) ──────
@@ -1483,6 +1517,39 @@ namespace Caelum
             GetActiveHomePage()?.Filter(SearchBox?.Text ?? string.Empty);
         }
 
+        /// <summary>
+        /// Clears the library search box — the empty-state "Clear search"
+        /// CTA routes here so the filter text and the chrome stay in sync
+        /// (TextChanged re-filters the tiles on the way out).
+        /// </summary>
+        internal void ClearHomeSearch()
+        {
+            if (SearchBox != null && !string.IsNullOrEmpty(SearchBox.Text))
+                SearchBox.Text = string.Empty;
+        }
+
+        /// <summary>
+        /// Fluent accent underline/hairline while the search box has focus —
+        /// the custom search chrome replaces the stock TextBox template, so
+        /// the focus ring is painted here instead.
+        /// </summary>
+        private void UpdateSearchBoxBorder()
+        {
+            if (SearchBoxBorder == null)
+                return;
+
+            bool focused = SearchBox?.FocusState is FocusState.Programmatic
+                or FocusState.Pointer
+                or FocusState.Keyboard;
+            SearchBoxBorder.BorderBrush = focused
+                ? ResolveThemeBrush("ThemeAccentBrush", "#2563EB")
+                : ResolveThemeBrush("ThemeBorderBrush", "#D1D5DB");
+        }
+
+        private void SearchBox_GotFocus(object sender, RoutedEventArgs e) => UpdateSearchBoxBorder();
+
+        private void SearchBox_LostFocus(object sender, RoutedEventArgs e) => UpdateSearchBoxBorder();
+
         private void SortByName_Click(object sender, RoutedEventArgs e)
         {
             GetActiveHomePage()?.SortByName();
@@ -1529,7 +1596,7 @@ namespace Caelum
                 ? ResolveThemeBrush("ThemeAccentBrush", "#2563EB")
                 : ResolveThemeBrush("ThemeSubtleForegroundBrush", "#4B5563");
             if (SelectButtonIcon != null)
-                SelectButtonIcon.Foreground = foreground;
+                SelectButtonIcon.Stroke = foreground;
             if (SelectButtonLabel != null)
                 SelectButtonLabel.Foreground = foreground;
         }
@@ -1538,9 +1605,11 @@ namespace Caelum
 
         /// <summary>
         /// Transient overlay toast — same contract as the WPF version:
-        /// a Lucide icon name OR a raw Segoe MDL2 glyph string, ~2.2 s hold,
-        /// fade in/out on Border.Opacity. A new toast cancels the pending
-        /// dismissal of the previous one.
+        /// a Lucide icon name OR a raw Segoe MDL2 glyph string (LucideIcon's
+        /// LegacyKinds table resolves the latter), ~2.2 s hold, fade+rise in
+        /// and fade out on the border. A new toast cancels the pending
+        /// dismissal — and stops the in-flight storyboard — of the previous
+        /// one, so rapid back-to-back toasts never fight or get stuck.
         /// </summary>
         public void ShowToast(string message, string iconGlyph = null, int durationMs = 2200)
         {
@@ -1552,16 +1621,27 @@ namespace Caelum
             var cts = new CancellationTokenSource();
             _toastCts = cts;
 
+            // Stop the retained storyboard before re-seeding — a HoldEnd
+            // opacity would otherwise outrank the local sets below and
+            // freeze the re-shown toast at its faded-out value.
+            _toastStoryboard?.Stop();
+
             ToastText.Text = message ?? string.Empty;
-            ToastIcon.Glyph = MapToastIconGlyph(iconGlyph);
+            ToastIcon.Kind = NormalizeToastIconKind(iconGlyph);
             ToastBorder.Visibility = Visibility.Visible;
 
             var fadeIn = WinUiThemeService.GetAnimationDuration(TimeSpan.FromMilliseconds(140));
             var fadeOut = WinUiThemeService.GetAnimationDuration(TimeSpan.FromMilliseconds(200));
             if (!WinUiThemeService.ShouldAnimate || fadeIn == TimeSpan.Zero)
+            {
                 ToastBorder.Opacity = 1.0;
+                if (ToastRiseTransform != null)
+                    ToastRiseTransform.Y = 0;
+            }
             else
-                AnimateToastOpacity(1.0, fadeIn, EasingMode.EaseOut);
+            {
+                AnimateToastIn(fadeIn);
+            }
 
             _ = DismissToastAfterDelayAsync(cts, durationMs, fadeOut);
         }
@@ -1577,6 +1657,10 @@ namespace Caelum
                 return;
             }
 
+            // A superseding toast re-showed the border while this delay ran.
+            if (cts.IsCancellationRequested)
+                return;
+
             if (!WinUiThemeService.ShouldAnimate || fadeOut == TimeSpan.Zero)
             {
                 ToastBorder.Opacity = 0.0;
@@ -1584,53 +1668,70 @@ namespace Caelum
             }
             else
             {
-                AnimateToastOpacity(0.0, fadeOut, EasingMode.EaseIn);
+                AnimateToastOut(fadeOut, cts);
             }
         }
 
-        private void AnimateToastOpacity(double to, TimeSpan duration, EasingMode easingMode)
+        /// <summary>Fade + 6px rise-in; the retained storyboard is stopped by the next show.</summary>
+        private void AnimateToastIn(TimeSpan duration)
+        {
+            if (ToastRiseTransform != null)
+                ToastRiseTransform.Y = 6;
+
+            var storyboard = new Storyboard();
+            var ease = new CubicEase { EasingMode = EasingMode.EaseOut };
+
+            var fade = new DoubleAnimation { To = 1.0, Duration = duration, EasingFunction = ease };
+            Storyboard.SetTarget(fade, ToastBorder);
+            Storyboard.SetTargetProperty(fade, nameof(UIElement.Opacity));
+            storyboard.Children.Add(fade);
+
+            if (ToastRiseTransform != null)
+            {
+                var rise = new DoubleAnimation { To = 0.0, Duration = duration, EasingFunction = ease };
+                Storyboard.SetTarget(rise, ToastRiseTransform);
+                Storyboard.SetTargetProperty(rise, nameof(TranslateTransform.Y));
+                storyboard.Children.Add(rise);
+            }
+
+            _toastStoryboard = storyboard;
+            storyboard.Begin();
+        }
+
+        /// <summary>Fade-out; collapses the border on completion unless a newer toast superseded it.</summary>
+        private void AnimateToastOut(TimeSpan duration, CancellationTokenSource cts)
         {
             var animation = new DoubleAnimation
             {
-                To = to,
+                To = 0.0,
                 Duration = duration,
-                EasingFunction = new CubicEase { EasingMode = easingMode }
+                EasingFunction = new CubicEase { EasingMode = EasingMode.EaseIn }
             };
             Storyboard.SetTarget(animation, ToastBorder);
-            Storyboard.SetTargetProperty(animation, "Opacity");
+            Storyboard.SetTargetProperty(animation, nameof(UIElement.Opacity));
             var storyboard = new Storyboard();
             storyboard.Children.Add(animation);
-            if (to == 0.0)
+            storyboard.Completed += (_, _) =>
             {
-                storyboard.Completed += (_, _) =>
-                {
-                    if (ToastBorder != null && ToastBorder.Opacity == 0.0)
-                        ToastBorder.Visibility = Visibility.Collapsed;
-                };
-            }
+                // Only collapse when this fade belongs to the live toast —
+                // a cancelled cts means a newer ShowToast already re-showed.
+                if (cts.IsCancellationRequested)
+                    return;
+                if (ToastBorder != null && ToastBorder.Opacity == 0.0)
+                    ToastBorder.Visibility = Visibility.Collapsed;
+            };
+            _toastStoryboard = storyboard;
             storyboard.Begin();
         }
 
         /// <summary>
         /// HomePage toasts pass Lucide icon names (WPF parity) or raw Segoe
-        /// MDL2 glyph strings — map the names to glyphs until the icon port
-        /// lands. Single/double-char strings are already glyphs and pass
-        /// through untouched.
+        /// MDL2 glyph strings — LucideIcon's LegacyKinds table resolves the
+        /// glyphs to kinds; anything unrecognized lands on the neutral
+        /// Circle glyph. Null/empty keeps the Check default.
         /// </summary>
-        private static string MapToastIconGlyph(string icon)
-        {
-            if (string.IsNullOrWhiteSpace(icon))
-                return "\uE73E"; // Check
-            if (icon.Length <= 2)
-                return icon;
-            return icon switch
-            {
-                "Trash2" => "\uE74D",
-                "Folder" or "FolderOpen" => "\uE8B7",
-                "Check" or "CheckCircle" => "\uE73E",
-                _ => "\uE73E"
-            };
-        }
+        private static string NormalizeToastIconKind(string icon) =>
+            string.IsNullOrWhiteSpace(icon) ? "Check" : icon;
 
         // ── Editor navigation + rename flow (WPF ports) ────────────────────
 

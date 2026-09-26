@@ -3,6 +3,7 @@
       xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
       xmlns:local="using:Caelum.Pages"
       xmlns:models="using:Caelum.Models"
+      xmlns:controls="using:Caelum.Controls"
       Background="{ThemeResource ThemeWorkspaceBrush}">
 
     <!--
@@ -251,10 +252,13 @@
                         </Grid.RenderTransform>
                         <Viewbox Stretch="Uniform" MaxWidth="90" MaxHeight="120" VerticalAlignment="Center" HorizontalAlignment="Center">
                             <Grid Width="90" Height="120">
-                                <Rectangle x:Name="BgRect" Fill="Transparent" RadiusX="5" RadiusY="5"/>
-                                <Rectangle Stroke="{ThemeResource ThemeAccentBrush}" StrokeThickness="2" StrokeDashArray="6,4" RadiusX="5" RadiusY="5"/>
-                                <FontIcon Glyph="&#xE710;" FontSize="40" Foreground="{ThemeResource ThemeAccentBrush}"
-                                          HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                <!-- T13-B: the tile's hover/selection wash now
+                                     reaches the dashed art (same TileBackground
+                                     binding the file/folder cards ride). -->
+                                <Rectangle x:Name="BgRect" Fill="{x:Bind TileBackground, Mode=OneWay}" RadiusX="8" RadiusY="8"/>
+                                <Rectangle Stroke="{ThemeResource ThemeAccentBrush}" StrokeThickness="2" StrokeDashArray="6,4" RadiusX="8" RadiusY="8"/>
+                                <controls:LucideIcon Kind="Plus" Width="36" Height="36" Stroke="{ThemeResource ThemeAccentBrush}"
+                                                     StrokeThickness="2.4" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                             </Grid>
                         </Viewbox>
                     </Grid>
@@ -349,15 +353,17 @@
                             HorizontalAlignment="Right"
                             VerticalAlignment="Top"
                             Margin="0,8,10,0"
-                            CornerRadius="12"
+                            CornerRadius="{ThemeResource ThemeRadiusPill}"
                             BorderThickness="1"
                             IsHitTestVisible="False"
                             Background="{x:Bind CheckBadgeBackground, Mode=OneWay}"
                             BorderBrush="{x:Bind CheckBadgeBorderBrush, Mode=OneWay}"
                             Visibility="{x:Bind CheckBadgeVisibility, Mode=OneWay}">
-                        <FontIcon Glyph="&#xE73E;" FontSize="10" Foreground="{ThemeResource ThemeSelectionForegroundBrush}"
-                                  HorizontalAlignment="Center" VerticalAlignment="Center"
-                                  Visibility="{x:Bind CheckGlyphVisibility, Mode=OneWay}"/>
+                        <controls:LucideIcon Kind="Check" Width="12" Height="12"
+                                             Stroke="{ThemeResource ThemeSelectionForegroundBrush}"
+                                             StrokeThickness="2.4"
+                                             HorizontalAlignment="Center" VerticalAlignment="Center"
+                                             Visibility="{x:Bind CheckGlyphVisibility, Mode=OneWay}"/>
                     </Border>
 
                     <Button Grid.Row="0" Style="{StaticResource InvisibleButtonStyle}"
@@ -434,16 +440,18 @@
                                 AutomationProperties.AutomationId="NavigateUpButton"
                                 AutomationProperties.Name="Back">
                             <StackPanel Orientation="Horizontal">
-                                <FontIcon Glyph="&#xE72B;" FontSize="12" Foreground="{ThemeResource ThemeForegroundBrush}" VerticalAlignment="Center"/>
+                                <controls:LucideIcon Kind="ArrowLeft" Width="13" Height="13" Stroke="{ThemeResource ThemeForegroundBrush}" StrokeThickness="2" VerticalAlignment="Center"/>
                                 <TextBlock Text="{x:Bind NavigateUpText, Mode=OneWay}" FontSize="12" FontWeight="SemiBold" Foreground="{ThemeResource ThemeForegroundBrush}" Margin="6,0,0,0" VerticalAlignment="Center"/>
                             </StackPanel>
                         </Button>
                         <TextBlock Text="{x:Bind FolderBreadcrumb, Mode=OneWay}" FontSize="12" Foreground="{ThemeResource ThemeSubtleForegroundBrush}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
                                    AutomationProperties.AutomationId="FolderBreadcrumb"/>
                     </StackPanel>
-                    <TextBlock x:Name="HomeTitleTextBlock" FontSize="28" FontWeight="SemiBold" Foreground="{ThemeResource ThemeForegroundBrush}"
+                    <TextBlock x:Name="HomeTitleTextBlock" Style="{ThemeResource TitleTextBlockStyle}"
+                               Foreground="{ThemeResource ThemeForegroundBrush}"
                                AutomationProperties.AutomationId="HomeTitleTextBlock"/>
-                    <TextBlock x:Name="HomeSubtitleTextBlock" Margin="0,8,0,0" FontSize="13" Foreground="{ThemeResource ThemeSubtleForegroundBrush}" TextWrapping="Wrap"
+                    <TextBlock x:Name="HomeSubtitleTextBlock" Style="{ThemeResource BodyTextBlockStyle}" Margin="0,6,0,0"
+                               Foreground="{ThemeResource ThemeSubtleForegroundBrush}" TextWrapping="Wrap"
                                AutomationProperties.AutomationId="HomeSubtitleTextBlock"/>
                     </StackPanel>
                     </Grid>
@@ -451,11 +459,62 @@
                               ItemsSource="{x:Bind VisibleTiles, Mode=OneWay}"
                               ItemTemplate="{StaticResource HomeTileTemplateSelector}"
                               Margin="12,4,12,12"
+                              Visibility="{x:Bind TilesRepeaterVisibility, Mode=OneWay}"
                               AutomationProperties.AutomationId="TilesGrid">
                     <ItemsRepeater.Layout>
                         <UniformGridLayout Orientation="Horizontal" ItemsJustification="Start" MinRowSpacing="0" MinColumnSpacing="0"/>
                     </ItemsRepeater.Layout>
                 </ItemsRepeater>
+
+                <!-- T13-B: Fluent empty state — icon disc + title + hint +
+                     contextual CTA. Library-empty offers the same "open or
+                     create" flyout the add tile hosts; search-empty offers a
+                     localized title ("No matches for 'x'") + Clear search.
+                     Both icon and copy are data-bound so the panel swaps
+                     variants without a template. -->
+                <StackPanel x:Name="HomeEmptyState"
+                            HorizontalAlignment="Center"
+                            Margin="0,64,0,48"
+                            Visibility="{x:Bind EmptyStateVisibility, Mode=OneWay}"
+                            AutomationProperties.AutomationId="HomeEmptyState"
+                            AutomationProperties.Name="{x:Bind EmptyStateTitle, Mode=OneWay}">
+                    <Border Width="56" Height="56" CornerRadius="28"
+                            HorizontalAlignment="Center"
+                            Background="{ThemeResource ThemeControlBrush}"
+                            BorderBrush="{ThemeResource ThemeBorderBrush}"
+                            BorderThickness="1">
+                        <Grid>
+                            <controls:LucideIcon Kind="FolderOpen" Width="24" Height="24"
+                                                 Stroke="{ThemeResource ThemeSubtleForegroundBrush}"
+                                                 Visibility="{x:Bind EmptyStateLibraryIconVisibility, Mode=OneWay}"/>
+                            <controls:LucideIcon Kind="Search" Width="24" Height="24"
+                                                 Stroke="{ThemeResource ThemeSubtleForegroundBrush}"
+                                                 Visibility="{x:Bind EmptyStateSearchIconVisibility, Mode=OneWay}"/>
+                        </Grid>
+                    </Border>
+                    <TextBlock Text="{x:Bind EmptyStateTitle, Mode=OneWay}"
+                               FontSize="16" FontWeight="SemiBold"
+                               Foreground="{ThemeResource ThemeForegroundBrush}"
+                               TextAlignment="Center" Margin="0,16,0,0"/>
+                    <TextBlock Text="{x:Bind EmptyStateHint, Mode=OneWay}"
+                               FontSize="13" MaxWidth="360"
+                               Foreground="{ThemeResource ThemeSubtleForegroundBrush}"
+                               TextAlignment="Center" TextWrapping="Wrap"
+                               Margin="0,6,0,0"/>
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,20,0,0">
+                        <Button x:Name="EmptyStateActionButton"
+                                Click="EmptyStateAction_Click"
+                                Style="{ThemeResource AccentButtonStyle}"
+                                Content="{x:Bind EmptyStateActionText, Mode=OneWay}"
+                                Visibility="{x:Bind EmptyStateActionVisibility, Mode=OneWay}"
+                                AutomationProperties.AutomationId="HomeEmptyStateAction"/>
+                        <Button x:Name="EmptyStateClearButton"
+                                Click="EmptyStateClearSearch_Click"
+                                Content="{x:Bind EmptyStateClearText, Mode=OneWay}"
+                                Visibility="{x:Bind EmptyStateClearVisibility, Mode=OneWay}"
+                                AutomationProperties.AutomationId="HomeEmptyStateClearSearch"/>
+                    </StackPanel>
+                </StackPanel>
             </StackPanel>
         </ScrollViewer>
 
@@ -479,7 +538,7 @@
                         CornerRadius="{ThemeResource ThemeRadiusCard}"
                         Opacity="0.6"/>
                 <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Opacity="0.85">
-                    <FontIcon Glyph="&#xE8E5;" FontSize="38" Foreground="{ThemeResource ThemeInkBrush}" HorizontalAlignment="Center"/>
+                    <controls:LucideIcon Kind="Import" Width="38" Height="38" Stroke="{ThemeResource ThemeInkBrush}" StrokeThickness="1.8" HorizontalAlignment="Center"/>
                     <TextBlock x:Name="DragDropOverlayText" FontSize="14" FontWeight="SemiBold" Foreground="{ThemeResource ThemeInkBrush}" HorizontalAlignment="Center" Margin="0,8,0,0"
                                AutomationProperties.AutomationId="DragDropOverlayText"/>
                 </StackPanel>

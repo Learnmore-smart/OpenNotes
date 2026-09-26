@@ -257,7 +257,7 @@ namespace Caelum.Controls
                 Padding = new Thickness(0),
                 Background = new SolidColorBrush(Colors.Transparent),
                 BorderThickness = new Thickness(0),
-                CornerRadius = new CornerRadius(10),
+                CornerRadius = ResCornerRadius("ThemeRadiusControl", 8),
                 Content = new LucideIcon
                 {
                     Kind = "FolderOpen",
@@ -305,7 +305,7 @@ namespace Caelum.Controls
                 Padding = new Thickness(0),
                 // T12-C: Fluent card radius (ThemeRadiusCard) — the WPF 18px
                 // round read soft next to the T12 radius-token surfaces.
-                CornerRadius = new CornerRadius(10),
+                CornerRadius = ResCornerRadius("ThemeRadiusCard", 10),
                 BorderThickness = new Thickness(1),
                 HorizontalAlignment = HorizontalAlignment.Stretch,
                 VerticalAlignment = VerticalAlignment.Stretch,
@@ -534,7 +534,7 @@ namespace Caelum.Controls
             return new Border
             {
                 Height = 160,
-                CornerRadius = new CornerRadius(8),
+                CornerRadius = ResCornerRadius("ThemeRadiusControl", 8),
                 Background = template == PageInsertTemplate.Notebook
                     ? Res("ThemeSurfaceAltBrush", Color.FromArgb(255, 0xF5, 0xF7, 0xFA))
                     : Res("ThemeSurfaceBrush", Colors.White),
@@ -591,6 +591,24 @@ namespace Caelum.Controls
                 && value is Brush brush)
                 return brush;
             return new SolidColorBrush(fallback);
+        }
+
+        /// <summary>
+        /// T13-B: radius token → <see cref="CornerRadius"/> for code-built
+        /// chrome (mirrors EditorPage.ResolveThemeCornerRadius — the App.xaml
+        /// resources may be stored as <see cref="CornerRadius"/> or a bare
+        /// uniform double).
+        /// </summary>
+        private static CornerRadius ResCornerRadius(string key, double fallback)
+        {
+            if (Application.Current?.Resources is not { } resources
+                || !resources.TryGetValue(key, out var value))
+                return new CornerRadius(fallback);
+            if (value is CornerRadius radius)
+                return radius;
+            if (value is double uniform)
+                return new CornerRadius(uniform);
+            return new CornerRadius(fallback);
         }
     }
 }

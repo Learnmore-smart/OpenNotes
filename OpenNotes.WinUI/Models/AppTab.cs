@@ -55,9 +55,9 @@ namespace Caelum.Models
         }
 
         /// <summary>
-        /// Lucide icon name (kept identical to WPF so the real icon port can
-        /// swap the renderer without touching the model). <see cref="IconGlyph"/>
-        /// maps it to a Segoe Fluent/MDL2 glyph for the interim FontIcon.
+        /// Lucide icon name (kept identical to WPF). T13-B: the tab template
+        /// binds it straight into <c>LucideIcon.Kind</c> — the interim
+        /// Segoe-glyph mapper is gone.
         /// </summary>
         public string Icon
         {
@@ -68,7 +68,6 @@ namespace Caelum.Models
                     return;
                 _icon = value;
                 OnPropertyChanged();
-                OnPropertyChanged(nameof(IconGlyph));
             }
         }
 
@@ -157,9 +156,6 @@ namespace Caelum.Models
         public string DisplayTitle =>
             _title != null && _title.Length > 20 ? _title.Substring(0, 17) + "..." : _title;
 
-        /// <summary>Segoe Fluent/MDL2 stand-in for <see cref="Icon"/>.</summary>
-        public string IconGlyph => IconGlyphFor(_icon);
-
         /// <summary>
         /// Fluent pill: the active tab gets the elevated surface brush so it
         /// reads as a card floating on the Mica/acrylic chrome band;
@@ -209,7 +205,6 @@ namespace Caelum.Models
         public void RefreshVisualState()
         {
             OnPropertyChanged(nameof(DisplayTitle));
-            OnPropertyChanged(nameof(IconGlyph));
             OnPropertyChanged(nameof(TabBackground));
             OnPropertyChanged(nameof(TabBorderBrush));
             OnPropertyChanged(nameof(TabForeground));
@@ -219,18 +214,6 @@ namespace Caelum.Models
             OnPropertyChanged(nameof(CloseButtonVisibility));
             OnPropertyChanged(nameof(AccentBarVisibility));
             OnPropertyChanged(nameof(CloseTooltip));
-        }
-
-        internal static string IconGlyphFor(string icon)
-        {
-            // Interim mapping until the Lucide vector icon port lands.
-            switch (icon)
-            {
-                case "Home": return "\uE80F";
-                case "File":
-                case "FileText": return "\uE8A5";
-                default: return "\uE8A5";
-            }
         }
 
         private static Brush ResolveBrush(string key, string fallbackHex)
