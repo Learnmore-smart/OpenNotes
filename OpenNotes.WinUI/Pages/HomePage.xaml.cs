@@ -198,17 +198,22 @@ namespace Caelum.Pages
         // Each template ROOT (the add-tile Button / FolderTileBorder /
         // FileTileBorder) carries a TranslateTransform. Hover lifts the card
         // a couple of px, a press settles it back to rest while held, and a
-        // staggered fade+rise entrance runs on every Loaded (the repeater
-        // rebuilds elements on folder navigation / re-show, so the entrance
-        // naturally replays per surface). Everything routes through
+        // staggered fade+rise entrance runs on every Loaded for an
+        // UNFILTERED surface (folder navigation / first load / refresh /
+        // cleared query); search rebuilds skip it — Filter() runs
+        // RebuildVisibleTiles per keystroke and a per-element cascade would
+        // flicker while typing. Everything routes through
         // WinUiThemeService.GetAnimationDuration — under reduced motion or
         // high contrast the values land instantly instead.
         //
         // Pointer press/release is wired with handledEventsToo from Loaded:
         // the inner tile Buttons mark PointerPressed/Released handled, so
         // plain XAML handlers on the card Border would never see the press.
-        // The storyboards are fire-and-forget (never fielded) — an unloaded
-        // element just lets its last animation finish.
+        // Entrance storyboards are retained per element
+        // (TileCardEntranceStoryboardProperty) and Stop()ed before the next
+        // re-seed — a completed HoldEnd storyboard outranks local SetValue,
+        // so the Opacity=0 / Y=8 seeds would be dead sets and a recycled
+        // element would silently skip its entrance.
 
         private const double TileCardHoverLift = -2.0;
         private const double TileEntranceRise = 8.0;
@@ -222,6 +227,10 @@ namespace Caelum.Pages
         private static readonly DependencyProperty TileCardWiredProperty =
             DependencyProperty.RegisterAttached(
                 "TileCardWired", typeof(bool), typeof(HomePage), new PropertyMetadata(false));
+
+        private static readonly DependencyProperty TileCardEntranceStoryboardProperty =
+            DependencyProperty.RegisterAttached(
+                "TileCardEntranceStoryboard", typeof(Storyboard), typeof(HomePage), new PropertyMetadata(null));
 
         private void TileCard_Loaded(object sender, RoutedEventArgs e)
         {
@@ -238,6 +247,14 @@ namespace Caelum.Pages
                 card.AddHandler(PointerCaptureLostEvent,
                     new PointerEventHandler(TileCard_PointerSettled), handledEventsToo: true);
             }
+
+            // A recycled element (or one re-bound to a different tile) can
+            // carry a stale hover flag / held lift from its previous
+            // realization — every load starts from clean rest state.
+            card.SetValue(TileCardHoverProperty, false);
+            if (card.Tag is HomeTile tile)
+                tile.IsHovered = false;
+            AnimateCardLiftTo(card, 0.0, 60);
 
             PlayTileCardEntrance(card);
         }
@@ -315,13 +332,18 @@ namespace Caelum.Pages
         /// First-show card entrance: fade + short rise, staggered by the
         /// element's index inside <see cref="TilesRepeater"/> (~25 ms/step,
         /// capped) so a fresh library reads as a quick cascade rather than a
-        /// wall pop. Skipped entirely under reduced motion — the card stays
-        /// at its XAML end-state.
+        /// wall pop. Skipped while a search query is active — Filter()
+        /// rebuilds VisibleTiles per keystroke and the cascade would flicker
+        /// on every character. Also skipped under reduced motion — the card
+        /// stays at its XAML end-state. The previous entrance storyboard is
+        /// Stop()ed before re-seeding: its HoldEnd values outrank local
+        /// sets, so without the Stop a recycled element would never replay.
         /// </summary>
         private void PlayTileCardEntrance(FrameworkElement card)
         {
             var duration = WinUiThemeService.GetAnimationDuration(TimeSpan.FromMilliseconds(200));
-            if (!WinUiThemeService.ShouldAnimate || duration == TimeSpan.Zero)
+            if (!WinUiThemeService.ShouldAnimate || duration == TimeSpan.Zero ||
+                _searchQuery.Length != 0)
                 return;
 
             var index = TilesRepeater != null
@@ -331,6 +353,7 @@ namespace Caelum.Pages
                 Math.Min(index * TileEntranceStaggerMs, TileEntranceStaggerCapMs));
             var ease = new CubicEase { EasingMode = EasingMode.EaseOut };
 
+            (card.GetValue(TileCardEntranceStoryboardProperty) as Storyboard)?.Stop();
             card.Opacity = 0;
             var storyboard = new Storyboard();
             var fade = new DoubleAnimation
@@ -361,13 +384,16 @@ namespace Caelum.Pages
             }
 
             storyboard.Begin();
+            card.SetValue(TileCardEntranceStoryboardProperty, storyboard);
         }
 
         /// <summary>
         /// Selection action-bar entrance — short fade + rise when the bar
         /// appears (mirrors the tile entrance; the Visibility binding has
         /// already flipped the card visible by the time this runs). Hide
-        /// stays instant: the x:Bind collapse can't be delayed.
+        /// stays instant: the x:Bind collapse can't be delayed. The retained
+        /// storyboard is Stop()ed before re-seeding for the same HoldEnd
+        /// reason as <see cref="PlayTileCardEntrance"/>.
         /// </summary>
         private void PlaySelectionBarEntrance()
         {
@@ -379,6 +405,7 @@ namespace Caelum.Pages
                 return;
 
             var ease = new CubicEase { EasingMode = EasingMode.EaseOut };
+            _selectionBarEntranceStoryboard?.Stop();
             SelectionActionBar.Opacity = 0;
             if (SelectionBarRiseTransform != null)
                 SelectionBarRiseTransform.Y = TileEntranceRise;
@@ -409,16 +436,21 @@ namespace Caelum.Pages
             }
 
             storyboard.Begin();
+            _selectionBarEntranceStoryboard = storyboard;
         }
+
+        private Storyboard _selectionBarEntranceStoryboard;
+        private Storyboard _overlayFadeStoryboard;
 
         /// <summary>
         /// Single funnel for every <see cref="DragDropOverlay"/> visibility
         /// flip (DragOver/DragLeave/Drop/DropCompleted/folder-hover). Showing
-        /// fades the overlay in (~120 ms, fire-and-forget); hiding stays
-        /// instant. DragOver re-fires continuously while the payload hovers,
-        /// so an already-visible overlay is left alone rather than restarting
-        /// the fade. The tint layer goes fully opaque under
-        /// <see cref="WinUiThemeService.ReduceTransparency"/>.
+        /// fades the overlay in (~120 ms); hiding stays instant and also
+        /// stops the retained fade so no HoldEnd value lingers over a
+        /// collapsed element. DragOver re-fires continuously while the
+        /// payload hovers, so an already-visible overlay is left alone
+        /// rather than restarting the fade. The tint layer goes fully
+        /// opaque under <see cref="WinUiThemeService.ReduceTransparency"/>.
         /// </summary>
         private void SetDragDropOverlayVisible(bool visible)
         {
@@ -427,6 +459,9 @@ namespace Caelum.Pages
 
             if (!visible)
             {
+                // Stop first — a mid-flight fade would keep its HoldEnd
+                // opacity over the collapsed element and fight the reset.
+                _overlayFadeStoryboard?.Stop();
                 DragDropOverlay.Visibility = Visibility.Collapsed;
                 DragDropOverlay.Opacity = 1.0;
                 return;
@@ -446,6 +481,7 @@ namespace Caelum.Pages
                 return;
             }
 
+            _overlayFadeStoryboard?.Stop();
             DragDropOverlay.Opacity = 0;
             var fade = new DoubleAnimation
             {
@@ -458,6 +494,7 @@ namespace Caelum.Pages
             Storyboard.SetTargetProperty(fade, nameof(UIElement.Opacity));
             storyboard.Children.Add(fade);
             storyboard.Begin();
+            _overlayFadeStoryboard = storyboard;
         }
 
         // ── Folder navigation state ─────────────────────────────────────────
