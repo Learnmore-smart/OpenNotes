@@ -456,7 +456,9 @@
                  Exited; both gated on WinUiThemeService.ShouldAnimate and
                  reset in ThumbnailImage_Loaded so recycled rows never carry
                  a stuck lift). -->
-            <StackPanel Margin="0,2"
+            <StackPanel x:Name="ThumbnailCardRoot"
+                        Margin="0,2"
+                        Background="Transparent"
                         PointerEntered="ThumbnailCard_PointerEntered"
                         PointerExited="ThumbnailCard_PointerExited"
                         AutomationProperties.AutomationId="{x:Bind AutomationId, Mode=OneTime}"

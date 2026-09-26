@@ -383,6 +383,11 @@ namespace Caelum.Pages
         // ── Search ──────────────────────────────────────────────────────────
         private readonly List<PdfSearchResult> _pdfSearchResults = new();
         private CancellationTokenSource _pdfSearchCts;
+        // T13-A: explicit in-flight flag — the empty-state overlay and the
+        // language-flip re-stamp must not infer "searching" from the
+        // localized status text (a finished 0-hit search used to read as
+        // mid-flight once the language changed out from under it).
+        private bool _pdfSearchInFlight;
 
         private bool _languageChangedSubscribed;
         // T12-B: ThemeApplied subscription mirrors _languageChangedSubscribed —
@@ -863,6 +868,17 @@ namespace Caelum.Pages
                     _rulerVisual.Visibility = Visibility.Visible;
                 }
             }
+            else if (!_rulerVisible && _rulerVisual != null)
+            {
+                // Same stale-capture hole while hidden: SetRulerVisible(false)
+                // only collapses the retained visual, so it would resurface
+                // with the old palette on next show. Drop it instead —
+                // EnsureRulerVisual rebuilds fresh (manipulation state was
+                // already cleared when the ruler was hidden).
+                RulerOverlayCanvas?.Children.Remove(_rulerVisual);
+                _rulerVisual = null;
+                _rulerTickCanvas = null;
+            }
 
             // T13-A imperative-capture sweep: the floating text toolbar
             // (canvas-hosted Border) and the sticky-note editor popup both
@@ -870,13 +886,21 @@ namespace Caelum.Pages
             // chrome does the same — rebuild/re-stamp them so a theme flip
             // while a surface is open repaints instead of holding the old
             // palette until reopen.
-            if (_inlineTextBoxToolbar?.Visibility == Visibility.Visible
-                && _selectedTextBox?.Parent is UIElement toolbarTarget)
+            if (_inlineTextBoxToolbar != null)
             {
+                // Rebuild whether the toolbar is showing or merely retained:
+                // a hidden Border (and the colour flyout it owns) still holds
+                // captured theme brushes and would resurface stale on next
+                // show. Nulling forces a fresh EnsureInlineTextBoxToolbar.
+                bool toolbarWasVisible = _inlineTextBoxToolbar.Visibility == Visibility.Visible;
                 _textColorFlyout?.Hide();
                 RemoveInlineTextBoxToolbar();
                 _inlineTextBoxToolbar = null;   // force full rebuild
-                PositionInlineTextBoxToolbar(toolbarTarget);
+                if (toolbarWasVisible
+                    && _selectedTextBox?.Parent is UIElement toolbarTarget)
+                {
+                    PositionInlineTextBoxToolbar(toolbarTarget);
+                }
             }
             if (_stickyNotePopup?.IsOpen == true)
                 RefreshStickyNoteEditorTheme();
@@ -1042,6 +1066,7 @@ namespace Caelum.Pages
                 _sidebarOutlineItems.Clear();
                 OutlineTreeView.RootNodes.Clear();
                 _pdfSearchResults.Clear();
+                _pdfSearchInFlight = false;
                 PdfSearchResultsListBox.Items.Clear();
                 PdfSearchPanel.Visibility = Visibility.Collapsed;
                 PagesEmptyState.Visibility = Visibility.Visible;
@@ -9306,9 +9331,12 @@ namespace Caelum.Pages
                 // T13-A: a realized image marks a (possibly recycled) row —
                 // reseed it to the resting state, stopping any retained
                 // lift storyboard first so a stale mid-flight animation
-                // can't write into the recycled container.
+                // can't write into the recycled container. The template
+                // root is found by name through a VisualTreeHelper walk —
+                // a fixed Parent.Parent chain snaps the moment the card
+                // gains an intermediate wrapper.
                 SetThumbnailCardLifted(
-                    ((element.Parent as FrameworkElement)?.Parent) as FrameworkElement,
+                    FindAncestorByName(element, "ThumbnailCardRoot"),
                     lifted: false,
                     animate: false);
                 if (element.DataContext is SidebarPageItem item && item.Thumbnail == null)
@@ -10380,6 +10408,9 @@ namespace Caelum.Pages
         private void ClosePdfSearch()
         {
             _pdfSearchCts?.Cancel();
+            // The canceled run's finally keeps the flag (its token is
+            // canceled), so the panel owns the reset itself.
+            _pdfSearchInFlight = false;
             PdfSearchPanel.Visibility = Visibility.Collapsed;
             PdfSearchResultsListBox.Items.Clear();
             PdfSearchStatusTextBlock.Text = string.Empty;
@@ -10408,10 +10439,7 @@ namespace Caelum.Pages
                 {
                     text = LocalizationService.Get("Editor.SearchEmptyHint");
                 }
-                else if (_pdfSearchResults.Count == 0
-                    && !string.Equals(PdfSearchStatusTextBlock?.Text,
-                        LocalizationService.Get("Editor.Searching"),
-                        StringComparison.Ordinal))
+                else if (_pdfSearchResults.Count == 0 && !_pdfSearchInFlight)
                 {
                     text = LocalizationService.Get("Editor.SearchNoResults");
                 }
@@ -10458,6 +10486,7 @@ namespace Caelum.Pages
                     return;
                 _pdfSearchResults.Clear();
                 PdfSearchResultsListBox.Items.Clear();
+                _pdfSearchInFlight = false;
                 if (string.IsNullOrWhiteSpace(query))
                 {
                     PdfSearchStatusTextBlock.Text = string.Empty;
@@ -10465,7 +10494,12 @@ namespace Caelum.Pages
                     return;
                 }
 
+                _pdfSearchInFlight = true;
                 PdfSearchStatusTextBlock.Text = LocalizationService.Get("Editor.Searching");
+                // Re-stamp the empty state with the status write: a previous
+                // finished search's "No matches" line would otherwise stay
+                // visible for the duration of the new in-flight search.
+                UpdatePdfSearchEmptyState();
                 for (int pageIndex = 0; pageIndex < _pageControls.Count; pageIndex++)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
@@ -10515,6 +10549,12 @@ namespace Caelum.Pages
             }
             finally
             {
+                // Only a run that completed without cancellation owns the
+                // flag: a canceled run was superseded by a newer search (or
+                // a panel/document teardown, which clears the flag itself)
+                // and must not clobber its successor's in-flight state.
+                if (!cancellationToken.IsCancellationRequested)
+                    _pdfSearchInFlight = false;
                 if (ownsLease)
                     operationLease.Dispose();
             }
@@ -12542,7 +12582,7 @@ namespace Caelum.Pages
             }
 
             var currentStatus = PdfSearchStatusTextBlock.Text ?? string.Empty;
-            var localizedStatus = PdfSearchResultsListBox.Items.Count == 0
+            var localizedStatus = _pdfSearchInFlight
                 ? LocalizationService.Get("Editor.Searching")
                 : LocalizationService.Format("Editor.SearchResults", _pdfSearchResults.Count);
 
@@ -12990,6 +13030,23 @@ namespace Caelum.Pages
                 if (current is T match)
                     return match;
                 current = VisualTreeHelper.GetParent(current);
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// Name-based sibling of <see cref="FindAncestor{T}"/> for
+        /// DataTemplate parts — template namescopes make descendants
+        /// reachable via FindName from the root, but the way back up
+        /// needs an explicit walk.
+        /// </summary>
+        private static FrameworkElement FindAncestorByName(DependencyObject start, string name)
+        {
+            for (var current = start; current != null;
+                 current = VisualTreeHelper.GetParent(current))
+            {
+                if (current is FrameworkElement element && element.Name == name)
+                    return element;
             }
             return null;
         }
@@ -13793,6 +13850,7 @@ namespace Caelum.Pages
                 _scrollReRenderCts?.Cancel();
                 _thumbnailLoadCts?.Cancel();
                 _pdfSearchCts?.Cancel();
+                _pdfSearchInFlight = false;
                 // CancelActiveLoad parity: invalidate every outstanding
                 // lease so late continuations cannot touch dead pages.
                 _documentOperationSession.Cancel();

@@ -154,6 +154,16 @@ public sealed class WinUiFluentPolishSourceTests
             Assert.That(editor, Does.Contain("LocalizationService.Get(\"Editor.SearchEmptyHint\")"));
             Assert.That(editor, Does.Contain("LocalizationService.Get(\"Editor.SearchNoResults\")"));
 
+            // In-flight state is an explicit flag, not a localized status-
+            // text compare (a finished 0-hit search must not read as
+            // "Searching…" after a language flip, and the overlay re-stamps
+            // the moment a new search starts so a stale "No matches" can't
+            // linger mid-flight).
+            Assert.That(editor, Does.Contain("private bool _pdfSearchInFlight"));
+            Assert.That(editor, Does.Contain("_pdfSearchResults.Count == 0 && !_pdfSearchInFlight"));
+            Assert.That(editor, Does.Contain("_pdfSearchInFlight = true;"));
+            Assert.That(editor, Does.Not.Contain("string.Equals(PdfSearchStatusTextBlock?.Text"));
+
             // Both strings exist in every shipped locale (en/zh-Hans/fr).
             Assert.That(l10n, Does.Contain("[\"Editor.SearchNoResults\"]"));
             Assert.That(l10n, Does.Contain("[\"Editor.SearchEmptyHint\"]"));
@@ -182,6 +192,16 @@ public sealed class WinUiFluentPolishSourceTests
             Assert.That(editor, Does.Contain("lifted ? 16f : 4f"));
             Assert.That(editor, Does.Contain("WinUiThemeService.ShouldAnimate"));
             Assert.That(editor, Does.Contain("retained.Stop()"));
+
+            // The template root is named and hit-testable across its full
+            // extent (Transparent background covers the card/label gap so
+            // Entered/Exited can't bounce-fire), and the Loaded reseed finds
+            // it by name instead of a fragile Parent.Parent chain.
+            Assert.That(xaml, Does.Contain("x:Name=\"ThumbnailCardRoot\""));
+            Assert.That(xaml, Does.Match("x:Name=\"ThumbnailCardRoot\"[^>]*Background=\"Transparent\""));
+            Assert.That(editor, Does.Contain("FindAncestorByName(element, \"ThumbnailCardRoot\")"));
+            Assert.That(editor, Does.Contain("private static FrameworkElement FindAncestorByName(DependencyObject start, string name)"));
+            Assert.That(editor, Does.Not.Contain("(element.Parent as FrameworkElement)?.Parent"));
         });
     }
 
@@ -202,10 +222,19 @@ public sealed class WinUiFluentPolishSourceTests
             Assert.That(editor, Does.Contain("private void RefreshStickyNoteEditorTheme()"));
             Assert.That(editor, Does.Contain("page.RefreshPageChromeTheme()"));
 
-            // Page-level imperative chrome re-stamps on the same sweep.
+            // Hidden-but-retained surfaces are dropped too, not just live
+            // ones: the floating toolbar and a collapsed ruler both rebuild
+            // fresh on next show instead of resurfacing stale brushes.
+            Assert.That(editor, Does.Contain("bool toolbarWasVisible = _inlineTextBoxToolbar.Visibility == Visibility.Visible"));
+            Assert.That(editor, Does.Contain("else if (!_rulerVisible && _rulerVisual != null)"));
+
+            // Page-level imperative chrome re-stamps on the same sweep —
+            // including the painted text-selection/search-hit highlights
+            // whose ThemeSelectionBrush fill is resolved once at creation.
             Assert.That(page, Does.Contain("public void RefreshPageChromeTheme()"));
             Assert.That(page, Does.Contain("ResolveAccentStroke()"));
             Assert.That(page, Does.Contain("ResolveAccentTranslucentFill(30)"));
+            Assert.That(page, Does.Contain("var selectionBrush = ResolveSelectionBrush();"));
         });
     }
 

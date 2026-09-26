@@ -2262,6 +2262,16 @@ namespace Caelum.Controls
                     _selectionRect.Stroke = accent;
                 _selectionRect.Fill = ResolveAccentTranslucentFill(30);
             }
+            // The painted text-selection/search-hit highlights resolve
+            // ThemeSelectionBrush once at creation (SetPdfTextSelectionRects)
+            // — re-stamp their fills or a theme flip leaves them in the old
+            // palette until the selection is rebuilt.
+            var selectionBrush = ResolveSelectionBrush();
+            foreach (var child in PdfTextSelectionCanvas.Children)
+            {
+                if (child is Rectangle highlight)
+                    highlight.Fill = selectionBrush;
+            }
             // UpdateSelectionVisuals rebuilds handles/outlines with fresh
             // theme brushes; it no-ops cleanly when nothing is selected.
             if (HasSelection)
