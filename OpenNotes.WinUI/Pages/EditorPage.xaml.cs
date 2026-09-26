@@ -792,6 +792,34 @@ namespace Caelum.Pages
                 RulerIcon.Stroke = ResolveThemeBrush(
                     _rulerVisible ? "ThemeAccentBrush" : "ThemeForegroundBrush",
                     _rulerVisible ? Color.FromArgb(0xFF, 0x25, 0x63, 0xEB) : Color.FromArgb(0xFF, 0x1F, 0x24, 0x2B));
+            // The code-built ruler overlay is persistent chrome while shown
+            // and captures theme brushes throughout (body fill/stroke, tick
+            // strokes, handles). Rebuild it in place so a live ruler picks
+            // the new palette up; centre/angle/length survive the swap and
+            // any in-flight manipulation is dropped with the old visual.
+            if (_rulerVisible && _rulerVisual != null && RulerOverlayCanvas != null)
+            {
+                var center = _rulerCenter;
+                var angle = _rulerAngle;
+                var length = _rulerLength;
+                _isDraggingRuler = false;
+                _isRotatingRuler = false;
+                _isResizingRuler = false;
+                _rulerPointerId = null;
+                RulerOverlayCanvas.Children.Remove(_rulerVisual);
+                _rulerVisual = null;
+                _rulerTickCanvas = null;
+                EnsureRulerVisual();
+                if (_rulerVisual != null)
+                {
+                    _rulerCenter = center;
+                    _rulerLength = length;
+                    if (_rulerRotate != null)
+                        _rulerRotate.Angle = angle;
+                    ApplyRulerLengthToVisual();
+                    _rulerVisual.Visibility = Visibility.Visible;
+                }
+            }
         }
 
         /// <summary>
@@ -8694,7 +8722,11 @@ namespace Caelum.Pages
 
             double currentWidth = DocumentSidebar?.Width ?? targetWidth;
             double currentShift = PagesShiftTransform?.X ?? 0.0;
-            double previousMarginLeft = PagesContainer?.Margin.Left ?? 0.0;
+            // The arrange-space position — NOT the margin — is what
+            // determines where the page stack sits (see
+            // PagesArrangeXForMargin). Capture the old arrange X before the
+            // margin snaps.
+            double previousArrangeX = PagesArrangeXForMargin(PagesContainer?.Margin.Left ?? 0.0);
 
             _sidebarGeometryStoryboard?.Stop();
             _sidebarGeometryStoryboard = null;
@@ -8703,8 +8735,8 @@ namespace Caelum.Pages
                 DocumentSidebar.Width = currentWidth;
             // Margin snaps to the contract value up front (probe + layout).
             UpdatePagesContainerMarginForSidebar();
-            double shiftCompensation = previousMarginLeft + currentShift -
-                (PagesContainer?.Margin.Left ?? 0.0);
+            double shiftCompensation = currentShift + previousArrangeX -
+                PagesArrangeXForMargin(PagesContainer?.Margin.Left ?? 0.0);
 
             if (!animate)
             {
@@ -8715,7 +8747,6 @@ namespace Caelum.Pages
                 return;
             }
 
-            DocumentSidebar.Width = currentWidth;
             PagesShiftTransform.X = shiftCompensation;
             var ease = new CubicEase { EasingMode = EasingMode.EaseOut };
             var storyboard = new Storyboard();
@@ -8736,7 +8767,12 @@ namespace Caelum.Pages
                 {
                     To = 0.0,
                     Duration = duration,
-                    EasingFunction = ease
+                    EasingFunction = ease,
+                    // Dependent too: a mid-flight direction flip reads
+                    // PagesShiftTransform.X above, and independent
+                    // (compositor) animations don't update the DP — the
+                    // read would see the stale start value and snap.
+                    EnableDependentAnimation = true
                 };
                 Storyboard.SetTarget(shiftAnimation, PagesShiftTransform);
                 Storyboard.SetTargetProperty(shiftAnimation, nameof(TranslateTransform.X));
@@ -8755,6 +8791,33 @@ namespace Caelum.Pages
             };
             _sidebarGeometryStoryboard = storyboard;
             storyboard.Begin();
+        }
+
+        /// <summary>
+        /// Arrange-space X of <see cref="PagesContainer"/> inside the
+        /// <see cref="PdfScrollViewer"/> extent for a given margin-left —
+        /// NOT the margin itself. The container is
+        /// <c>HorizontalAlignment="Center"</c>: while the content fits the
+        /// viewport it centres inside the extent
+        /// (<c>mL + max(0, viewportW − mL − mR − contentW)/2</c>); once it
+        /// overflows it hugs the left margin (<c>mL</c>). Using the raw
+        /// margin delta as the slide compensation would overshoot ~2× in
+        /// the fits-viewport case (the dominant layout) — the stack would
+        /// teleport sideways, then drift back. The margin's Right
+        /// component is invariant across the collapse/expand presets, and a
+        /// zero/negative viewport (pre-layout) degrades to the margin
+        /// delta, matching the old behaviour where the animation doesn't
+        /// run anyway.
+        /// </summary>
+        private double PagesArrangeXForMargin(double marginLeft)
+        {
+            if (PagesContainer == null || PdfScrollViewer == null)
+                return marginLeft;
+            double spare = PdfScrollViewer.ViewportWidth
+                - marginLeft
+                - PagesContainer.Margin.Right
+                - PagesContainer.ActualWidth;
+            return marginLeft + Math.Max(0.0, spare) / 2.0;
         }
 
         /// <summary>

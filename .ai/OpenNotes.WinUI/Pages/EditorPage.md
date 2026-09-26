@@ -529,6 +529,15 @@ the Task 9 Phase A save/autosave + close/dirty protocol is live (T9-B defers set
 - **Checked toggles** fade a `CheckedLayer` (`ThemeSelectionBrush`) and
   grow the named `ActiveBar` accent underline from 60 % width via a
   `ScaleTransform` — `ActiveBar` is a UIA/test probe, never rename it.
+  **WinUI toggle VSM trap (quality-review fix):**
+  `ToggleButton.ChangeVisualState` issues ONE `GoToState` with COMBINED
+  names (`Checked`, `CheckedPointerOver`, `CheckedPressed`,
+  `CheckedDisabled`, `Indeterminate*`) in the single CommonStates group —
+  the WPF two-dimension model does not apply. All 12 stock state names
+  live in `CommonStates` and every `Checked*` state carries the full
+  checked visual inline (CheckedLayer + ActiveBar + the interaction
+  overlay/scale for that state); a separate `CheckStates` group leaves
+  Pressed visuals stuck for the whole checked lifetime.
 - **Toolbar shell** stays the floating pill: `ToolbarBorder` =
   `ThemeToolbarBrush` (opaque — no acrylic), `ThemeRadiusPill`,
   `BorderThickness=1` `ThemeBorderBrush`, `ThemeShadow` +
@@ -547,7 +556,11 @@ the Task 9 Phase A save/autosave + close/dirty protocol is live (T9-B defers set
   chevron buttons (32×32 `ToolbarButtonStyle`), hairline separators at
   0.75 opacity, borderless semibold `Editor.PageJump` TextBox +
   subdued `/ N` `PageCountText`. `Editor.PageJumpGroup` HelpText keeps
-  the DEBUG `current-page=N` probe.
+  the DEBUG `current-page=N` probe. `PageJumpReservedSpace` is
+  **coupled to the pill's auto-sized width** (~148 DIP at ≤3-digit
+  page counts) — it reserves 152 DIP so neighbours never slide under
+  the overlay; keep it ≥ the pill's real width if the navigator is
+  ever widened.
 - **DocumentSidebar** renders as one coherent Fluent card instead of a
   flat block: `Margin="12,70,0,12"`, outer Border =
   `ThemeSurfaceBrush` + `ThemeBorderBrush` hairline +
@@ -584,8 +597,17 @@ the Task 9 Phase A save/autosave + close/dirty protocol is live (T9-B defers set
   entrance request). The `PagesContainer.Margin` snaps to the 32/228
   contract IMMEDIATELY so the `pages-margin-left` DEBUG HelpText probe
   always reads settled geometry; `PagesShiftTransform.X` compensates
-  and eases back to 0 so the stack appears to slide. Rapid toggles
-  capture live values before `Storyboard.Stop()` and resume — no wedge.
+  and eases back to 0 so the stack appears to slide. **Compensation
+  uses the arrange model** (`PagesArrangeXForMargin`) — `PagesContainer`
+  is `HorizontalAlignment="Center"`, so while content fits the
+  viewport its arrange X is `mL + max(0, viewportW − mL − mR − cw)/2`,
+  not `mL`; the raw margin delta would overcompensate ~2× in the
+  dominant fits-viewport layout. Both legs of the storyboard run
+  `EnableDependentAnimation = true` — a mid-flight direction flip
+  re-reads `PagesShiftTransform.X`/`DocumentSidebar.Width`, and
+  independent (compositor) animations never update the DP (the read
+  would see the stale start value and snap). Rapid toggles capture
+  live values before `Storyboard.Stop()` and resume — no wedge.
   Instant paths: `!ShouldAnimate`, unloaded page, `_resourcesReleased`,
   AND the ≤375 DIP narrow auto-collapse
   (`AutoCollapseSidebarForNarrowLayout` and the
@@ -617,8 +639,17 @@ the Task 9 Phase A save/autosave + close/dirty protocol is live (T9-B defers set
   up the new Foreground automatically) and loops
   `SidebarPageItems` calling `item.RefreshThemeBrushes()` (re-raises
   `PropertyChanged` for the two captured-brush properties so the
-  x:Bind OneWay consumers re-read). Unsubscribe lives in
-  `ReleaseResourcesAsync` next to the language unsubscribe.
+  x:Bind OneWay consumers re-read). The handler also re-stamps the
+  persistent bookmark toggle (`ApplyLocalizedBookmarkLabel`),
+  `RulerIcon.Stroke`, and **rebuilds a visible ruler overlay**
+  (`_rulerVisual`/`_rulerTickCanvas` are nulled, `EnsureRulerVisual`
+  re-creates with fresh brushes, and `_rulerCenter`/`_rulerAngle`/
+  `_rulerLength` are restored — drag/rotate/resize state is dropped
+  with the old visual). Unsubscribe lives in `ReleaseResourcesAsync`
+  next to the language unsubscribe. Accepted residual: per-page
+  delete/insert chrome and flyout color swatches also capture
+  brushes imperatively but are rebuilt on each render/open, so they
+  self-heal on next interaction.
 - `DocumentSidebarListBoxItemStyle` stays `ListViewItemPresenter`-based
   (native hover/selection visuals) with `ThemeRadiusControl` corners;
   `ModernTextBox`/`ModernListBox` unchanged. Every chrome color is a
@@ -638,6 +669,26 @@ the Task 9 Phase A save/autosave + close/dirty protocol is live (T9-B defers set
   flow (no WPF caller).
 
 ## Change History
+- 2026-09-26 T12-B quality-review fixes (over `d5baeb9`): (1)
+  `ToolbarToggleButtonStyle` rebuilt to the stock single-group VSM
+  model — WinUI `ToggleButton` emits combined `Checked*`/
+  `Indeterminate*` names in `CommonStates`, so every combined state
+  now carries its full visual inline (fixed: Pressed layer + 0.96
+  squish stuck for the whole checked lifetime, no hover/press/disabled
+  feedback on checked toggles — all 11 toolbar toggles +
+  `BookmarkToggleButton`). (2) `PagesShiftTransform` compensation now
+  uses `PagesArrangeXForMargin` — the centered `PagesContainer`'s
+  arrange X is `mL + max(0, viewportW − mL − mR − cw)/2`, so the old
+  raw-margin delta overcompensated ~2× whenever content fit the
+  viewport (teleport + drift rubber-band). (3) Shift animation gained
+  `EnableDependentAnimation = true` so mid-flight flips read the live
+  DP instead of a stale start value (Width leg already had it).
+  (4) Nits: `PageLabel` automation-name bind `OneTime`→`OneWay`
+  (re-localizes), unused `xmlns:primitives` removed, duplicate
+  `DocumentSidebar.Width` write dropped, `PageJumpReservedSpace`
+  144→152 with a coupling comment, and `EditorPage_ThemeApplied` now
+  rebuilds a visible ruler overlay so its imperative brushes re-resolve
+  (centre/angle/length preserved). | Devin
 - 2026-09-26 T12-B spec-review fixes (over `f2d5349`): (1) theme-swap
   staleness — `EditorPage` now subscribes `WinUiThemeService.ThemeApplied`
   in `Loaded` (`_themeAppliedSubscribed` guard, unsubscribed in

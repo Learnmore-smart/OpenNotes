@@ -3,7 +3,6 @@
       xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
       xmlns:controls="using:Caelum.Controls"
       xmlns:pages="using:Caelum.Pages"
-      xmlns:primitives="using:Microsoft.UI.Xaml.Controls.Primitives"
       Background="{ThemeResource ThemeWindowBrush}"
       SizeChanged="EditorPage_SizeChanged"
       PreviewKeyDown="EditorPage_PreviewKeyDown">
@@ -93,8 +92,17 @@
              selection tint lives on a CheckedLayer that fades in, and the
              ActiveBar accent underline grows from 60% width with an opacity
              fade (keep the ActiveBar element name — UIA/tests probe it).
-             All fades are generated VisualTransitions like the chrome
-             styles in MainWindow.xaml. -->
+             IMPORTANT — WinUI ToggleButton.ChangeVisualState issues ONE
+             GoToState with combined names (CheckedPointerOver/
+             CheckedPressed/CheckedDisabled while checked) in the single
+             CommonStates group, NOT the WPF two-dimension model where
+             CommonStates and CheckStates update independently. Every
+             combined state must therefore carry its full visuals inline:
+             a bare Checked in a second group would leave the Pressed
+             layer + squish stuck for the whole checked lifetime and give
+             checked toggles no hover/press/disabled feedback. The state
+             list mirrors the stock template (12 CommonStates entries);
+             transitions still do the animated reveals. -->
         <Style x:Key="ToolbarToggleButtonStyle" TargetType="ToggleButton">
             <Setter Property="Background" Value="Transparent"/>
             <Setter Property="Foreground" Value="{ThemeResource ThemeTextBrush}"/>
@@ -116,6 +124,14 @@
                                         <VisualTransition To="PointerOver" GeneratedDuration="0:0:0.12"/>
                                         <VisualTransition To="Pressed" GeneratedDuration="0:0:0.06"/>
                                         <VisualTransition To="Disabled" GeneratedDuration="0:0:0.12"/>
+                                        <VisualTransition To="Checked" GeneratedDuration="0:0:0.15"/>
+                                        <VisualTransition To="CheckedPointerOver" GeneratedDuration="0:0:0.15"/>
+                                        <VisualTransition To="CheckedPressed" GeneratedDuration="0:0:0.15"/>
+                                        <VisualTransition To="CheckedDisabled" GeneratedDuration="0:0:0.12"/>
+                                        <VisualTransition To="Indeterminate" GeneratedDuration="0:0:0.12"/>
+                                        <VisualTransition To="IndeterminatePointerOver" GeneratedDuration="0:0:0.12"/>
+                                        <VisualTransition To="IndeterminatePressed" GeneratedDuration="0:0:0.06"/>
+                                        <VisualTransition To="IndeterminateDisabled" GeneratedDuration="0:0:0.12"/>
                                     </VisualStateGroup.Transitions>
                                     <VisualState x:Name="Normal"/>
                                     <VisualState x:Name="PointerOver">
@@ -137,13 +153,10 @@
                                             <Setter Target="ToggleChrome.Opacity" Value="0.55"/>
                                         </VisualState.Setters>
                                     </VisualState>
-                                </VisualStateGroup>
-                                <VisualStateGroup x:Name="CheckStates">
-                                    <VisualStateGroup.Transitions>
-                                        <VisualTransition To="Checked" GeneratedDuration="0:0:0.15"/>
-                                        <VisualTransition To="Unchecked" GeneratedDuration="0:0:0.12"/>
-                                        <VisualTransition To="Indeterminate" GeneratedDuration="0:0:0.12"/>
-                                    </VisualStateGroup.Transitions>
+                                    <!-- Checked visuals ride inside EVERY combined checked
+                                         state so checking/pressing/hovering/disabling a
+                                         checked toggle never drops the selection layer or
+                                         the ActiveBar. -->
                                     <VisualState x:Name="Checked">
                                         <VisualState.Setters>
                                             <Setter Target="CheckedLayer.Opacity" Value="1"/>
@@ -151,8 +164,57 @@
                                             <Setter Target="ActiveBarScale.ScaleX" Value="1"/>
                                         </VisualState.Setters>
                                     </VisualState>
-                                    <VisualState x:Name="Unchecked"/>
+                                    <VisualState x:Name="CheckedPointerOver">
+                                        <VisualState.Setters>
+                                            <Setter Target="CheckedLayer.Opacity" Value="1"/>
+                                            <Setter Target="ActiveBar.Opacity" Value="1"/>
+                                            <Setter Target="ActiveBarScale.ScaleX" Value="1"/>
+                                            <Setter Target="StateLayer.Background" Value="{ThemeResource ThemeControlHoverBrush}"/>
+                                            <Setter Target="StateLayer.Opacity" Value="1"/>
+                                        </VisualState.Setters>
+                                    </VisualState>
+                                    <VisualState x:Name="CheckedPressed">
+                                        <VisualState.Setters>
+                                            <Setter Target="CheckedLayer.Opacity" Value="1"/>
+                                            <Setter Target="ActiveBar.Opacity" Value="1"/>
+                                            <Setter Target="ActiveBarScale.ScaleX" Value="1"/>
+                                            <Setter Target="StateLayer.Background" Value="{ThemeResource ThemeControlPressedBrush}"/>
+                                            <Setter Target="StateLayer.Opacity" Value="1"/>
+                                            <Setter Target="ToggleChromeScale.ScaleX" Value="0.96"/>
+                                            <Setter Target="ToggleChromeScale.ScaleY" Value="0.96"/>
+                                        </VisualState.Setters>
+                                    </VisualState>
+                                    <VisualState x:Name="CheckedDisabled">
+                                        <VisualState.Setters>
+                                            <Setter Target="CheckedLayer.Opacity" Value="1"/>
+                                            <Setter Target="ActiveBar.Opacity" Value="1"/>
+                                            <Setter Target="ActiveBarScale.ScaleX" Value="1"/>
+                                            <Setter Target="ToggleChrome.Opacity" Value="0.55"/>
+                                        </VisualState.Setters>
+                                    </VisualState>
+                                    <!-- Three-state names for completeness — the toolbar
+                                         toggles are two-state so these are never emitted;
+                                         they mirror the unchecked interaction visuals. -->
                                     <VisualState x:Name="Indeterminate"/>
+                                    <VisualState x:Name="IndeterminatePointerOver">
+                                        <VisualState.Setters>
+                                            <Setter Target="StateLayer.Background" Value="{ThemeResource ThemeControlHoverBrush}"/>
+                                            <Setter Target="StateLayer.Opacity" Value="1"/>
+                                        </VisualState.Setters>
+                                    </VisualState>
+                                    <VisualState x:Name="IndeterminatePressed">
+                                        <VisualState.Setters>
+                                            <Setter Target="StateLayer.Background" Value="{ThemeResource ThemeControlPressedBrush}"/>
+                                            <Setter Target="StateLayer.Opacity" Value="1"/>
+                                            <Setter Target="ToggleChromeScale.ScaleX" Value="0.96"/>
+                                            <Setter Target="ToggleChromeScale.ScaleY" Value="0.96"/>
+                                        </VisualState.Setters>
+                                    </VisualState>
+                                    <VisualState x:Name="IndeterminateDisabled">
+                                        <VisualState.Setters>
+                                            <Setter Target="ToggleChrome.Opacity" Value="0.55"/>
+                                        </VisualState.Setters>
+                                    </VisualState>
                                 </VisualStateGroup>
                             </VisualStateManager.VisualStateGroups>
                             <Border x:Name="Root" Background="{TemplateBinding Background}"
@@ -326,7 +388,7 @@
         <DataTemplate x:Key="SidebarPageItemTemplate" x:DataType="pages:SidebarPageItem">
             <StackPanel Margin="0,2"
                         AutomationProperties.AutomationId="{x:Bind AutomationId, Mode=OneTime}"
-                        AutomationProperties.Name="{x:Bind PageLabel, Mode=OneTime}">
+                        AutomationProperties.Name="{x:Bind PageLabel, Mode=OneWay}">
                 <Border CornerRadius="{ThemeResource ThemeRadiusCard}"
                         Background="{ThemeResource ThemeSurfaceAltBrush}"
                         BorderBrush="{x:Bind CardBorderBrush, Mode=OneWay}"
@@ -559,9 +621,12 @@
                                                  Stroke="{ThemeResource ThemeForegroundBrush}"/>
                         </ToggleButton>
 
-                        <!-- Reserve the toolbar midpoint for the centered page navigator. -->
+                        <!-- Reserve the toolbar midpoint for the centered page navigator.
+                             Coupled to CenteredPageJumpHost's auto-sized width (~148 DIP
+                             at ≤3-digit page counts): the reserve must never be narrower
+                             or neighbouring buttons slide under the overlay pill. -->
                         <Border x:Name="PageJumpReservedSpace"
-                                Width="144"
+                                Width="152"
                                 Height="36"
                                 Margin="1,0"
                                 Background="Transparent"
