@@ -10,7 +10,7 @@
 > exists/stubbed, intentionally off) · ❌ dropped (with reason) · — not applicable to WinUI.
 > `[manual]` = needs a real-device/desktop-session check; headless evidence only today.
 
-## Headline gaps (open at audit time; G2/G3/G4 closed 2026-09-25, G5/G6 closed 2026-09-26 — see rows)
+## Headline gaps — ALL CLOSED (G1+G8 2026-09-25, G2/G3/G4 2026-09-25, G5/G6 2026-09-26); G7/G9/G10 are documented decisions, not open defects
 
 | # | Gap | Severity | Plan |
 |---|---|---|---|
