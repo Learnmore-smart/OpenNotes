@@ -497,7 +497,7 @@ namespace Caelum
             }
             catch (Exception ex)
             {
-                ShowToast(LocalizationService.Format("Editor.SaveFailed", ex.Message), "", 3500);
+                ShowToast(LocalizationService.Format("Editor.SaveFailed", ex.Message), "", 3500);
             }
             finally
             {
@@ -571,7 +571,7 @@ namespace Caelum
             }
             catch (Exception ex)
             {
-                ShowToast(LocalizationService.Format("Editor.SaveFailed", ex.Message), "", 3500);
+                ShowToast(LocalizationService.Format("Editor.SaveFailed", ex.Message), "", 3500);
                 // The suffix was prepared but never released — a
                 // timeout/failure must not strand those editors in a
                 // close-preparation state or leave them half-detached.
@@ -1663,6 +1663,10 @@ namespace Caelum
 
             if (!WinUiThemeService.ShouldAnimate || fadeOut == TimeSpan.Zero)
             {
+                // A completed HoldEnd fade-in still owns Opacity — the local
+                // 0.0 set would lose to it. Same retained-storyboard stop as
+                // the ShowToast re-seed path.
+                _toastStoryboard?.Stop();
                 ToastBorder.Opacity = 0.0;
                 ToastBorder.Visibility = Visibility.Collapsed;
             }

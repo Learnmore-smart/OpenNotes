@@ -321,6 +321,38 @@ public sealed class WinUiHomeDialogPolishSourceTests
         });
     }
 
+    [Test]
+    public void DangerConfirmButtonStyleCarriesARealTemplateWithDangerStates()
+    {
+        string app = Read("App.xaml");
+        string service = Read("Services", "WinUiDialogService.cs");
+
+        Assert.Multiple(() =>
+        {
+            // The style lives in App.xaml (WPF DialogDangerButton role) with
+            // a full ControlTemplate + VisualStateManager — a code-only
+            // Background setter let the stock Button template repaint the
+            // fill generic gray on PointerOver/Pressed, erasing the warning
+            // color on the hover-to-click path.
+            Assert.That(app, Does.Contain("x:Key=\"DialogDangerButtonStyle\""));
+            Assert.That(app, Does.Contain("<ControlTemplate TargetType=\"Button\">"));
+            Assert.That(app, Does.Contain("<VisualStateManager.VisualStateGroups>"));
+
+            // Danger fill resting on the theme brush; hover/press paint a
+            // translucent StateLayer darker/darkest; disabled dims.
+            Assert.That(app, Does.Contain(
+                "Value=\"{ThemeResource ThemeDangerBrush}\""));
+            Assert.That(app, Does.Contain("<VisualState x:Name=\"PointerOver\">"));
+            Assert.That(app, Does.Contain("<VisualState x:Name=\"Pressed\">"));
+            Assert.That(app, Does.Contain("<VisualState x:Name=\"Disabled\">"));
+            Assert.That(app, Does.Contain("x:Name=\"StateLayer\""));
+
+            // The dialog service resolves the style instead of handing a
+            // template-less Style to ContentDialog.PrimaryButtonStyle.
+            Assert.That(service, Does.Contain("\"DialogDangerButtonStyle\""));
+        });
+    }
+
     private static string Read(params string[] segments)
     {
         return File.ReadAllText(Path.Combine(

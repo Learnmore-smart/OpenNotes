@@ -87,6 +87,76 @@
             <CornerRadius x:Key="ThemeRadiusCard">10</CornerRadius>
             <CornerRadius x:Key="ThemeRadiusPill">12</CornerRadius>
 
+            <!-- Filled danger confirm button for code-built ContentDialogs
+                 (WPF DialogDangerButton role), resolved from code by
+                 WinUiDialogService.BuildDangerButtonStyle. A code-only
+                 Background setter is NOT enough: the stock Button
+                 template's VSM setters would repaint the fill generic gray
+                 on PointerOver/Pressed — the warning color must survive
+                 the hover-to-click path. Same StateLayer + generated
+                 transition convention as the T12/T13 styles (brushes can't
+                 animate; the dedicated StateLayer's Opacity is what the
+                 transitions interpolate). The fill rests on
+                 ThemeDangerBrush; hover/press darken it with translucent
+                 black StateLayer overlays (the palette carries no danger
+                 ramp tokens) and Disabled drops to 55%. -->
+            <Style x:Key="DialogDangerButtonStyle" TargetType="Button">
+                <Setter Property="Background" Value="{ThemeResource ThemeDangerBrush}"/>
+                <Setter Property="Foreground" Value="White"/>
+                <Setter Property="FontSize" Value="13"/>
+                <Setter Property="FontWeight" Value="SemiBold"/>
+                <Setter Property="Height" Value="34"/>
+                <Setter Property="MinWidth" Value="96"/>
+                <Setter Property="Padding" Value="16,0"/>
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="Button">
+                            <Border x:Name="Root"
+                                    Background="{TemplateBinding Background}"
+                                    CornerRadius="{ThemeResource ThemeRadiusControl}"
+                                    RenderTransformOrigin="0.5,0.5">
+                                <Border.RenderTransform>
+                                    <ScaleTransform x:Name="RootScale"/>
+                                </Border.RenderTransform>
+                                <VisualStateManager.VisualStateGroups>
+                                    <VisualStateGroup x:Name="CommonStates">
+                                        <VisualStateGroup.Transitions>
+                                            <VisualTransition To="Normal" GeneratedDuration="0:0:0.12"/>
+                                            <VisualTransition To="PointerOver" GeneratedDuration="0:0:0.12"/>
+                                            <VisualTransition To="Pressed" GeneratedDuration="0:0:0.06"/>
+                                            <VisualTransition To="Disabled" GeneratedDuration="0:0:0.12"/>
+                                        </VisualStateGroup.Transitions>
+                                        <VisualState x:Name="Normal"/>
+                                        <VisualState x:Name="PointerOver">
+                                            <VisualState.Setters>
+                                                <Setter Target="StateLayer.Background" Value="#1A000000"/>
+                                                <Setter Target="StateLayer.Opacity" Value="1"/>
+                                            </VisualState.Setters>
+                                        </VisualState>
+                                        <VisualState x:Name="Pressed">
+                                            <VisualState.Setters>
+                                                <Setter Target="StateLayer.Background" Value="#33000000"/>
+                                                <Setter Target="StateLayer.Opacity" Value="1"/>
+                                                <Setter Target="RootScale.ScaleX" Value="0.96"/>
+                                                <Setter Target="RootScale.ScaleY" Value="0.96"/>
+                                            </VisualState.Setters>
+                                        </VisualState>
+                                        <VisualState x:Name="Disabled">
+                                            <VisualState.Setters>
+                                                <Setter Target="Root.Opacity" Value="0.55"/>
+                                            </VisualState.Setters>
+                                        </VisualState>
+                                    </VisualStateGroup>
+                                </VisualStateManager.VisualStateGroups>
+                                <Grid>
+                                    <Border x:Name="StateLayer" CornerRadius="{ThemeResource ThemeRadiusControl}" Opacity="0" IsHitTestVisible="False"/>
+                                    <ContentPresenter Margin="{TemplateBinding Padding}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                </Grid>
+                            </Border>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
 
         </ResourceDictionary>
     </Application.Resources>

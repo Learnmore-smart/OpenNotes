@@ -208,20 +208,30 @@ namespace Caelum.Services
 
         /// <summary>
         /// Danger confirm chrome: red filled button, matching the WPF
-        /// <c>DialogDangerButton</c> role. Built once in code so it can pull
-        /// the live <c>ThemeDangerBrush</c>.
+        /// <c>DialogDangerButton</c> role. The full ControlTemplate +
+        /// VisualStateManager live in App.xaml's
+        /// <c>DialogDangerButtonStyle</c> — a code-only Background setter
+        /// would let the stock Button template's state setters repaint the
+        /// fill generic gray on PointerOver/Pressed, erasing the warning
+        /// color exactly when the user hovers to click. The bare-setter
+        /// fallback below only runs if that resource is ever missing, and
+        /// still pulls the live <c>ThemeDangerBrush</c>.
         /// </summary>
         private static Style BuildDangerButtonStyle()
         {
-            var style = new Style(typeof(Button));
+            if (Application.Current?.Resources?.TryGetValue("DialogDangerButtonStyle", out var resource) == true
+                && resource is Style style)
+                return style;
+
+            var fallback = new Style(typeof(Button));
             Brush danger = null;
             if (Application.Current?.Resources?.TryGetValue("ThemeDangerBrush", out var value) == true)
                 danger = value as Brush;
-            style.Setters.Add(new Setter(Control.BackgroundProperty,
+            fallback.Setters.Add(new Setter(Control.BackgroundProperty,
                 danger ?? new SolidColorBrush(Windows.UI.Color.FromArgb(0xFF, 0xB4, 0x23, 0x18))));
-            style.Setters.Add(new Setter(Control.ForegroundProperty,
+            fallback.Setters.Add(new Setter(Control.ForegroundProperty,
                 new SolidColorBrush(Microsoft.UI.Colors.White)));
-            return style;
+            return fallback;
         }
     }
 }
