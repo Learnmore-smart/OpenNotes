@@ -137,6 +137,20 @@ public sealed class WinUiFluentPolishSourceTests
         string editor = Read("Pages", "EditorPage.xaml.cs");
         string l10n = ReadCore("Services", "LocalizationService.cs");
 
+        // Slice RunPdfSearchAsync so the completed-path ordering can be
+        // pinned below (re-review regression).
+        int bodyStart = editor.IndexOf("private async Task RunPdfSearchAsync(", StringComparison.Ordinal);
+        int bodyEnd = bodyStart < 0 ? -1 : editor.IndexOf(
+            "private async void PdfSearchResultsListBox_SelectionChanged", bodyStart, StringComparison.Ordinal);
+        Assert.That(bodyStart, Is.GreaterThanOrEqualTo(0));
+        Assert.That(bodyEnd, Is.GreaterThan(bodyStart));
+        string searchBody = editor.Substring(bodyStart, bodyEnd - bodyStart);
+        int resultItems = searchBody.IndexOf("PdfSearchResultsListBox.Items.Add(new ListViewItem", StringComparison.Ordinal);
+        int tailClear = resultItems < 0 ? -1 : searchBody.IndexOf(
+            "_pdfSearchInFlight = false;", resultItems, StringComparison.Ordinal);
+        int finalStamp = tailClear < 0 ? -1 : searchBody.IndexOf(
+            "UpdatePdfSearchEmptyState();", tailClear, StringComparison.Ordinal);
+
         Assert.Multiple(() =>
         {
             // Automation ids + card chrome.
@@ -163,6 +177,18 @@ public sealed class WinUiFluentPolishSourceTests
             Assert.That(editor, Does.Contain("_pdfSearchResults.Count == 0 && !_pdfSearchInFlight"));
             Assert.That(editor, Does.Contain("_pdfSearchInFlight = true;"));
             Assert.That(editor, Does.Not.Contain("string.Equals(PdfSearchStatusTextBlock?.Text"));
+
+            // Regression pin: a completed run clears the flag in the
+            // synchronous tail BEFORE the final empty-state stamp —
+            // stamping while the flag is still true suppresses the
+            // "No matches" overlay, and the finally's guarded clear runs
+            // after the last stamp with nothing left to re-stamp, so a
+            // finished 0-hit search would hide the overlay forever.
+            Assert.That(resultItems, Is.GreaterThanOrEqualTo(0));
+            Assert.That(tailClear, Is.GreaterThan(resultItems),
+                "the in-flight flag must be cleared in the completed-path tail");
+            Assert.That(finalStamp, Is.GreaterThan(tailClear),
+                "the final UpdatePdfSearchEmptyState stamp must run after the tail clear");
 
             // Both strings exist in every shipped locale (en/zh-Hans/fr).
             Assert.That(l10n, Does.Contain("[\"Editor.SearchNoResults\"]"));

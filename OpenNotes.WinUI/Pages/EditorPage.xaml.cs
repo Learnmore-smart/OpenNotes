@@ -10542,6 +10542,17 @@ namespace Caelum.Pages
                         Tag = result,
                         Style = resultStyle,
                     });
+                // A completed run clears the in-flight flag BEFORE the
+                // final status write + empty-state stamp: stamping while
+                // the flag is still true suppresses the "No matches"
+                // overlay, and the finally's guarded clear runs after this
+                // stamp with nothing left to re-stamp — a finished 0-hit
+                // search would hide the overlay forever. The last
+                // ThrowIfCancellationRequested above already ran, so this
+                // synchronous tail cannot observe a cancellation; the
+                // finally's clear still covers the exception/cancel paths
+                // that never reach here.
+                _pdfSearchInFlight = false;
                 PdfSearchStatusTextBlock.Text = LocalizationService.Format("Editor.SearchResults", _pdfSearchResults.Count);
                 UpdatePdfSearchEmptyState();
                 if (_pdfSearchResults.Count > 0)
