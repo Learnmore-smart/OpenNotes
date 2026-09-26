@@ -1,5 +1,5 @@
 # OpenNotes.WinUI/Pages/HomePage.xaml.cs
-> Last updated: 2026-09-25 (V6 Task 9 Phase B — shared template picker) | Protection: STANDARD
+> Last updated: 2026-09-26 (T12-C — tile card motion + drop-overlay fade + drill-in nav) | Protection: STANDARD
 
 ## Purpose
 `Caelum.Pages.HomePage : Page` (partial with `HomePage.Utilities.cs`) — the WinUI port of the WPF library home (~1,500 lines vs WPF's larger original). Drives tile loading, folder navigation, search/sort, add/create flows, context menus, drag/drop, file open → `EditorPage`, delete/rename/export, and toasts via `MainWindow`.
@@ -35,4 +35,5 @@
 - WPF's `RefreshOpenContextMenus` has no port: menus are per-show `MenuFlyout`s, so a live language change can't leave stale strings.
 
 ## Change History
+- 2026-09-26 T12-C Fluent treatment: tile cards get per-element motion — template-root `TranslateTransform`s lift −2px on hover (`TileCard_PointerEntered/Exited` on the folder/file `Border`s, `TileButton_*` on the add-tile `Button`), settle to 0 on `handledEventsToo` press/release/capture-lost wired once from `TileCard_Loaded`, and `PlayTileCardEntrance` fades+rises each card with a 25ms/index stagger (cap 200ms) via `TilesRepeater.GetElementIndex`. `SetDragDropOverlayVisible(bool)` is the single funnel for overlay visibility (120ms fade-in only; tint goes opaque under `ReduceTransparency`). `PlaySelectionBarEntrance` fades+rises `SelectionActionBar` on `SetSelectionMode(true)`. Folder color submenu items carry `PathIcon` ellipse swatch dots; the submenu itself a `\uE790` FontIcon. Fallback `Frame?.Navigate(EditorPage)` sites pass `GetEditorNavTransitionInfo()` (DrillIn / Suppress under reduced motion). All storyboards fire-and-forget (never fielded), gated on `WinUiThemeService.ShouldAnimate`+`GetAnimationDuration`. | Devin
 - 2026-09-25 Task 9 Phase B: `PickNotebookTemplateAsync` now hosts the shared `PageTemplatePickerDialog` (notebook-creation mode, folder row + gated Create) instead of the inline radio-card stand-in; `NotebookTemplateOptions` removed. | Devin

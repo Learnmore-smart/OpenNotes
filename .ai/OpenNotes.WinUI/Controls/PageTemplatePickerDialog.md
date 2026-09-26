@@ -1,5 +1,5 @@
 # OpenNotes.WinUI/Controls/PageTemplatePickerDialog.cs
-> Last updated: 2026-09-25 (V6 Task 9 Phase B quality pass — real WPF keys + open-deferred subscriptions) | Protection: STANDARD
+> Last updated: 2026-09-26 (T12-C — Fluent card radii 18→10 / preview 16→8) | Protection: STANDARD
 
 ## Purpose
 `public sealed class PageTemplatePickerDialog : ContentDialog` (`Caelum.Controls`) — the WinUI port of the WPF `PageTemplatePickerWindow`. A 3×3 card grid where each card carries a code-drawn mini preview sketch (`BuildPreview`/`BuildStaffLines`/`MakeLine`), a localized title and a localized hint.
@@ -24,5 +24,6 @@
 - **Status:** GREEN — builds 0 err/0 warn; source-pinned by `WinUiDialogsServicesSourceTests.PageTemplatePickerCoversBothModesBehindTheGate`.
 
 ## Change History
+- 2026-09-26 T12-C: card `CornerRadius` 18→10 (ThemeRadiusCard) and preview well 16→8 — the WPF rounds read soft next to the T12 radius-token surfaces; purely cosmetic, both modes unchanged. | Devin
 - 2026-09-25 Task 9 Phase B quality pass: real WPF insert-mode keys (`Editor.InsertPageDialogTitle`/`Subtitle`) replace the nonexistent `Editor.PageTemplateTitle`/`Subtitle` (ctor-path `KeyNotFoundException` → async-void crash); language/theme subscriptions deferred ctor→`Opened` with `_opened` guards (a `ShowAsync` throw must not leak handlers). | Devin
 - 2026-09-25 Task 9 Phase B: initial WinUI port (WPF `PageTemplatePickerWindow` parity); replaced HomePage's compact radio-card stand-in. | Devin

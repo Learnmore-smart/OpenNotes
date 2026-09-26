@@ -116,6 +116,8 @@ namespace Caelum.Pages
             // DataTrigger; here it is filtered out of the visible list).
             RebuildVisibleTiles();
             RefreshSelectionState();
+            if (isEnabled)
+                PlaySelectionBarEntrance();
         }
 
         private void ToggleTileSelection(HomeTile tile)

@@ -681,6 +681,10 @@ namespace Caelum
             // them the way the WPF DynamicResource bindings did implicitly.
             foreach (var tab in _tabs)
                 (tab.Frame?.Content as HomePage)?.RefreshTileVisualState();
+            // T12-C: ReduceMotion is recomputed per Apply — re-evaluate the
+            // frame transition gate (empty collection = fully instant nav).
+            foreach (var tab in _tabs)
+                ApplyNavigationTransitions(tab.Frame);
             RefreshSelectButtonVisualState();
         }
 
@@ -782,12 +786,13 @@ namespace Caelum
             var tab = new AppTab { Title = GetHomeTabTitle(), Icon = "Home" };
             var frame = new Frame();
             frame.Navigated += Frame_Navigated;
+            ApplyNavigationTransitions(frame);
             tab.Frame = frame;
             TabContentArea.Children.Add(frame);
             frame.Visibility = Visibility.Collapsed;
             _tabs.Add(tab);
 
-            frame.Navigate(typeof(HomePage));
+            frame.Navigate(typeof(HomePage), null, GetNavigationTransitionInfo(drillIn: false));
 
             if (activate)
                 ActivateTab(tab);
@@ -1344,7 +1349,7 @@ namespace Caelum
                     {
                         if (ActiveFrame?.Content is EditorPage currentEditor)
                             currentEditor.SetHostActive(false);
-                        ActiveFrame?.GoBack();
+                        ActiveFrame?.GoBack(GetNavigationTransitionInfo(drillIn: false));
                         return Task.CompletedTask;
                     });
                 if (navigated && wasDirty)
@@ -1384,6 +1389,9 @@ namespace Caelum
                         ShowToast(LocalizationService.Get("Main.FileAutoSaved"));
                     editor.SetHostActive(false);
                 }
+                // GoForward has no transition-info overload (GoBack does) —
+                // the frame's ContentTransitions supplies the entrance, or
+                // stays empty under reduced motion.
                 ActiveFrame.GoForward();
             }
             catch (Exception ex)
@@ -1416,7 +1424,7 @@ namespace Caelum
                         ShowToast(LocalizationService.Get("Main.FileAutoSaved"));
                     editor.SetHostActive(false);
                 }
-                ActiveFrame.Navigate(typeof(HomePage));
+                ActiveFrame.Navigate(typeof(HomePage), null, GetNavigationTransitionInfo(drillIn: false));
             }
             catch (Exception ex)
             {
@@ -1657,7 +1665,7 @@ namespace Caelum
                 _activeTab.Title = Path.GetFileNameWithoutExtension(filePath);
                 _activeTab.Icon = "FileText";
                 _activeTab.FilePath = filePath;
-                ActiveFrame?.Navigate(typeof(EditorPage), filePath);
+                ActiveFrame?.Navigate(typeof(EditorPage), filePath, GetNavigationTransitionInfo(drillIn: true));
             }
             catch (Exception ex)
             {
@@ -1720,13 +1728,57 @@ namespace Caelum
             };
             var frame = new Frame();
             frame.Navigated += Frame_Navigated;
+            ApplyNavigationTransitions(frame);
             tab.Frame = frame;
             TabContentArea.Children.Add(frame);
             frame.Visibility = Visibility.Collapsed;
             _tabs.Add(tab);
-            frame.Navigate(typeof(EditorPage), filePath);
+            frame.Navigate(typeof(EditorPage), filePath, GetNavigationTransitionInfo(drillIn: true));
             ActivateTab(tab);
             UpdateCloseButtonVisibility();
+        }
+
+        // ── Frame navigation transitions (T12-C Fluent motion) ──────────
+
+        /// <summary>
+        /// Per-tab <see cref="Frame.ContentTransitions"/> gate: a
+        /// <see cref="NavigationThemeTransition"/> executing the caller's
+        /// <see cref="NavigationTransitionInfo"/> covers Navigate/GoBack/
+        /// GoForward uniformly; under reduced motion or high contrast the
+        /// collection stays EMPTY so no transition can ever play (the built-
+        /// in default frame transition is realized through exactly this
+        /// mechanism). Re-applied on ThemeApplied because ReduceMotion is
+        /// recomputed per <see cref="WinUiThemeService.Apply"/>.
+        /// </summary>
+        private static void ApplyNavigationTransitions(Frame frame)
+        {
+            if (frame == null)
+                return;
+
+            var transitions = new TransitionCollection();
+            if (WinUiThemeService.ShouldAnimate)
+            {
+                transitions.Add(new NavigationThemeTransition
+                {
+                    DefaultNavigationTransitionInfo = new EntranceNavigationTransitionInfo()
+                });
+            }
+            frame.ContentTransitions = transitions;
+        }
+
+        /// <summary>
+        /// Picks the per-navigation transition: entrance for home/back/
+        /// forward, drill-in for home → editor (the Fluent "open a detail"
+        /// motif), explicit suppress under reduced motion so every call site
+        /// stays instant regardless of the frame's ContentTransitions state.
+        /// </summary>
+        private static NavigationTransitionInfo GetNavigationTransitionInfo(bool drillIn)
+        {
+            if (!WinUiThemeService.ShouldAnimate)
+                return new SuppressNavigationTransitionInfo();
+            return drillIn
+                ? (NavigationTransitionInfo)new DrillInNavigationTransitionInfo()
+                : new EntranceNavigationTransitionInfo();
         }
 
         // ── Window-level file drop (WPF Window_Drop parity) ────────────────

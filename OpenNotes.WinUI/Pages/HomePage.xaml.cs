@@ -122,7 +122,16 @@ namespace Caelum.Pages
             if (sender is Button button)
             {
                 AnimateTileScale(button, isHovered: true);
-                if (button.Tag is HomeTile tile)
+                // T12-C card lift: only fires for a Button that IS the card
+                // root (the add tile) — the inner file/folder icon buttons
+                // carry no TranslateTransform and are skipped.
+                button.SetValue(TileCardHoverProperty, true);
+                AnimateCardLiftTo(button, TileCardHoverLift, 120);
+                // File/folder tile hover is owned by the template-root
+                // Border (TileCard_PointerEntered/Exited) so the tint does
+                // not flicker when sliding between icon and label; the add
+                // tile has no border, so its Button keeps driving it.
+                if (button.Tag is HomeTile tile && tile.IsAddTile)
                     tile.IsHovered = true;
             }
         }
@@ -132,7 +141,9 @@ namespace Caelum.Pages
             if (sender is Button button)
             {
                 AnimateTileScale(button, isHovered: false);
-                if (button.Tag is HomeTile tile)
+                button.SetValue(TileCardHoverProperty, false);
+                AnimateCardLiftTo(button, 0.0, 150);
+                if (button.Tag is HomeTile tile && tile.IsAddTile)
                     tile.IsHovered = false;
             }
         }
@@ -179,6 +190,273 @@ namespace Caelum.Pages
                 Storyboard.SetTargetProperty(animation, property);
                 storyboard.Children.Add(animation);
             }
+            storyboard.Begin();
+        }
+
+        // ── Tile card motion (T12-C Fluent treatment) ─────────────────────
+        //
+        // Each template ROOT (the add-tile Button / FolderTileBorder /
+        // FileTileBorder) carries a TranslateTransform. Hover lifts the card
+        // a couple of px, a press settles it back to rest while held, and a
+        // staggered fade+rise entrance runs on every Loaded (the repeater
+        // rebuilds elements on folder navigation / re-show, so the entrance
+        // naturally replays per surface). Everything routes through
+        // WinUiThemeService.GetAnimationDuration — under reduced motion or
+        // high contrast the values land instantly instead.
+        //
+        // Pointer press/release is wired with handledEventsToo from Loaded:
+        // the inner tile Buttons mark PointerPressed/Released handled, so
+        // plain XAML handlers on the card Border would never see the press.
+        // The storyboards are fire-and-forget (never fielded) — an unloaded
+        // element just lets its last animation finish.
+
+        private const double TileCardHoverLift = -2.0;
+        private const double TileEntranceRise = 8.0;
+        private const int TileEntranceStaggerMs = 25;
+        private const int TileEntranceStaggerCapMs = 200;
+
+        private static readonly DependencyProperty TileCardHoverProperty =
+            DependencyProperty.RegisterAttached(
+                "TileCardHover", typeof(bool), typeof(HomePage), new PropertyMetadata(false));
+
+        private static readonly DependencyProperty TileCardWiredProperty =
+            DependencyProperty.RegisterAttached(
+                "TileCardWired", typeof(bool), typeof(HomePage), new PropertyMetadata(false));
+
+        private void TileCard_Loaded(object sender, RoutedEventArgs e)
+        {
+            if (sender is not FrameworkElement card)
+                return;
+
+            if (card.GetValue(TileCardWiredProperty) is not true)
+            {
+                card.SetValue(TileCardWiredProperty, true);
+                card.AddHandler(PointerPressedEvent,
+                    new PointerEventHandler(TileCard_PointerPressed), handledEventsToo: true);
+                card.AddHandler(PointerReleasedEvent,
+                    new PointerEventHandler(TileCard_PointerSettled), handledEventsToo: true);
+                card.AddHandler(PointerCaptureLostEvent,
+                    new PointerEventHandler(TileCard_PointerSettled), handledEventsToo: true);
+            }
+
+            PlayTileCardEntrance(card);
+        }
+
+        private void TileCard_PointerEntered(object sender, PointerRoutedEventArgs e)
+        {
+            if (sender is not FrameworkElement card)
+                return;
+            card.SetValue(TileCardHoverProperty, true);
+            if (card.Tag is HomeTile tile)
+                tile.IsHovered = true;
+            AnimateCardLiftTo(card, TileCardHoverLift, 120);
+        }
+
+        private void TileCard_PointerExited(object sender, PointerRoutedEventArgs e)
+        {
+            if (sender is not FrameworkElement card)
+                return;
+            card.SetValue(TileCardHoverProperty, false);
+            if (card.Tag is HomeTile tile)
+                tile.IsHovered = false;
+            AnimateCardLiftTo(card, 0.0, 150);
+        }
+
+        private void TileCard_PointerPressed(object sender, PointerRoutedEventArgs e)
+        {
+            // Press = settle: the lifted card drops back to rest while held
+            // (fluent "press down" affordance; faster than the hover lift).
+            if (sender is FrameworkElement card)
+                AnimateCardLiftTo(card, 0.0, 60);
+        }
+
+        private void TileCard_PointerSettled(object sender, PointerRoutedEventArgs e)
+        {
+            if (sender is FrameworkElement card)
+            {
+                AnimateCardLiftTo(card,
+                    card.GetValue(TileCardHoverProperty) is true ? TileCardHoverLift : 0.0, 120);
+            }
+        }
+
+        /// <summary>
+        /// Eases the card's TranslateTransform.Y to <paramref name="targetY"/>.
+        /// Cheap, per-element, fire-and-forget — the same convention as
+        /// <see cref="AnimateTileScale"/> above (dependent animation +
+        /// cubic ease-out; instant when animations are disabled).
+        /// </summary>
+        private static void AnimateCardLiftTo(FrameworkElement card, double targetY, int requestedMs)
+        {
+            if (card?.RenderTransform is not TranslateTransform lift || lift.Y == targetY)
+                return;
+
+            var duration = WinUiThemeService.GetAnimationDuration(TimeSpan.FromMilliseconds(requestedMs));
+            if (!WinUiThemeService.ShouldAnimate || duration == TimeSpan.Zero)
+            {
+                lift.Y = targetY;
+                return;
+            }
+
+            var animation = new DoubleAnimation
+            {
+                To = targetY,
+                Duration = duration,
+                EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut },
+                EnableDependentAnimation = true
+            };
+            var storyboard = new Storyboard();
+            Storyboard.SetTarget(animation, lift);
+            Storyboard.SetTargetProperty(animation, nameof(TranslateTransform.Y));
+            storyboard.Children.Add(animation);
+            storyboard.Begin();
+        }
+
+        /// <summary>
+        /// First-show card entrance: fade + short rise, staggered by the
+        /// element's index inside <see cref="TilesRepeater"/> (~25 ms/step,
+        /// capped) so a fresh library reads as a quick cascade rather than a
+        /// wall pop. Skipped entirely under reduced motion — the card stays
+        /// at its XAML end-state.
+        /// </summary>
+        private void PlayTileCardEntrance(FrameworkElement card)
+        {
+            var duration = WinUiThemeService.GetAnimationDuration(TimeSpan.FromMilliseconds(200));
+            if (!WinUiThemeService.ShouldAnimate || duration == TimeSpan.Zero)
+                return;
+
+            var index = TilesRepeater != null
+                ? Math.Max(0, TilesRepeater.GetElementIndex(card))
+                : 0;
+            var begin = TimeSpan.FromMilliseconds(
+                Math.Min(index * TileEntranceStaggerMs, TileEntranceStaggerCapMs));
+            var ease = new CubicEase { EasingMode = EasingMode.EaseOut };
+
+            card.Opacity = 0;
+            var storyboard = new Storyboard();
+            var fade = new DoubleAnimation
+            {
+                To = 1.0,
+                Duration = duration,
+                EasingFunction = ease,
+                BeginTime = begin
+            };
+            Storyboard.SetTarget(fade, card);
+            Storyboard.SetTargetProperty(fade, nameof(UIElement.Opacity));
+            storyboard.Children.Add(fade);
+
+            if (card.RenderTransform is TranslateTransform lift)
+            {
+                lift.Y = TileEntranceRise;
+                var rise = new DoubleAnimation
+                {
+                    To = 0.0,
+                    Duration = duration,
+                    EasingFunction = ease,
+                    BeginTime = begin,
+                    EnableDependentAnimation = true
+                };
+                Storyboard.SetTarget(rise, lift);
+                Storyboard.SetTargetProperty(rise, nameof(TranslateTransform.Y));
+                storyboard.Children.Add(rise);
+            }
+
+            storyboard.Begin();
+        }
+
+        /// <summary>
+        /// Selection action-bar entrance — short fade + rise when the bar
+        /// appears (mirrors the tile entrance; the Visibility binding has
+        /// already flipped the card visible by the time this runs). Hide
+        /// stays instant: the x:Bind collapse can't be delayed.
+        /// </summary>
+        private void PlaySelectionBarEntrance()
+        {
+            if (SelectionActionBar == null || SelectionActionBar.Visibility != Visibility.Visible)
+                return;
+
+            var duration = WinUiThemeService.GetAnimationDuration(TimeSpan.FromMilliseconds(180));
+            if (!WinUiThemeService.ShouldAnimate || duration == TimeSpan.Zero)
+                return;
+
+            var ease = new CubicEase { EasingMode = EasingMode.EaseOut };
+            SelectionActionBar.Opacity = 0;
+            if (SelectionBarRiseTransform != null)
+                SelectionBarRiseTransform.Y = TileEntranceRise;
+
+            var storyboard = new Storyboard();
+            var fade = new DoubleAnimation
+            {
+                To = 1.0,
+                Duration = duration,
+                EasingFunction = ease
+            };
+            Storyboard.SetTarget(fade, SelectionActionBar);
+            Storyboard.SetTargetProperty(fade, nameof(UIElement.Opacity));
+            storyboard.Children.Add(fade);
+
+            if (SelectionBarRiseTransform != null)
+            {
+                var rise = new DoubleAnimation
+                {
+                    To = 0.0,
+                    Duration = duration,
+                    EasingFunction = ease,
+                    EnableDependentAnimation = true
+                };
+                Storyboard.SetTarget(rise, SelectionBarRiseTransform);
+                Storyboard.SetTargetProperty(rise, nameof(TranslateTransform.Y));
+                storyboard.Children.Add(rise);
+            }
+
+            storyboard.Begin();
+        }
+
+        /// <summary>
+        /// Single funnel for every <see cref="DragDropOverlay"/> visibility
+        /// flip (DragOver/DragLeave/Drop/DropCompleted/folder-hover). Showing
+        /// fades the overlay in (~120 ms, fire-and-forget); hiding stays
+        /// instant. DragOver re-fires continuously while the payload hovers,
+        /// so an already-visible overlay is left alone rather than restarting
+        /// the fade. The tint layer goes fully opaque under
+        /// <see cref="WinUiThemeService.ReduceTransparency"/>.
+        /// </summary>
+        private void SetDragDropOverlayVisible(bool visible)
+        {
+            if (DragDropOverlay == null)
+                return;
+
+            if (!visible)
+            {
+                DragDropOverlay.Visibility = Visibility.Collapsed;
+                DragDropOverlay.Opacity = 1.0;
+                return;
+            }
+
+            if (DragDropOverlay.Visibility == Visibility.Visible)
+                return;
+
+            if (DragDropOverlayTint != null)
+                DragDropOverlayTint.Opacity = WinUiThemeService.ReduceTransparency ? 1.0 : 0.6;
+
+            DragDropOverlay.Visibility = Visibility.Visible;
+            var duration = WinUiThemeService.GetAnimationDuration(TimeSpan.FromMilliseconds(120));
+            if (!WinUiThemeService.ShouldAnimate || duration == TimeSpan.Zero)
+            {
+                DragDropOverlay.Opacity = 1.0;
+                return;
+            }
+
+            DragDropOverlay.Opacity = 0;
+            var fade = new DoubleAnimation
+            {
+                To = 1.0,
+                Duration = duration,
+                EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
+            };
+            var storyboard = new Storyboard();
+            Storyboard.SetTarget(fade, DragDropOverlay);
+            Storyboard.SetTargetProperty(fade, nameof(UIElement.Opacity));
+            storyboard.Children.Add(fade);
             storyboard.Begin();
         }
 
@@ -585,11 +863,31 @@ namespace Caelum.Pages
             // Folder color submenu (WPF nested MenuItem → MenuFlyoutSubItem).
             var colorItem = new MenuFlyoutSubItem
             {
-                Text = LocalizationService.Get("Home.Context.Color")
+                Text = LocalizationService.Get("Home.Context.Color"),
+                Icon = new FontIcon { Glyph = "\uE790", FontSize = 14 }
             };
             foreach (var swatch in FolderColorSwatches)
             {
-                var swatchItem = new MenuFlyoutItem { Text = LocalizeFolderColor(swatch.Key), Tag = swatch.Hex };
+                // T12-C: a color-dot icon per swatch (the only menu rows that
+                // lacked one) — PathIcon ellipse filled with the swatch hex,
+                // same glyph-icon convention as the sibling items.
+                var swatchItem = new MenuFlyoutItem
+                {
+                    Text = LocalizeFolderColor(swatch.Key),
+                    Tag = swatch.Hex,
+                    Icon = new PathIcon
+                    {
+                        Data = new EllipseGeometry
+                        {
+                            Center = new Windows.Foundation.Point(8, 8),
+                            RadiusX = 7,
+                            RadiusY = 7
+                        },
+                        Foreground = WinUiThemeService.CreateBrush(swatch.Hex),
+                        Width = 16,
+                        Height = 16
+                    }
+                };
                 swatchItem.Click += async (_, _) =>
                 {
                     try
@@ -809,7 +1107,7 @@ namespace Caelum.Pages
             if (GetMainWindow() is MainWindow mw)
                 mw.NavigateActiveTabToFile(pdfPath);
             else
-                Frame?.Navigate(typeof(EditorPage), pdfPath);
+                Frame?.Navigate(typeof(EditorPage), pdfPath, GetEditorNavTransitionInfo());
         }
 
         private async Task CreateFolderAsync()
@@ -883,7 +1181,7 @@ namespace Caelum.Pages
                 if (GetMainWindow() is MainWindow mw)
                     mw.NavigateActiveTabToFile(notebookPath);
                 else
-                    Frame?.Navigate(typeof(EditorPage), notebookPath);
+                    Frame?.Navigate(typeof(EditorPage), notebookPath, GetEditorNavTransitionInfo());
             }
             catch (Exception ex)
             {
@@ -940,7 +1238,7 @@ namespace Caelum.Pages
                 if (GetMainWindow() is MainWindow mw)
                     mw.NavigateActiveTabToFile(tile.Path);
                 else
-                    Frame?.Navigate(typeof(EditorPage), tile.Path);
+                    Frame?.Navigate(typeof(EditorPage), tile.Path, GetEditorNavTransitionInfo());
             }
             catch
             {
@@ -1178,8 +1476,7 @@ namespace Caelum.Pages
             // highlights (an armed move-target stays lit, drag-hover goes
             // dark) and hide the page overlay so nothing sticks.
             UpdateFolderPlacementHighlights();
-            if (DragDropOverlay != null)
-                DragDropOverlay.Visibility = Visibility.Collapsed;
+            SetDragDropOverlayVisible(false);
         }
 
         private string[] GetDragCandidatePaths(HomeTile tile)
@@ -1297,7 +1594,7 @@ namespace Caelum.Pages
 
             // Hovering a folder must hide the page-level overlay even though
             // the routed DragOver may be handled before it reaches the page.
-            DragDropOverlay.Visibility = Visibility.Collapsed;
+            SetDragDropOverlayVisible(false);
             e.Handled = true;
         }
 
@@ -1307,7 +1604,7 @@ namespace Caelum.Pages
         {
             if (GetFolderTileFromSource(e.OriginalSource as DependencyObject) != null)
             {
-                DragDropOverlay.Visibility = Visibility.Collapsed;
+                SetDragDropOverlayVisible(false);
                 return;
             }
 
@@ -1316,24 +1613,24 @@ namespace Caelum.Pages
             if (hasLibraryPaths || hasStorageItems)
             {
                 e.AcceptedOperation = hasLibraryPaths ? DataPackageOperation.Move : DataPackageOperation.Copy;
-                DragDropOverlay.Visibility = Visibility.Visible;
+                SetDragDropOverlayVisible(true);
                 e.Handled = true;
             }
             else
             {
                 e.AcceptedOperation = DataPackageOperation.None;
-                DragDropOverlay.Visibility = Visibility.Collapsed;
+                SetDragDropOverlayVisible(false);
             }
         }
 
         private void HomePage_DragLeave(object sender, DragEventArgs e)
         {
-            DragDropOverlay.Visibility = Visibility.Collapsed;
+            SetDragDropOverlayVisible(false);
         }
 
         private async void HomePage_Drop(object sender, DragEventArgs e)
         {
-            DragDropOverlay.Visibility = Visibility.Collapsed;
+            SetDragDropOverlayVisible(false);
 
             if (GetFolderTileFromSource(e.OriginalSource as DependencyObject) != null)
                 return;
@@ -1460,6 +1757,19 @@ namespace Caelum.Pages
             // Single-window shell — the static is the WinUI stand-in for
             // Window.GetWindow(this)/Application.Current.MainWindow.
             return MainWindow.Current;
+        }
+
+        /// <summary>
+        /// T12-C: home → editor navigations drill in (Fluent "open a detail"
+        /// motif); reduced-motion / high-contrast users get an explicit
+        /// suppress so the fallback <c>Frame?.Navigate</c> path stays instant
+        /// even when it bypasses <see cref="MainWindow"/>'s transition gate.
+        /// </summary>
+        private static NavigationTransitionInfo GetEditorNavTransitionInfo()
+        {
+            return WinUiThemeService.ShouldAnimate
+                ? (NavigationTransitionInfo)new DrillInNavigationTransitionInfo()
+                : new SuppressNavigationTransitionInfo();
         }
 
         private static Brush ResolveThemeBrush(string key, string fallbackHex)

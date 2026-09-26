@@ -303,7 +303,9 @@ namespace Caelum.Controls
             {
                 Margin = new Thickness(8),
                 Padding = new Thickness(0),
-                CornerRadius = new CornerRadius(18),
+                // T12-C: Fluent card radius (ThemeRadiusCard) — the WPF 18px
+                // round read soft next to the T12 radius-token surfaces.
+                CornerRadius = new CornerRadius(10),
                 BorderThickness = new Thickness(1),
                 HorizontalAlignment = HorizontalAlignment.Stretch,
                 VerticalAlignment = VerticalAlignment.Stretch,
@@ -526,11 +528,13 @@ namespace Caelum.Controls
                     break;
             }
 
-            // WPF card preview: 160px rounded well on the surface fill.
+            // WPF card preview: 160px rounded well on the surface fill
+            // (T12-C: 8px nested radius matches the Fluent inner-corner rule
+            // under the 10px card).
             return new Border
             {
                 Height = 160,
-                CornerRadius = new CornerRadius(16),
+                CornerRadius = new CornerRadius(8),
                 Background = template == PageInsertTemplate.Notebook
                     ? Res("ThemeSurfaceAltBrush", Color.FromArgb(255, 0xF5, 0xF7, 0xFA))
                     : Res("ThemeSurfaceBrush", Colors.White),

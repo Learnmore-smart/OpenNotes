@@ -1,5 +1,5 @@
 # OpenNotes.WinUI/Pages/HomePage.xaml
-> Last updated: 2026-09-23 (V6 Task 5 — library home markup; `ContextRequested` context-menu fix) | Protection: STANDARD
+> Last updated: 2026-09-26 (T12-C — Fluent selection bar, breadcrumb pill, card transforms, drop-overlay tint) | Protection: STANDARD
 
 ## Purpose
 WinUI `Page` markup for the library home: header/breadcrumb, `ItemsRepeater` tile grid, selection action bar, page-level drop surface. Ports the WPF `Pages/HomePage.xaml` layout; every string is `x:Bind` to localized properties or `x:Uid`-free code-behind assignment (no literal UI text beyond the editor-independent add-tile glyphs).
@@ -10,6 +10,9 @@ WinUI `Page` markup for the library home: header/breadcrumb, `ItemsRepeater` til
 - **Tiles:** invisible `Button` (style `InvisibleButtonStyle`) over the icon `Grid`, name + info `TextBlock`s, corner check badge on file tiles. Every interactive element carries `Tag="{x:Bind}"` — the code-behind resolves the `HomeTile` from `FrameworkElement.Tag` because x:Bind templates do NOT populate `DataContext`.
 - **Context menus:** `ContextRequested="FileTile_ContextRequested"` / `FolderTile_ContextRequested` on the tile `Border`s — NOT `RightTapped` (ButtonBase marks `RightTapped` handled, so a handler on the tile surface never fires — this was the context-menu regression fixed in Task 5). Menus themselves are code-built `MenuFlyout`s (file: Open/Rename/Select/MoveToLibrary-in-folder/CopyPath/OpenFolder/Export/Delete/Remove; folder: Open/Rename/Color submenu/RemoveFolder).
 - Hover scale animation stays code-behind (`TileButton_PointerEntered/Exited` → `ScaleTransform` on `IconGrid`/`FolderIconGrid`); WPF `TileScale` storyboard parity.
+- **T12-C card motion hooks:** each template ROOT carries `RenderTransform`=`TranslateTransform` — the add-tile `Button` itself, `FolderTileBorder`, `FileTileBorder` — plus `Loaded="TileCard_Loaded"` (entrance + press wiring) and `PointerEntered/Exited` (`TileCard_*` on the borders so card hover doesn't flicker between icon and label; the add tile reuses `TileButton_*`). RenderTransform never disturbs `ItemsRepeater` layout.
+- **T12-C styles:** `SelectionActionButtonStyle`/`SelectionDangerButtonStyle` rebuilt to the T12 StateLayer convention (hover/press paint a `StateLayer` Border whose Opacity interpolates via `VisualTransition`s — brush objects can't animate — plus a 0.96 `RootScale` press squish); new `BreadcrumbPillButtonStyle` (paper-alt card + hairline + `ThemeRadiusCard`) now owns the NavigateUpButton chrome (was a hand-rolled Border inside `InvisibleButtonStyle`); tile `CornerRadius` 10 → `ThemeRadiusCard`.
+- **T12-C surfaces:** `SelectionActionBar` is a floating Fluent card — `ThemeSurfaceBrush` + `ThemeRadiusPill` + `Translation="0,0,8"` + `ThemeShadow` + named `SelectionBarRiseTransform` for the code-behind entrance. `DragDropOverlay` keeps its id/hairline/`ThemeRadiusPill` outer Border but the selection tint moved to inner `DragDropOverlayTint` (Opacity 0.6, driven opaque under `ReduceTransparency` by `SetDragDropOverlayVisible`).
 
 ## Important Notes / NEVER Change
 - `Tag="{x:Bind}"` on every tile `Button`/`Border`/`Grid` that a code-behind handler inspects is LOAD-BEARING — removing one silently kills that handler (`DataContext` is null inside x:Bind templates).
