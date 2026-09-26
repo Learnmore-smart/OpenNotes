@@ -785,6 +785,13 @@ namespace Caelum.Pages
             SetSidebarTab(_sidebarTab);
             foreach (var item in SidebarPageItems)
                 item.RefreshThemeBrushes();
+            // Same stale-capture class: the persistent bookmark toggle and
+            // ruler glyph resolve their brushes imperatively.
+            ApplyLocalizedBookmarkLabel();
+            if (RulerIcon != null)
+                RulerIcon.Stroke = ResolveThemeBrush(
+                    _rulerVisible ? "ThemeAccentBrush" : "ThemeForegroundBrush",
+                    _rulerVisible ? Color.FromArgb(0xFF, 0x25, 0x63, 0xEB) : Color.FromArgb(0xFF, 0x1F, 0x24, 0x2B));
         }
 
         /// <summary>
