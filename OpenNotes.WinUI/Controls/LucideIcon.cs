@@ -171,7 +171,15 @@ namespace Caelum.Controls
                 ["Download"] = "M12,3 V15 M7,10 L12,15 L17,10 M4,20 H20",
                 ["RotateCw"] = "M20,4 V10 H14 M19,15 A8,8 0 1 1 18,7",
                 ["LoaderCircle"] = "M12,3 A9,9 0 0 1 21,12 M12,21 A9,9 0 0 1 3,12",
-                ["Move"] = "M12,3 V21 M8,7 L12,3 L16,7 M8,17 L12,21 L16,17 M3,12 H21 M7,8 L3,12 L7,16 M17,8 L21,12 L17,16"
+                ["Move"] = "M12,3 V21 M8,7 L12,3 L16,7 M8,17 L12,21 L16,17 M3,12 H21 M7,8 L3,12 L7,16 M17,8 L21,12 L17,16",
+                // T13-A menu coverage: refresh / paste / select-all /
+                // export-current / export-all / bookmark-remove.
+                ["RefreshCw"] = "M3,12 A9,9 0 0 1 18.74,5.26 L21,8 M21,3 V8 H16 M21,12 A9,9 0 0 1 5.26,18.74 L3,16 M8,16 H3 V21",
+                ["ClipboardPaste"] = "M8,2 H16 V5 H8 Z M16,4 H17.5 A1.5,1.5 0 0 1 19,5.5 V20.5 A1.5,1.5 0 0 1 17.5,22 H6.5 A1.5,1.5 0 0 1 5,20.5 V5.5 A1.5,1.5 0 0 1 6.5,4 H8 M12,11 V17 M9,14 L12,17 L15,14",
+                ["SquareCheck"] = "M5,3 H19 A2,2 0 0 1 21,5 V19 A2,2 0 0 1 19,21 H5 A2,2 0 0 1 3,19 V5 A2,2 0 0 1 5,3 M8,12 L11,15 L16,9",
+                ["Images"] = "M18,22 H4 A2,2 0 0 1 2,20 V6 M22,16 V4 A2,2 0 0 0 20,2 H8 A2,2 0 0 0 6,4 V16 A2,2 0 0 0 8,18 H20 A2,2 0 0 0 22,16 M10,9 A1.5,1.5 0 1 1 9.99,9 M6,16 L11,11 L14,14.5 L17,12.5 L22,17",
+                ["ImageDown"] = "M9,10 A2,2 0 1 1 8.99,10 M21,15 V4 A1,1 0 0 0 20,3 H4 A1,1 0 0 0 3,4 V20 A1,1 0 0 0 4,21 H11 M3,17 L9,12 L13,15 M16,15 V22 M13,19 L16,22 L19,19",
+                ["BookmarkMinus"] = "M6,3 H18 V21 L12,17 L6,21 Z M9,9 H15"
             };
 
             return new Dictionary<string, string>(data, StringComparer.OrdinalIgnoreCase);

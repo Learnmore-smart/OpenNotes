@@ -90,6 +90,8 @@ namespace Caelum.Services
             ["Editor.PenFeatureTilt"] = ("tilt", "\u503E\u659C", "inclinaison"),
             ["Editor.PenFeatureBarrel"] = ("barrel button", "\u7B14\u8EAB\u6309\u952E", "bouton du stylet"),
             ["Editor.SearchResults"] = ("{0} results · F3 next / Shift+F3 previous", "{0} \u4E2A\u7ED3\u679C · F3 \u4E0B\u4E00\u4E2A / Shift+F3 \u4E0A\u4E00\u4E2A", "{0} résultats · F3 suivant / Maj+F3 précédent"),
+            ["Editor.SearchNoResults"] = ("No matches found", "\u672A\u627E\u5230\u5339\u914D\u9879", "Aucune correspondance"),
+            ["Editor.SearchEmptyHint"] = ("Type to search the document", "\u8F93\u5165\u5185\u5BB9\u4EE5\u641C\u7D22\u6587\u6863", "Saisissez du texte pour rechercher dans le document"),
             ["Editor.PageNumber"] = ("Page {0}", "\u7B2C {0} \u9875", "Page {0}"),
             ["Editor.LoadPdfFailed"] = ("Failed to load PDF: {0}", "\u52A0\u8F7D PDF \u5931\u8D25\uFF1A{0}", "Échec du chargement du PDF : {0}"),
             ["Editor.ErrorDetails"] = ("Details: {0}", "\u8BE6\u7EC6\u4FE1\u606F\uFF1A{0}", "Détails : {0}"),

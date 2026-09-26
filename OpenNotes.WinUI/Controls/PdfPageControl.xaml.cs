@@ -1375,7 +1375,9 @@ namespace Caelum.Controls
                 _freeSelectionPoints = new List<PointD> { pos };
                 _freeSelectionPath = new Polyline
                 {
-                    Stroke = new SolidColorBrush(Color.FromArgb(255, 0, 120, 212)),
+                    // T13-A: the marquee follows the theme accent (the
+                    // 0,120,212 literal stays only as the no-theme fallback).
+                    Stroke = ResolveAccentStroke(),
                     StrokeThickness = 1.5,
                     StrokeDashArray = new DoubleCollection { 4, 2 },
                     IsHitTestVisible = false,
@@ -1387,10 +1389,10 @@ namespace Caelum.Controls
             {
                 _selectionRect = new Rectangle
                 {
-                    Stroke = new SolidColorBrush(Color.FromArgb(255, 0, 120, 212)),
+                    Stroke = ResolveAccentStroke(),
                     StrokeThickness = 1,
                     StrokeDashArray = new DoubleCollection { 4, 2 },
-                    Fill = new SolidColorBrush(Color.FromArgb(30, 0, 120, 212)),
+                    Fill = ResolveAccentTranslucentFill(30),
                     IsHitTestVisible = false,
                 };
                 Canvas.SetLeft(_selectionRect, pos.X);
@@ -2227,6 +2229,45 @@ namespace Caelum.Controls
             return null;
         }
 
+        /// <summary>Theme accent as a stroke brush (classic blue fallback).</summary>
+        private static Brush ResolveAccentStroke()
+            => TryFindBrush("ThemeAccentBrush")
+                ?? new SolidColorBrush(Color.FromArgb(255, 0, 120, 212));
+
+        /// <summary>Translucent accent fill — the marquee wash derives its
+        /// RGB from the themed accent so a recolored palette stays coherent.</summary>
+        private static Brush ResolveAccentTranslucentFill(byte alpha)
+        {
+            if (TryFindBrush("ThemeAccentBrush") is SolidColorBrush accent)
+                return new SolidColorBrush(
+                    Color.FromArgb(alpha, accent.Color.R, accent.Color.G, accent.Color.B));
+            return new SolidColorBrush(Color.FromArgb(alpha, 0, 120, 212));
+        }
+
+        /// <summary>
+        /// T13-A theme sweep: the selection chrome (in-flight marquee +
+        /// per-item outlines/handles) resolves theme brushes imperatively at
+        /// build time — rebuild/re-stamp it after a theme flip so live
+        /// chrome repaints instead of holding the old palette. Annotation
+        /// data colours and the always-white paper surface are untouched.
+        /// </summary>
+        public void RefreshPageChromeTheme()
+        {
+            var accent = TryFindBrush("ThemeAccentBrush");
+            if (_freeSelectionPath != null && accent != null)
+                _freeSelectionPath.Stroke = accent;
+            if (_selectionRect != null)
+            {
+                if (accent != null)
+                    _selectionRect.Stroke = accent;
+                _selectionRect.Fill = ResolveAccentTranslucentFill(30);
+            }
+            // UpdateSelectionVisuals rebuilds handles/outlines with fresh
+            // theme brushes; it no-ops cleanly when nothing is selected.
+            if (HasSelection)
+                UpdateSelectionVisuals();
+        }
+
         private void UpdateHoverCursor(PointD pos)
         {
             var unionBounds = GetSelectionBounds();
@@ -2562,6 +2603,14 @@ namespace Caelum.Controls
             {
                 Text = LocalizationService.Get("Editor.DeleteTooltip"),
                 Tag = "StickyNote.Delete",
+                // T13-A: every menu entry carries a Lucide glyph; Trash2 for
+                // the destructive delete.
+                Icon = new PathIcon
+                {
+                    Data = LucideIcon.GetIconGeometry("Trash2"),
+                    Width = 16,
+                    Height = 16,
+                },
             };
             AutomationProperties.SetAutomationId(delete, "Sticky.Delete.ContextMenu");
             string deleteLabel = LocalizationService.Get("Editor.DeleteTooltip");

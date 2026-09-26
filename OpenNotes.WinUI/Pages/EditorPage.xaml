@@ -361,6 +361,70 @@
             </Setter>
         </Style>
 
+        <!-- T13-A: shared Fluent card chrome for every editor Flyout —
+             the stock FlyoutPresenter template has no shadow, so this
+             template re-states it with the theme surface/border/card-radius
+             tokens plus a ThemeShadow on a 32-DIP z-lift (same elevation
+             band as the floating toolbar). Assigned per-flyout via
+             ApplyToolFlyoutChrome so MenuFlyout presenters stay stock. -->
+        <Style x:Key="EditorFlyoutPresenterStyle" TargetType="FlyoutPresenter">
+            <Setter Property="Background" Value="{ThemeResource ThemeSurfaceBrush}"/>
+            <Setter Property="BorderBrush" Value="{ThemeResource ThemeBorderBrush}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="{ThemeResource ThemeRadiusCard}"/>
+            <Setter Property="Padding" Value="10"/>
+            <Setter Property="MinWidth" Value="0"/>
+            <Setter Property="ScrollViewer.HorizontalScrollMode" Value="Auto"/>
+            <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Auto"/>
+            <Setter Property="ScrollViewer.VerticalScrollMode" Value="Auto"/>
+            <Setter Property="ScrollViewer.VerticalScrollBarVisibility" Value="Auto"/>
+            <Setter Property="ScrollViewer.ZoomMode" Value="Disabled"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="FlyoutPresenter">
+                        <Border Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="{TemplateBinding CornerRadius}"
+                                BackgroundSizing="InnerBorderEdge"
+                                Translation="0,0,32">
+                            <Border.Shadow>
+                                <ThemeShadow/>
+                            </Border.Shadow>
+                            <ScrollViewer x:Name="ScrollViewer"
+                                    ZoomMode="{TemplateBinding ScrollViewer.ZoomMode}"
+                                    HorizontalScrollMode="{TemplateBinding ScrollViewer.HorizontalScrollMode}"
+                                    HorizontalScrollBarVisibility="{TemplateBinding ScrollViewer.HorizontalScrollBarVisibility}"
+                                    VerticalScrollMode="{TemplateBinding ScrollViewer.VerticalScrollMode}"
+                                    VerticalScrollBarVisibility="{TemplateBinding ScrollViewer.VerticalScrollBarVisibility}"
+                                    AutomationProperties.AccessibilityView="Raw">
+                                <ContentPresenter Content="{TemplateBinding Content}"
+                                        ContentTemplate="{TemplateBinding ContentTemplate}"
+                                        ContentTransitions="{TemplateBinding ContentTransitions}"
+                                        Margin="{TemplateBinding Padding}"
+                                        HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                        VerticalAlignment="{TemplateBinding VerticalContentAlignment}"/>
+                            </ScrollViewer>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- T13-A: search hits are added as direct ListViewItem objects
+             (Items.Clear/Items.Add — bypassing the container generator), so
+             ItemContainerStyle never reaches them; the style is assigned in
+             code per item. BasedOn the shared sidebar item chrome keeps the
+             rounded hover/selection treatment; tighter padding + a smaller
+             type ramp fit the denser result rows. -->
+        <Style x:Key="PdfSearchResultItemStyle" TargetType="ListViewItem"
+               BasedOn="{StaticResource DocumentSidebarListBoxItemStyle}">
+            <Setter Property="Padding" Value="8,6"/>
+            <Setter Property="Margin" Value="0,1"/>
+            <Setter Property="MinHeight" Value="30"/>
+            <Setter Property="FontSize" Value="12"/>
+        </Style>
+
         <Style x:Key="ModernTextBox" TargetType="TextBox">
             <Setter Property="Background" Value="{ThemeResource ThemeControlBrush}"/>
             <Setter Property="Foreground" Value="{ThemeResource ThemeTextBrush}"/>
@@ -386,13 +450,29 @@
              image keeps a fixed 132x170 Uniform fit box so every page aspect
              letterboxes inside the card instead of cropping. -->
         <DataTemplate x:Key="SidebarPageItemTemplate" x:DataType="pages:SidebarPageItem">
+            <!-- T13-A hover-lift: pointer enter/exit animate this root's
+                 RenderTransform −1 DIP and deepen the card's ThemeShadow via
+                 the Z channel of Translation (ThumbnailCard_PointerEntered/
+                 Exited; both gated on WinUiThemeService.ShouldAnimate and
+                 reset in ThumbnailImage_Loaded so recycled rows never carry
+                 a stuck lift). -->
             <StackPanel Margin="0,2"
+                        PointerEntered="ThumbnailCard_PointerEntered"
+                        PointerExited="ThumbnailCard_PointerExited"
                         AutomationProperties.AutomationId="{x:Bind AutomationId, Mode=OneTime}"
                         AutomationProperties.Name="{x:Bind PageLabel, Mode=OneWay}">
-                <Border CornerRadius="{ThemeResource ThemeRadiusCard}"
+                <StackPanel.RenderTransform>
+                    <TranslateTransform Y="0"/>
+                </StackPanel.RenderTransform>
+                <Border x:Name="ThumbnailCardSurface"
+                        CornerRadius="{ThemeResource ThemeRadiusCard}"
                         Background="{ThemeResource ThemeSurfaceAltBrush}"
                         BorderBrush="{x:Bind CardBorderBrush, Mode=OneWay}"
-                        BorderThickness="1" Margin="2" Padding="2" HorizontalAlignment="Center">
+                        BorderThickness="1" Margin="2" Padding="2" HorizontalAlignment="Center"
+                        Translation="0,0,4">
+                    <Border.Shadow>
+                        <ThemeShadow/>
+                    </Border.Shadow>
                     <Image Width="132"
                            Height="170"
                            Stretch="Uniform"
@@ -443,11 +523,12 @@
                         Tag="{Binding Content.PageIndex}"
                         AutomationProperties.AutomationId="{Binding Content.InvokeAutomationId}"
                         AutomationProperties.Name="{Binding Content.PageLabel}"
+                        x:Name="OutlineInvokeGlyphButton"
                         Click="OutlineInvokeButton_Click">
                     <Path Width="16"
                           Height="16"
                           Stretch="Uniform"
-                          Stroke="{ThemeResource ThemeForegroundBrush}"
+                          Stroke="{Binding Foreground, ElementName=OutlineInvokeGlyphButton}"
                           StrokeThickness="1.6"
                           StrokeStartLineCap="Round"
                           StrokeEndLineCap="Round"
@@ -516,7 +597,7 @@
                                 Width="36" Height="36" Margin="1,0" IsEnabled="False"
                                 AutomationProperties.AutomationId="Editor.UndoButton">
                             <controls:LucideIcon Kind="Undo2" Width="18" Height="18"
-                                                 Stroke="{ThemeResource ThemeForegroundBrush}"/>
+                                                 Stroke="{Binding Foreground, ElementName=UndoButton}"/>
                         </Button>
 
                         <!-- Redo (state-driven via UpdateUndoRedoButtons) -->
@@ -525,7 +606,7 @@
                                 Width="36" Height="36" Margin="1,0" IsEnabled="False"
                                 AutomationProperties.AutomationId="Editor.RedoButton">
                             <controls:LucideIcon Kind="Redo2" Width="18" Height="18"
-                                                 Stroke="{ThemeResource ThemeForegroundBrush}"/>
+                                                 Stroke="{Binding Foreground, ElementName=RedoButton}"/>
                         </Button>
 
                         <!-- Separator -->
@@ -538,7 +619,7 @@
                                       AutomationProperties.AutomationId="Editor.PenToolButton">
                             <Grid Width="22" Height="22">
                                 <controls:LucideIcon x:Name="PenIcon" Kind="PenLine" Width="18" Height="18"
-                                                     Stroke="{ThemeResource ThemeForegroundBrush}"/>
+                                                     Stroke="{Binding Foreground, ElementName=PenToolButton}"/>
                                 <Border x:Name="PenColorIndicator"
                                         Width="12" Height="2.5"
                                         VerticalAlignment="Bottom"
@@ -554,7 +635,7 @@
                                       AutomationProperties.AutomationId="Editor.HighlighterToolButton">
                             <Grid Width="22" Height="22">
                                 <controls:LucideIcon x:Name="HighlighterIcon" Kind="Highlighter" Width="18" Height="18"
-                                                     Stroke="{ThemeResource ThemeForegroundBrush}"/>
+                                                     Stroke="{Binding Foreground, ElementName=HighlighterToolButton}"/>
                                 <Border x:Name="HighlighterColorIndicator"
                                         Width="12" Height="2.5"
                                         VerticalAlignment="Bottom"
@@ -571,7 +652,7 @@
                                       Width="36" Height="36" Margin="1,0"
                                       AutomationProperties.AutomationId="HiddenInkToolButton">
                             <controls:LucideIcon x:Name="HiddenInkIcon" Kind="HiddenInkReveal" Width="18" Height="18"
-                                                 Stroke="{ThemeResource ThemeForegroundBrush}"/>
+                                                 Stroke="{Binding Foreground, ElementName=HiddenInkToolButton}"/>
                         </ToggleButton>
 
                         <!-- Sticky note (T8) -->
@@ -580,7 +661,7 @@
                                       Width="36" Height="36" Margin="1,0"
                                       AutomationProperties.AutomationId="Editor.StickyNoteToolButton">
                             <controls:LucideIcon Kind="StickyNote" Width="18" Height="18"
-                                                 Stroke="{ThemeResource ThemeForegroundBrush}"/>
+                                                 Stroke="{Binding Foreground, ElementName=StickyNoteToolButton}"/>
                         </ToggleButton>
 
                         <!-- Eraser (T7) -->
@@ -589,7 +670,7 @@
                                       Width="36" Height="36" Margin="1,0"
                                       AutomationProperties.AutomationId="Editor.EraserToolButton">
                             <controls:LucideIcon Kind="Eraser" x:Name="EraserIcon" Width="18" Height="18"
-                                                 Stroke="{ThemeResource ThemeForegroundBrush}"/>
+                                                 Stroke="{Binding Foreground, ElementName=EraserToolButton}"/>
                         </ToggleButton>
 
                         <!-- Shape (T7) -->
@@ -598,7 +679,7 @@
                                       Width="36" Height="36" Margin="1,0"
                                       AutomationProperties.AutomationId="Editor.ShapeToolButton">
                             <controls:LucideIcon x:Name="ShapeIcon" Kind="Shapes" Width="18" Height="18"
-                                                 Stroke="{ThemeResource ThemeForegroundBrush}"/>
+                                                 Stroke="{Binding Foreground, ElementName=ShapeToolButton}"/>
                         </ToggleButton>
 
                         <!-- Laser pointer (T7) -->
@@ -607,7 +688,7 @@
                                       Width="36" Height="36" Margin="1,0"
                                       AutomationProperties.AutomationId="Editor.LaserToolButton">
                             <controls:LucideIcon x:Name="LaserIcon" Kind="Laser" Width="18" Height="18"
-                                                 Stroke="{ThemeResource ThemeForegroundBrush}"/>
+                                                 Stroke="{Binding Foreground, ElementName=LaserToolButton}"/>
                         </ToggleButton>
 
                         <!-- On-screen ruler overlay toggle (T7 Phase B).
@@ -618,7 +699,7 @@
                                       Width="36" Height="36" Margin="1,0"
                                       AutomationProperties.AutomationId="Editor.RulerToolButton">
                             <controls:LucideIcon x:Name="RulerIcon" Kind="Ruler" Width="18" Height="18"
-                                                 Stroke="{ThemeResource ThemeForegroundBrush}"/>
+                                                 Stroke="{Binding Foreground, ElementName=RulerToolButton}"/>
                         </ToggleButton>
 
                         <!-- Reserve the toolbar midpoint for the centered page navigator.
@@ -638,7 +719,7 @@
                                       Width="36" Height="36" Margin="1,0"
                                       AutomationProperties.AutomationId="Editor.SelectToolButton">
                             <controls:LucideIcon x:Name="SelectIcon" Kind="MousePointer2" Width="18" Height="18"
-                                                 Stroke="{ThemeResource ThemeForegroundBrush}"/>
+                                                 Stroke="{Binding Foreground, ElementName=SelectToolButton}"/>
                         </ToggleButton>
 
                         <Border Style="{StaticResource ToolbarSeparatorStyle}"/>
@@ -649,7 +730,7 @@
                                       Width="36" Height="36" Margin="1,0"
                                       AutomationProperties.AutomationId="Editor.TextToolButton">
                             <controls:LucideIcon Kind="Type" Width="18" Height="18"
-                                                 Stroke="{ThemeResource ThemeForegroundBrush}"/>
+                                                 Stroke="{Binding Foreground, ElementName=TextToolButton}"/>
                         </ToggleButton>
 
                         <!-- Save (T9 Phase A: wired to the shared save task) -->
@@ -658,7 +739,7 @@
                                 Width="36" Height="36" Margin="1,0"
                                 AutomationProperties.AutomationId="Editor.SavePdfButton">
                             <controls:LucideIcon Kind="Save" Width="18" Height="18"
-                                                 Stroke="{ThemeResource ThemeForegroundBrush}"/>
+                                                 Stroke="{Binding Foreground, ElementName=SavePdfButton}"/>
                         </Button>
 
                         <!-- Version History (T9-B: wired to the restore flyout) -->
@@ -667,7 +748,7 @@
                                 Width="36" Height="36" Margin="1,0"
                                 AutomationProperties.AutomationId="Editor.VersionHistoryButton">
                             <controls:LucideIcon Kind="History" Width="18" Height="18"
-                                                 Stroke="{ThemeResource ThemeForegroundBrush}"/>
+                                                 Stroke="{Binding Foreground, ElementName=VersionHistoryButton}"/>
                         </Button>
 
                         <!-- Separator -->
@@ -679,7 +760,7 @@
                                       Width="36" Height="36" Margin="1,0"
                                       AutomationProperties.AutomationId="Editor.PenOnlyButton">
                             <controls:LucideIcon x:Name="PenOnlyIcon" Kind="PenLine" Width="18" Height="18"
-                                                 Stroke="{ThemeResource ThemeForegroundBrush}"/>
+                                                 Stroke="{Binding Foreground, ElementName=PenOnlyButton}"/>
                         </ToggleButton>
 
                         <!-- Segmented zoom pill (T12-B): one rounded shell with
@@ -702,7 +783,7 @@
                                         Width="34" Height="34"
                                         AutomationProperties.AutomationId="Editor.ZoomOutButton">
                                     <controls:LucideIcon Kind="Minus" Width="18" Height="18"
-                                                         Stroke="{ThemeResource ThemeForegroundBrush}"/>
+                                                         Stroke="{Binding Foreground, ElementName=ZoomOutButton}"/>
                                 </Button>
                                 <Border Width="1" Margin="0,7"
                                         Background="{ThemeResource ThemeMenuSeparatorBrush}"/>
@@ -731,7 +812,7 @@
                                         Width="34" Height="34"
                                         AutomationProperties.AutomationId="Editor.ZoomInButton">
                                     <controls:LucideIcon Kind="Plus" Width="18" Height="18"
-                                                         Stroke="{ThemeResource ThemeForegroundBrush}"/>
+                                                         Stroke="{Binding Foreground, ElementName=ZoomInButton}"/>
                                 </Button>
                             </StackPanel>
                         </Border>
@@ -740,7 +821,7 @@
                                 Width="36" Height="36" Margin="1,0"
                                 AutomationProperties.AutomationId="Editor.RotatePageButton">
                             <controls:LucideIcon Kind="RotateCcw" Width="18" Height="18"
-                                                 Stroke="{ThemeResource ThemeForegroundBrush}"/>
+                                                 Stroke="{Binding Foreground, ElementName=RotatePageButton}"/>
                         </Button>
 
                     </StackPanel>
@@ -777,7 +858,7 @@
                                     Click="PreviousPageButton_Click"
                                     AutomationProperties.AutomationId="Editor.PreviousPageButton">
                                 <controls:LucideIcon Kind="ChevronLeft" Width="18" Height="18"
-                                                     Stroke="{ThemeResource ThemeForegroundBrush}"/>
+                                                     Stroke="{Binding Foreground, ElementName=PreviousPageButton}"/>
                             </Button>
                             <!-- T12-B: hairline separators make the group read
                                  as a segmented navigator, not a form field. -->
@@ -823,7 +904,7 @@
                                     Click="NextPageButton_Click"
                                     AutomationProperties.AutomationId="Editor.NextPageButton">
                                 <controls:LucideIcon Kind="ChevronRight" Width="18" Height="18"
-                                                     Stroke="{ThemeResource ThemeForegroundBrush}"/>
+                                                     Stroke="{Binding Foreground, ElementName=NextPageButton}"/>
                             </Button>
                         </controls:UiaGrid>
                         <TextBlock x:Name="PageNumberLabel"
@@ -892,7 +973,7 @@
                             AutomationProperties.AutomationId="Editor.Sidebar.Collapse">
                         <controls:LucideIcon x:Name="SidebarCollapseIcon" Kind="PanelLeftClose"
                                              Width="18" Height="18"
-                                             Stroke="{ThemeResource ThemeForegroundBrush}"/>
+                                             Stroke="{Binding Foreground, ElementName=SidebarCollapseButton}"/>
                     </Button>
                 </Grid>
 
@@ -1081,24 +1162,26 @@
                 Visibility="Collapsed"
                 Canvas.ZIndex="25"
                 AutomationProperties.AutomationId="PdfSearchPanel">
+            <!-- T13-A: card radius (not the pill chrome radius) + a wider
+                 inner pad so the panel reads as a Fluent surface card. -->
             <Border HorizontalAlignment="Stretch"
                     VerticalAlignment="Stretch"
                     Background="{ThemeResource ThemeSurfaceBrush}"
                     BorderBrush="{ThemeResource ThemeBorderBrush}"
                     BorderThickness="1"
-                    CornerRadius="{ThemeResource ThemeRadiusPill}"
-                    Padding="10"
+                    CornerRadius="{ThemeResource ThemeRadiusCard}"
+                    Padding="12"
                     Translation="0,0,8">
             <Border.Shadow>
                 <ThemeShadow/>
             </Border.Shadow>
             <Grid>
                 <Grid.RowDefinitions>
-                    <RowDefinition Height="34"/>
+                    <RowDefinition Height="36"/>
                     <RowDefinition Height="*"/>
                     <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
-                <Grid Grid.Row="0" Height="34">
+                <Grid Grid.Row="0" Height="36">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="Auto"/>
@@ -1106,15 +1189,30 @@
                     <TextBox x:Name="PdfSearchTextBox" Margin="0,0,8,0" Style="{StaticResource ModernTextBox}"
                              KeyDown="PdfSearchTextBox_KeyDown" TextChanged="PdfSearchTextBox_TextChanged"
                              AutomationProperties.AutomationId="PdfSearchTextBox"/>
-                    <Button Grid.Column="1" Width="32" Height="32" Click="ClosePdfSearchButton_Click"
+                    <Button x:Name="PdfSearchCloseButton" Grid.Column="1" Width="32" Height="32" Click="ClosePdfSearchButton_Click"
                             Style="{StaticResource ToolbarButtonStyle}" Padding="0" MinWidth="32"
                             AutomationProperties.AutomationId="PdfSearchCloseButton">
-                        <controls:LucideIcon Kind="X" Width="16" Height="16" Stroke="{ThemeResource ThemeForegroundBrush}"/>
+                        <controls:LucideIcon Kind="X" Width="16" Height="16" Stroke="{Binding Foreground, ElementName=PdfSearchCloseButton}"/>
                     </Button>
                 </Grid>
-                <ListView x:Name="PdfSearchResultsListBox" Grid.Row="1" Margin="0,8,0,0" Style="{StaticResource ModernListBox}"
-                         SelectionChanged="PdfSearchResultsListBox_SelectionChanged"
-                         AutomationProperties.AutomationId="PdfSearchResultsListBox"/>
+                <!-- Results + the empty/no-results state share row 1 — the
+                     overlay hides while hits exist (WPF parity: the status
+                     line carries the localized counts). -->
+                <Grid Grid.Row="1" Margin="0,8,0,0">
+                    <ListView x:Name="PdfSearchResultsListBox" Style="{StaticResource ModernListBox}"
+                             SelectionChanged="PdfSearchResultsListBox_SelectionChanged"
+                             AutomationProperties.AutomationId="PdfSearchResultsListBox"/>
+                    <TextBlock x:Name="PdfSearchEmptyState"
+                               Text=""
+                               Foreground="{ThemeResource ThemeSubtleForegroundBrush}"
+                               FontSize="12"
+                               TextWrapping="Wrap"
+                               TextAlignment="Center"
+                               Margin="16,24,16,0"
+                               VerticalAlignment="Top"
+                               IsHitTestVisible="False"
+                               Visibility="Collapsed"/>
+                </Grid>
                 <TextBlock x:Name="PdfSearchStatusTextBlock" Grid.Row="2" Margin="2,6,2,0"
                            Foreground="{ThemeResource ThemeSubtleForegroundBrush}" FontSize="11"
                            AutomationProperties.AutomationId="PdfSearchStatus"/>

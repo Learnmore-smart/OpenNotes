@@ -751,6 +751,50 @@ namespace Caelum.Pages
             // tool flyout while the incoming tool's stays open.
             CloseToolFlyouts(tool);
             ApplyToolToAllPages();
+            ApplyToolbarToggleAccents();
+        }
+
+        // ── T13-A: active-tool accent ─────────────────────────────────────
+
+        /// <summary>
+        /// Toggles armed by <see cref="ToolbarToggleButtonStyle"/> tint their
+        /// glyph through the control Foreground — every toolbar
+        /// <c>LucideIcon.Stroke</c> binds <c>{Binding Foreground,
+        /// ElementName=&lt;button&gt;}</c> so the checked cell (plus the
+        /// non-tool PenOnly/Ruler toggles) paints the accent automatically
+        /// in Checked/CheckedPointerOver/CheckedPressed without per-state
+        /// icon setters the template cannot reach (VSM targets only template
+        /// parts, never the control root). Unchecked falls back to the text
+        /// brush; the CheckedLayer selection tint + ActiveBar stay template-
+        /// driven.
+        /// </summary>
+        private void ApplyToolButtonAccent(ToggleButton button)
+        {
+            if (button == null)
+                return;
+            bool active = button.IsChecked == true;
+            button.Foreground = ResolveThemeBrush(
+                active ? "ThemeAccentBrush" : "ThemeTextBrush",
+                active ? Color.FromArgb(0xFF, 0x25, 0x63, 0xEB)
+                       : Color.FromArgb(0xFF, 0x1F, 0x24, 0x2B));
+        }
+
+        /// <summary>Re-stamps every accent-capable toolbar toggle — tool set
+        /// + PenOnly + the ruler overlay toggle (the bookmark cell repaints
+        /// its icon through SetBookmarkButtonContent instead).</summary>
+        private void ApplyToolbarToggleAccents()
+        {
+            ApplyToolButtonAccent(PenToolButton);
+            ApplyToolButtonAccent(HighlighterToolButton);
+            ApplyToolButtonAccent(HiddenInkToolButton);
+            ApplyToolButtonAccent(StickyNoteToolButton);
+            ApplyToolButtonAccent(EraserToolButton);
+            ApplyToolButtonAccent(ShapeToolButton);
+            ApplyToolButtonAccent(LaserToolButton);
+            ApplyToolButtonAccent(SelectToolButton);
+            ApplyToolButtonAccent(TextToolButton);
+            ApplyToolButtonAccent(PenOnlyButton);
+            ApplyToolButtonAccent(RulerToolButton);
         }
 
         private void EditorPage_Unloaded(object sender, RoutedEventArgs e)
@@ -785,13 +829,12 @@ namespace Caelum.Pages
             SetSidebarTab(_sidebarTab);
             foreach (var item in SidebarPageItems)
                 item.RefreshThemeBrushes();
-            // Same stale-capture class: the persistent bookmark toggle and
-            // ruler glyph resolve their brushes imperatively.
+            // Same stale-capture class: the persistent bookmark toggle
+            // rebuilds its glyph and every toolbar toggle re-resolves its
+            // accent/text Foreground imperatively (the icons ride it via
+            // the ElementName binding — T13-A).
             ApplyLocalizedBookmarkLabel();
-            if (RulerIcon != null)
-                RulerIcon.Stroke = ResolveThemeBrush(
-                    _rulerVisible ? "ThemeAccentBrush" : "ThemeForegroundBrush",
-                    _rulerVisible ? Color.FromArgb(0xFF, 0x25, 0x63, 0xEB) : Color.FromArgb(0xFF, 0x1F, 0x24, 0x2B));
+            ApplyToolbarToggleAccents();
             // The code-built ruler overlay is persistent chrome while shown
             // and captures theme brushes throughout (body fill/stroke, tick
             // strokes, handles). Rebuild it in place so a live ruler picks
@@ -820,6 +863,25 @@ namespace Caelum.Pages
                     _rulerVisual.Visibility = Visibility.Visible;
                 }
             }
+
+            // T13-A imperative-capture sweep: the floating text toolbar
+            // (canvas-hosted Border) and the sticky-note editor popup both
+            // resolve theme brushes outside XAML, and each page's card
+            // chrome does the same — rebuild/re-stamp them so a theme flip
+            // while a surface is open repaints instead of holding the old
+            // palette until reopen.
+            if (_inlineTextBoxToolbar?.Visibility == Visibility.Visible
+                && _selectedTextBox?.Parent is UIElement toolbarTarget)
+            {
+                _textColorFlyout?.Hide();
+                RemoveInlineTextBoxToolbar();
+                _inlineTextBoxToolbar = null;   // force full rebuild
+                PositionInlineTextBoxToolbar(toolbarTarget);
+            }
+            if (_stickyNotePopup?.IsOpen == true)
+                RefreshStickyNoteEditorTheme();
+            foreach (var page in _pageControls)
+                page.RefreshPageChromeTheme();
         }
 
         /// <summary>
@@ -2155,7 +2217,10 @@ namespace Caelum.Pages
             if (PenColorIndicator != null)
                 PenColorIndicator.Background = new SolidColorBrush(_penColor);
             if (PenOnlyButton != null)
+            {
                 PenOnlyButton.IsChecked = _applicationSettings.PenOnlyMode;
+                ApplyToolButtonAccent(PenOnlyButton);
+            }
         }
 
         /// <summary>#RRGGBB / #AARRGGBB → Color. Throws on bad input.</summary>
@@ -2260,6 +2325,9 @@ namespace Caelum.Pages
                 _currentTool = next;
             }
             ApplyToolToAllPages();
+            // T13-A: accent icon stroke on the armed toggle follows the
+            // control Foreground — refresh after the IsChecked writes above.
+            ApplyToolbarToggleAccents();
 
             // WPF ToggleToolButton → CloseToolPopups() runs first: only one
             // tool flyout can be open at a time, and deactivating back to
@@ -2408,6 +2476,7 @@ namespace Caelum.Pages
                 return;
             _applicationSettings.PenOnlyMode = PenOnlyButton.IsChecked == true;
             AppSettingsService.Save(_applicationSettings);
+            ApplyToolButtonAccent(PenOnlyButton);
             foreach (var page in _pageControls)
                 page.Ink.PenOnlyMode = _applicationSettings.PenOnlyMode;
         }
@@ -2585,12 +2654,10 @@ namespace Caelum.Pages
         {
             _rulerVisible = visible;
             RulerToolButton.IsChecked = visible;
-            if (RulerIcon != null)
-            {
-                RulerIcon.Stroke = ResolveThemeBrush(
-                    visible ? "ThemeAccentBrush" : "ThemeForegroundBrush",
-                    visible ? Color.FromArgb(0xFF, 0x25, 0x63, 0xEB) : Color.FromArgb(0xFF, 0x1F, 0x24, 0x2B));
-            }
+            // T13-A: RulerIcon.Stroke binds the button Foreground — the
+            // accent comes through ApplyToolButtonAccent (a local Stroke
+            // write would clobber that binding).
+            ApplyToolButtonAccent(RulerToolButton);
 
             if (visible)
             {
@@ -4544,6 +4611,7 @@ namespace Caelum.Pages
                 var copyItem = new MenuFlyoutItem
                 {
                     Text = LocalizationService.Get("Editor.Action.Copy"),
+                    Icon = MenuIcon("Copy"),
                 };
                 AutomationProperties.SetAutomationId(copyItem, "Editor.Action.Copy");
                 copyItem.Click += (_, __) => CopySelection();
@@ -4555,6 +4623,7 @@ namespace Caelum.Pages
                 var pasteItem = new MenuFlyoutItem
                 {
                     Text = LocalizationService.Get("Editor.Action.Paste"),
+                    Icon = MenuIcon("ClipboardPaste"),
                 };
                 AutomationProperties.SetAutomationId(pasteItem, "Editor.Action.Paste");
                 pasteItem.Click += (_, __) => PasteClipboardImageOrSelection();
@@ -4564,6 +4633,7 @@ namespace Caelum.Pages
             var selectAll = new MenuFlyoutItem
             {
                 Text = LocalizationService.Get("Editor.Action.SelectAll"),
+                Icon = MenuIcon("SquareCheck"),
             };
             AutomationProperties.SetAutomationId(selectAll, "Editor.Action.SelectAll");
             selectAll.Click += (_, __) =>
@@ -4583,6 +4653,7 @@ namespace Caelum.Pages
             var refreshItem = new MenuFlyoutItem
             {
                 Text = LocalizationService.Get("Editor.Action.RefreshPage"),
+                Icon = MenuIcon("RefreshCw"),
             };
             AutomationProperties.SetAutomationId(refreshItem, "Editor.Action.RefreshPage");
             refreshItem.Click += async (_, __) =>
@@ -4603,6 +4674,7 @@ namespace Caelum.Pages
                 var deleteItem = new MenuFlyoutItem
                 {
                     Text = LocalizationService.Get("Editor.Action.Delete"),
+                    Icon = MenuIcon("Trash2"),
                 };
                 AutomationProperties.SetAutomationId(deleteItem, "Editor.Action.Delete");
                 deleteItem.Click += (_, __) => DeleteSelection();
@@ -5927,7 +5999,12 @@ namespace Caelum.Pages
             var border = new Border
             {
                 BorderThickness = new Thickness(1),
-                CornerRadius = new CornerRadius(16),
+                // T13-A: pill radius token + a z-lifted ThemeShadow — the
+                // floating toolbar reads as the same Fluent card language
+                // as the flyout/search chrome instead of a flat outline.
+                CornerRadius = ResolveThemeCornerRadius("ThemeRadiusPill", 12),
+                Translation = new System.Numerics.Vector3(0, 0, 32),
+                Shadow = new ThemeShadow(),
                 Child = panel,
                 Background = ResolveThemeBrush("ThemeSurfaceBrush", Color.FromArgb(0xFF, 0xFF, 0xFF, 0xFF)),
                 BorderBrush = ResolveThemeBrush("ThemeBorderBrush", Color.FromArgb(0xFF, 0xC9, 0xCE, 0xD6)),
@@ -6055,6 +6132,7 @@ namespace Caelum.Pages
             textColorPanel.Children.Add(textRecentSection);
             textColorPanel.Children.Add(textPalette);
             _textColorFlyout = new Flyout { Content = textColorPanel };
+            ApplyToolFlyoutChrome(_textColorFlyout);
             _textColorFlyout.Opening += (_, __) =>
             {
                 RefreshRecentColorsRow(
@@ -6709,7 +6787,7 @@ namespace Caelum.Pages
             _stickyNoteDragHandle = new Border
             {
                 Background = new SolidColorBrush(Color.FromArgb(0, 0, 0, 0)),
-                CornerRadius = new CornerRadius(8),
+                CornerRadius = ResolveThemeCornerRadius("ThemeRadiusControl", 8),
                 Padding = new Thickness(8, 6, 8, 6),
                 Margin = new Thickness(-4, -4, -4, 10),
                 Child = dragHeaderContent,
@@ -6743,7 +6821,13 @@ namespace Caelum.Pages
             var border = new Border
             {
                 BorderThickness = new Thickness(1),
-                CornerRadius = new CornerRadius(14),
+                // T13-A: card radius token + a z-lifted ThemeShadow so the
+                // editor bubble carries the same Fluent card chrome as the
+                // flyouts/search panel (Popup replaces the WPF placement
+                // popup, which had DropShadowEffect).
+                CornerRadius = ResolveThemeCornerRadius("ThemeRadiusCard", 10),
+                Translation = new System.Numerics.Vector3(0, 0, 32),
+                Shadow = new ThemeShadow(),
                 Padding = new Thickness(2),
                 Child = panel,
                 Background = ResolveThemeBrush("ThemeSurfaceBrush", Color.FromArgb(0xFF, 0xFF, 0xFF, 0xFF)),
@@ -6792,6 +6876,39 @@ namespace Caelum.Pages
             popup.Closed -= StickyNotePopup_Closed;
             if (popup.IsOpen)
                 popup.IsOpen = false;
+        }
+
+        /// <summary>
+        /// T13-A: the open sticky-note editor resolved its surface/border/
+        /// text brushes imperatively — re-resolve them after a theme flip
+        /// so the card repaints instead of holding the old palette until
+        /// reopen. Position, in-flight text and the drag session survive;
+        /// annotation colours are data and stay untouched (rebuild parity
+        /// with the inline text toolbar sweep in EditorPage_ThemeApplied).
+        /// </summary>
+        private void RefreshStickyNoteEditorTheme()
+        {
+            if (_stickyNotePopup?.Child is Border border)
+            {
+                border.Background = ResolveThemeBrush("ThemeSurfaceBrush", Color.FromArgb(0xFF, 0xFF, 0xFF, 0xFF));
+                border.BorderBrush = ResolveThemeBrush("ThemeBorderBrush", Color.FromArgb(0xFF, 0xC9, 0xCE, 0xD6));
+            }
+            if (_stickyNoteEditor != null)
+            {
+                _stickyNoteEditor.Background = ResolveThemeBrush("ThemeControlBrush", Color.FromArgb(0xFF, 0xFF, 0xFF, 0xFF));
+                _stickyNoteEditor.Foreground = ResolveThemeBrush("ThemeForegroundBrush", Color.FromArgb(0xFF, 0x1F, 0x24, 0x2B));
+                _stickyNoteEditor.BorderBrush = ResolveThemeBrush("ThemeBorderBrush", Color.FromArgb(0xFF, 0xC9, 0xCE, 0xD6));
+            }
+            if (_stickyNoteTitleTextBlock != null)
+                _stickyNoteTitleTextBlock.Foreground = ResolveThemeBrush("ThemeForegroundBrush", Color.FromArgb(0xFF, 0x1F, 0x24, 0x2B));
+            if (_stickyNoteDeleteButton != null)
+                _stickyNoteDeleteButton.Foreground = ResolveThemeBrush("ThemeDangerBrush", Color.FromArgb(0xFF, 0xC4, 0x2B, 0x1C));
+            if (_stickyNoteDragHandle?.Child is StackPanel header
+                && header.Children.Count > 0
+                && header.Children[0] is LucideIcon grip)
+            {
+                grip.Stroke = ResolveThemeBrush("ThemeSubtleTextBrush", Color.FromArgb(0xFF, 0x6B, 0x72, 0x80));
+            }
         }
 
         private void ResetStickyNoteEditorState()
@@ -8036,6 +8153,22 @@ namespace Caelum.Pages
         }
 
         /// <summary>
+        /// T13-A: stamps the shared Fluent card chrome
+        /// (<c>EditorFlyoutPresenterStyle</c>) onto a <see cref="Flyout"/> —
+        /// theme surface/border/card-radius tokens plus the ThemeShadow the
+        /// stock presenter template lacks. Plain Flyouts only; MenuFlyout
+        /// presenters keep the stock menu chrome.
+        /// </summary>
+        private void ApplyToolFlyoutChrome(Flyout flyout)
+        {
+            if (flyout == null)
+                return;
+            if (Resources.TryGetValue("EditorFlyoutPresenterStyle", out var style)
+                && style is Style presenterStyle)
+                flyout.FlyoutPresenterStyle = presenterStyle;
+        }
+
+        /// <summary>
         /// Shows a tool-options flyout under its toolbar button and records
         /// ownership so the mutual-exclusion sweep (<see cref="CloseToolFlyouts"/>)
         /// and the transient-UI sweep (<see cref="CloseTransientUi"/>) can
@@ -8045,6 +8178,7 @@ namespace Caelum.Pages
         /// </summary>
         private void ShowToolFlyout(Flyout flyout, ToolType owner, FrameworkElement anchor)
         {
+            ApplyToolFlyoutChrome(flyout);
             _toolFlyout?.Hide();
             _toolFlyout = flyout;
             _toolFlyoutTool = ToolFlyoutOwner(owner);
@@ -9167,12 +9301,100 @@ namespace Caelum.Pages
         /// </summary>
         private void ThumbnailImage_Loaded(object sender, RoutedEventArgs e)
         {
-            if (sender is FrameworkElement element &&
-                element.DataContext is SidebarPageItem item &&
-                item.Thumbnail == null)
+            if (sender is FrameworkElement element)
             {
-                TryLoadThumbnail(item);
+                // T13-A: a realized image marks a (possibly recycled) row —
+                // reseed it to the resting state, stopping any retained
+                // lift storyboard first so a stale mid-flight animation
+                // can't write into the recycled container.
+                SetThumbnailCardLifted(
+                    ((element.Parent as FrameworkElement)?.Parent) as FrameworkElement,
+                    lifted: false,
+                    animate: false);
+                if (element.DataContext is SidebarPageItem item && item.Thumbnail == null)
+                    TryLoadThumbnail(item);
             }
+        }
+
+        // ── T13-A: thumbnail hover-lift (−1 DIP + deeper ThemeShadow) ─────
+
+        private void ThumbnailCard_PointerEntered(object sender, PointerRoutedEventArgs e)
+            => SetThumbnailCardLifted(sender as FrameworkElement, lifted: true);
+
+        private void ThumbnailCard_PointerExited(object sender, PointerRoutedEventArgs e)
+            => SetThumbnailCardLifted(sender as FrameworkElement, lifted: false);
+
+        /// <summary>
+        /// Drives the hover-lift on a realized thumbnail card: the template
+        /// root's <see cref="TranslateTransform"/> eases to −1 DIP while the
+        /// card surface's Translation Z channel deepens its ThemeShadow
+        /// (resting 4 → lifted 16, matching the flyout-card elevation band).
+        /// Gated on <see cref="WinUiThemeService.ShouldAnimate"/> — reduced
+        /// motion snaps instantly. The retained <see cref="Storyboard"/>
+        /// travels in the root's Tag; every entry (and the recycle reseed in
+        /// <see cref="ThumbnailImage_Loaded"/>) stops it before re-pinning so
+        /// two animations never write the same transform. The in-flight Y
+        /// is captured BEFORE Stop() reverts it, then re-pinned so a rapid
+        /// enter/exit resumes from the live position instead of snapping.
+        /// </summary>
+        private void SetThumbnailCardLifted(FrameworkElement root, bool lifted, bool animate = true)
+        {
+            if (root == null)
+                return;
+
+            var lift = root.RenderTransform as TranslateTransform;
+            var cardSurface = root.FindName("ThumbnailCardSurface") as Border;
+            double currentY = lift?.Y ?? 0.0;
+
+            if (root.Tag is Storyboard retained)
+            {
+                retained.Stop();
+                root.Tag = null;
+            }
+            if (lift != null)
+                lift.Y = currentY; // resume point — Stop() reverted to base
+
+            double targetY = lifted ? -1.0 : 0.0;
+            var targetTranslation = new System.Numerics.Vector3(0, 0, lifted ? 16f : 4f);
+            var duration = WinUiThemeService.GetAnimationDuration(TimeSpan.FromMilliseconds(120));
+            bool shouldAnimate = animate
+                && WinUiThemeService.ShouldAnimate
+                && duration > TimeSpan.Zero
+                && root.IsLoaded
+                && lift != null;
+
+            if (!shouldAnimate)
+            {
+                if (lift != null)
+                    lift.Y = targetY;
+                if (cardSurface != null)
+                    cardSurface.Translation = targetTranslation;
+                return;
+            }
+
+            var storyboard = new Storyboard();
+            var move = new DoubleAnimation
+            {
+                From = currentY,
+                To = targetY,
+                Duration = duration,
+                EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut },
+            };
+            Storyboard.SetTarget(move, lift);
+            Storyboard.SetTargetProperty(move, nameof(TranslateTransform.Y));
+            storyboard.Children.Add(move);
+            storyboard.Completed += (_, _) =>
+            {
+                if (!ReferenceEquals(root.Tag, storyboard))
+                    return;
+                storyboard.Stop();
+                root.Tag = null;
+                lift.Y = targetY;
+            };
+            root.Tag = storyboard;
+            if (cardSurface != null)
+                cardSurface.Translation = targetTranslation;
+            storyboard.Begin();
         }
 
         private void TryLoadThumbnail(SidebarPageItem item)
@@ -9301,6 +9523,7 @@ namespace Caelum.Pages
             var insertItem = new MenuFlyoutItem
             {
                 Text = LocalizationService.Get("Editor.InsertBlankPageBefore"),
+                Icon = MenuIcon("FilePlus"),
             };
             AutomationProperties.SetAutomationId(insertItem, "Editor.Sidebar.Page.InsertBefore");
             insertItem.Click += (_, _) => RunThumbnailMenuOperationAsync(
@@ -9309,6 +9532,7 @@ namespace Caelum.Pages
             var duplicateItem = new MenuFlyoutItem
             {
                 Text = LocalizationService.Get("Editor.DuplicatePage"),
+                Icon = MenuIcon("Copy"),
             };
             AutomationProperties.SetAutomationId(duplicateItem, "Editor.Sidebar.Page.Duplicate");
             duplicateItem.Click += (_, _) => RunThumbnailMenuOperationAsync(
@@ -9317,7 +9541,9 @@ namespace Caelum.Pages
             var deleteItem = new MenuFlyoutItem
             {
                 Text = LocalizationService.Get("Editor.DeletePage"),
-                // WPF parity: the destructive item keeps the danger brush.
+                // WPF parity: the destructive item keeps the danger brush;
+                // the icon follows it through Foreground value-inheritance.
+                Icon = MenuIcon("Trash2"),
                 Foreground = ResolveThemeBrush("ThemeDangerBrush", Color.FromArgb(0xFF, 0xB4, 0x23, 0x18)),
             };
             AutomationProperties.SetAutomationId(deleteItem, "Editor.Sidebar.Page.Delete");
@@ -10113,6 +10339,7 @@ namespace Caelum.Pages
             var removeItem = new MenuFlyoutItem
             {
                 Text = LocalizationService.Get("Editor.RemoveBookmark"),
+                Icon = MenuIcon("BookmarkMinus"),
                 Tag = model
             };
             AutomationProperties.SetAutomationId(removeItem, "Editor.Sidebar.Bookmark.Remove");
@@ -10145,6 +10372,7 @@ namespace Caelum.Pages
         private void OpenPdfSearch()
         {
             PdfSearchPanel.Visibility = Visibility.Visible;
+            UpdatePdfSearchEmptyState();
             PdfSearchTextBox.Focus(FocusState.Programmatic);
             PdfSearchTextBox.SelectAll();
         }
@@ -10158,6 +10386,40 @@ namespace Caelum.Pages
             foreach (var page in _pageControls)
                 page.ClearPdfTextSelection();
             _pdfSearchResults.Clear();
+            UpdatePdfSearchEmptyState();
+        }
+
+        /// <summary>
+        /// T13-A empty state: the hint overlay reads
+        /// "Type to search the document" while the box is empty and the
+        /// localized no-matches line once a finished search returned zero
+        /// hits (mid-flight "Searching…" keeps the overlay off). Collapses
+        /// the moment hits exist so it never overlays the results list.
+        /// </summary>
+        private void UpdatePdfSearchEmptyState()
+        {
+            if (PdfSearchEmptyState == null)
+                return;
+
+            string text = null;
+            if (PdfSearchPanel?.Visibility == Visibility.Visible)
+            {
+                if (string.IsNullOrWhiteSpace(PdfSearchTextBox?.Text))
+                {
+                    text = LocalizationService.Get("Editor.SearchEmptyHint");
+                }
+                else if (_pdfSearchResults.Count == 0
+                    && !string.Equals(PdfSearchStatusTextBlock?.Text,
+                        LocalizationService.Get("Editor.Searching"),
+                        StringComparison.Ordinal))
+                {
+                    text = LocalizationService.Get("Editor.SearchNoResults");
+                }
+            }
+
+            PdfSearchEmptyState.Text = text ?? string.Empty;
+            PdfSearchEmptyState.Visibility =
+                text == null ? Visibility.Collapsed : Visibility.Visible;
         }
 
         private async void PdfSearchTextBox_TextChanged(object sender, TextChangedEventArgs e)
@@ -10199,6 +10461,7 @@ namespace Caelum.Pages
                 if (string.IsNullOrWhiteSpace(query))
                 {
                     PdfSearchStatusTextBlock.Text = string.Empty;
+                    UpdatePdfSearchEmptyState();
                     return;
                 }
 
@@ -10234,9 +10497,19 @@ namespace Caelum.Pages
                 cancellationToken.ThrowIfCancellationRequested();
                 if (!ValidateDocumentOperationLease(operationLease))
                     return;
+                // T13-A: hits bypass the container generator (direct item
+                // add), so PdfSearchResultItemStyle is stamped per item to
+                // get the rounded interactive row treatment.
+                var resultStyle = Resources["PdfSearchResultItemStyle"] as Style;
                 foreach (var result in _pdfSearchResults)
-                    PdfSearchResultsListBox.Items.Add(new ListViewItem { Content = result.DisplayText, Tag = result });
+                    PdfSearchResultsListBox.Items.Add(new ListViewItem
+                    {
+                        Content = result.DisplayText,
+                        Tag = result,
+                        Style = resultStyle,
+                    });
                 PdfSearchStatusTextBlock.Text = LocalizationService.Format("Editor.SearchResults", _pdfSearchResults.Count);
+                UpdatePdfSearchEmptyState();
                 if (_pdfSearchResults.Count > 0)
                     PdfSearchResultsListBox.SelectedIndex = 0;
             }
@@ -10354,7 +10627,7 @@ namespace Caelum.Pages
 
             PrintMenuItem = new MenuFlyoutItem
             {
-                Icon = new PathIcon { Data = LucideIcon.GetIconGeometry("Printer") },
+                Icon = MenuIcon("Printer"),
                 KeyboardAcceleratorTextOverride = "Ctrl+P",
             };
             AutomationProperties.SetAutomationId(PrintMenuItem, "Editor.ContextMenu.Print");
@@ -10363,23 +10636,38 @@ namespace Caelum.Pages
 
             _pageContextMenu.Items.Add(new MenuFlyoutSeparator());
 
-            ExportCurrentPagePng1xMenuItem = AddMenuItem("Editor.ContextMenu.ExportCurrentPagePng1x", ExportCurrentPagePng1x_Click);
-            ExportCurrentPagePng2xMenuItem = AddMenuItem("Editor.ContextMenu.ExportCurrentPagePng2x", ExportCurrentPagePng2x_Click);
-            ExportAllPagesPng1xMenuItem = AddMenuItem("Editor.ContextMenu.ExportAllPagesPng1x", ExportAllPagesPng1x_Click);
-            ExportAllPagesPng2xMenuItem = AddMenuItem("Editor.ContextMenu.ExportAllPagesPng2x", ExportAllPagesPng2x_Click);
+            ExportCurrentPagePng1xMenuItem = AddMenuItem("Editor.ContextMenu.ExportCurrentPagePng1x", ExportCurrentPagePng1x_Click, "ImageDown");
+            ExportCurrentPagePng2xMenuItem = AddMenuItem("Editor.ContextMenu.ExportCurrentPagePng2x", ExportCurrentPagePng2x_Click, "ImageDown");
+            ExportAllPagesPng1xMenuItem = AddMenuItem("Editor.ContextMenu.ExportAllPagesPng1x", ExportAllPagesPng1x_Click, "Images");
+            ExportAllPagesPng2xMenuItem = AddMenuItem("Editor.ContextMenu.ExportAllPagesPng2x", ExportAllPagesPng2x_Click, "Images");
 
             _pageContextMenu.Items.Add(new MenuFlyoutSeparator());
 
-            InsertPdfPageMenuItem = AddMenuItem("Editor.ContextMenu.InsertPdfPage", InsertPdfPages_Click);
-            InsertImagePageMenuItem = AddMenuItem("Editor.ContextMenu.InsertImagePage", InsertImagePage_Click);
-            RotateCurrentPageMenuItem = AddMenuItem("Editor.ContextMenu.RotateCurrentPage", RotateCurrentPage_Click);
+            InsertPdfPageMenuItem = AddMenuItem("Editor.ContextMenu.InsertPdfPage", InsertPdfPages_Click, "FilePlus");
+            InsertImagePageMenuItem = AddMenuItem("Editor.ContextMenu.InsertImagePage", InsertImagePage_Click, "Image");
+            RotateCurrentPageMenuItem = AddMenuItem("Editor.ContextMenu.RotateCurrentPage", RotateCurrentPage_Click, "RotateCcw");
 
             PdfScrollViewer.ContextFlyout = _pageContextMenu;
         }
 
-        private MenuFlyoutItem AddMenuItem(string automationId, RoutedEventHandler onClick)
+        /// <summary>
+        /// T13-A shared menu glyph: a 16-DIP PathIcon carrying the Lucide
+        /// geometry. Foreground is left to value-inheritance so destructive
+        /// items (danger Foreground) tint their icon automatically.
+        /// </summary>
+        private static PathIcon MenuIcon(string kind) => new()
         {
-            var item = new MenuFlyoutItem();
+            Data = LucideIcon.GetIconGeometry(kind),
+            Width = 16,
+            Height = 16,
+        };
+
+        private MenuFlyoutItem AddMenuItem(string automationId, RoutedEventHandler onClick, string iconKind)
+        {
+            var item = new MenuFlyoutItem
+            {
+                Icon = iconKind == null ? null : MenuIcon(iconKind),
+            };
             AutomationProperties.SetAutomationId(item, automationId);
             item.Click += onClick;
             _pageContextMenu.Items.Add(item);
@@ -11690,6 +11978,7 @@ namespace Caelum.Pages
                 var item = new MenuFlyoutItem
                 {
                     Text = dt.ToString("yyyy-MM-dd HH:mm:ss"),
+                    Icon = MenuIcon("History"),
                 };
                 AutomationProperties.SetAutomationId(item, $"Editor.VersionHistoryItem.{i}");
                 item.Click += async (s, args) =>
@@ -12248,6 +12537,7 @@ namespace Caelum.Pages
             {
                 if (!string.IsNullOrEmpty(PdfSearchStatusTextBlock.Text))
                     PdfSearchStatusTextBlock.Text = string.Empty;
+                UpdatePdfSearchEmptyState();
                 return;
             }
 
@@ -12258,6 +12548,11 @@ namespace Caelum.Pages
 
             if (!string.Equals(currentStatus, localizedStatus, StringComparison.Ordinal))
                 PdfSearchStatusTextBlock.Text = localizedStatus;
+
+            // The empty-state overlay strings are localized too — re-stamp
+            // on language change (UpdatePdfSearchEmptyState re-reads the
+            // current result count).
+            UpdatePdfSearchEmptyState();
         }
 
         private void RefreshLocalizedDocumentSidebar()
@@ -12705,6 +13000,17 @@ namespace Caelum.Pages
                 value is Brush brush)
                 return brush;
             return new SolidColorBrush(fallback);
+        }
+
+        /// <summary>T13-A: x:Double radius token → CornerRadius for chrome
+        /// built imperatively (flyout cards, floating toolbars, editor
+        /// popups) — same geometry language as the XAML surfaces.</summary>
+        private static CornerRadius ResolveThemeCornerRadius(string key, double fallback)
+        {
+            if (Application.Current?.Resources?.TryGetValue(key, out var value) == true
+                && value is double radius)
+                return new CornerRadius(radius);
+            return new CornerRadius(fallback);
         }
 
         private static MainWindow GetMainWindow() => MainWindow.Current;

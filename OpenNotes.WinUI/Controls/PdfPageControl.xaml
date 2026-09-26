@@ -21,13 +21,19 @@
 
     <Grid x:Name="RootGrid">
         <!-- Shadow casting Border (separate from content; ThemeShadow replaces
-             the WPF DropShadowEffect). -->
-        <Border Background="White" Translation="0,0,8">
+             the WPF DropShadowEffect). T13-A: ThemeRadiusControl rounds the
+             caster — at page scale 8 DIP reads as the subtle paper edge. -->
+        <Border Background="White" Translation="0,0,8"
+                CornerRadius="{ThemeResource ThemeRadiusControl}">
             <Border.Shadow>
                 <ThemeShadow/>
             </Border.Shadow>
         </Border>
 
+        <!-- T13-A: the content Border carries the matching radius so the page
+             image + every overlay layer clip to the same rounded corners as
+             the shadow caster (WinUI Border clips its child to CornerRadius). -->
+        <Border x:Name="PageCardClip" CornerRadius="{ThemeResource ThemeRadiusControl}">
         <Grid x:Name="PageGrid" Background="White">
             <!-- PDF Background -->
             <Image x:Name="PdfImage" Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Top"/>
@@ -85,5 +91,6 @@
             <Canvas x:Name="LaserInkCanvas" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
                     Background="Transparent" IsHitTestVisible="False"/>
         </Grid>
+        </Border>
     </Grid>
 </UserControl>
