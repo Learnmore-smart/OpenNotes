@@ -7,6 +7,10 @@
     <RootNamespace>Caelum</RootNamespace>
     <AssemblyName>OpenNotes.WinUI</AssemblyName>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- Embed the app icon into the exe's Win32 resources (same convention as
+         OpenNotes.csproj). Without it, shortcuts/taskbar/alt-tab/uninstall all
+         render the blank generic icon. -->
+    <ApplicationIcon>..\Assets\app-icon.ico</ApplicationIcon>
     <UseWinUI>true</UseWinUI>
     <Nullable>disable</Nullable>
     <ImplicitUsings>disable</ImplicitUsings>
