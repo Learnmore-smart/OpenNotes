@@ -1,5 +1,5 @@
 # OpenNotes.WinUI/Pages/EditorPage.xaml(.cs)
-> Last updated: 2026-09-26 (G5/G6 — thumbnail drag-reorder + F11 immersive mode) | Protection: STANDARD
+> Last updated: 2026-09-26 (T12-B — Fluent editor chrome revamp) | Protection: STANDARD
 
 ## Purpose
 `Caelum.Pages.EditorPage : Page` — the WinUI editor shell port of the WPF
@@ -516,6 +516,90 @@ the Task 9 Phase A save/autosave + close/dirty protocol is live (T9-B defers set
   and `KickViewportRender()`s a re-raster under the new `PdfRenderPolicy`
   profile (WPF `RenderVisibleWorkingSetAsync` parity).
 
+## T12-B Fluent editor chrome (2026-09-26)
+
+- **Toolbar styles are animated Fluent templates.** `ToolbarButtonStyle`,
+  `ToolbarToggleButtonStyle` and `DocumentSidebarNavButtonStyle` share the
+  T12-A MainWindow convention: a `StateLayer`/`NavStateLayer` Border whose
+  Opacity is interpolated by generated `VisualTransition`s (hover/press
+  swap a brush on the layer because brush objects cannot animate),
+  `Pressed` adds a 0.96/0.97 scale squish on the root `ScaleTransform`,
+  `Disabled` = root Opacity 0.55. Transitions: normal/pointer-over 120 ms,
+  pressed 60 ms, checked 150 ms.
+- **Checked toggles** fade a `CheckedLayer` (`ThemeSelectionBrush`) and
+  grow the named `ActiveBar` accent underline from 60 % width via a
+  `ScaleTransform` — `ActiveBar` is a UIA/test probe, never rename it.
+- **Toolbar shell** stays the floating pill: `ToolbarBorder` =
+  `ThemeToolbarBrush` (opaque — no acrylic), `ThemeRadiusPill`,
+  `BorderThickness=1` `ThemeBorderBrush`, `ThemeShadow` +
+  `Translation="0,0,16"`, `ToolbarEntranceTransform` Y drives the
+  one-time `PlayToolbarEntrance` fade+slide (220 ms, gated on
+  `ShouldAnimate`, `_toolbarEntrancePlayed` once per page instance;
+  `CompleteToolbarEntrance` pins the end state on re-attach).
+- **Zoom cluster** is a segmented pill (`ZoomSegmentPill`:
+  `ThemeSurfaceAltBrush` + hairline + `ThemeRadiusCard`) containing
+  `Editor.ZoomOutButton`/`Editor.ZoomLabel`/`Editor.ZoomInput`/
+  `Editor.ZoomInButton` separated by 1-DIP `ThemeMenuSeparatorBrush`
+  hairlines. The label still taps open `ZoomTextBox` inline editing.
+- **Page navigator** (`CenteredPageJumpHost` overlaying
+  `PageJumpReservedSpace` at the toolbar midpoint) is a 5-column
+  segmented group inside a rounded `ThemeSurfaceAltBrush` host:
+  chevron buttons (32×32 `ToolbarButtonStyle`), hairline separators at
+  0.75 opacity, borderless semibold `Editor.PageJump` TextBox +
+  subdued `/ N` `PageCountText`. `Editor.PageJumpGroup` HelpText keeps
+  the DEBUG `current-page=N` probe.
+- **DocumentSidebar** renders as one coherent Fluent card instead of a
+  flat block: `Margin="12,70,0,12"`, outer Border =
+  `ThemeSurfaceBrush` + `ThemeBorderBrush` hairline +
+  `ThemeRadiusPill` + `ThemeShadow`/`Translation="0,0,8"`. Header row =
+  `SidebarTitleLabel` (13 px semibold, names the active tab) +
+  `Editor.Sidebar.Collapse` (32×32 `ToolbarButtonStyle`,
+  `SidebarCollapseIcon` Kind flips PanelLeftClose/PanelLeftOpen).
+- **Icon-led segmented nav:** `SidebarNavBar` is a bordered
+  `ThemeSurfaceAltBrush` group of three equal columns
+  (`Editor.Sidebar.Pages/Outline/Bookmarks`). The tab TextBlock labels
+  are `Visibility="Collapsed"` in XAML — localization still writes them
+  for the metadata contract, but the names surface via
+  `SidebarTitleLabel`, localized `ToolTipService` tooltips and
+  `AutomationProperties.Name`; `SetSidebarCollapsed` must NOT flip them
+  visible again. Selection = `ApplySidebarButtonState(button, selected,
+  label, cue)`: `ThemeSelectionBrush` background + `ThemeAccentBrush`
+  1-DIP border + semibold + accent `Foreground` (each `LucideIcon`
+  Stroke binds `Foreground` — that is how the active glyph tints) +
+  per-button `*NavSelectionCue` accent bar in the content.
+- **Thumbnail cards:** `SidebarPageItemTemplate` wraps each
+  `ThumbnailImage_Loaded` image (fixed 132×170 Uniform letterbox) in a
+  `ThemeRadiusCard` Border with `ThemeSurfaceAltBrush` fill and
+  `{x:Bind CardBorderBrush}` hairline — `SidebarPageItem.IsSelected`
+  flips it to `ThemeAccentBrush` (live `ResolveBrush`, same mechanism
+  as `LabelForeground`) so the current page reads as an accent-ringed
+  card. Items keep `Margin="0,2"` spacing.
+- **Collapse/expand motion:** `UpdateSidebarChromeGeometry(bool
+  animateTransition)` eases `DocumentSidebar.Width` 38↔184 over
+  `GetAnimationDuration(200 ms)` with CubicEase EaseOut
+  (`EnableDependentAnimation` — Width is a layout property), while the
+  `PagesContainer.Margin` snaps to the 32/228 contract IMMEDIATELY so
+  the `pages-margin-left` DEBUG HelpText probe always reads settled
+  geometry; `PagesShiftTransform.X` compensates and eases back to 0 so
+  the stack appears to slide. Rapid toggles capture live values before
+  `Storyboard.Stop()` and resume — no wedge. Instant paths:
+  `!ShouldAnimate`, unloaded page, `_resourcesReleased`, AND the ≤375
+  DIP narrow auto-collapse (`AutoCollapseSidebarForNarrowLayout` and
+  the `Editor.DebugSidebarNarrow` seam pass `animateTransition:false`
+  — layout response, not a user toggle).
+- **Immersive guard:** `ToggleImmersiveMode` calls
+  `CancelSidebarGeometryAnimation` + `CompleteToolbarEntrance` before
+  snapshotting pre-immersive chrome state (no half-run values in the
+  snapshot); `UpdatePagesContainerMarginForSidebar` returns the
+  default margin while `_isImmersiveMode` so a collapse/expand behind
+  the hidden rail can't re-offset the stack (exit re-applies the
+  contract margin). `EditorPage_Unloaded` and `ReleaseResourcesAsync`
+  call `StopChromeAnimations` — no chrome motion outlives teardown.
+- `DocumentSidebarListBoxItemStyle` stays `ListViewItemPresenter`-based
+  (native hover/selection visuals) with `ThemeRadiusControl` corners;
+  `ModernTextBox`/`ModernListBox` unchanged. Every chrome color is a
+  `{ThemeResource}` — a repo-side check confirmed zero unresolved keys.
+
 ## Open Threads / Resume Context
 - **Status:** GREEN — `tools/winui-editor-smoke.ps1` 60/60; Tasks 7A/7B/
   8A/8B + Task 9 Phase A (save/autosave + close/dirty protocol) + Task 9
@@ -530,6 +614,21 @@ the Task 9 Phase A save/autosave + close/dirty protocol is live (T9-B defers set
   flow (no WPF caller).
 
 ## Change History
+- 2026-09-26 T12-B Fluent editor chrome: toolbar/toggle/sidebar-nav styles
+  rebuilt as StateLayer + generated-`VisualTransition` templates (120 ms
+  hover / 60 ms press / 150 ms checked, 0.96 press squish, 0.55 disabled),
+  `ActiveBar` kept and animated; zoom cluster + page navigator re-cut as
+  segmented `ThemeRadiusCard` pills with hairline separators; sidebar is
+  now one `ThemeSurfaceBrush`+shadow card with an icon-led segmented nav
+  (tab labels Collapsed in XAML — names live on `SidebarTitleLabel`,
+  tooltips and `AutomationProperties.Name`), accent-ringed thumbnail cards
+  via `SidebarPageItem.CardBorderBrush`, and `UpdateSidebarChromeGeometry`
+  animates width while the 32/228 margin contract snaps instantly
+  (`animateTransition:false` for the ≤375 DIP auto-collapse +
+  `Editor.DebugSidebarNarrow`); immersive toggles settle chrome
+  storyboards first and `UpdatePagesContainerMarginForSidebar` yields the
+  default margin while `_isImmersiveMode`. Build 0 err/0 warn; targeted
+  source-test fixtures green. | Devin
 - 2026-09-26 G5/G6 port: thumbnail drag-reorder live — manual
   `StartDragAsync` payload drag (NOT built-in `CanReorderItems`, which would
   mutate `SidebarPageItems` ahead of the lease pipeline): `PointerPressed`/

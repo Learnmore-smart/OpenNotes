@@ -24,6 +24,7 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Media.Animation;
 using Microsoft.UI.Xaml.Media.Imaging;
 using Microsoft.UI.Xaml.Navigation;
 using Windows.ApplicationModel.DataTransfer;
@@ -327,6 +328,11 @@ namespace Caelum.Pages
         // ── Sidebar ─────────────────────────────────────────────────────────
         private SidebarTab _sidebarTab = SidebarTab.Pages;
         private bool _sidebarCollapsed;
+        // T12-A: in-flight chrome storyboards so rapid toggles/immersive
+        // switches/teardown can settle deterministically.
+        private Storyboard _sidebarGeometryStoryboard;
+        private Storyboard _toolbarEntranceStoryboard;
+        private bool _toolbarEntrancePlayed;
         internal ObservableCollection<SidebarPageItem> SidebarPageItems { get; } = new();
         internal ObservableCollection<SidebarBookmarkItem> SidebarBookmarkItems { get; } = new();
         private readonly ObservableCollection<SidebarOutlineItem> _sidebarOutlineItems = new();
@@ -577,6 +583,12 @@ namespace Caelum.Pages
             if (_completedLoadSessionId != 0 && _pageControls.Count > 0)
                 KickViewportRender();
             EnsureAutoSaveTimer();
+            // T12-A: one-time toolbar entrance; a re-attach mid/post
+            // animation just lands on the final state.
+            if (!_toolbarEntrancePlayed)
+                PlayToolbarEntrance();
+            else
+                CompleteToolbarEntrance();
         }
 
         /// <summary>
@@ -732,7 +744,13 @@ namespace Caelum.Pages
             ApplyToolToAllPages();
         }
 
-        private void EditorPage_Unloaded(object sender, RoutedEventArgs e) => ReleaseResources();
+        private void EditorPage_Unloaded(object sender, RoutedEventArgs e)
+        {
+            // T12-A: stop chrome storyboards before teardown — a page that
+            // re-loads must not inherit a half-run entrance/sidebar state.
+            StopChromeAnimations();
+            ReleaseResources();
+        }
 
         private void EditorPage_LanguageChanged(object sender, EventArgs e)
         {
@@ -778,10 +796,13 @@ namespace Caelum.Pages
             toggle.Click += (_, __) =>
             {
                 _debugForceNarrowLayout = !_debugForceNarrowLayout;
+                // Instant both ways: this simulates the <=375 DIP layout
+                // response (T12-B narrow-collapse contract), and the smoke
+                // reads settled geometry immediately after the click.
                 if (_debugForceNarrowLayout && !_sidebarCollapsed)
-                    SetSidebarCollapsed(true);
+                    SetSidebarCollapsed(true, animateTransition: false);
                 else if (!_debugForceNarrowLayout && _sidebarCollapsed)
-                    SetSidebarCollapsed(false);
+                    SetSidebarCollapsed(false, animateTransition: false);
             };
             EditorRootGrid.Children.Add(toggle);
 
@@ -8574,7 +8595,7 @@ namespace Caelum.Pages
         private void SidebarCollapseButton_Click(object sender, RoutedEventArgs e)
             => SetSidebarCollapsed(!_sidebarCollapsed);
 
-        private void SetSidebarCollapsed(bool collapsed)
+        private void SetSidebarCollapsed(bool collapsed, bool animateTransition = true)
         {
             _sidebarCollapsed = collapsed;
             if (SidebarContentHost != null)
@@ -8583,31 +8604,215 @@ namespace Caelum.Pages
                 SidebarNavBar.Visibility = _sidebarCollapsed ? Visibility.Collapsed : Visibility.Visible;
             if (SidebarTitleLabel != null)
                 SidebarTitleLabel.Visibility = _sidebarCollapsed ? Visibility.Collapsed : Visibility.Visible;
-            if (SidebarPagesLabel != null)
-                SidebarPagesLabel.Visibility = _sidebarCollapsed ? Visibility.Collapsed : Visibility.Visible;
-            if (SidebarOutlineLabel != null)
-                SidebarOutlineLabel.Visibility = _sidebarCollapsed ? Visibility.Collapsed : Visibility.Visible;
-            if (SidebarBookmarksLabel != null)
-                SidebarBookmarksLabel.Visibility = _sidebarCollapsed ? Visibility.Collapsed : Visibility.Visible;
+            // T12-B: the three tab label elements stay Collapsed in XAML —
+            // the segmented nav is icon-only (tooltips + header title carry
+            // the names), so nothing flips them visible here. They still
+            // receive localized text for the metadata contract.
             if (SidebarHeaderGrid != null)
                 SidebarHeaderGrid.Margin = _sidebarCollapsed
                     ? new Thickness(3)
                     : new Thickness(8, 8, 8, 2);
 
-            if (DocumentSidebar != null)
-            {
-                DocumentSidebar.Width = _sidebarCollapsed
-                    ? SidebarCollapsedWidth
-                    : SidebarExpandedWidth;
-            }
-
-            UpdatePagesContainerMarginForSidebar();
+            UpdateSidebarChromeGeometry(animateTransition);
 
             if (SidebarCollapseIcon != null)
                 SidebarCollapseIcon.Kind = _sidebarCollapsed ? "PanelLeftOpen" : "PanelLeftClose";
 
             ApplyStateAwareSidebarMetadata();
             SetSidebarTab(_sidebarTab);
+        }
+
+        /// <summary>
+        /// T12-A chrome motion: collapse/expand eases the rail width
+        /// (38↔184 DIP) while the page-stack margin snaps to the final
+        /// 32/228 DIP contract immediately — the DEBUG
+        /// <c>pages-margin-left</c> HelpText probe and every layout reader
+        /// must observe the end state the moment the toggle returns. To keep
+        /// the transition continuous for the user, <see cref="PagesContainer"/>
+        /// gets a compensating <see cref="PagesShiftTransform"/> X offset that
+        /// eases back to zero over the same duration (a RenderTransform never
+        /// changes the layout margin). Gated on
+        /// <see cref="WinUiThemeService.ShouldAnimate"/> /
+        /// <see cref="WinUiThemeService.GetAnimationDuration"/> — reduced
+        /// motion, an unloaded page and released resources take the instant
+        /// path; <paramref name="animateTransition"/> lets layout-driven
+        /// collapses (the ≤375 DIP narrow auto-collapse) skip motion entirely.
+        /// Rapid toggles resume from the in-flight values instead of
+        /// snapping: Stop() reverts animated properties to their local bases,
+        /// so the live values are captured first and re-pinned.
+        /// </summary>
+        private void UpdateSidebarChromeGeometry(bool animateTransition = true)
+        {
+            double targetWidth = _sidebarCollapsed ? SidebarCollapsedWidth : SidebarExpandedWidth;
+            var duration = WinUiThemeService.GetAnimationDuration(TimeSpan.FromMilliseconds(200));
+            bool animate = animateTransition
+                && WinUiThemeService.ShouldAnimate
+                && duration > TimeSpan.Zero
+                && !_resourcesReleased
+                && DocumentSidebar != null && DocumentSidebar.IsLoaded
+                && PagesContainer != null && PagesShiftTransform != null;
+
+            double currentWidth = DocumentSidebar?.Width ?? targetWidth;
+            double currentShift = PagesShiftTransform?.X ?? 0.0;
+            double previousMarginLeft = PagesContainer?.Margin.Left ?? 0.0;
+
+            _sidebarGeometryStoryboard?.Stop();
+            _sidebarGeometryStoryboard = null;
+
+            if (DocumentSidebar != null)
+                DocumentSidebar.Width = currentWidth;
+            // Margin snaps to the contract value up front (probe + layout).
+            UpdatePagesContainerMarginForSidebar();
+            double shiftCompensation = previousMarginLeft + currentShift -
+                (PagesContainer?.Margin.Left ?? 0.0);
+
+            if (!animate)
+            {
+                if (DocumentSidebar != null)
+                    DocumentSidebar.Width = targetWidth;
+                if (PagesShiftTransform != null)
+                    PagesShiftTransform.X = 0;
+                return;
+            }
+
+            DocumentSidebar.Width = currentWidth;
+            PagesShiftTransform.X = shiftCompensation;
+            var ease = new CubicEase { EasingMode = EasingMode.EaseOut };
+            var storyboard = new Storyboard();
+            var widthAnimation = new DoubleAnimation
+            {
+                To = targetWidth,
+                Duration = duration,
+                EasingFunction = ease,
+                // Width feeds layout, so it needs the dependent-animation opt-in.
+                EnableDependentAnimation = true
+            };
+            Storyboard.SetTarget(widthAnimation, DocumentSidebar);
+            Storyboard.SetTargetProperty(widthAnimation, nameof(FrameworkElement.Width));
+            storyboard.Children.Add(widthAnimation);
+            if (Math.Abs(shiftCompensation) > 0.01)
+            {
+                var shiftAnimation = new DoubleAnimation
+                {
+                    To = 0.0,
+                    Duration = duration,
+                    EasingFunction = ease
+                };
+                Storyboard.SetTarget(shiftAnimation, PagesShiftTransform);
+                Storyboard.SetTargetProperty(shiftAnimation, nameof(TranslateTransform.X));
+                storyboard.Children.Add(shiftAnimation);
+            }
+
+            storyboard.Completed += (_, _) =>
+            {
+                if (!ReferenceEquals(_sidebarGeometryStoryboard, storyboard))
+                    return;
+                // Pin the exact contract values even if a frame was dropped.
+                storyboard.Stop();
+                _sidebarGeometryStoryboard = null;
+                DocumentSidebar.Width = targetWidth;
+                PagesShiftTransform.X = 0;
+            };
+            _sidebarGeometryStoryboard = storyboard;
+            storyboard.Begin();
+        }
+
+        /// <summary>
+        /// Stops a mid-flight collapse/expand transition and pins the contract
+        /// end-state — immersive toggles and teardown must not inherit a
+        /// half-run width or a residual page-stack offset.
+        /// </summary>
+        private void CancelSidebarGeometryAnimation()
+        {
+            _sidebarGeometryStoryboard?.Stop();
+            _sidebarGeometryStoryboard = null;
+            if (DocumentSidebar != null)
+                DocumentSidebar.Width = _sidebarCollapsed ? SidebarCollapsedWidth : SidebarExpandedWidth;
+            if (PagesShiftTransform != null)
+                PagesShiftTransform.X = 0;
+        }
+
+        /// <summary>
+        /// Ends a mid-flight toolbar entrance deterministically — used when the
+        /// page leaves the tree or immersive mode snapshots chrome opacity, so
+        /// the recorded/restored value is always the real end-state 1.0.
+        /// </summary>
+        private void CompleteToolbarEntrance()
+        {
+            if (_toolbarEntranceStoryboard != null)
+            {
+                _toolbarEntranceStoryboard.Stop();
+                _toolbarEntranceStoryboard = null;
+                if (ToolbarBorder != null)
+                    ToolbarBorder.Opacity = 1.0;
+            }
+            if (ToolbarEntranceTransform != null)
+                ToolbarEntranceTransform.Y = 0;
+        }
+
+        /// <summary>
+        /// T12-A: first-load toolbar entrance — a short fade + slide-down so
+        /// the floating pill lands instead of popping. Runs once per page
+        /// instance (<see cref="_toolbarEntrancePlayed"/>); reduced motion and
+        /// released resources keep the XAML default end-state (no offset,
+        /// Opacity 1).
+        /// </summary>
+        private void PlayToolbarEntrance()
+        {
+            _toolbarEntrancePlayed = true;
+            if (ToolbarBorder == null)
+                return;
+
+            var duration = WinUiThemeService.GetAnimationDuration(TimeSpan.FromMilliseconds(220));
+            if (!WinUiThemeService.ShouldAnimate || duration == TimeSpan.Zero || _resourcesReleased)
+                return;
+
+            var ease = new CubicEase { EasingMode = EasingMode.EaseOut };
+            ToolbarBorder.Opacity = 0;
+            if (ToolbarEntranceTransform != null)
+                ToolbarEntranceTransform.Y = -10;
+
+            var storyboard = new Storyboard();
+            var fade = new DoubleAnimation
+            {
+                To = 1.0,
+                Duration = duration,
+                EasingFunction = ease
+            };
+            Storyboard.SetTarget(fade, ToolbarBorder);
+            Storyboard.SetTargetProperty(fade, nameof(UIElement.Opacity));
+            storyboard.Children.Add(fade);
+            if (ToolbarEntranceTransform != null)
+            {
+                var slide = new DoubleAnimation
+                {
+                    To = 0.0,
+                    Duration = duration,
+                    EasingFunction = ease
+                };
+                Storyboard.SetTarget(slide, ToolbarEntranceTransform);
+                Storyboard.SetTargetProperty(slide, nameof(TranslateTransform.Y));
+                storyboard.Children.Add(slide);
+            }
+
+            storyboard.Completed += (_, _) =>
+            {
+                if (!ReferenceEquals(_toolbarEntranceStoryboard, storyboard))
+                    return;
+                storyboard.Stop();
+                _toolbarEntranceStoryboard = null;
+                ToolbarBorder.Opacity = 1.0;
+                if (ToolbarEntranceTransform != null)
+                    ToolbarEntranceTransform.Y = 0;
+            };
+            _toolbarEntranceStoryboard = storyboard;
+            storyboard.Begin();
+        }
+
+        private void StopChromeAnimations()
+        {
+            CancelSidebarGeometryAnimation();
+            CompleteToolbarEntrance();
         }
 
         /// <summary>
@@ -8620,7 +8825,11 @@ namespace Caelum.Pages
         {
             if (PagesContainer == null)
                 return;
-            PagesContainer.Margin = _sidebarCollapsed
+            // T12-B: immersive mode owns the centered margin while active —
+            // a collapse/expand triggered behind the hidden rail must not
+            // re-offset the page stack (the exit path re-applies the
+            // contract margin once the flag clears).
+            PagesContainer.Margin = _sidebarCollapsed || _isImmersiveMode
                 ? PagesContainerDefaultMargin
                 : PagesContainerSidebarMargin;
 #if DEBUG
@@ -8647,6 +8856,11 @@ namespace Caelum.Pages
         private void ToggleImmersiveMode()
         {
             CloseToolFlyouts();
+            // T12-A: settle any in-flight chrome motion first — the
+            // pre-immersive snapshot below must record real end-state
+            // values, not half-run animation values.
+            CancelSidebarGeometryAnimation();
+            CompleteToolbarEntrance();
             _isImmersiveMode = !_isImmersiveMode;
 
             if (_isImmersiveMode)
@@ -8705,12 +8919,15 @@ namespace Caelum.Pages
 #if DEBUG
             if (_debugForceNarrowLayout && !_sidebarCollapsed)
             {
-                SetSidebarCollapsed(true);
+                // Narrow auto-collapse is a layout response, not a user
+                // toggle — always instant (T12-B contract: no motion at
+                // <=375 DIP so the smoke reads settled geometry).
+                SetSidebarCollapsed(true, animateTransition: false);
                 return;
             }
 #endif
             if (ActualWidth > 0 && ActualWidth <= SidebarNarrowAutoCollapseWidth && !_sidebarCollapsed)
-                SetSidebarCollapsed(true);
+                SetSidebarCollapsed(true, animateTransition: false);
         }
 
         // ── Sidebar: tabs ───────────────────────────────────────────────────
@@ -8744,9 +8961,22 @@ namespace Caelum.Pages
             ApplySidebarButtonState(SidebarBookmarksButton, tab == SidebarTab.Bookmarks,
                 LocalizationService.Get("Editor.BookmarksTab"), BookmarksNavSelectionCue);
 
+            // T12-B: the header title names the active tab — the icon-only
+            // segmented nav no longer shows per-tab text.
+            if (SidebarTitleLabel != null)
+                SidebarTitleLabel.Text = GetSidebarTabLabel(tab);
+
             if (tab == SidebarTab.Pages && !_sidebarCollapsed)
                 UpdateThumbnailSelection(forceCenter: true);
         }
+
+        /// <summary>Localized title for a sidebar tab (header + tooltips).</summary>
+        private static string GetSidebarTabLabel(SidebarTab tab) => tab switch
+        {
+            SidebarTab.Outline => LocalizationService.Get("Editor.OutlineTab"),
+            SidebarTab.Bookmarks => LocalizationService.Get("Editor.BookmarksTab"),
+            _ => LocalizationService.Get("Editor.PagesTab"),
+        };
 
         private void ApplySidebarButtonState(Button button, bool selected, string label, Border selectionCue)
         {
@@ -8764,6 +8994,11 @@ namespace Caelum.Pages
                 : new SolidColorBrush(Colors.Transparent);
             button.BorderThickness = new Thickness(1);
             button.FontWeight = selected ? FontWeights.SemiBold : FontWeights.Normal;
+            // T12-B: the nav icon Stroke binds the button Foreground, so
+            // this write is what accent-tints the selected tab's glyph.
+            button.Foreground = selected
+                ? ResolveThemeBrush("ThemeAccentBrush", Color.FromArgb(0xFF, 0x25, 0x63, 0xEB))
+                : ResolveThemeBrush("ThemeForegroundBrush", Color.FromArgb(0xFF, 0x1F, 0x29, 0x37));
             if (selectionCue != null)
                 selectionCue.Visibility = selected ? Visibility.Visible : Visibility.Collapsed;
 
@@ -11875,7 +12110,7 @@ namespace Caelum.Pages
             if (SidebarBookmarksLabel != null)
                 SidebarBookmarksLabel.Text = LocalizationService.Get("Editor.BookmarksTab");
             if (SidebarTitleLabel != null)
-                SidebarTitleLabel.Text = pages;
+                SidebarTitleLabel.Text = GetSidebarTabLabel(_sidebarTab);
             if (PagesEmptyState != null)
                 PagesEmptyState.Text = LocalizationService.Get("Editor.NoDocumentLoaded");
             if (OutlineEmptyState != null)
@@ -13146,6 +13381,8 @@ namespace Caelum.Pages
 
                 _zoomRenderDebounceTimer.Stop();
                 _scrollRenderDebounceTimer.Stop();
+                // T12-A: no in-flight chrome motion may outlive the release.
+                StopChromeAnimations();
 
                 if (_languageChangedSubscribed)
                 {
@@ -13334,12 +13571,22 @@ namespace Caelum.Pages
                 PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsSelected)));
                 PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(LabelForeground)));
                 PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(LabelFontWeight)));
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CardBorderBrush)));
             }
         }
 
         public Brush LabelForeground => _isSelected
             ? ResolveBrush("ThemeAccentBrush", Color.FromArgb(0xFF, 0x25, 0x63, 0xEB))
             : ResolveBrush("ThemeSubtleForegroundBrush", Color.FromArgb(0xFF, 0x6B, 0x72, 0x80));
+
+        /// <summary>
+        /// Thumbnail card hairline: the accent ring while this page is
+        /// current, the regular border brush otherwise (T12-B selection
+        /// treatment — resolved live like <see cref="LabelForeground"/>).
+        /// </summary>
+        public Brush CardBorderBrush => _isSelected
+            ? ResolveBrush("ThemeAccentBrush", Color.FromArgb(0xFF, 0x25, 0x63, 0xEB))
+            : ResolveBrush("ThemeBorderBrush", Color.FromArgb(0xFF, 0xD1, 0xD5, 0xDB));
 
         public FontWeight LabelFontWeight => _isSelected ? FontWeights.SemiBold : FontWeights.Normal;
 
