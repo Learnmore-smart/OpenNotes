@@ -11991,6 +11991,18 @@ namespace Caelum.Pages
         }
 
         /// <summary>
+        /// WPF <c>MainWindow_Deactivated</c> parity — the window lost focus
+        /// (Alt-Tab/minimize): sweep transient chrome without flipping the
+        /// host-active gate (the editor stays active; only the transient
+        /// state clears). <see cref="CloseTransientUi"/> already cancels
+        /// every page's in-flight interaction.
+        /// </summary>
+        internal void OnWindowDeactivated()
+        {
+            CloseTransientUi("window deactivated");
+        }
+
+        /// <summary>
         /// WPF SetHostActive parity: MainWindow calls this on tab switches so
         /// hidden tabs sweep transient UI, gate page input AND stop the
         /// selection marching-ants timer via
@@ -11998,19 +12010,6 @@ namespace Caelum.Pages
         /// Rendering/scroll state stays warm — the tab is hidden, not torn
         /// down.
         /// </summary>
-        /// <summary>
-        /// WPF <c>MainWindow_Deactivated</c> parity — the window lost focus
-        /// (Alt-Tab/minimize): cancel in-flight pointer gestures and sweep
-        /// transient chrome without flipping the host-active gate (the
-        /// editor stays active; only the transient state clears).
-        /// </summary>
-        internal void OnWindowDeactivated()
-        {
-            CloseTransientUi("window deactivated");
-            foreach (var page in _pageControls)
-                page.CancelInteraction();
-        }
-
         public void SetHostActive(bool isActive)
         {
             // WPF runs the transient sweep BEFORE the no-op early return —

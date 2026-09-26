@@ -249,14 +249,22 @@ namespace Caelum
 
             // WPF MainWindow_StateChanged parity: minimize gates the ACTIVE
             // editor (window-global pen hotkeys still arrive while
-            // minimized); restore resumes interaction.
+            // minimized); restore resumes interaction — but NOT while a
+            // close/navigation workflow owns the editor: AppWindow.Changed
+            // fires on every geometry event, so an unguarded resume could
+            // reopen edit admission inside the final-generation barrier.
             if (_activeTab?.Frame?.Content is EditorPage activeEditor)
             {
                 bool minimized = _appWindow?.Presenter is OverlappedPresenter p
                     && p.State == OverlappedPresenterState.Minimized;
                 activeEditor.SetHostActive(!minimized);
-                if (!minimized)
+                if (!minimized &&
+                    !_windowCloseWorkflowActive &&
+                    !_navigationWorkflowActive &&
+                    _tabCloseWorkflows.Count == 0)
+                {
                     activeEditor.ResumeDocumentInteraction();
+                }
             }
         }
 
@@ -627,6 +635,7 @@ namespace Caelum
             _windowCloseCts = null;
             if (ReferenceEquals(Current, this))
                 Current = null;
+            this.Activated -= MainWindow_Activated;
             if (_appWindow != null)
             {
                 _appWindow.Changed -= AppWindow_Changed;
