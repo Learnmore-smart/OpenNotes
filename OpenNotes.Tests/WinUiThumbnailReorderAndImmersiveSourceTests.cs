@@ -159,7 +159,11 @@ public sealed class WinUiThumbnailReorderAndImmersiveSourceTests
             Assert.That(source, Does.Contain("ToolbarBorder.IsHitTestVisible = false"));
             Assert.That(source, Does.Contain("DocumentSidebar.Opacity = 0"));
             Assert.That(source, Does.Contain("PdfSearchPanel.Opacity = 0"));
-            Assert.That(source, Does.Contain("PagesContainer.Margin = PagesContainerDefaultMargin"));
+            // T12-B review: margin writes route through the probe-aware
+            // helper — a direct "PagesContainer.Margin = ..." write on the
+            // immersive path would skip the DEBUG pages-margin-left
+            // HelpText refresh.
+            Assert.That(source, Does.Not.Contain("PagesContainer.Margin = PagesContainerDefaultMargin"));
             Assert.That(source, Does.Contain("UpdatePagesContainerMarginForSidebar()"));
 
             // F11 toggles only when a TextBox isn't being edited; Escape

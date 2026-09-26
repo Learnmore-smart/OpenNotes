@@ -385,6 +385,10 @@ namespace Caelum.Pages
         private CancellationTokenSource _pdfSearchCts;
 
         private bool _languageChangedSubscribed;
+        // T12-B: ThemeApplied subscription mirrors _languageChangedSubscribed —
+        // imperatively captured theme brushes must be re-stamped on a palette
+        // swap or they keep the old colors (invisible glyphs, stale accent).
+        private bool _themeAppliedSubscribed;
 
         // ── Page jump ───────────────────────────────────────────────────────
         private string _bookmarksCachePath;
@@ -577,6 +581,11 @@ namespace Caelum.Pages
                 LocalizationService.LanguageChanged += EditorPage_LanguageChanged;
                 _languageChangedSubscribed = true;
             }
+            if (!_themeAppliedSubscribed)
+            {
+                WinUiThemeService.ThemeApplied += EditorPage_ThemeApplied;
+                _themeAppliedSubscribed = true;
+            }
 
             InitializePenService();
             AutoCollapseSidebarForNarrowLayout();
@@ -758,6 +767,24 @@ namespace Caelum.Pages
             // re-localize sidebar labels, empty states, toolbar metadata and
             // the context menu in place (WPF EditorPage parity).
             ApplyLocalization();
+        }
+
+        private void EditorPage_ThemeApplied(object sender, EventArgs e)
+        {
+            if (_resourcesReleased)
+                return;
+            // ThemeApplied fires after Apply() has REPLACED the brush objects
+            // in App.Resources. XAML {ThemeResource} lookups re-resolve, but
+            // brushes captured imperatively keep the stale palette —
+            // unselected nav glyphs would go dark-on-dark and the selected
+            // cell/thumbnail ring would keep the old accent. Re-stamp the
+            // nav cell state (SetSidebarTab → ApplySidebarButtonState re-
+            // resolves Background/BorderBrush/Foreground, and the icon
+            // Stroke binding picks the new Foreground up) and re-raise the
+            // sidebar items' bound card/label brushes.
+            SetSidebarTab(_sidebarTab);
+            foreach (var item in SidebarPageItems)
+                item.RefreshThemeBrushes();
         }
 
         /// <summary>
@@ -8633,10 +8660,14 @@ namespace Caelum.Pages
         /// eases back to zero over the same duration (a RenderTransform never
         /// changes the layout margin). Gated on
         /// <see cref="WinUiThemeService.ShouldAnimate"/> /
-        /// <see cref="WinUiThemeService.GetAnimationDuration"/> — reduced
-        /// motion, an unloaded page and released resources take the instant
-        /// path; <paramref name="animateTransition"/> lets layout-driven
-        /// collapses (the ≤375 DIP narrow auto-collapse) skip motion entirely.
+        /// <see cref="WinUiThemeService.GetAnimationDuration"/> — the
+        /// requested value below is a hint: the service returns the app-wide
+        /// <c>ThemeAnimationDuration</c> token (~160 ms currently) whenever
+        /// it is nonzero, so the effective duration is the shared token.
+        /// Reduced motion, an unloaded page and released resources take the
+        /// instant path; <paramref name="animateTransition"/> lets
+        /// layout-driven collapses (the ≤375 DIP narrow auto-collapse)
+        /// skip motion entirely.
         /// Rapid toggles resume from the in-flight values instead of
         /// snapping: Stop() reverts animated properties to their local bases,
         /// so the live values are captured first and re-pinned.
@@ -8644,6 +8675,8 @@ namespace Caelum.Pages
         private void UpdateSidebarChromeGeometry(bool animateTransition = true)
         {
             double targetWidth = _sidebarCollapsed ? SidebarCollapsedWidth : SidebarExpandedWidth;
+            // The 200 ms request resolves through GetAnimationDuration, which
+            // returns the ThemeAnimationDuration token (~160 ms) while set.
             var duration = WinUiThemeService.GetAnimationDuration(TimeSpan.FromMilliseconds(200));
             bool animate = animateTransition
                 && WinUiThemeService.ShouldAnimate
@@ -8755,7 +8788,10 @@ namespace Caelum.Pages
         /// the floating pill lands instead of popping. Runs once per page
         /// instance (<see cref="_toolbarEntrancePlayed"/>); reduced motion and
         /// released resources keep the XAML default end-state (no offset,
-        /// Opacity 1).
+        /// Opacity 1). The 220 ms request resolves through
+        /// <see cref="WinUiThemeService.GetAnimationDuration"/>, which returns
+        /// the app-wide <c>ThemeAnimationDuration</c> token (~160 ms
+        /// currently) whenever it is nonzero.
         /// </summary>
         private void PlayToolbarEntrance()
         {
@@ -8763,6 +8799,8 @@ namespace Caelum.Pages
             if (ToolbarBorder == null)
                 return;
 
+            // Same resolution note as UpdateSidebarChromeGeometry: effective
+            // duration is the shared token, not the requested 220 ms.
             var duration = WinUiThemeService.GetAnimationDuration(TimeSpan.FromMilliseconds(220));
             if (!WinUiThemeService.ShouldAnimate || duration == TimeSpan.Zero || _resourcesReleased)
                 return;
@@ -8877,8 +8915,11 @@ namespace Caelum.Pages
                 DocumentSidebar.IsHitTestVisible = false;
                 PdfSearchPanel.Opacity = 0;
                 PdfSearchPanel.IsHitTestVisible = false;
-                if (PagesContainer != null)
-                    PagesContainer.Margin = PagesContainerDefaultMargin;
+                // Route through the helper (not a direct Margin write) so the
+                // DEBUG pages-margin-left HelpText probe refreshes on entry
+                // too — _isImmersiveMode is already true, so the helper
+                // returns the same default margin.
+                UpdatePagesContainerMarginForSidebar();
             }
             else
             {
@@ -13389,6 +13430,11 @@ namespace Caelum.Pages
                     LocalizationService.LanguageChanged -= EditorPage_LanguageChanged;
                     _languageChangedSubscribed = false;
                 }
+                if (_themeAppliedSubscribed)
+                {
+                    WinUiThemeService.ThemeApplied -= EditorPage_ThemeApplied;
+                    _themeAppliedSubscribed = false;
+                }
 
                 // Window-owned shared service — release the reference
                 // only; MainWindow disposes the single instance on Closed.
@@ -13589,6 +13635,19 @@ namespace Caelum.Pages
             : ResolveBrush("ThemeBorderBrush", Color.FromArgb(0xFF, 0xD1, 0xD5, 0xDB));
 
         public FontWeight LabelFontWeight => _isSelected ? FontWeights.SemiBold : FontWeights.Normal;
+
+        /// <summary>
+        /// Re-raises the brush-capturing properties after a theme swap
+        /// (<see cref="WinUiThemeService.ThemeApplied"/>): their values were
+        /// resolved imperatively, so bound consumers keep the stale palette
+        /// until they are re-read. Selection itself is unchanged — only the
+        /// palette moved underneath.
+        /// </summary>
+        public void RefreshThemeBrushes()
+        {
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(LabelForeground)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CardBorderBrush)));
+        }
 
         private static Brush ResolveBrush(string key, Color fallback)
         {

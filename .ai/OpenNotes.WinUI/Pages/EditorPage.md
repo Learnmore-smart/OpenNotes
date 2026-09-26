@@ -575,26 +575,50 @@ the Task 9 Phase A save/autosave + close/dirty protocol is live (T9-B defers set
   as `LabelForeground`) so the current page reads as an accent-ringed
   card. Items keep `Margin="0,2"` spacing.
 - **Collapse/expand motion:** `UpdateSidebarChromeGeometry(bool
-  animateTransition)` eases `DocumentSidebar.Width` 38↔184 over
-  `GetAnimationDuration(200 ms)` with CubicEase EaseOut
-  (`EnableDependentAnimation` — Width is a layout property), while the
-  `PagesContainer.Margin` snaps to the 32/228 contract IMMEDIATELY so
-  the `pages-margin-left` DEBUG HelpText probe always reads settled
-  geometry; `PagesShiftTransform.X` compensates and eases back to 0 so
-  the stack appears to slide. Rapid toggles capture live values before
-  `Storyboard.Stop()` and resume — no wedge. Instant paths:
-  `!ShouldAnimate`, unloaded page, `_resourcesReleased`, AND the ≤375
-  DIP narrow auto-collapse (`AutoCollapseSidebarForNarrowLayout` and
-  the `Editor.DebugSidebarNarrow` seam pass `animateTransition:false`
-  — layout response, not a user toggle).
+  animateTransition)` eases `DocumentSidebar.Width` 38↔184 with
+  CubicEase EaseOut (`EnableDependentAnimation` — Width is a layout
+  property). The requested 200 ms is a HINT —
+  `WinUiThemeService.GetAnimationDuration` returns the app-wide
+  `ThemeAnimationDuration` token (~160 ms) whenever nonzero, so the
+  effective duration is the shared token (same for the 220 ms toolbar
+  entrance request). The `PagesContainer.Margin` snaps to the 32/228
+  contract IMMEDIATELY so the `pages-margin-left` DEBUG HelpText probe
+  always reads settled geometry; `PagesShiftTransform.X` compensates
+  and eases back to 0 so the stack appears to slide. Rapid toggles
+  capture live values before `Storyboard.Stop()` and resume — no wedge.
+  Instant paths: `!ShouldAnimate`, unloaded page, `_resourcesReleased`,
+  AND the ≤375 DIP narrow auto-collapse
+  (`AutoCollapseSidebarForNarrowLayout` and the
+  `Editor.DebugSidebarNarrow` seam pass `animateTransition:false` —
+  layout response, not a user toggle).
 - **Immersive guard:** `ToggleImmersiveMode` calls
   `CancelSidebarGeometryAnimation` + `CompleteToolbarEntrance` before
   snapshotting pre-immersive chrome state (no half-run values in the
   snapshot); `UpdatePagesContainerMarginForSidebar` returns the
   default margin while `_isImmersiveMode` so a collapse/expand behind
   the hidden rail can't re-offset the stack (exit re-applies the
-  contract margin). `EditorPage_Unloaded` and `ReleaseResourcesAsync`
-  call `StopChromeAnimations` — no chrome motion outlives teardown.
+  contract margin). The immersive ENTRY path also routes through that
+  helper (never a direct `PagesContainer.Margin` write) so the DEBUG
+  `pages-margin-left` HelpText probe refreshes on entry too — the
+  source contract pins the absence of the direct write.
+  `EditorPage_Unloaded` and `ReleaseResourcesAsync` call
+  `StopChromeAnimations` — no chrome motion outlives teardown.
+- **Theme-swap re-stamp (review fix):** `WinUiThemeService.Apply`
+  REPLACES brush objects in `App.Resources` — XAML `{ThemeResource}`
+  lookups re-resolve, but brushes captured imperatively
+  (`ApplySidebarButtonState`'s nav-cell Background/BorderBrush/
+  Foreground, `SidebarPageItem.LabelForeground`/`CardBorderBrush`)
+  keep the stale palette. `EditorPage` mirrors the
+  `_languageChangedSubscribed` pattern: `_themeAppliedSubscribed`
+  guards a `WinUiThemeService.ThemeApplied` subscription in
+  `EditorPage_Loaded`, the handler (`EditorPage_ThemeApplied`, skipped
+  when `_resourcesReleased`) calls `SetSidebarTab(_sidebarTab)` to
+  re-stamp the nav cells (the icon `Stroke` ElementName binding picks
+  up the new Foreground automatically) and loops
+  `SidebarPageItems` calling `item.RefreshThemeBrushes()` (re-raises
+  `PropertyChanged` for the two captured-brush properties so the
+  x:Bind OneWay consumers re-read). Unsubscribe lives in
+  `ReleaseResourcesAsync` next to the language unsubscribe.
 - `DocumentSidebarListBoxItemStyle` stays `ListViewItemPresenter`-based
   (native hover/selection visuals) with `ThemeRadiusControl` corners;
   `ModernTextBox`/`ModernListBox` unchanged. Every chrome color is a
@@ -614,6 +638,22 @@ the Task 9 Phase A save/autosave + close/dirty protocol is live (T9-B defers set
   flow (no WPF caller).
 
 ## Change History
+- 2026-09-26 T12-B spec-review fixes (over `f2d5349`): (1) theme-swap
+  staleness — `EditorPage` now subscribes `WinUiThemeService.ThemeApplied`
+  in `Loaded` (`_themeAppliedSubscribed` guard, unsubscribed in
+  `ReleaseResourcesAsync` beside the language unsubscribe); the handler
+  re-stamps nav-cell brushes via `SetSidebarTab(_sidebarTab)` and loops
+  `SidebarPageItems` → new `SidebarPageItem.RefreshThemeBrushes()`
+  re-raises `PropertyChanged` for `LabelForeground`/`CardBorderBrush`
+  (the two imperatively captured brushes — bound consumers were keeping
+  the pre-swap palette after Light→Dark/HC). (2) Doc comments corrected:
+  the 200 ms / 220 ms animation requests resolve through
+  `GetAnimationDuration` to the shared `ThemeAnimationDuration` token
+  (~160 ms). (3) Immersive entry now calls
+  `UpdatePagesContainerMarginForSidebar()` instead of a direct
+  `PagesContainer.Margin` write so the DEBUG `pages-margin-left` probe
+  refreshes on entry. Source-contract test updated to pin the helper
+  route (`Does.Not.Contain` the direct write). | Devin
 - 2026-09-26 T12-B Fluent editor chrome: toolbar/toggle/sidebar-nav styles
   rebuilt as StateLayer + generated-`VisualTransition` templates (120 ms
   hover / 60 ms press / 150 ms checked, 0.96 press squish, 0.55 disabled),
