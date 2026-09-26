@@ -79,8 +79,9 @@
                  system backdrop (Mica/acrylic) is installed —
                  WinUiThemeService.Apply rewrites it per palette and flips
                  it to the opaque toolbar brush under high contrast /
-                 reduce-transparency. The ThemeRadius* CornerRadius set is
-                 static Fluent geometry shared by chrome + control styles. -->
+                 reduce-transparency. ThemeRadiusControl is the static
+                 Fluent corner used by the chrome styles; ThemeRadiusCard /
+                 ThemeRadiusPill are reserved for the T12-B content pass. -->
             <SolidColorBrush x:Key="ThemeChromeBrush" Color="#B3FFFFFF"/>
             <CornerRadius x:Key="ThemeRadiusControl">8</CornerRadius>
             <CornerRadius x:Key="ThemeRadiusCard">10</CornerRadius>

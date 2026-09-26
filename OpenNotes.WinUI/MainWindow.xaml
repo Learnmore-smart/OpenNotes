@@ -88,7 +88,8 @@
                 </Setter>
             </Style>
 
-            <!-- Compact tab-close button (20px glyph in a 24px hit area). -->
+            <!-- Compact tab-close button (9px glyph in a 24px hit area —
+                 ≥20px target kept for the UIA/pointer smokes). -->
             <Style x:Key="TabCloseButtonStyle" TargetType="Button">
                 <Setter Property="Background" Value="Transparent"/>
                 <Setter Property="BorderThickness" Value="0"/>
@@ -294,6 +295,7 @@
                                     Visibility="{x:Bind CloseButtonVisibility, Mode=OneWay}"
                                     Opacity="{x:Bind CloseButtonOpacity, Mode=OneWay}"
                                     IsHitTestVisible="{x:Bind CloseButtonHitTestVisible, Mode=OneWay}"
+                                    IsTabStop="{x:Bind CloseButtonHitTestVisible, Mode=OneWay}"
                                     AutomationProperties.AutomationId="TabCloseButton"
                                     AutomationProperties.Name="{x:Bind CloseTooltip, Mode=OneWay}"
                                     ToolTipService.ToolTip="{x:Bind CloseTooltip, Mode=OneWay}"
@@ -341,8 +343,7 @@
 
                     <!-- Brand + nav cluster (left). -->
                     <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center" Margin="10,0,0,0">
-                        <Border x:Name="BrandMarginRail"
-                                Width="3" Height="16"
+                        <Border Width="3" Height="16"
                                 Margin="0,0,8,0"
                                 Background="{ThemeResource ThemeMarginBrush}"
                                 CornerRadius="2"/>

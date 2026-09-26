@@ -70,6 +70,9 @@ namespace Caelum
         // True while a system backdrop (Mica/acrylic) is installed — the
         // chrome band then resolves the translucent ThemeChromeBrush;
         // otherwise it must stay opaque ThemeToolbarBrush.
+        // One-time snapshot taken at startup: if the compositor ever drops
+        // the backdrop mid-session the band keeps its (still legible, just
+        // less Mica-showing) tint — accepted limitation.
         private bool _systemBackdropInstalled;
 
         // DIP intents — converted to physical px by the rasterization scale.
@@ -354,8 +357,21 @@ namespace Caelum
             // Sweep every tab's editor (hidden tabs are already input-gated,
             // but an armed thumbnail drag / flyout on the ACTIVE editor must
             // not survive an app switch — WPF swept all retained editors).
+            // Also clear hover state: PointerExited may never fire once the
+            // window deactivates mid-hover, which would leave a stale
+            // revealed close button AND a lit TabHoverTint on the inactive
+            // pill (the tint is animated from code, not bound to
+            // IsPointerOver — it must be faded back explicitly).
             foreach (var tab in _tabs)
+            {
+                tab.IsPointerOver = false;
+                if (TabStrip?.ContainerFromItem(tab) is ListViewItem item &&
+                    item.ContentTemplateRoot is Border pill)
+                {
+                    AnimateChromeOpacity(pill.FindName("TabHoverTint") as UIElement, 0.0);
+                }
                 (tab.Frame?.Content as EditorPage)?.OnWindowDeactivated();
+            }
         }
 
         private void UpdateMaximizeGlyph()
@@ -636,6 +652,15 @@ namespace Caelum
             // Pages built at navigation time re-localize on their own; the
             // live HomePage rebinds through its ApplyLocalization too.
             (ActiveFrame?.Content as HomePage)?.ApplyLocalization();
+            // Tab chrome binds computed properties — CloseTooltip re-reads
+            // the catalog on RefreshVisualState, and IsHome tabs re-take
+            // the localized "Home" title (editor titles are file names).
+            foreach (var tab in _tabs)
+            {
+                if (tab.IsHome)
+                    tab.Title = GetHomeTabTitle();
+                tab.RefreshVisualState();
+            }
         }
 
         private void WinUiThemeService_ThemeApplied(object sender, EventArgs e)
@@ -1151,11 +1176,12 @@ namespace Caelum
                 tab.IsPointerOver = false;
                 AnimateChromeOpacity(border.FindName("TabHoverTint") as UIElement, 0.0);
                 AnimatePillScale(border, 1.0);
-                // ClearValue would null the pill (x:Bind has no
-                // BindingExpression to restore) and strip the ACTIVE tab's
-                // surface brush. Re-apply the computed brush — for the
-                // active tab that is ThemeSurfaceBrush, for inactive ones
-                // the inactive brush.
+                // Defensive re-sync only: nothing writes Background outside
+                // the x:Bind anymore (hover paints TabHoverTint, press
+                // scales the transform), so this is a no-op in the normal
+                // path. Kept because a future direct write/ClearValue would
+                // otherwise leave a stale pill — ClearValue in particular
+                // nulls it (x:Bind has no BindingExpression to restore).
                 border.SetValue(Border.BackgroundProperty, tab.TabBackground);
             }
         }
