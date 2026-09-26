@@ -9048,7 +9048,10 @@ namespace Caelum.Pages
             var point = e.GetCurrentPoint(ThumbnailListBox);
             if (e.Pointer.PointerDeviceType == PointerDeviceType.Touch ||
                 !point.Properties.IsLeftButtonPressed)
+            {
+                ResetThumbnailDragState();
                 return;
+            }
 
             if (FindAncestor<ListViewItem>(e.OriginalSource as DependencyObject) is ListViewItem item &&
                 item.DataContext is SidebarPageItem page &&
@@ -9298,6 +9301,13 @@ namespace Caelum.Pages
                 ResetThumbnailDragState();
                 await MovePageAsync(
                     payload, slotResolved ? resolvedSlot : indicatorSlot, pageCount);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine(
+                    $"[EditorPage] Thumbnail drop faulted: {ex}");
+                GetMainWindow()?.ShowToast(
+                    LocalizationService.Get("Editor.PageReorderFailed"), "\uE783");
             }
             finally
             {
@@ -11988,6 +11998,19 @@ namespace Caelum.Pages
         /// Rendering/scroll state stays warm — the tab is hidden, not torn
         /// down.
         /// </summary>
+        /// <summary>
+        /// WPF <c>MainWindow_Deactivated</c> parity — the window lost focus
+        /// (Alt-Tab/minimize): cancel in-flight pointer gestures and sweep
+        /// transient chrome without flipping the host-active gate (the
+        /// editor stays active; only the transient state clears).
+        /// </summary>
+        internal void OnWindowDeactivated()
+        {
+            CloseTransientUi("window deactivated");
+            foreach (var page in _pageControls)
+                page.CancelInteraction();
+        }
+
         public void SetHostActive(bool isActive)
         {
             // WPF runs the transient sweep BEFORE the no-op early return —

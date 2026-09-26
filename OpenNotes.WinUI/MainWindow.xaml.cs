@@ -87,6 +87,10 @@ namespace Caelum
             WinUiThemeService.ThemeApplied += WinUiThemeService_ThemeApplied;
             LocalizationService.LanguageChanged += LocalizationService_LanguageChanged;
             this.Closed += MainWindow_Closed;
+            // WPF MainWindow_Deactivated parity: sweep transient UI + cancel
+            // in-flight gestures when the window loses activation (Alt-Tab,
+            // minimize) so an OpenNotes flyout/armed drag can't outlive focus.
+            this.Activated += MainWindow_Activated;
 
             // The normal application window starts with Home (WPF parity).
             AddNewHomeTab(activate: true);
@@ -242,6 +246,29 @@ namespace Caelum
                 ApplyMinimumSize(_appliedScale);
             }
             UpdateMaximizeGlyph();
+
+            // WPF MainWindow_StateChanged parity: minimize gates the ACTIVE
+            // editor (window-global pen hotkeys still arrive while
+            // minimized); restore resumes interaction.
+            if (_activeTab?.Frame?.Content is EditorPage activeEditor)
+            {
+                bool minimized = _appWindow?.Presenter is OverlappedPresenter p
+                    && p.State == OverlappedPresenterState.Minimized;
+                activeEditor.SetHostActive(!minimized);
+                if (!minimized)
+                    activeEditor.ResumeDocumentInteraction();
+            }
+        }
+
+        private void MainWindow_Activated(object sender, Microsoft.UI.Xaml.WindowActivatedEventArgs args)
+        {
+            if (args.WindowActivationState != WindowActivationState.Deactivated)
+                return;
+            // Sweep every tab's editor (hidden tabs are already input-gated,
+            // but an armed thumbnail drag / flyout on the ACTIVE editor must
+            // not survive an app switch — WPF swept all retained editors).
+            foreach (var tab in _tabs)
+                (tab.Frame?.Content as EditorPage)?.OnWindowDeactivated();
         }
 
         private void UpdateMaximizeGlyph()
