@@ -75,6 +75,50 @@ public sealed class WinUiInkRenderingSourceTests
     }
 
     [Test]
+    public void PointerToGeometryPathsDropNonFiniteInput()
+    {
+        string surface = Read("Controls", "InkSurface.cs");
+        string page = Read("Controls", "PdfPageControl.xaml.cs");
+
+        Assert.Multiple(() =>
+        {
+            // Shared finite checks exist in both files (PointD + the raw
+            // PointerPoint Position struct on the surface).
+            Assert.That(surface, Does.Contain("IsFinite(PointD "));
+            Assert.That(surface, Does.Contain("IsFinite(Point "));
+            Assert.That(page, Does.Contain("IsFinite(PointD "));
+
+            // Press-time ingest gate: a non-finite press never seeds a
+            // gesture, and stroke packets are filtered before they can
+            // poison the outline or the saved ink.
+            Assert.That(surface, Does.Contain("!IsFinite(point.Position)"));
+            Assert.That(surface, Does.Contain("!IsFinite(p.Position)"));
+            Assert.That(surface, Does.Contain("IsFinite(current.Position)"));
+
+            // Both cursor indicators bail before Canvas.SetLeft/SetTop.
+            Assert.That(
+                CountOccurrences(surface, "indicator == null || !IsFinite(pagePoint)"),
+                Is.EqualTo(2),
+                "eraser + brush indicators must both skip non-finite positions");
+
+            // Page sinks: selection overlay press+move, shape-drag handlers,
+            // preview segments, hidden-ink masks, and all three laser loops.
+            Assert.That(
+                CountOccurrences(page, "if (!IsFinite(pos))"),
+                Is.EqualTo(2),
+                "selection press + move must both gate on finite input");
+            Assert.That(page, Does.Contain("!IsFinite(e.Anchor) || !IsFinite(e.Current)"));
+            Assert.That(page, Does.Contain("!IsFinite(e.Current)"));
+            Assert.That(
+                CountOccurrences(page, "if (!IsFinite(p))"),
+                Is.GreaterThanOrEqualTo(4),
+                "shape preview + all three laser loops must skip non-finite points");
+            Assert.That(page, Does.Contain("!double.IsFinite(pt[0])"),
+                "hidden-ink mask vertices (loaded or live) are checked too");
+        });
+    }
+
+    [Test]
     public void AppHooksCrashLoggingWithoutSwallowing()
     {
         string app = Read("App.xaml.cs");
@@ -102,6 +146,18 @@ public sealed class WinUiInkRenderingSourceTests
             Assert.That(logger, Does.Contain("try"));
             Assert.That(logger, Does.Contain("catch"));
         });
+    }
+
+    private static int CountOccurrences(string haystack, string needle)
+    {
+        int count = 0;
+        for (int i = haystack.IndexOf(needle, StringComparison.Ordinal);
+             i >= 0;
+             i = haystack.IndexOf(needle, i + needle.Length, StringComparison.Ordinal))
+        {
+            count++;
+        }
+        return count;
     }
 
     private static string Read(params string[] segments)

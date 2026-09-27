@@ -39,18 +39,30 @@
    pins for Nonzero fill, the finite guard, the UpdateStrokePath try/catch,
    the three App hooks, and the CrashLogger destination/cap.
 
-## Out of scope (flagged suspects — same E_INVALIDARG vector)
-- `PdfPageControl` laser polylines (`Ink_LaserStroke*`), freeform selection
-  `_freeSelectionPath.Points.Add`, shape-preview polylines — all feed raw
-  pointer positions into `Polyline.Points` per move event.
-- `InkSurface.ShowEraserIndicatorAt`/`ShowBrushIndicatorAt` →
-  `Canvas.SetLeft/Top` with a non-finite `PointD` also throws E_INVALIDARG.
-- If the field crash recurs, the crash log will name the real site.
+## Follow-up leg (same day) — residual pointer→geometry guards
+The originally-flagged sibling sites were then hardened too (same vector,
+silent skips — hot paths get no per-event logging):
+- `InkSurface.cs`: `IsFinite(PointD)`/`IsFinite(Point)` helpers;
+  `PointerPressed` swallows a non-finite press BEFORE `CapturePointer`
+  (guarding after capture would wedge `_activePointerId` — no gesture
+  branch clears it on release); draw-move intermediates + tail-append and
+  `CompleteStroke`'s release append require finite positions (also keeps
+  NaN out of the stroke's saved point list → PDF); both indicator methods
+  bail before `SetLeft/SetTop`.
+- `PdfPageControl.xaml.cs`: `IsFinite(PointD)` helper; selection-overlay
+  press + move gates (covers freeform `Polyline.Points`, rect
+  `Canvas.SetLeft/Top`, drag/resize anchors); `Ink_ShapeDragStarted/
+  Updated` guards; `Ink_ShapeDragEnded` substitutes the anchor for a
+  non-finite release (zero-size → sub-threshold → commit skipped with all
+  cleanup intact — both shape and area-highlight branches);
+  `UpdateShapePreview` per-vertex skip; `AddHiddenInkVisual` finite check
+  on `pt[0]/pt[1]` (covers stored masks); all three laser loops skip
+  non-finite points.
 
 ## Result
 Implemented as planned. `CreateStrokePath` additionally delegates to
 `UpdateStrokePath` so both geometry-build entry points ride the one guarded
 rebuild. `LogFault` caps crash-file writes at 3/process (renderer is a
-per-pointer-move hot path). Build Release 0 errors; new fixture
-`WinUiInkRenderingSourceTests` 3/3 green, related ink/geometry +
-WinUI-source-contract batches 177 + 65 green.
+per-pointer-move hot path). Build Release 0 errors; fixture
+`WinUiInkRenderingSourceTests` 4/4 green, related ink/geometry +
+WinUI-source-contract batches 174 + 65 green.

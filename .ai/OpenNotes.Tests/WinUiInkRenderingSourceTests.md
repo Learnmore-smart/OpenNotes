@@ -7,7 +7,7 @@ fixes and the crash-journal wiring by grepping `OpenNotes.WinUI` sources
 (uses the standard `Read`/`ProjectRoot` helper pair — resolves the solution
 root by locating `OpenNotes.WinUI/OpenNotes.WinUI.csproj`).
 
-## Coverage (3 tests)
+## Coverage (4 tests)
 - `StrokeGeometryUsesNonzeroFillRuleSoCrossingsFillSolid` — `StrokeRenderer`
   sets `FillRule = FillRule.Nonzero` (the EvenOdd default punched holes in
   self-crossing strokes).
@@ -17,6 +17,14 @@ root by locating `OpenNotes.WinUI/OpenNotes.WinUI.csproj`).
   `UpdateStrokePath` body contains try + `catch (Exception` around
   `path.Data = BuildGeometry(stroke)`; faults report via `Debug.WriteLine`
   + `CrashLogger.Log`.
+- `PointerToGeometryPathsDropNonFiniteInput` — the follow-up leg: pins
+  `IsFinite(PointD)`/`IsFinite(Point)` helpers in `InkSurface`, the press
+  chokepoint (`!IsFinite(point.Position)`), draw-ingest packet filter,
+  both indicator guards (`indicator == null || !IsFinite(pagePoint)` ×2),
+  and in `PdfPageControl` the selection press/move gates
+  (`if (!IsFinite(pos))` ×2), shape-drag guards, `if (!IsFinite(p))` in
+  the shape preview + all three laser loops, and the hidden-ink
+  `double.IsFinite(pt[0]/pt[1])` vertex check.
 - `AppHooksCrashLoggingWithoutSwallowing` — `App.xaml.cs` hooks
   `UnhandledException`, `AppDomain.CurrentDomain.UnhandledException`,
   `TaskScheduler.UnobservedTaskException`; `e.Handled = false` and no

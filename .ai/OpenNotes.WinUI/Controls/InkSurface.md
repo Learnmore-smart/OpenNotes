@@ -1,5 +1,5 @@
 # OpenNotes.WinUI/Controls/InkSurface.cs
-> Last updated: 2026-09-23 | Protection: STANDARD
+> Last updated: 2026-09-26 (T14-A — non-finite ingest guards) | Protection: STANDARD
 
 ## Purpose
 
@@ -38,3 +38,10 @@ The custom pointer-ink pipeline for the WinUI editor (`Caelum.Controls`, Task 7 
 ## Open Threads / Resume Context
 
 - **Status:** GREEN — Phase A complete (pen/highlighter/eraser, pressure, recognition-on-collect); Phase B gestures (laser, shape drag, hidden-ink commit, eraser path trace, ruler constraint) live and build clean; Task 8 Phase B added the `AreaHighlight` shape-drag mode.
+- **T14-A non-finite ingest guards (2026-09-26):** static `IsFinite(PointD)`/`IsFinite(Point)` helpers sit next to `ToPointD`. A non-finite coordinate reaching `Polyline.Points`/`Canvas.Set*` throws `ArgumentException` (E_INVALIDARG → stowed 0xC000027B) — the v6.0.3 field crash. Guards: `PointerPressed` swallows a non-finite press before `CapturePointer` (no gesture seeds); the draw-move loop skips non-finite intermediate packets and the dedup tail-append requires `IsFinite(current.Position)`; `CompleteStroke`'s release append likewise; `ShowEraserIndicatorAt`/`ShowBrushIndicatorAt` early-return on non-finite `pagePoint`. Laser/shape/eraser event payloads are additionally guarded at the `PdfPageControl` sinks. Contract: `WinUiInkRenderingSourceTests.PointerToGeometryPathsDropNonFiniteInput`.
+
+## Change History
+
+| Date | Change | Author |
+|---|---|---|
+| 2026-09-26 | T14-A: `IsFinite` helpers + press chokepoint, draw-ingest packet filter, indicator guards. | Devin |

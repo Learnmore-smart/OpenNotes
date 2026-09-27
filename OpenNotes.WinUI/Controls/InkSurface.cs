@@ -412,7 +412,7 @@ public sealed partial class InkSurface : Canvas
     private void ShowEraserIndicatorAt(PointD pagePoint)
     {
         var indicator = EraserIndicator;
-        if (indicator == null)
+        if (indicator == null || !IsFinite(pagePoint))
             return;
         indicator.Visibility = Visibility.Visible;
         if (indicator is FrameworkElement fe)
@@ -447,7 +447,7 @@ public sealed partial class InkSurface : Canvas
     private void ShowBrushIndicatorAt(PointD pagePoint)
     {
         var indicator = EraserIndicator;
-        if (indicator == null)
+        if (indicator == null || !IsFinite(pagePoint))
             return;
 
         bool hiddenInk = Tool == InkSurfaceTool.HiddenInk;
@@ -547,6 +547,15 @@ public sealed partial class InkSurface : Canvas
         bool wantsLaser = !wantsErase && Tool == InkSurfaceTool.Laser;
         if (!wantsErase && !wantsDraw && !wantsShape && !wantsLaser)
             return; // Tool == None — input belongs to the selection overlay
+
+        // A non-finite press point can't seed a gesture — it would ride
+        // into XAML geometry and the saved stroke. Swallow like any other
+        // rejected press (T14-A).
+        if (!IsFinite(point.Position))
+        {
+            e.Handled = true;
+            return;
+        }
 
         // Capture failure means moves/releases for this pointer may never
         // reach us — do not begin an untracked gesture (and keep the press
@@ -689,6 +698,8 @@ public sealed partial class InkSurface : Canvas
             // deliver many samples at high report rates.
             foreach (var p in e.GetIntermediatePoints(this))
             {
+                if (!IsFinite(p.Position))
+                    continue; // a bad packet must not poison the outline or saved ink
                 float pressure = EffectivePacketPressure(p);
                 _liveStroke.Points.Add(new InkPointData(
                     p.Position.X, p.Position.Y, pressure));
@@ -696,8 +707,9 @@ public sealed partial class InkSurface : Canvas
             // Also append the current point if it advanced past the last
             // intermediate (GetIntermediatePoints may exclude it).
             var tail = _liveStroke.Points[^1];
-            if (Math.Abs(tail.X - current.Position.X) > 0.0001
-                || Math.Abs(tail.Y - current.Position.Y) > 0.0001)
+            if (IsFinite(current.Position)
+                && (Math.Abs(tail.X - current.Position.X) > 0.0001
+                    || Math.Abs(tail.Y - current.Position.Y) > 0.0001))
             {
                 _liveStroke.Points.Add(new InkPointData(
                     current.Position.X, current.Position.Y, EffectivePacketPressure(current)));
@@ -831,6 +843,12 @@ public sealed partial class InkSurface : Canvas
 
     private static PointD ToPointD(Point p) => new(p.X, p.Y);
 
+    // T14-A: a non-finite coordinate reaching Polyline.Points/Canvas.Set* or
+    // saved stroke data throws ArgumentException (E_INVALIDARG) on the UI
+    // thread — drop it at ingest instead of letting it into geometry.
+    private static bool IsFinite(PointD p) => double.IsFinite(p.X) && double.IsFinite(p.Y);
+    private static bool IsFinite(Point p) => double.IsFinite(p.X) && double.IsFinite(p.Y);
+
     // ── Drawing ──────────────────────────────────────────────────────────
 
     private void BeginStroke(PointerPoint point)
@@ -886,8 +904,9 @@ public sealed partial class InkSurface : Canvas
         // the stylus-up point in StylusPoints. Append it past the same
         // dedup threshold the move handler applies.
         var tail = stroke.Points[^1];
-        if (Math.Abs(tail.X - point.Position.X) > 0.0001
-            || Math.Abs(tail.Y - point.Position.Y) > 0.0001)
+        if (IsFinite(point.Position)
+            && (Math.Abs(tail.X - point.Position.X) > 0.0001
+                || Math.Abs(tail.Y - point.Position.Y) > 0.0001))
         {
             stroke.Points.Add(new InkPointData(
                 point.Position.X, point.Position.Y, EffectivePacketPressure(point)));

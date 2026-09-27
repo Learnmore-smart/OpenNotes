@@ -1282,6 +1282,11 @@ namespace Caelum.Controls
 
         // ── Selection overlay pointer pipeline ───────────────────────────
 
+        // T14-A: a non-finite coordinate reaching Polyline.Points/
+        // Canvas.Set* throws ArgumentException (E_INVALIDARG) on the UI
+        // thread — pointer/annotation input is checked before it gets there.
+        private static bool IsFinite(PointD p) => double.IsFinite(p.X) && double.IsFinite(p.Y);
+
         private void SelectionOverlay_PointerPressed(object sender, PointerRoutedEventArgs e)
         {
             if (!_isSelectionMode || !_hostActive || !_documentInputEnabled)
@@ -1300,6 +1305,11 @@ namespace Caelum.Controls
             }
 
             var pos = new PointD(point.Position.X, point.Position.Y);
+            if (!IsFinite(pos))
+            {
+                e.Handled = true;
+                return;
+            }
 
             // Ctrl+click (mouse only) toggles the topmost item — WPF parity.
             if (device == PointerDeviceType.Mouse
@@ -1412,6 +1422,11 @@ namespace Caelum.Controls
         {
             var current = e.GetCurrentPoint(SelectionOverlayCanvas);
             var pos = new PointD(current.Position.X, current.Position.Y);
+            if (!IsFinite(pos))
+            {
+                e.Handled = true;
+                return;
+            }
 
             if (_selectionPointerId == null || e.Pointer.PointerId != _selectionPointerId.Value)
             {
@@ -3534,6 +3549,8 @@ namespace Caelum.Controls
 
         private void Ink_ShapeDragStarted(object sender, ShapeDragEventArgs e)
         {
+            if (!IsFinite(e.Anchor) || !IsFinite(e.Current))
+                return;
             if (_currentMode == CustomInkInputProcessingMode.AreaHighlight)
             {
                 BeginAreaHighlightDrag(e.Anchor);
@@ -3548,6 +3565,8 @@ namespace Caelum.Controls
 
         private void Ink_ShapeDragUpdated(object sender, ShapeDragEventArgs e)
         {
+            if (!IsFinite(e.Current))
+                return;
             if (_isAreaHighlightDragging)
             {
                 UpdateAreaHighlightDrag(e.Current);
@@ -3564,13 +3583,15 @@ namespace Caelum.Controls
         {
             if (_isAreaHighlightDragging)
             {
-                EndAreaHighlightDrag(e.Current);
+                // A non-finite release substitutes the anchor — a zero-size
+                // drag ends below threshold with all cleanup intact (T14-A).
+                EndAreaHighlightDrag(IsFinite(e.Current) ? e.Current : _areaHighlightAnchor);
                 return;
             }
             if (!_isShapeDragging)
                 return;
             _isShapeDragging = false;
-            _shapeCurrent = e.Current;
+            _shapeCurrent = IsFinite(e.Current) ? e.Current : _shapeAnchor;
             _shapeShiftHeld = e.ShiftHeld;
             ClearShapePreview();
 
@@ -3691,7 +3712,11 @@ namespace Caelum.Controls
                 if (dashed)
                     polyline.StrokeDashArray = new DoubleCollection { 4, 2 };
                 foreach (var p in constrained)
+                {
+                    if (!IsFinite(p))
+                        continue; // keep bad math out of XAML geometry (T14-A)
                     polyline.Points.Add(new Point(p.X, p.Y));
+                }
                 _shapePreviewPolylines.Add(polyline);
                 ShapePreviewCanvas.Children.Add(polyline);
             }
@@ -3826,7 +3851,8 @@ namespace Caelum.Controls
             {
                 foreach (var pt in annotation.Points)
                 {
-                    if (pt == null || pt.Length < 2)
+                    if (pt == null || pt.Length < 2
+                        || !double.IsFinite(pt[0]) || !double.IsFinite(pt[1]))
                         continue;
                     polyline.Points.Add(new Point(pt[0], pt[1]));
                 }
@@ -3991,7 +4017,13 @@ namespace Caelum.Controls
                 IsHitTestVisible = false,
             };
             foreach (var p in e.Points)
+            {
+                // A non-finite packet throws inside Points.Add — skip it
+                // (a missing laser segment beats the stowed crash, T14-A).
+                if (!IsFinite(p))
+                    continue;
                 _laserPolyline.Points.Add(new Point(p.X, p.Y));
+            }
             LaserInkCanvas.Children.Add(_laserPolyline);
             _liveLaserPolylines.Add(_laserPolyline);
 
@@ -4010,7 +4042,11 @@ namespace Caelum.Controls
             if (_laserPolyline == null)
                 return;
             foreach (var p in e.Points)
+            {
+                if (!IsFinite(p))
+                    continue;
                 _laserPolyline.Points.Add(new Point(p.X, p.Y));
+            }
         }
 
         private void Ink_LaserStrokeCompleted(object sender, LaserStrokeEventArgs e)
@@ -4018,7 +4054,11 @@ namespace Caelum.Controls
             if (_laserPolyline != null)
             {
                 foreach (var p in e.Points)
+                {
+                    if (!IsFinite(p))
+                        continue;
                     _laserPolyline.Points.Add(new Point(p.X, p.Y));
+                }
                 _laserCompletedAt[_laserPolyline] = DateTimeOffset.UtcNow;
                 _laserPolyline = null;
                 EnsureLaserFadeTimer();
