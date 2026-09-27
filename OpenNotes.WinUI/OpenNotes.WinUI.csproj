@@ -22,10 +22,10 @@
     <Platform>x64</Platform>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
 
-    <Version>6.0.1</Version>
-    <AssemblyVersion>6.0.1.0</AssemblyVersion>
-    <FileVersion>6.0.1.0</FileVersion>
-    <InformationalVersion>6.0.1</InformationalVersion>
+    <Version>6.0.2</Version>
+    <AssemblyVersion>6.0.2.0</AssemblyVersion>
+    <FileVersion>6.0.2.0</FileVersion>
+    <InformationalVersion>6.0.2</InformationalVersion>
     <Authors>Learnmore_smart</Authors>
     <Company>Learnmore_smart</Company>
     <Product>OpenNotes</Product>
@@ -58,6 +58,10 @@
           Condition="'$(PublishDir)' != ''">
     <ItemGroup>
       <_CompiledXaml Include="$(OutDir)**\*.xbf" />
+      <!-- Never re-copy xbfs already inside PublishDir — without -o it nests
+           under $(OutDir), so the glob would re-glob its own output and grow
+           publish\publish\... junk on repeat publishes. -->
+      <_CompiledXaml Remove="$(PublishDir)**\*.xbf" />
     </ItemGroup>
     <Copy SourceFiles="@(_CompiledXaml)"
           DestinationFolder="$(PublishDir)%(_CompiledXaml.RecursiveDir)" />

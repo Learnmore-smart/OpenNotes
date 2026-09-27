@@ -320,11 +320,12 @@ public sealed class WinUiParitySourceTests
             Assert.That(csproj, Does.Contain("<RuntimeIdentifier>win-x64</RuntimeIdentifier>"));
             Assert.That(csproj, Does.Contain("<AssemblyName>OpenNotes.WinUI</AssemblyName>"));
 
-            // Version: the V6 line starts at 6.0.0 while the WPF project
-            // keeps its own 5.2.x channel version.
-            Assert.That(csproj, Does.Contain("<Version>6.0.0</Version>"));
-            Assert.That(csproj, Does.Contain("<AssemblyVersion>6.0.0.0</AssemblyVersion>"));
-            Assert.That(csproj, Does.Contain("<FileVersion>6.0.0.0</FileVersion>"));
+            // Version: the V6 line stays on a 6.x channel while the WPF project
+            // keeps its own 5.2.x channel version. Major-only match — patch
+            // bumps (6.0.1 etc.) must not break this contract.
+            Assert.That(csproj, Does.Match("<Version>6\\.\\d+\\.\\d+</Version>"));
+            Assert.That(csproj, Does.Match("<AssemblyVersion>6\\.\\d+\\.\\d+\\.\\d+</AssemblyVersion>"));
+            Assert.That(csproj, Does.Match("<FileVersion>6\\.\\d+\\.\\d+\\.\\d+</FileVersion>"));
         });
     }
 
