@@ -482,20 +482,65 @@ public sealed class WinUiHomeDialogPolishSourceTests
             }
 
             // Shell chrome: tab cards, nav cluster, tab/overflow and the
-            // library select/sort buttons.
+            // library select/sort buttons — T14-C adds the tab-close and
+            // Min/Max/Close caption buttons (8 → 12).
             Assert.That(
                 Regex.Matches(main, Regex.Escape("CursorExtensions.Hand=\"True\"")).Count,
-                Is.EqualTo(8), "tabs + nav + toolbar");
+                Is.EqualTo(12), "tabs + nav + toolbar + caption buttons");
             foreach (var anchor in new[]
             {
                 "x:Name=\"NavBackButton\"", "x:Name=\"NavForwardButton\"",
                 "x:Name=\"NavHomeButton\"", "x:Name=\"NewTabButton\"",
                 "x:Name=\"MoreButton\"", "x:Name=\"SelectButton\"",
-                "x:Name=\"SortButton\""
+                "x:Name=\"SortButton\"", "x:Name=\"TabCloseButton\"",
+                "x:Name=\"MinimizeButton\"", "x:Name=\"MaximizeButton\"",
+                "x:Name=\"CloseButton\""
             })
             {
                 Assert.That(main, Does.Contain(anchor), anchor);
             }
+        });
+    }
+
+    [Test]
+    public void EditorChromeRollsOutTheHandCursor()
+    {
+        // T14-C "hover on button → hand cursor" rollout: every toolbar
+        // button/toggle, the zoom + page-jump cells, the sidebar chrome
+        // and the clickable template roots carry the shared attached
+        // property; code-created chrome uses CursorExtensions.SetHand.
+        string editor = Read("Pages", "EditorPage.xaml");
+        string editorCode = Read("Pages", "EditorPage.xaml.cs");
+        string page = Read("Controls", "PdfPageControl.xaml.cs");
+        string picker = Read("Controls", "PageTemplatePickerDialog.cs");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                Regex.Matches(editor, Regex.Escape("CursorExtensions.Hand=\"True\"")).Count,
+                Is.EqualTo(31), "toolbar + sidebar + search + template hit targets");
+            foreach (var anchor in new[]
+            {
+                "AutomationId=\"Editor.UndoButton\"", "AutomationId=\"Editor.PenToolButton\"",
+                "AutomationId=\"Editor.ZoomOutButton\"", "AutomationId=\"Editor.ZoomLabel\"",
+                "AutomationId=\"Editor.PreviousPageButton\"", "AutomationId=\"Editor.NextPageButton\"",
+                "AutomationId=\"Editor.Sidebar.Collapse\"", "AutomationId=\"Editor.Sidebar.Pages\"",
+                "AutomationId=\"Editor.Sidebar.BookmarkToggle\"", "AutomationId=\"PdfSearchCloseButton\"",
+                "x:Name=\"ThumbnailCardRoot\"", "x:Name=\"OutlineInvokeGlyphButton\""
+            })
+            {
+                Assert.That(editor, Does.Contain(anchor), anchor);
+            }
+
+            // Code-created chrome: page insert/delete, inline text toolbar,
+            // sticky editor, shared flyout toggle builders, swatches.
+            Assert.That(
+                Regex.Matches(editorCode, Regex.Escape("CursorExtensions.SetHand(")).Count,
+                Is.EqualTo(17), "code-created editor buttons");
+            Assert.That(page, Does.Contain("CursorExtensions.SetHand(hitButton, true)"));
+            Assert.That(
+                Regex.Matches(picker, Regex.Escape("CursorExtensions.SetHand(")).Count,
+                Is.EqualTo(2), "template cards + browse button");
         });
     }
 

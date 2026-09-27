@@ -1256,6 +1256,7 @@ namespace Caelum.Pages
             deleteButton.Content = deleteContent;
             ToolTipService.SetToolTip(deleteButton, LocalizationService.Get("Editor.DeletePageTooltip"));
             AutomationProperties.SetAutomationId(deleteButton, $"Editor.PageDeleteButton.{pageControl.PageIndex}");
+            CursorExtensions.SetHand(deleteButton, true);
 
             bool hostHovered = false;
             bool buttonHovered = false;
@@ -1335,6 +1336,7 @@ namespace Caelum.Pages
             insertButton.Content = plusIcon;
             ToolTipService.SetToolTip(insertButton, LocalizationService.Get("Editor.InsertPageHereTooltip"));
             AutomationProperties.SetAutomationId(insertButton, $"Editor.PageInsertButton.{insertIndex}");
+            CursorExtensions.SetHand(insertButton, true);
 
             bool zoneHovered = false;
             bool buttonHovered = false;
@@ -6104,6 +6106,7 @@ namespace Caelum.Pages
             ToolTipService.SetToolTip(deleteButton, deleteLabel);
             AutomationProperties.SetAutomationId(deleteButton, "Editor.TextToolbar.Delete");
             AutomationProperties.SetName(deleteButton, deleteLabel);
+            CursorExtensions.SetHand(deleteButton, true);
             deleteButton.Click += (s, e) => DeleteSelectedTextBox();
 
             var decreaseFontButton = new Button
@@ -6120,6 +6123,7 @@ namespace Caelum.Pages
             ToolTipService.SetToolTip(decreaseFontButton, smallerLabel);
             AutomationProperties.SetAutomationId(decreaseFontButton, "Editor.TextToolbar.FontSizeDown");
             AutomationProperties.SetName(decreaseFontButton, smallerLabel);
+            CursorExtensions.SetHand(decreaseFontButton, true);
             decreaseFontButton.Click += (s, e) => AdjustSelectedTextBoxFontSize(increase: false);
 
             var increaseFontButton = new Button
@@ -6136,6 +6140,7 @@ namespace Caelum.Pages
             ToolTipService.SetToolTip(increaseFontButton, biggerLabel);
             AutomationProperties.SetAutomationId(increaseFontButton, "Editor.TextToolbar.FontSizeUp");
             AutomationProperties.SetName(increaseFontButton, biggerLabel);
+            CursorExtensions.SetHand(increaseFontButton, true);
             increaseFontButton.Click += (s, e) => AdjustSelectedTextBoxFontSize(increase: true);
 
             var fontButtonGroup = new Border
@@ -6149,14 +6154,6 @@ namespace Caelum.Pages
                     Children =
                     {
                         decreaseFontButton,
-                        new Border
-                        {
-                            Width = 1,
-                            Height = 16,
-                            Margin = new Thickness(1, 0, 1, 0),
-                            VerticalAlignment = VerticalAlignment.Center,
-                            Background = ResolveThemeBrush("ThemeBorderBrush", Color.FromArgb(0xFF, 0xC9, 0xCE, 0xD6)),
-                        },
                         increaseFontButton,
                     },
                 },
@@ -6187,6 +6184,7 @@ namespace Caelum.Pages
             ToolTipService.SetToolTip(colorButton, colorLabel);
             AutomationProperties.SetAutomationId(colorButton, "Editor.TextToolbar.Color");
             AutomationProperties.SetName(colorButton, colorLabel);
+            CursorExtensions.SetHand(colorButton, true);
             // G4: WPF's text-colour popup shows the "最近 Recent" swatch row
             // above the palette; repopulated on every open (WPF popup.Opened
             // parity) and persisted via AppSettings.RecentTextColors.
@@ -6224,6 +6222,7 @@ namespace Caelum.Pages
             ToolTipService.SetToolTip(_textBoldButton, boldLabel);
             AutomationProperties.SetAutomationId(_textBoldButton, "Editor.TextToolbar.Bold");
             AutomationProperties.SetName(_textBoldButton, boldLabel);
+            CursorExtensions.SetHand(_textBoldButton, true);
             _textItalicButton = new ToggleButton
             {
                 Content = "I",
@@ -6237,6 +6236,7 @@ namespace Caelum.Pages
             ToolTipService.SetToolTip(_textItalicButton, italicLabel);
             AutomationProperties.SetAutomationId(_textItalicButton, "Editor.TextToolbar.Italic");
             AutomationProperties.SetName(_textItalicButton, italicLabel);
+            CursorExtensions.SetHand(_textItalicButton, true);
             _textBoldButton.Click += (_, __) => ApplySelectedTextFormat(tb =>
                 tb.FontWeight = _textBoldButton.IsChecked == true
                     ? Microsoft.UI.Text.FontWeights.Bold
@@ -6289,33 +6289,11 @@ namespace Caelum.Pages
                 }
             };
 
+            // T14-C: no separator Borders between groups — the small pill
+            // relies on the controls' own margins for grouping.
             panel.Children.Add(deleteButton);
-            panel.Children.Add(new Border
-            {
-                Width = 1,
-                Height = 18,
-                Margin = new Thickness(6, 5, 6, 5),
-                VerticalAlignment = VerticalAlignment.Center,
-                Background = ResolveThemeBrush("ThemeBorderBrush", Color.FromArgb(0xFF, 0xC9, 0xCE, 0xD6)),
-            });
             panel.Children.Add(fontButtonGroup);
-            panel.Children.Add(new Border
-            {
-                Width = 1,
-                Height = 18,
-                Margin = new Thickness(6, 5, 6, 5),
-                VerticalAlignment = VerticalAlignment.Center,
-                Background = ResolveThemeBrush("ThemeBorderBrush", Color.FromArgb(0xFF, 0xC9, 0xCE, 0xD6)),
-            });
             panel.Children.Add(colorButton);
-            panel.Children.Add(new Border
-            {
-                Width = 1,
-                Height = 18,
-                Margin = new Thickness(6, 5, 6, 5),
-                VerticalAlignment = VerticalAlignment.Center,
-                Background = ResolveThemeBrush("ThemeBorderBrush", Color.FromArgb(0xFF, 0xC9, 0xCE, 0xD6)),
-            });
             panel.Children.Add(_textBoldButton);
             panel.Children.Add(_textItalicButton);
             panel.Children.Add(_textFontFamilyCombo);
@@ -7005,6 +6983,7 @@ namespace Caelum.Pages
             AutomationProperties.SetAutomationId(button, automationId);
             AutomationProperties.SetName(button, label);
             AutomationProperties.SetHelpText(button, label);
+            CursorExtensions.SetHand(button, true);
             button.IsTabStop = true;
             if (button.MinHeight < 32)
                 button.MinHeight = 32;
@@ -7533,6 +7512,7 @@ namespace Caelum.Pages
                 AutomationProperties.SetAutomationId(button, modes[i].AutomationId);
                 AutomationProperties.SetName(button, modes[i].Label);
                 AutomationProperties.SetHelpText(button, modes[i].Label);
+                CursorExtensions.SetHand(button, true);
                 button.Click += (_, __) =>
                 {
                     if (_highlighterApplyMode != mode)
@@ -8071,6 +8051,7 @@ namespace Caelum.Pages
                     AutomationProperties.SetAutomationId(swatch, $"Editor.Color.Recent.{recentIndex}");
                     AutomationProperties.SetName(swatch, hex);
                     AutomationProperties.SetHelpText(swatch, hex);
+                    CursorExtensions.SetHand(swatch, true);
                     swatch.Click += (_, __) =>
                     {
                         if (swatch.Tag is Windows.UI.Color picked)
@@ -8165,6 +8146,7 @@ namespace Caelum.Pages
             AutomationProperties.SetAutomationId(row, automationId ?? "Editor.Popup.Setting");
             AutomationProperties.SetName(row, label);
             AutomationProperties.SetHelpText(row, label);
+            CursorExtensions.SetHand(row, true);
 
             row.IsChecked = initialState;
 
@@ -8451,6 +8433,7 @@ namespace Caelum.Pages
                 };
                 AutomationProperties.SetAutomationId(
                     widthButton, $"Editor.Select.DrawingWidth.{width:0.#}");
+                CursorExtensions.SetHand(widthButton, true);
                 double w = width;
                 widthButton.Click += (_, __) => ApplySelectedDrawingStyle(null, w);
                 widthRow.Children.Add(widthButton);
@@ -8485,6 +8468,7 @@ namespace Caelum.Pages
                 string label = $"#{color.R:X2}{color.G:X2}{color.B:X2}";
                 AutomationProperties.SetAutomationId(swatch, $"Editor.Select.DrawingColor.{label[1..]}");
                 AutomationProperties.SetName(swatch, label);
+                CursorExtensions.SetHand(swatch, true);
                 var picked = color;
                 swatch.Click += (_, __) => ApplySelectedDrawingStyle(picked, null);
                 colorRow.Children.Add(swatch);
@@ -8555,6 +8539,7 @@ namespace Caelum.Pages
             ToolTipService.SetToolTip(button, tooltip);
             AutomationProperties.SetAutomationId(button, automationId);
             AutomationProperties.SetName(button, tooltip);
+            CursorExtensions.SetHand(button, true);
             return button;
         }
 
@@ -8571,6 +8556,7 @@ namespace Caelum.Pages
             ToolTipService.SetToolTip(button, label);
             AutomationProperties.SetAutomationId(button, automationId);
             AutomationProperties.SetName(button, label);
+            CursorExtensions.SetHand(button, true);
             return button;
         }
 
@@ -8779,6 +8765,7 @@ namespace Caelum.Pages
                     ToolTipService.SetToolTip(cell, cellLabel);
                     AutomationProperties.SetAutomationId(cell, $"Editor.Palette.Color.{row}.{col}");
                     AutomationProperties.SetName(cell, cellLabel);
+                    CursorExtensions.SetHand(cell, true);
                     cell.Click += (_, __) =>
                     {
                         UpdateColorMarkers(cellColor);

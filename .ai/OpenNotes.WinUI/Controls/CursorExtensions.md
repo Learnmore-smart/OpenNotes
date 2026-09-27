@@ -38,7 +38,14 @@ MainWindow nav/tab/toolbar cluster); T14-C will reuse it for editor chrome.
   (CS0122).
 
 ## Open Threads / Resume Context
-- **Status:** GREEN — applied to 12 hit targets in `HomePage.xaml` + 8 in
-  `MainWindow.xaml`; source contracts in
-  `WinUiHomeDialogPolishSourceTests.HandCursorHelperIsSharedAcrossHomeAndShell`.
-- T14-C: apply the same attribute to editor chrome/tab hit targets.
+- **Status:** GREEN — applied to 12 hit targets in `HomePage.xaml`, 12 in
+  `MainWindow.xaml` (T14-C added `TabCloseButton` + the three caption
+  buttons), 31 in `EditorPage.xaml`, plus `SetHand` call sites in
+  `EditorPage.xaml.cs` (17 — page insert/delete, inline text toolbar,
+  sticky editor via `ApplyStickyNoteButtonMetadata`, shared flyout
+  toggle builders, palette/swatch cells), `PdfPageControl.xaml.cs`
+  (sticky `hitButton`) and `PageTemplatePickerDialog.cs` (cards +
+  browse). ComboBoxes/Sliders/MenuFlyoutItems/ContentDialog buttons
+  deliberately keep platform cursors. Source contracts:
+  `WinUiHomeDialogPolishSourceTests.HandCursorHelperIsSharedAcrossHomeAndShell`
+  + `.EditorChromeRollsOutTheHandCursor`.

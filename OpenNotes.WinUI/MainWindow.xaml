@@ -299,6 +299,7 @@
                                     IsHitTestVisible="{x:Bind CloseButtonHitTestVisible, Mode=OneWay}"
                                     IsTabStop="{x:Bind CloseButtonHitTestVisible, Mode=OneWay}"
                                     AutomationProperties.AutomationId="TabCloseButton"
+                                    controls:CursorExtensions.Hand="True"
                                     AutomationProperties.Name="{x:Bind CloseTooltip, Mode=OneWay}"
                                     ToolTipService.ToolTip="{x:Bind CloseTooltip, Mode=OneWay}"
                                     PointerPressed="TabCloseButton_PointerPressed"
@@ -345,14 +346,12 @@
 
                     <!-- Brand + nav cluster (left). -->
                     <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center" Margin="10,0,0,0">
-                        <Border Width="3" Height="16"
-                                Margin="0,0,8,0"
-                                Background="{ThemeResource ThemeMarginBrush}"
-                                CornerRadius="2"/>
                         <!-- T13-B: app glyph beside the product name — the
                              cheap brand mark the WPF window carried as its
                              .ico image (WinUI renders the Lucide PenLine
-                             mark in accent). -->
+                             mark in accent). T14-C removed the 3×16 accent
+                             rail that used to precede it (stray vertical
+                             accent, same class as the T14-B rail). -->
                         <controls:LucideIcon Kind="PenLine" Width="15" Height="15"
                                              Stroke="{ThemeResource ThemeAccentBrush}"
                                              VerticalAlignment="Center" Margin="0,0,7,0"/>
@@ -451,14 +450,17 @@
                             </Button.Flyout>
                         </Button>
                         <Button x:Name="MinimizeButton" Click="MinimizeButton_Click" Style="{StaticResource TitleBarButtonStyle}"
+                                controls:CursorExtensions.Hand="True"
                                 AutomationProperties.AutomationId="MinimizeButton" AutomationProperties.Name="Minimize">
                             <FontIcon Glyph="&#xE921;" FontSize="10"/>
                         </Button>
                         <Button x:Name="MaximizeButton" Click="MaximizeButton_Click" Style="{StaticResource TitleBarButtonStyle}"
+                                controls:CursorExtensions.Hand="True"
                                 AutomationProperties.AutomationId="MaximizeButton" AutomationProperties.Name="Maximize">
                             <FontIcon x:Name="MaximizeIcon" Glyph="&#xE922;" FontSize="10"/>
                         </Button>
                         <Button x:Name="CloseButton" Click="CloseButton_Click" Style="{StaticResource CloseButtonStyle}"
+                                controls:CursorExtensions.Hand="True"
                                 AutomationProperties.AutomationId="CloseButton" AutomationProperties.Name="Close">
                             <FontIcon Glyph="&#xE8BB;" FontSize="10"/>
                         </Button>

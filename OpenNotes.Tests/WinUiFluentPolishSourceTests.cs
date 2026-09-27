@@ -1,5 +1,7 @@
+using System;
 using System.IO;
 using System.Linq;
+using System.Text.RegularExpressions;
 
 namespace Caelum.Tests;
 
@@ -261,6 +263,63 @@ public sealed class WinUiFluentPolishSourceTests
             Assert.That(page, Does.Contain("ResolveAccentStroke()"));
             Assert.That(page, Does.Contain("ResolveAccentTranslucentFill(30)"));
             Assert.That(page, Does.Contain("var selectionBrush = ResolveSelectionBrush();"));
+        });
+    }
+
+    [Test]
+    public void EditorChromeCarriesNoStandaloneVerticalSeparators()
+    {
+        // T14-C "remove all vertical lines": the toolbar pill, the zoom and
+        // page-jump sub-pills, the inline text toolbar and the shell brand
+        // cluster paint zero decorative 1-DIP vertical rules — grouping is
+        // whitespace (6-DIP leader margins) + the shared pill chrome.
+        // Surface outlines (BorderThickness="1" pill/panel edges), the
+        // horizontal flyout section rules and MenuFlyoutSeparators stay.
+        string editor = Read("Pages", "EditorPage.xaml");
+        string editorCode = Read("Pages", "EditorPage.xaml.cs");
+        string main = Read("MainWindow.xaml");
+
+        int toolbarStart = editor.IndexOf(
+            "<Border x:Name=\"ToolbarBorder\"", StringComparison.Ordinal);
+        int toolbarEnd = editor.IndexOf(
+            "</Border>", editor.IndexOf("</ScrollViewer>", toolbarStart, StringComparison.Ordinal) + 1,
+            StringComparison.Ordinal);
+        Assert.That(toolbarStart, Is.GreaterThanOrEqualTo(0));
+        Assert.That(toolbarEnd, Is.GreaterThan(toolbarStart));
+        string toolbar = editor.Substring(toolbarStart, toolbarEnd - toolbarStart);
+
+        int textToolbarStart = editorCode.IndexOf(
+            "private void EnsureInlineTextBoxToolbar()", StringComparison.Ordinal);
+        int textToolbarEnd = editorCode.IndexOf(
+            "_inlineTextBoxToolbar = border;", textToolbarStart, StringComparison.Ordinal);
+        Assert.That(textToolbarStart, Is.GreaterThanOrEqualTo(0));
+        Assert.That(textToolbarEnd, Is.GreaterThan(textToolbarStart));
+        string textToolbar = editorCode.Substring(
+            textToolbarStart, textToolbarEnd - textToolbarStart);
+
+        Assert.Multiple(() =>
+        {
+            // The separator style + brush are gone file-wide.
+            Assert.That(editor, Does.Not.Contain("ToolbarSeparatorStyle"));
+            Assert.That(editor, Does.Not.Contain("ThemeMenuSeparatorBrush"));
+
+            // Toolbar + page-jump/zoom pill slices: no 1–3 DIP vertical bars.
+            Assert.That(toolbar, Does.Not.Match(@"Width=""[1-3]"""));
+
+            // Former separator sites keep the group segmentation via a
+            // 6-DIP leader margin on the three group-leading buttons.
+            Assert.That(
+                Regex.Matches(toolbar, Regex.Escape("Margin=\"5,0,1,0\"")).Count,
+                Is.EqualTo(3), "pen / text / pen-only group gaps");
+
+            // Inline text toolbar (code-created): no 1-DIP separator
+            // Borders — regex-anchored so Width = 14/104 don't match.
+            Assert.That(textToolbar, Does.Not.Match(@"\bWidth\s*=\s*1\s*,"));
+
+            // Shell chrome: the 3×16 brand accent rail is gone (the only
+            // vertical mark the chrome band painted).
+            Assert.That(main, Does.Not.Contain("ThemeMarginBrush"));
+            Assert.That(main, Does.Not.Match(@"Width=""[1-3]""\s+Height=""16"""));
         });
     }
 

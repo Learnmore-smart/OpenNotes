@@ -548,19 +548,42 @@ the Task 9 Phase A save/autosave + close/dirty protocol is live (T9-B defers set
 - **Zoom cluster** is a segmented pill (`ZoomSegmentPill`:
   `ThemeSurfaceAltBrush` + hairline + `ThemeRadiusCard`) containing
   `Editor.ZoomOutButton`/`Editor.ZoomLabel`/`Editor.ZoomInput`/
-  `Editor.ZoomInButton` separated by 1-DIP `ThemeMenuSeparatorBrush`
-  hairlines. The label still taps open `ZoomTextBox` inline editing.
+  `Editor.ZoomInButton` — T14-C removed the interior hairline rules
+  (the pill edge alone carries the segmentation). The label still taps
+  open `ZoomTextBox` inline editing.
 - **Page navigator** (`CenteredPageJumpHost` overlaying
   `PageJumpReservedSpace` at the toolbar midpoint) is a 5-column
   segmented group inside a rounded `ThemeSurfaceAltBrush` host:
-  chevron buttons (32×32 `ToolbarButtonStyle`), hairline separators at
-  0.75 opacity, borderless semibold `Editor.PageJump` TextBox +
-  subdued `/ N` `PageCountText`. `Editor.PageJumpGroup` HelpText keeps
+  chevron buttons (32×32 `ToolbarButtonStyle`), borderless semibold
+  `Editor.PageJump` TextBox + subdued `/ N` `PageCountText`; columns 1/3
+  are now empty `Auto` spacers (T14-C removed the hairline separators).
+  `Editor.PageJumpGroup` HelpText keeps
   the DEBUG `current-page=N` probe. `PageJumpReservedSpace` is
   **coupled to the pill's auto-sized width** (~148 DIP at ≤3-digit
   page counts) — it reserves 152 DIP so neighbours never slide under
   the overlay; keep it ≥ the pill's real width if the navigator is
   ever widened.
+- **T14-C no vertical separators:** `ToolbarSeparatorStyle` and all
+  `ThemeMenuSeparatorBrush` usage are gone from this file — toolbar
+  grouping is whitespace: `PenToolButton`/`TextToolButton`/`PenOnlyButton`
+  carry `Margin="5,0,1,0"` (6-DIP group gap vs 2-DIP inner gap). The
+  code-created inline text toolbar (`EnsureInlineTextBoxToolbar`) lost
+  its four `Width=1` hairline Borders the same way. Kept surface
+  boundaries: pill/page/card/search `BorderThickness="1"` outlines,
+  horizontal `PopupSectionDivider` rules inside tool flyouts,
+  `MenuFlyoutSeparator`s, page-insert `guideLine`,
+  `ThumbnailDropIndicator`.
+- **T14-C hand cursor:** every interactive editor-chrome element carries
+  `controls:CursorExtensions.Hand="True"` (31 XAML sites — all toolbar
+  buttons/toggles, zoom ±/label, prev/next, sidebar collapse + nav
+  cells, bookmark toggle, search close, `ThumbnailCardRoot`, outline
+  row/invoke button, bookmark rows) or `CursorExtensions.SetHand(x, true)`
+  in code (17 sites: page insert/delete, inline text toolbar buttons,
+  sticky save/cancel/delete via `ApplyStickyNoteButtonMetadata`,
+  `BuildGlyphToggleButton`/`BuildTextToggleButton`/
+  `BuildSettingToggleButton`, highlighter-mode cells, width/swatch/
+  recent/palette buttons). ComboBoxes, sliders, MenuFlyoutItems and
+  ContentDialog buttons keep platform cursors.
 - **DocumentSidebar** renders as one coherent Fluent card instead of a
   flat block: `Margin="12,70,0,12"`, outer Border =
   `ThemeSurfaceBrush` + `ThemeBorderBrush` hairline +
@@ -795,3 +818,4 @@ the Task 9 Phase A save/autosave + close/dirty protocol is live (T9-B defers set
   captures a lease). | Devin
 - 2026-09-25 Task 9 Phase B: page delete chrome + insert-gap zones wired (`InsertPageAtAsync`/`DeletePageAtAsync`, template picker under the dialog gate); `VersionHistory_Click` `MenuFlyout` restore flow (reversible snapshot-first semantics); `ApplySettings(AppSettings)` overload with performance-mode re-render; `VersionHistoryButton` enabled in XAML. | Devin
 - 2026-09-24 Lifecycle hardening: unload funnels through `DeferredTeardownAsync` (sync `ReleaseCoreResources` removed); save drain before `LoadPdfAsync` reset; `RecentFilesService.UpdateMetadata` on load; async-void guards on all seven handlers; close-prep error dialog is fire-and-forget; deferred-teardown failures mark `_releaseState` failed; `Editor.SaveTimedOut` label for cancelled close/nav saves. | Devin
+- 2026-09-26 T14-C toolbar/chrome field-fix (6.0.3 "more broken than ever" + "no hover cursor" report): ALL standalone vertical separators removed — `ToolbarSeparatorStyle` + its 3 toolbar uses, the 2 `ZoomSegmentPill` + 2 `PageJumpGroup` hairline Borders, the 4 `Width=1` hairlines in code-created `EnsureInlineTextBoxToolbar`, and the MainWindow 3×16 brand rail. Group segmentation now rides 6-DIP leader margins (`PenToolButton`/`TextToolButton`/`PenOnlyButton` `Margin="5,0,1,0"`); surface outlines (pill borders, card hairlines) kept — pinned by `EditorChromeCarriesNoStandaloneVerticalSeparators`. Hand cursor rolled out: 31 XAML sites + 17 `CursorExtensions.SetHand` code sites here, `PdfPageControl` sticky `hitButton`, template-picker card/browse buttons, MainWindow `TabCloseButton` + caption buttons (8→12 shell sites) — `EditorChromeRollsOutTheHandCursor` pins counts. Verified live: env-gated `RenderTargetBitmap` seam rendered the 1824×104 toolbar PNG (seam removed after); pixel scan = zero interior hairlines, all icon glyphs uniform 18-DIP. `winui-editor-smoke` 60/61 — `zoom-in-label-110` fails identically on HEAD (documented ViewChanged race, not a regression). Cursor glyph unobservable in this session (GetCursorInfo returns the default arrow even for TextBox I-beam/window edges); `ProtectedCursor=InputSystemCursor` verified SET via in-app reflection readback. | Devin

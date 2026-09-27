@@ -267,6 +267,7 @@ namespace Caelum.Controls
                 },
             };
             AutomationProperties.SetAutomationId(browseButton, "BrowsePathButton");
+            CursorExtensions.SetHand(browseButton, true);
             browseButton.Click += BrowsePathButton_Click;
             Grid.SetColumn(browseButton, 2);
             _pathRow.Children.Add(browseButton);
@@ -314,6 +315,7 @@ namespace Caelum.Controls
             };
             // Card ids mirror the WPF x:Names (BlankCard, NotebookCard, …).
             AutomationProperties.SetAutomationId(card, $"{template}Card");
+            CursorExtensions.SetHand(card, true);
             var option = template;
             card.Click += (_, _) => SelectTemplate(option);
             _cards[template] = card;

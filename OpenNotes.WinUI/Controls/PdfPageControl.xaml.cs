@@ -2555,6 +2555,7 @@ namespace Caelum.Controls
                 Content = icon,
                 IsTabStop = true,
             };
+            CursorExtensions.SetHand(hitButton, true);
             hitButton.AddHandler(PointerPressedEvent,
                 new PointerEventHandler(StickyNote_PointerPressed), handledEventsToo: true);
             hitButton.AddHandler(PointerReleasedEvent,
