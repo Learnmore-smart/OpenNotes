@@ -22,10 +22,10 @@
     <Platform>x64</Platform>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
 
-    <Version>6.0.2</Version>
-    <AssemblyVersion>6.0.2.0</AssemblyVersion>
-    <FileVersion>6.0.2.0</FileVersion>
-    <InformationalVersion>6.0.2</InformationalVersion>
+    <Version>6.0.3</Version>
+    <AssemblyVersion>6.0.3.0</AssemblyVersion>
+    <FileVersion>6.0.3.0</FileVersion>
+    <InformationalVersion>6.0.3</InformationalVersion>
     <Authors>Learnmore_smart</Authors>
     <Company>Learnmore_smart</Company>
     <Product>OpenNotes</Product>
