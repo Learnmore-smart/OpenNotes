@@ -231,6 +231,7 @@
         <DataTemplate x:Key="AddTileTemplate" x:DataType="models:HomeTile">
             <Button Style="{StaticResource InvisibleButtonStyle}" Click="AddTile_Click" VerticalAlignment="Top"
                     Tag="{x:Bind}"
+                    controls:CursorExtensions.Hand="True"
                     AutomationProperties.AutomationId="{x:Bind AutomationId, Mode=OneWay}"
                     AutomationProperties.Name="{x:Bind AutomationId, Mode=OneWay}"
                     PointerEntered="TileButton_PointerEntered" PointerExited="TileButton_PointerExited"
@@ -271,6 +272,7 @@
                     Background="{x:Bind TileBackground, Mode=OneWay}"
                     BorderBrush="{x:Bind TileBorderBrush, Mode=OneWay}"
                     BorderThickness="{x:Bind TileBorderThickness, Mode=OneWay}"
+                    controls:CursorExtensions.Hand="True"
                     AutomationProperties.AutomationId="{x:Bind AutomationId, Mode=OneWay}"
                     AutomationProperties.Name="{x:Bind FileName, Mode=OneWay}"
                     Tag="{x:Bind}"
@@ -307,11 +309,26 @@
                                 <ScaleTransform ScaleX="1" ScaleY="1"/>
                             </Grid.RenderTransform>
                             <Viewbox Stretch="Uniform" MaxWidth="100" MaxHeight="120" VerticalAlignment="Center" HorizontalAlignment="Center">
+                                <!-- T14-B: Fluent two-tone folder silhouette.
+                                     Back plate + tab ride FolderTabBrush, the
+                                     front plate rides FolderBodyBrush (the
+                                     user's folder color), and a FolderLineBrush
+                                     seam marks the opening. Per-folder Color
+                                     personalization still drives all three. -->
                                 <Grid Width="96" Height="96">
-                                    <Border Background="{x:Bind FolderTabBrush, Mode=OneWay}" Width="42" Height="18" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="8,10,0,0" CornerRadius="8,8,0,0"/>
-                                    <Border Background="{x:Bind FolderBodyBrush, Mode=OneWay}" CornerRadius="14" Margin="6,22,6,10"/>
-                                    <Border Background="{x:Bind FolderLineBrush, Mode=OneWay}" Height="10" Margin="18,42,18,0" VerticalAlignment="Top" CornerRadius="5"/>
-                                    <Border Background="{x:Bind FolderLineAltBrush, Mode=OneWay}" Height="10" Margin="18,58,32,0" VerticalAlignment="Top" CornerRadius="5"/>
+                                    <Path Width="80" Height="54" Stretch="Fill"
+                                          HorizontalAlignment="Center" VerticalAlignment="Center"
+                                          Fill="{x:Bind FolderTabBrush, Mode=OneWay}"
+                                          Data="M6,54 L6,12 Q6,6 12,6 L32,6 L40,14 L72,14 Q78,14 78,20 L78,54 Z"/>
+                                    <Path Width="80" Height="54" Stretch="Fill"
+                                          HorizontalAlignment="Center" VerticalAlignment="Center"
+                                          Fill="{x:Bind FolderBodyBrush, Mode=OneWay}"
+                                          Data="M12,24 L72,24 Q78,24 78,30 L78,48 Q78,54 72,54 L12,54 Q6,54 6,48 L6,30 Q6,24 12,24 Z"/>
+                                    <Path Width="80" Height="54" Stretch="Fill"
+                                          HorizontalAlignment="Center" VerticalAlignment="Center"
+                                          Stroke="{x:Bind FolderLineBrush, Mode=OneWay}" StrokeThickness="1.4"
+                                          StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                          Data="M10,21 L74,21"/>
                                 </Grid>
                             </Viewbox>
                         </Grid>
@@ -331,6 +348,7 @@
                     Background="{x:Bind TileBackground, Mode=OneWay}"
                     BorderBrush="{x:Bind TileBorderBrush, Mode=OneWay}"
                     BorderThickness="{x:Bind TileBorderThickness, Mode=OneWay}"
+                    controls:CursorExtensions.Hand="True"
                     AutomationProperties.AutomationId="{x:Bind AutomationId, Mode=OneWay}"
                     AutomationProperties.Name="{x:Bind FileName, Mode=OneWay}"
                     Tag="{x:Bind}"
@@ -378,14 +396,41 @@
                                 <ScaleTransform ScaleX="1" ScaleY="1"/>
                             </Grid.RenderTransform>
                             <Viewbox Stretch="Uniform" MaxWidth="90" MaxHeight="120" VerticalAlignment="Center" HorizontalAlignment="Center">
+                                <!-- T14-B: Fluent document card — a paper sheet
+                                     with a dog-eared top-right corner (the fold
+                                     flap sits in SurfaceAlt over the BorderBrush
+                                     hairline), subtle content lines, and a small
+                                     accent PDF pill. Replaces the accent-spine /
+                                     margin-strip art. -->
                                 <Grid Width="90" Height="120">
-                                    <Rectangle Fill="{ThemeResource ThemeSurfaceAltBrush}" RadiusX="5" RadiusY="5"/>
-                                    <Rectangle Fill="{ThemeResource ThemeAccentBrush}" Width="12" HorizontalAlignment="Left" RadiusX="5" RadiusY="5"/>
-                                    <Rectangle Fill="{ThemeResource ThemeInkBrush}" Width="6" HorizontalAlignment="Left" Margin="6,0,0,0"/>
-                                    <Rectangle Fill="{ThemeResource ThemeMarginBrush}" Width="2" HorizontalAlignment="Left" Margin="10,0,0,0"/>
-                                    <Border Background="{ThemeResource ThemePaperBrush}" CornerRadius="4" BorderBrush="{ThemeResource ThemeBorderBrush}" BorderThickness="1" Width="44" Height="22" Margin="24,16,0,0" VerticalAlignment="Top" HorizontalAlignment="Left">
-                                        <Rectangle Fill="{ThemeResource ThemeSubtleForegroundBrush}" Height="4" Width="24" RadiusX="2" RadiusY="2" HorizontalAlignment="Center" VerticalAlignment="Center" Opacity="0.35"/>
-                                    </Border>
+                                    <Path Width="72" Height="94" Stretch="Fill"
+                                          HorizontalAlignment="Center" VerticalAlignment="Center"
+                                          Fill="{ThemeResource ThemePaperBrush}"
+                                          Stroke="{ThemeResource ThemeBorderBrush}" StrokeThickness="1"
+                                          Data="M0.5,7.5 Q0.5,0.5 7.5,0.5 L58,0.5 L71.5,14 L71.5,86.5 Q71.5,93.5 64.5,93.5 L7.5,93.5 Q0.5,93.5 0.5,86.5 Z"/>
+                                    <Path Width="72" Height="94" Stretch="Fill"
+                                          HorizontalAlignment="Center" VerticalAlignment="Center"
+                                          Fill="{ThemeResource ThemeSurfaceAltBrush}"
+                                          Stroke="{ThemeResource ThemeBorderBrush}" StrokeThickness="1"
+                                          Data="M58,0.5 L71.5,14 L58,14 Z"/>
+                                    <Grid Width="72" Height="94" HorizontalAlignment="Center" VerticalAlignment="Center">
+                                        <StackPanel Margin="12,32,12,0">
+                                            <Rectangle Height="4" RadiusX="2" RadiusY="2" Opacity="0.28"
+                                                       Fill="{ThemeResource ThemeSubtleForegroundBrush}"/>
+                                            <Rectangle Height="4" RadiusX="2" RadiusY="2" Opacity="0.28" Width="34"
+                                                       HorizontalAlignment="Left" Margin="0,7,0,0"
+                                                       Fill="{ThemeResource ThemeSubtleForegroundBrush}"/>
+                                            <Rectangle Height="4" RadiusX="2" RadiusY="2" Opacity="0.28" Width="40"
+                                                       HorizontalAlignment="Left" Margin="0,7,0,0"
+                                                       Fill="{ThemeResource ThemeSubtleForegroundBrush}"/>
+                                        </StackPanel>
+                                        <Border HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,10"
+                                                Padding="8,1" CornerRadius="{ThemeResource ThemeRadiusPill}"
+                                                Background="{ThemeResource ThemeAccentBrush}">
+                                            <TextBlock Text="PDF" FontSize="9" FontWeight="Bold"
+                                                       Foreground="{ThemeResource ThemeSelectionForegroundBrush}"/>
+                                        </Border>
+                                    </Grid>
                                 </Grid>
                             </Viewbox>
                         </Grid>
@@ -420,22 +465,16 @@
                       AutomationProperties.AutomationId="HomeScrollViewer"
                       PointerWheelChanged="HomeScrollViewer_PointerWheelChanged">
             <StackPanel>
-                <Grid Margin="24,24,24,6">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="3"/>
-                        <ColumnDefinition Width="14"/>
-                        <ColumnDefinition Width="*"/>
-                    </Grid.ColumnDefinitions>
-                    <Border x:Name="HomeMarginRail"
-                            Grid.Column="0"
-                            Background="{ThemeResource ThemeMarginBrush}"
-                            CornerRadius="2"/>
-                    <StackPanel Grid.Column="2">
+                <!-- T14-B: the stray HomeMarginRail accent strip is gone;
+                     the header keeps its old visual left inset (24 page
+                     margin + 3 rail + 14 gap = 41). -->
+                <StackPanel Margin="41,24,24,6">
                     <StackPanel Orientation="Horizontal"
                                 Margin="0,0,0,14"
                                 Visibility="{x:Bind BreadcrumbBarVisibility, Mode=OneWay}">
                         <Button Click="NavigateUpButton_Click"
                                 Style="{StaticResource BreadcrumbPillButtonStyle}"
+                                controls:CursorExtensions.Hand="True"
                                 Margin="0,0,10,0"
                                 AutomationProperties.AutomationId="NavigateUpButton"
                                 AutomationProperties.Name="Back">
@@ -453,8 +492,7 @@
                     <TextBlock x:Name="HomeSubtitleTextBlock" Style="{ThemeResource BodyTextBlockStyle}" Margin="0,6,0,0"
                                Foreground="{ThemeResource ThemeSubtleForegroundBrush}" TextWrapping="Wrap"
                                AutomationProperties.AutomationId="HomeSubtitleTextBlock"/>
-                    </StackPanel>
-                    </Grid>
+                </StackPanel>
                 <ItemsRepeater x:Name="TilesRepeater"
                               ItemsSource="{x:Bind VisibleTiles, Mode=OneWay}"
                               ItemTemplate="{StaticResource HomeTileTemplateSelector}"
@@ -462,7 +500,20 @@
                               Visibility="{x:Bind TilesRepeaterVisibility, Mode=OneWay}"
                               AutomationProperties.AutomationId="TilesGrid">
                     <ItemsRepeater.Layout>
-                        <UniformGridLayout Orientation="Horizontal" ItemsJustification="Start" MinRowSpacing="0" MinColumnSpacing="0"/>
+                        <!-- T14-B: explicit slot size is load-bearing.
+                             UniformGridLayout caches item 0's DesiredSize as
+                             the effective cell for EVERY element; the add tile
+                             desired 200x184, so folder/file cards were arranged
+                             into a 160x160 box after their 20,12 margin and the
+                             two label rows (icon+title+info ≈204 DIP tall)
+                             rendered below the element bounds — populated but
+                             clipped. MinItemWidth/Height replace the first-item
+                             measurement entirely and also keep slots stable
+                             when selection mode removes the add tile from
+                             index 0. -->
+                        <UniformGridLayout Orientation="Horizontal" ItemsJustification="Start"
+                                           MinRowSpacing="0" MinColumnSpacing="0"
+                                           MinItemWidth="200" MinItemHeight="230"/>
                     </ItemsRepeater.Layout>
                 </ItemsRepeater>
 
@@ -504,12 +555,14 @@
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,20,0,0">
                         <Button x:Name="EmptyStateActionButton"
                                 Click="EmptyStateAction_Click"
+                                controls:CursorExtensions.Hand="True"
                                 Style="{ThemeResource AccentButtonStyle}"
                                 Content="{x:Bind EmptyStateActionText, Mode=OneWay}"
                                 Visibility="{x:Bind EmptyStateActionVisibility, Mode=OneWay}"
                                 AutomationProperties.AutomationId="HomeEmptyStateAction"/>
                         <Button x:Name="EmptyStateClearButton"
                                 Click="EmptyStateClearSearch_Click"
+                                controls:CursorExtensions.Hand="True"
                                 Content="{x:Bind EmptyStateClearText, Mode=OneWay}"
                                 Visibility="{x:Bind EmptyStateClearVisibility, Mode=OneWay}"
                                 AutomationProperties.AutomationId="HomeEmptyStateClearSearch"/>
@@ -592,36 +645,42 @@
                             VerticalAlignment="Center">
                     <Button x:Name="SelectAllSelectionButton"
                             Click="SelectAllSelectionButton_Click"
+                            controls:CursorExtensions.Hand="True"
                             Style="{StaticResource SelectionActionButtonStyle}"
                             Content="{x:Bind SelectionSelectAllText, Mode=OneWay}"
                             IsEnabled="{x:Bind CanSelectAllTiles, Mode=OneWay}"
                             AutomationProperties.AutomationId="SelectAllSelectionButton"/>
                     <Button x:Name="ClearSelectionButton"
                             Click="ClearSelectionButton_Click"
+                            controls:CursorExtensions.Hand="True"
                             Style="{StaticResource SelectionActionButtonStyle}"
                             Content="{x:Bind SelectionClearText, Mode=OneWay}"
                             IsEnabled="{x:Bind HasSelectedTiles, Mode=OneWay}"
                             AutomationProperties.AutomationId="ClearSelectionButton"/>
                     <Button x:Name="MoveSelectionButton"
                             Click="MoveSelectionButton_Click"
+                            controls:CursorExtensions.Hand="True"
                             Style="{StaticResource SelectionActionButtonStyle}"
                             Content="{x:Bind SelectionMoveText, Mode=OneWay}"
                             IsEnabled="{x:Bind CanChooseMoveTarget, Mode=OneWay}"
                             AutomationProperties.AutomationId="MoveSelectionButton"/>
                     <Button x:Name="RemoveSelectionButton"
                             Click="RemoveSelectionButton_Click"
+                            controls:CursorExtensions.Hand="True"
                             Style="{StaticResource SelectionDangerButtonStyle}"
                             Content="{x:Bind SelectionRemoveText, Mode=OneWay}"
                             IsEnabled="{x:Bind HasSelectedTiles, Mode=OneWay}"
                             AutomationProperties.AutomationId="RemoveSelectionButton"/>
                     <Button x:Name="DeleteSelectionButton"
                             Click="DeleteSelectionButton_Click"
+                            controls:CursorExtensions.Hand="True"
                             Style="{StaticResource SelectionDangerButtonStyle}"
                             Content="{x:Bind SelectionDeleteText, Mode=OneWay}"
                             IsEnabled="{x:Bind HasSelectedTiles, Mode=OneWay}"
                             AutomationProperties.AutomationId="DeleteSelectionButton"/>
                     <Button x:Name="DoneSelectionButton"
                             Click="DoneSelectionButton_Click"
+                            controls:CursorExtensions.Hand="True"
                             Style="{StaticResource SelectionActionButtonStyle}"
                             Content="{x:Bind SelectionDoneText, Mode=OneWay}"
                             Margin="0"

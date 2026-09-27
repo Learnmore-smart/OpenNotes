@@ -263,6 +263,7 @@
                  WinUiThemeService.ShouldAnimate/ThemeAnimationDuration. -->
             <DataTemplate x:Key="TabItemTemplate" x:DataType="models:AppTab">
                 <Border Height="32" MinWidth="90" CornerRadius="{ThemeResource ThemeRadiusControl}" Margin="0,0,4,0"
+                        controls:CursorExtensions.Hand="True"
                         BorderThickness="1"
                         Background="{x:Bind TabBackground, Mode=OneWay}"
                         BorderBrush="{x:Bind TabBorderBrush, Mode=OneWay}"
@@ -360,16 +361,19 @@
                                    Margin="0,0,10,0" VerticalAlignment="Center" FontWeight="SemiBold"/>
                         <Button x:Name="NavBackButton" Click="NavBack_Click" Style="{StaticResource NavButtonStyle}"
                                 IsEnabled="False" AutomationProperties.AutomationId="NavBackButton"
+                                controls:CursorExtensions.Hand="True"
                                 AutomationProperties.Name="Back">
                             <controls:LucideIcon Kind="ArrowLeft" Width="14" Height="14" Stroke="{ThemeResource ThemeSubtleForegroundBrush}"/>
                         </Button>
                         <Button x:Name="NavForwardButton" Click="NavForward_Click" Style="{StaticResource NavButtonStyle}"
                                 IsEnabled="False" Margin="2,0,0,0" AutomationProperties.AutomationId="NavForwardButton"
+                                controls:CursorExtensions.Hand="True"
                                 AutomationProperties.Name="Forward">
                             <controls:LucideIcon Kind="ArrowRight" Width="14" Height="14" Stroke="{ThemeResource ThemeSubtleForegroundBrush}"/>
                         </Button>
                         <Button x:Name="NavHomeButton" Click="NavHome_Click" Style="{StaticResource NavButtonStyle}"
                                 Margin="2,0,0,0" AutomationProperties.AutomationId="NavHomeButton"
+                                controls:CursorExtensions.Hand="True"
                                 AutomationProperties.Name="Home">
                             <controls:LucideIcon Kind="Home" Width="15" Height="15" Stroke="{ThemeResource ThemeSubtleForegroundBrush}"/>
                         </Button>
@@ -417,6 +421,7 @@
                                     </ListView.ItemContainerTransitions>
                                 </ListView>
                                 <Button x:Name="NewTabButton" Click="NewTab_Click" Style="{StaticResource NavButtonStyle}"
+                                        controls:CursorExtensions.Hand="True"
                                         VerticalAlignment="Center" Width="32" Height="32" Margin="4,0,0,0"
                                         AutomationProperties.AutomationId="NewTabButton" AutomationProperties.Name="New tab">
                                     <controls:LucideIcon Kind="Plus" Width="15" Height="15" Stroke="{ThemeResource ThemeSubtleForegroundBrush}"/>
@@ -430,6 +435,7 @@
                          removed by ApplyCustomChrome). -->
                     <StackPanel x:Name="CaptionButtonsPanel" Grid.Column="2" Orientation="Horizontal">
                         <Button x:Name="MoreButton" Style="{StaticResource NavButtonStyle}" Margin="0,0,8,0"
+                                controls:CursorExtensions.Hand="True"
                                 VerticalAlignment="Center"
                                 AutomationProperties.AutomationId="MoreButton" AutomationProperties.Name="More">
                             <controls:LucideIcon Kind="Ellipsis" Width="15" Height="15" Stroke="{ThemeResource ThemeSubtleForegroundBrush}"/>
@@ -493,6 +499,7 @@
                         </Grid>
                     </Border>
                     <Button x:Name="SelectButton" Click="SelectButton_Click" Style="{StaticResource NavButtonStyle}"
+                            controls:CursorExtensions.Hand="True"
                             Width="Auto" MinWidth="56" Padding="8,0" Margin="0,0,2,0"
                             AutomationProperties.AutomationId="SelectButton" AutomationProperties.Name="Select">
                         <StackPanel Orientation="Horizontal">
@@ -504,6 +511,7 @@
                         </StackPanel>
                     </Button>
                     <Button x:Name="SortButton" Style="{StaticResource NavButtonStyle}" Margin="0,0,2,0"
+                            controls:CursorExtensions.Hand="True"
                             AutomationProperties.AutomationId="SortButton" AutomationProperties.Name="Sort">
                         <controls:LucideIcon Kind="ArrowUpDown" Width="15" Height="15" Stroke="{ThemeResource ThemeSubtleForegroundBrush}"/>
                         <Button.Flyout>

@@ -11,7 +11,9 @@ namespace Caelum.Tests;
 /// radius tokens), the shell toolbar/search cluster and the toast
 /// overlay (pill chrome + gated fade/rise + retained-storyboard stop)
 /// are pinned as source contracts; behavioural verification lives in
-/// the tools/winui-*.ps1 smokes.
+/// the tools/winui-*.ps1 smokes. T14-B adds the tile-grid slot sizing
+/// that keeps every tile's title/info rows inside its card, the Fluent
+/// folder/document art, and the shared Hand-cursor attached property.
 /// </summary>
 [TestFixture]
 public sealed class WinUiHomeDialogPolishSourceTests
@@ -350,6 +352,138 @@ public sealed class WinUiHomeDialogPolishSourceTests
             // The dialog service resolves the style instead of handing a
             // template-less Style to ContentDialog.PrimaryButtonStyle.
             Assert.That(service, Does.Contain("\"DialogDangerButtonStyle\""));
+        });
+    }
+
+    [Test]
+    public void HomeTileLayoutReservesLabelRowsAndDropsTheMarginRail()
+    {
+        string xaml = Read("Pages", "HomePage.xaml");
+
+        Assert.Multiple(() =>
+        {
+            // T14-B root cause: UniformGridLayout cached item 0's
+            // DesiredSize (the add tile, 200x184) as the effective slot
+            // for EVERY element — folder/file cards were arranged into a
+            // 160x160 box after their 20,12 margin, so the title/info
+            // rows below the 160-DIP icon grid rendered outside the card
+            // bounds (populated and Visible, but clipped). Explicit Min*
+            // sizes replace first-item measurement entirely and also keep
+            // slots stable when selection mode removes the add tile from
+            // index 0.
+            Assert.That(xaml, Does.Contain("MinItemWidth=\"200\""));
+            Assert.That(xaml, Does.Contain("MinItemHeight=\"230\""));
+
+            // The stray accent strip beside the header is gone (the
+            // element declaration, that is — a historical comment still
+            // names it); ThemeMarginBrush has no remaining home-surface
+            // use at all.
+            Assert.That(xaml, Does.Not.Contain("x:Name=\"HomeMarginRail\""));
+            Assert.That(xaml, Does.Not.Contain("ThemeMarginBrush"));
+
+            // Title/info rows survive inside both content templates —
+            // they must live on the tile card (Grid.Row 1/2 below the
+            // 160-DIP icon grid), bound OneWay to the HomeTile.
+            Assert.That(xaml, Does.Contain(
+                "Text=\"{x:Bind FileName, Mode=OneWay}\" TextTrimming=\"CharacterEllipsis\""));
+            Assert.That(xaml, Does.Contain(
+                "Text=\"{x:Bind InfoText, Mode=OneWay}\" FontSize=\"12\""));
+        });
+    }
+
+    [Test]
+    public void TileIconsUseFluentFolderAndDocumentArt()
+    {
+        string xaml = Read("Pages", "HomePage.xaml");
+
+        Assert.Multiple(() =>
+        {
+            // Folder: Path silhouette — back plate+tab, front plate and
+            // the opening seam — still driven by the per-folder color
+            // brush trio so Color personalization keeps working.
+            Assert.That(xaml, Does.Contain(
+                "Fill=\"{x:Bind FolderTabBrush, Mode=OneWay}\""));
+            Assert.That(xaml, Does.Contain(
+                "Fill=\"{x:Bind FolderBodyBrush, Mode=OneWay}\""));
+            Assert.That(xaml, Does.Contain(
+                "Stroke=\"{x:Bind FolderLineBrush, Mode=OneWay}\""));
+            Assert.That(xaml, Does.Contain("L32,6 L40,14")); // tab notch
+
+            // File: dog-eared paper sheet (BorderBrush hairline + fold
+            // flap in SurfaceAlt) + subtle content lines + accent PDF
+            // pill — replaces the accent-spine / margin-strip art.
+            Assert.That(xaml, Does.Contain(
+                "Fill=\"{ThemeResource ThemePaperBrush}\""));
+            Assert.That(xaml, Does.Contain(
+                "Fill=\"{ThemeResource ThemeSurfaceAltBrush}\""));
+            Assert.That(xaml, Does.Contain("Text=\"PDF\""));
+            Assert.That(xaml, Does.Contain("M58,0.5 L71.5,14 L58,14 Z")); // fold flap
+
+            // Icon grids + tile roots stay named for the smoke harness.
+            Assert.That(xaml, Does.Contain("x:Name=\"IconGrid\""));
+            Assert.That(xaml, Does.Contain("x:Name=\"FolderIconGrid\""));
+            Assert.That(xaml, Does.Contain("x:Name=\"FolderTileBorder\""));
+            Assert.That(xaml, Does.Contain("x:Name=\"FileTileBorder\""));
+
+            // x:Bind templates don't populate DataContext — the tile
+            // reaches code-behind via Tag; every tile element keeps it.
+            Assert.That(
+                Regex.Matches(xaml, Regex.Escape("Tag=\"{x:Bind}\"")).Count,
+                Is.GreaterThanOrEqualTo(3));
+        });
+    }
+
+    [Test]
+    public void HandCursorHelperIsSharedAcrossHomeAndShell()
+    {
+        string helper = Read("Controls", "CursorExtensions.cs");
+        string home = Read("Pages", "HomePage.xaml");
+        string main = Read("MainWindow.xaml");
+
+        Assert.Multiple(() =>
+        {
+            // UIElement.ProtectedCursor is protected-only in WinUI, so the
+            // attached property reaches the non-public setter via
+            // reflection (the same workaround CommunityToolkit's WinUI
+            // cursor extension uses) and shares one immutable cursor.
+            Assert.That(helper, Does.Contain("DependencyProperty.RegisterAttached"));
+            Assert.That(helper, Does.Contain("\"ProtectedCursor\""));
+            Assert.That(helper, Does.Contain(
+                "BindingFlags.Instance | BindingFlags.NonPublic"));
+            Assert.That(helper, Does.Contain(
+                "InputSystemCursor.Create(InputSystemCursorShape.Hand)"));
+
+            // Home surface: add/folder/file tiles, breadcrumb back,
+            // empty-state CTAs and the six selection-bar buttons.
+            Assert.That(
+                Regex.Matches(home, Regex.Escape("CursorExtensions.Hand=\"True\"")).Count,
+                Is.EqualTo(12), "tile + header + empty-state + selection-bar hit targets");
+            foreach (var anchor in new[]
+            {
+                "x:Name=\"FolderTileBorder\"", "x:Name=\"FileTileBorder\"",
+                "AutomationProperties.AutomationId=\"NavigateUpButton\"",
+                "x:Name=\"EmptyStateActionButton\"", "x:Name=\"EmptyStateClearButton\"",
+                "x:Name=\"DoneSelectionButton\""
+            })
+            {
+                Assert.That(home, Does.Contain(anchor), anchor);
+            }
+
+            // Shell chrome: tab cards, nav cluster, tab/overflow and the
+            // library select/sort buttons.
+            Assert.That(
+                Regex.Matches(main, Regex.Escape("CursorExtensions.Hand=\"True\"")).Count,
+                Is.EqualTo(8), "tabs + nav + toolbar");
+            foreach (var anchor in new[]
+            {
+                "x:Name=\"NavBackButton\"", "x:Name=\"NavForwardButton\"",
+                "x:Name=\"NavHomeButton\"", "x:Name=\"NewTabButton\"",
+                "x:Name=\"MoreButton\"", "x:Name=\"SelectButton\"",
+                "x:Name=\"SortButton\""
+            })
+            {
+                Assert.That(main, Does.Contain(anchor), anchor);
+            }
         });
     }
 
