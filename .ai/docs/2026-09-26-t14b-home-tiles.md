@@ -27,11 +27,14 @@ same slot.
   slot.
 
 ### Fix
-Set `MinItemWidth="200" MinItemHeight="230"` on the `UniformGridLayout` —
+Set `MinItemWidth="204" MinItemHeight="232"` on the `UniformGridLayout` —
 when set, those values *replace* the first-item measurement entirely
 (`m_effectiveItemWidth/Height = isnan(min) ? desired : min`), so every tile —
 including in selection mode, where the add tile is filtered out of index 0 —
 gets a slot big enough for icon + both label rows (content ≈204 + margin 24).
+Spec-review bumped 200×230 → **204×232**: `TileBorderThickness` ≥1 inflates
+the card's true desired size to ~202–203 wide / ~230.3–231.4 tall, and a
+snug 230-height slot would have clipped the bottom label row again.
 
 ## Remove `HomeMarginRail`
 3px ThemeMarginBrush column left of the header (field-reported as a stray

@@ -370,9 +370,11 @@ public sealed class WinUiHomeDialogPolishSourceTests
             // bounds (populated and Visible, but clipped). Explicit Min*
             // sizes replace first-item measurement entirely and also keep
             // slots stable when selection mode removes the add tile from
-            // index 0.
-            Assert.That(xaml, Does.Contain("MinItemWidth=\"200\""));
-            Assert.That(xaml, Does.Contain("MinItemHeight=\"230\""));
+            // index 0. 204x232 (not a snug 200x230) leaves headroom for
+            // TileBorderThickness >=1, which inflates the true desired
+            // size to ~202-203w / ~230.3-231.4h — spec-review flag.
+            Assert.That(xaml, Does.Contain("MinItemWidth=\"204\""));
+            Assert.That(xaml, Does.Contain("MinItemHeight=\"232\""));
 
             // The stray accent strip beside the header is gone (the
             // element declaration, that is — a historical comment still

@@ -1,5 +1,5 @@
 # OpenNotes.WinUI/MainWindow.xaml
-> Last updated: 2026-09-26 (T12-A Fluent window chrome — unified chrome band + Mica region) | Protection: STANDARD
+> Last updated: 2026-09-27 (T14-B — Hand cursor on chrome/home-toolbar hit targets) | Protection: STANDARD
 
 ## Purpose
 WinUI 3 `Microsoft.UI.Xaml.Window` markup (NOT WPF `System.Windows.Window`) — the V6 chrome: a single Fluent chrome band (brand + nav cluster, tab strip, caption buttons on ONE row), a translucent band surface for the window `SystemBackdrop`, per-tab `Frame` host area, home toolbar row, and toast overlay.
@@ -13,6 +13,7 @@ WinUI 3 `Microsoft.UI.Xaml.Window` markup (NOT WPF `System.Windows.Window`) — 
 - **Home toolbar:** `HomeToolbarPanel` sits in ChromeBand Row1 (its own band UNDER the chrome row — no longer packed into the caption cluster): `SearchBox` `TextBox` inside `SearchBoxBorder`, `SelectButton`, `SortButton` (flyout `SortByNameMenuItem`/`SortByDateMenuItem`). Code-behind collapses the panel unless the active page is `HomePage`.
 - **Toast overlay (Task 5):** `ToastBorder` + `ToastIcon` + `ToastText` layered over `TabContentArea` inside `RootGrid` — `Visibility=Collapsed` + `Opacity=0` default, code-behind fades in/out; `IsHitTestVisible=False` so it never eats clicks.
 - **Window file drop (Task 5 review fix):** `RootGrid` carries `AllowDrop` + `DragOver`/`Drop` → `Window_DragOver`/`Window_Drop` in code-behind. Events bubble from the deepest element — HomePage's own grid marks accepted drops `Handled`, so the window handlers only fire for drops HomePage declined or while a non-Home page is active (WPF `ShouldDeferWindowFileDrop` parity).
+- **T14-B hand cursor:** `controls:CursorExtensions.Hand="True"` on all 8 shell hit targets — the `TabItemTemplate` card `Border`, `NavBackButton`/`NavForwardButton`/`NavHomeButton`, `NewTabButton`, `MoreButton`, `SelectButton`, `SortButton`. The attached DP writes protected `UIElement.ProtectedCursor` via cached reflection (pointer-over scoped — no enter/exit wiring; deepest element wins, so the tab-card Border covers its children). Same helper HomePage uses; see `.ai/OpenNotes.WinUI/Controls/CursorExtensions.md`.
 
 ## Important Notes / NEVER Change
 - **Caption fix (defect found in spec review of `dbfd81a`):** `ExtendsContentIntoTitleBar=true` alone does NOT remove the system Min/Max/Close — they render TOPMOST over the right edge and swallow real clicks (UIA Invoke passes anyway because it bypasses hit-testing). The custom buttons are the only true caption UI because code-behind calls `OverlappedPresenter.SetBorderAndTitleBar(hasBorder: true, hasTitleBar: false)` in `ApplyCustomChrome` (re-applied on `AppWindow.Changed`/`DidPresenterChange`). NEVER remove that call when editing chrome — if a future chrome rewrite recreates/swaps the presenter, re-apply there too.
