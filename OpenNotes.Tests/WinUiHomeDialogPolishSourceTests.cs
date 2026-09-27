@@ -421,6 +421,16 @@ public sealed class WinUiHomeDialogPolishSourceTests
             Assert.That(xaml, Does.Contain("Text=\"PDF\""));
             Assert.That(xaml, Does.Contain("M58,0.5 L71.5,14 L58,14 Z")); // fold flap
 
+            // The five art Paths share literal coordinate spaces, so
+            // Stretch MUST be None — Fill/Uniform normalize each path's
+            // own bounds to the slot, which painted the 1.4px seam over
+            // the whole icon and blew the 14x14 fold into a giant
+            // triangle (spec-review defect). No Stretch="Fill" remains.
+            Assert.That(
+                Regex.Matches(xaml, Regex.Escape("Stretch=\"None\"")).Count,
+                Is.GreaterThanOrEqualTo(5));
+            Assert.That(xaml, Does.Not.Contain("Stretch=\"Fill\""));
+
             // Icon grids + tile roots stay named for the smoke harness.
             Assert.That(xaml, Does.Contain("x:Name=\"IconGrid\""));
             Assert.That(xaml, Does.Contain("x:Name=\"FolderIconGrid\""));

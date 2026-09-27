@@ -314,17 +314,25 @@
                                      front plate rides FolderBodyBrush (the
                                      user's folder color), and a FolderLineBrush
                                      seam marks the opening. Per-folder Color
-                                     personalization still drives all three. -->
+                                     personalization still drives all three.
+                                     Stretch MUST stay None: all three Paths
+                                     share one literal 80x54 coordinate space —
+                                     Fill/Uniform would normalize each path's
+                                     own bounds to the slot (the 1.4px seam
+                                     would paint the whole icon, the front
+                                     plate would hide the tab). The −4,−6
+                                     margin centers the art: its bounds center
+                                     is (42,30) vs the slot's (40,27). -->
                                 <Grid Width="96" Height="96">
-                                    <Path Width="80" Height="54" Stretch="Fill"
+                                    <Path Width="80" Height="54" Stretch="None" Margin="-4,-6,0,0"
                                           HorizontalAlignment="Center" VerticalAlignment="Center"
                                           Fill="{x:Bind FolderTabBrush, Mode=OneWay}"
                                           Data="M6,54 L6,12 Q6,6 12,6 L32,6 L40,14 L72,14 Q78,14 78,20 L78,54 Z"/>
-                                    <Path Width="80" Height="54" Stretch="Fill"
+                                    <Path Width="80" Height="54" Stretch="None" Margin="-4,-6,0,0"
                                           HorizontalAlignment="Center" VerticalAlignment="Center"
                                           Fill="{x:Bind FolderBodyBrush, Mode=OneWay}"
                                           Data="M12,24 L72,24 Q78,24 78,30 L78,48 Q78,54 72,54 L12,54 Q6,54 6,48 L6,30 Q6,24 12,24 Z"/>
-                                    <Path Width="80" Height="54" Stretch="Fill"
+                                    <Path Width="80" Height="54" Stretch="None" Margin="-4,-6,0,0"
                                           HorizontalAlignment="Center" VerticalAlignment="Center"
                                           Stroke="{x:Bind FolderLineBrush, Mode=OneWay}" StrokeThickness="1.4"
                                           StrokeStartLineCap="Round" StrokeEndLineCap="Round"
@@ -401,14 +409,19 @@
                                      flap sits in SurfaceAlt over the BorderBrush
                                      hairline), subtle content lines, and a small
                                      accent PDF pill. Replaces the accent-spine /
-                                     margin-strip art. -->
+                                     margin-strip art. Stretch MUST stay None:
+                                     sheet and fold share one literal 72x94
+                                     space (bounds center = slot center, so no
+                                     offset needed) — Fill/Uniform would
+                                     normalize each path's own bounds and blow
+                                     the 14x14 fold into a full-slot triangle. -->
                                 <Grid Width="90" Height="120">
-                                    <Path Width="72" Height="94" Stretch="Fill"
+                                    <Path Width="72" Height="94" Stretch="None"
                                           HorizontalAlignment="Center" VerticalAlignment="Center"
                                           Fill="{ThemeResource ThemePaperBrush}"
                                           Stroke="{ThemeResource ThemeBorderBrush}" StrokeThickness="1"
                                           Data="M0.5,7.5 Q0.5,0.5 7.5,0.5 L58,0.5 L71.5,14 L71.5,86.5 Q71.5,93.5 64.5,93.5 L7.5,93.5 Q0.5,93.5 0.5,86.5 Z"/>
-                                    <Path Width="72" Height="94" Stretch="Fill"
+                                    <Path Width="72" Height="94" Stretch="None"
                                           HorizontalAlignment="Center" VerticalAlignment="Center"
                                           Fill="{ThemeResource ThemeSurfaceAltBrush}"
                                           Stroke="{ThemeResource ThemeBorderBrush}" StrokeThickness="1"

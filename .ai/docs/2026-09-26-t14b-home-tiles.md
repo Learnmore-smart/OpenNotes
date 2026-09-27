@@ -46,15 +46,33 @@ WinUI has **no** home-tile thumbnail pipeline (the `ThumbnailCompositor` /
 `RenderPageBgraAsync` path is editor-scoped and needs an open `PdfService`
 document — too heavy per library tile; noted as a gap). Static redesign:
 
-- **File tile**: paper card (radius `ThemeRadiusCard`, `ThemePaperBrush` +
-  `ThemeBorderBrush` hairline) + dog-ear fold + subtle text lines + small
-  accent `PDF` pill — replaces the white card + accent spine + red margin
-  rail look.
+- **File tile**: paper sheet (`ThemePaperBrush` fill + `ThemeBorderBrush`
+  hairline) + `ThemeSurfaceAltBrush` dog-ear fold flap + subtle text lines +
+  small accent `PDF` pill — replaces the white card + accent spine + red
+  margin rail look.
 - **Folder tile**: two-tone filled silhouette — back plate + tab in
   `FolderTabBrush`, front plate in `FolderBodyBrush`, thin `FolderLineBrush`
   opening gap. Per-folder `Color` still shows (it drives the folder brushes).
 - 120×160 icon grid / viewbox footprint, `IconGrid`/`FolderIconGrid` names and
   all handlers/AutomationIds unchanged.
+
+### Art stretch review defect (fixed post-review)
+The art `Path`s originally used `Stretch="Fill"` — `Shape.Stretch` normalizes
+EACH path's own geometry bounds to its slot, discarding the shared
+coordinate space: the 1.4-DIP seam line stretched ~38× vertically and
+painted the whole slot `FolderLineBrush`, the front plate stretched ~1.8×
+and hid the tab, and the 13.5×13.5 fold flap stretched ~5-7× into a giant
+triangle. Fixed with `Stretch="None"` on all five paths (literal coords
+compose correctly inside identical centered slots) + `Margin="-4,-6,0,0"`
+on the folder trio (art bounds center (42,30) vs slot (40,27)).
+**Verification**: session was locked during verification — `CopyFromScreen`
+returned the explorer "Backstop Window" black layer and `PrintWindow` only
+sees the GDI layer — so a temporary env-gated `RenderTargetBitmap` capture
+seam was added, PNGs pixel-analyzed (folder column: tab `#5E98F7` → thin
+seam `#8BB6FA`/`#93BAFA` ~4px → body `#3B82F6`; file: paper + 3 line bands
++ ~14-DIP fold corner + accent pill with white letterforms), then the seam
+was removed again. Contract test now pins `Stretch="None"` ×5 and forbids
+`Stretch="Fill"` in the file.
 
 ## Hand cursor — `Controls/CursorExtensions.cs`
 Attached prop `CursorExtensions.Hand="True"` → `element.ProtectedCursor =
