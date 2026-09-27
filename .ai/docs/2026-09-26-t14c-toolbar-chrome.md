@@ -119,7 +119,8 @@ Also run tools/winui-editor-smoke.ps1 for the AutomationId contract.
   `PenOnlyButton` (6-DIP group gap vs 2-DIP inner gap).
 - **Cursor rollout:** 31 `CursorExtensions.Hand="True"` in
   EditorPage.xaml; MainWindow 8→12 (`TabCloseButton`, Min/Max/Close);
-  17 `CursorExtensions.SetHand` sites in EditorPage.xaml.cs + 1 in
+  18 `CursorExtensions.SetHand` sites in EditorPage.xaml.cs (review nit:
+  + search-result `ListViewItem` rows) + 1 in
   PdfPageControl.xaml.cs (sticky `hitButton`) + 2 in
   PageTemplatePickerDialog.cs (cards, browse). HomePage stays 12.
 - **Icon audit:** every `Kind=` resolves in the `LucideIcon` table —

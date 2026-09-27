@@ -24,6 +24,7 @@
 - **Status:** GREEN — builds 0 err/0 warn; source-pinned by `WinUiDialogsServicesSourceTests.PageTemplatePickerCoversBothModesBehindTheGate`.
 
 ## Change History
+- 2026-09-26 T14-C: `CursorExtensions.SetHand` on the template cards (`BuildCard`) and the browse-folder button. | Devin
 - 2026-09-26 T12-C: card `CornerRadius` 18→10 (ThemeRadiusCard) and preview well 16→8 — the WPF rounds read soft next to the T12 radius-token surfaces; purely cosmetic, both modes unchanged. | Devin
 - 2026-09-25 Task 9 Phase B quality pass: real WPF insert-mode keys (`Editor.InsertPageDialogTitle`/`Subtitle`) replace the nonexistent `Editor.PageTemplateTitle`/`Subtitle` (ctor-path `KeyNotFoundException` → async-void crash); language/theme subscriptions deferred ctor→`Opened` with `_opened` guards (a `ShowAsync` throw must not leak handlers). | Devin
 - 2026-09-25 Task 9 Phase B: initial WinUI port (WPF `PageTemplatePickerWindow` parity); replaced HomePage's compact radio-card stand-in. | Devin

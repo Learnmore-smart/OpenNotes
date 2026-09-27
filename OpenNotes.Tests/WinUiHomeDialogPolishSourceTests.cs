@@ -533,10 +533,11 @@ public sealed class WinUiHomeDialogPolishSourceTests
             }
 
             // Code-created chrome: page insert/delete, inline text toolbar,
-            // sticky editor, shared flyout toggle builders, swatches.
+            // sticky editor, shared flyout toggle builders, swatches,
+            // search-result rows (T14-C review nit).
             Assert.That(
                 Regex.Matches(editorCode, Regex.Escape("CursorExtensions.SetHand(")).Count,
-                Is.EqualTo(17), "code-created editor buttons");
+                Is.EqualTo(18), "code-created editor buttons + result rows");
             Assert.That(page, Does.Contain("CursorExtensions.SetHand(hitButton, true)"));
             Assert.That(
                 Regex.Matches(picker, Regex.Escape("CursorExtensions.SetHand(")).Count,

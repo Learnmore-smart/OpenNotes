@@ -10564,12 +10564,18 @@ namespace Caelum.Pages
                 // get the rounded interactive row treatment.
                 var resultStyle = Resources["PdfSearchResultItemStyle"] as Style;
                 foreach (var result in _pdfSearchResults)
-                    PdfSearchResultsListBox.Items.Add(new ListViewItem
+                {
+                    var item = new ListViewItem
                     {
                         Content = result.DisplayText,
                         Tag = result,
                         Style = resultStyle,
-                    });
+                    };
+                    // T14-C review nit: result rows jump to the hit — same
+                    // hand cursor the sidebar/bookmark rows carry.
+                    CursorExtensions.SetHand(item, true);
+                    PdfSearchResultsListBox.Items.Add(item);
+                }
                 // A completed run clears the in-flight flag BEFORE the
                 // final status write + empty-state stamp: stamping while
                 // the flag is still true suppresses the "No matches"

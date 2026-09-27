@@ -147,7 +147,10 @@ public sealed class WinUiFluentPolishSourceTests
         Assert.That(bodyStart, Is.GreaterThanOrEqualTo(0));
         Assert.That(bodyEnd, Is.GreaterThan(bodyStart));
         string searchBody = editor.Substring(bodyStart, bodyEnd - bodyStart);
-        int resultItems = searchBody.IndexOf("PdfSearchResultsListBox.Items.Add(new ListViewItem", StringComparison.Ordinal);
+        // T14-C review: the row is built as `var item = new ListViewItem
+        // {...}` so `CursorExtensions.SetHand(item, true)` can stamp it
+        // before `Items.Add(item)` — anchor on the add call.
+        int resultItems = searchBody.IndexOf("PdfSearchResultsListBox.Items.Add(item);", StringComparison.Ordinal);
         int tailClear = resultItems < 0 ? -1 : searchBody.IndexOf(
             "_pdfSearchInFlight = false;", resultItems, StringComparison.Ordinal);
         int finalStamp = tailClear < 0 ? -1 : searchBody.IndexOf(
