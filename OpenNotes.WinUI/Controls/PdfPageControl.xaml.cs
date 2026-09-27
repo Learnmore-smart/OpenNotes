@@ -1423,10 +1423,7 @@ namespace Caelum.Controls
             var current = e.GetCurrentPoint(SelectionOverlayCanvas);
             var pos = new PointD(current.Position.X, current.Position.Y);
             if (!IsFinite(pos))
-            {
-                e.Handled = true;
-                return;
-            }
+                return; // nothing acted on the event — leave it unhandled (hover-path parity)
 
             if (_selectionPointerId == null || e.Pointer.PointerId != _selectionPointerId.Value)
             {

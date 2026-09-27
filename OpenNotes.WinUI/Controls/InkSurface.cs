@@ -642,18 +642,20 @@ public sealed partial class InkSurface : Canvas
             foreach (var p in e.GetIntermediatePoints(this))
             {
                 var d = ToPointD(p.Position);
-                if (!_lastLaserPoint.HasValue
-                    || Math.Abs(_lastLaserPoint.Value.X - d.X) > 0.0001
-                    || Math.Abs(_lastLaserPoint.Value.Y - d.Y) > 0.0001)
+                if (IsFinite(d)
+                    && (!_lastLaserPoint.HasValue
+                        || Math.Abs(_lastLaserPoint.Value.X - d.X) > 0.0001
+                        || Math.Abs(_lastLaserPoint.Value.Y - d.Y) > 0.0001))
                 {
                     batch.Add(d);
                     _lastLaserPoint = d;
                 }
             }
             var tail = ToPointD(current.Position);
-            if (!_lastLaserPoint.HasValue
-                || Math.Abs(_lastLaserPoint.Value.X - tail.X) > 0.0001
-                || Math.Abs(_lastLaserPoint.Value.Y - tail.Y) > 0.0001)
+            if (IsFinite(tail)
+                && (!_lastLaserPoint.HasValue
+                    || Math.Abs(_lastLaserPoint.Value.X - tail.X) > 0.0001
+                    || Math.Abs(_lastLaserPoint.Value.Y - tail.Y) > 0.0001))
             {
                 batch.Add(tail);
                 _lastLaserPoint = tail;
@@ -674,20 +676,28 @@ public sealed partial class InkSurface : Canvas
             var intermediates = e.GetIntermediatePoints(this);
             var batch = new List<PointD>(intermediates.Count + 1);
             foreach (var p in intermediates)
-                batch.Add(ToPointD(p.Position));
+            {
+                var d = ToPointD(p.Position);
+                if (IsFinite(d))
+                    batch.Add(d);
+            }
             // GetIntermediatePoints may exclude the current point — append
             // it past the same dedup the draw path applies so the eraser
             // reaches the freshest position too.
             var currentPoint = ToPointD(current.Position);
-            if (batch.Count == 0
-                || Math.Abs(batch[batch.Count - 1].X - currentPoint.X) > 0.0001
-                || Math.Abs(batch[batch.Count - 1].Y - currentPoint.Y) > 0.0001)
+            if (IsFinite(currentPoint)
+                && (batch.Count == 0
+                    || Math.Abs(batch[batch.Count - 1].X - currentPoint.X) > 0.0001
+                    || Math.Abs(batch[batch.Count - 1].Y - currentPoint.Y) > 0.0001))
             {
                 batch.Add(currentPoint);
             }
-            ShowEraserIndicatorAt(batch[batch.Count - 1]);
-            if (EraseAlongPoints(batch))
-                InkMutated?.Invoke(this, EventArgs.Empty);
+            if (batch.Count > 0)
+            {
+                ShowEraserIndicatorAt(batch[batch.Count - 1]);
+                if (EraseAlongPoints(batch))
+                    InkMutated?.Invoke(this, EventArgs.Empty);
+            }
             e.Handled = true;
             return;
         }
@@ -1048,6 +1058,8 @@ public sealed partial class InkSurface : Canvas
     /// </summary>
     private bool EraseAtPoint(PointD point)
     {
+        if (!IsFinite(point))
+            return false;
         var path = new List<PointD>(2);
         if (_lastErasePoint.HasValue)
             path.Add(_lastErasePoint.Value);
@@ -1070,8 +1082,14 @@ public sealed partial class InkSurface : Canvas
         var path = new List<PointD>(points.Count + 1);
         if (_lastErasePoint.HasValue)
             path.Add(_lastErasePoint.Value);
-        path.AddRange(points);
-        _lastErasePoint = points[points.Count - 1];
+        foreach (var p in points)
+        {
+            if (IsFinite(p))
+                path.Add(p);
+        }
+        if (path.Count == 0)
+            return false;
+        _lastErasePoint = path[path.Count - 1];
         return EraseAlongPath(path);
     }
 

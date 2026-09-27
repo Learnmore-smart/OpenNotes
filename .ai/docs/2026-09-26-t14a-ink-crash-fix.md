@@ -59,10 +59,28 @@ silent skips — hot paths get no per-event logging):
   on `pt[0]/pt[1]` (covers stored masks); all three laser loops skip
   non-finite points.
 
+## Review-follow-up leg (same day)
+Approved-with-comments sweep added:
+- **CrashLogger.Log** now wraps `Flatten()`+`ToString()` in try/catch — a
+  throwing formatter falls back to logging `GetType().Name` (formatting
+  must not kill the journal entry it exists to write).
+- **InkSurface**: laser batch + eraser batch filter non-finite packets
+  (`IsFinite(d)`/`IsFinite(tail)`/`IsFinite(currentPoint)`);
+  `EraseAtPoint`/`EraseAlongPoints` keep `_lastErasePoint` finite (a NaN
+  there freezes every subsequent dedup compare). Empty filtered erase
+  batches bail before `ShowEraserIndicatorAt(batch[^1])`.
+- **EditorPage.xaml.cs**: `IsFinite(Point)` helper + ingress guards —
+  `Ruler_PointerPressed/Moved`, `PageControl_TextOverlayPointerPressed`
+  (before `CreateTextBox`'s `SetLeft`), `PageControl_BackgroundPointerPressed`
+  (before `_lastClickedPoint` + the sticky `pos`), `TextResizeHandle`
+  press+`UpdateTextResize` move, `BeginTextBoxDrag`+`UpdateTextBoxDrag`.
+- **M3**: `SelectionOverlay_PointerMoved` returns UNHANDLED on non-finite
+  `pos` — only the captured-pointer path marks handled (hover parity).
+
 ## Result
 Implemented as planned. `CreateStrokePath` additionally delegates to
 `UpdateStrokePath` so both geometry-build entry points ride the one guarded
 rebuild. `LogFault` caps crash-file writes at 3/process (renderer is a
 per-pointer-move hot path). Build Release 0 errors; fixture
-`WinUiInkRenderingSourceTests` 4/4 green, related ink/geometry +
-WinUI-source-contract batches 174 + 65 green.
+`WinUiInkRenderingSourceTests` 5/5 green, related ink/geometry +
+WinUI-source-contract batches 174/214 + 65 green.

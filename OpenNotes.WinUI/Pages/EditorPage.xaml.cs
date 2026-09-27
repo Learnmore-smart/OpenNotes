@@ -2833,6 +2833,11 @@ namespace Caelum.Pages
             // zones stay the first/last 14px of the body at any angle.
             var local = e.GetCurrentPoint(_rulerVisual).Position;
             var viewport = e.GetCurrentPoint(RulerOverlayCanvas).Position;
+            if (!IsFinite(local) || !IsFinite(viewport))
+            {
+                e.Handled = true;
+                return;
+            }
 
             if (isLeft && IsRulerLengthHandle(e.OriginalSource as DependencyObject, out bool fromLeft))
             {
@@ -2859,6 +2864,11 @@ namespace Caelum.Pages
                 return;
 
             var p = e.GetCurrentPoint(RulerOverlayCanvas).Position;
+            if (!IsFinite(p))
+            {
+                e.Handled = true;
+                return;
+            }
 
             if (_isResizingRuler)
             {
@@ -4813,6 +4823,11 @@ namespace Caelum.Pages
                 e.Handled = true;
                 return;
             }
+            if (!IsFinite(point))
+            {
+                e.Handled = true;
+                return;
+            }
 
             CreateTextBox(page, point, alignToPointer: true);
             e.Handled = true;
@@ -5198,7 +5213,13 @@ namespace Caelum.Pages
             if (container == null || page == null)
                 return;
 
-            BeginTextResize(handle, container, page, resizeHandle, e.GetCurrentPoint(page).Position);
+            var pos = e.GetCurrentPoint(page).Position;
+            if (!IsFinite(pos))
+            {
+                e.Handled = true;
+                return;
+            }
+            BeginTextResize(handle, container, page, resizeHandle, pos);
             handle.CapturePointer(e.Pointer);
             _textResizePointerId = e.Pointer.PointerId;
             e.Handled = true;
@@ -5296,7 +5317,9 @@ namespace Caelum.Pages
             if (_textResizePointerId != null && e.Pointer.PointerId != _textResizePointerId.Value)
                 return;
 
-            UpdateTextResize(e.GetCurrentPoint(_resizingTextPage).Position);
+            var pos = e.GetCurrentPoint(_resizingTextPage).Position;
+            if (IsFinite(pos))
+                UpdateTextResize(pos);
             e.Handled = true;
         }
 
@@ -5527,7 +5550,7 @@ namespace Caelum.Pages
 
         private void BeginTextBoxDrag(Grid container, Point pressPoint)
         {
-            if (_currentTool != ToolType.Text || container == null)
+            if (_currentTool != ToolType.Text || container == null || !IsFinite(pressPoint))
                 return;
 
             if (container.Children.OfType<TextBox>().FirstOrDefault() is TextBox textBox)
@@ -5541,8 +5564,15 @@ namespace Caelum.Pages
             _dragStartY = Canvas.GetTop(container);
         }
 
+        // T14-A: a non-finite pointer coordinate reaching Canvas.SetLeft/
+        // SetTop throws ArgumentException (E_INVALIDARG) on the UI thread —
+        // drop it at pointer ingress instead of letting it into layout.
+        private static bool IsFinite(Point p) => double.IsFinite(p.X) && double.IsFinite(p.Y);
+
         private void UpdateTextBoxDrag(Point currentPoint, Action capture)
         {
+            if (!IsFinite(currentPoint))
+                return;
             if ((!_isDragging && !_dragArmed) || _draggedContainer == null)
                 return;
 
@@ -5738,13 +5768,24 @@ namespace Caelum.Pages
             // clicked point rather than a fixed (+20,+20) nudge.
             if (sender is PdfPageControl clickedPage)
             {
+                var clicked = e.GetCurrentPoint(clickedPage).Position;
+                if (!IsFinite(clicked))
+                {
+                    e.Handled = true;
+                    return;
+                }
                 _lastClickedPage = clickedPage;
-                _lastClickedPoint = e.GetCurrentPoint(clickedPage).Position;
+                _lastClickedPoint = clicked;
             }
 
             if (_currentTool == ToolType.StickyNote && sender is PdfPageControl page)
             {
                 var pos = e.GetCurrentPoint(page).Position;
+                if (!IsFinite(pos))
+                {
+                    e.Handled = true;
+                    return;
+                }
                 var note = new StickyNoteAnnotation
                 {
                     X = pos.X,

@@ -20,9 +20,19 @@ namespace Caelum.Services
         /// <summary>Logs an exception with type, message, stack, and the flattened inner chain.</summary>
         public static void Log(string source, Exception exception)
         {
-            if (exception is AggregateException aggregate)
-                exception = aggregate.Flatten();
-            Write(source, exception?.ToString() ?? "(no managed exception object)");
+            try
+            {
+                if (exception is AggregateException aggregate)
+                    exception = aggregate.Flatten();
+                Write(source, exception?.ToString() ?? "(no managed exception object)");
+            }
+            catch (Exception formatFailure)
+            {
+                // A throwing ToString()/Flatten() must not kill the journal —
+                // record the type name as a last resort.
+                Write(source, $"{exception?.GetType().Name ?? "unknown"}"
+                    + $" (formatting faulted: {formatFailure.GetType().Name})");
+            }
         }
 
         /// <summary>Logs a free-form detail line (e.g. a dodged fault, not a thrown exception).</summary>

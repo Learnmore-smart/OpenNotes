@@ -115,6 +115,53 @@ public sealed class WinUiInkRenderingSourceTests
                 "shape preview + all three laser loops must skip non-finite points");
             Assert.That(page, Does.Contain("!double.IsFinite(pt[0])"),
                 "hidden-ink mask vertices (loaded or live) are checked too");
+
+            // Review follow-up: laser + eraser packet streams also filter —
+            // a NaN reaching _lastLaserPoint/_lastErasePoint freezes the
+            // whole gesture (every dedup compare against NaN is false).
+            Assert.That(
+                CountOccurrences(surface, "if (IsFinite(d)"),
+                Is.GreaterThanOrEqualTo(2),
+                "laser + erase intermediate batches must filter non-finite packets");
+            Assert.That(surface, Does.Contain("if (IsFinite(tail)"));
+            Assert.That(surface, Does.Contain("if (IsFinite(currentPoint)"));
+            Assert.That(surface, Does.Contain("if (!IsFinite(point))"),
+                "EraseAtPoint must not write a non-finite _lastErasePoint");
+            Assert.That(surface, Does.Contain("if (IsFinite(p))"),
+                "EraseAlongPoints filters each swept point");
+        });
+    }
+
+    [Test]
+    public void EditorPagePointerIngressDropsNonFinitePositions()
+    {
+        string editor = Read("Pages", "EditorPage.xaml.cs");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(editor, Does.Contain("private static bool IsFinite(Point p)"));
+
+            // Text-box drag: the press can't arm a drag on a non-finite
+            // point and the move path drops non-finite packets before
+            // Canvas.SetLeft/SetTop.
+            Assert.That(editor, Does.Contain("!IsFinite(pressPoint)"));
+            Assert.That(editor, Does.Contain("!IsFinite(currentPoint)"));
+
+            // Text-resize handles: non-finite press seeds no gesture; the
+            // move wraps UpdateTextResize (ClampToPage lets NaN X/Y through
+            // Math.Max into ApplyTextContainerBounds' SetLeft).
+            Assert.That(editor, Does.Contain("!IsFinite(pos)"));
+            Assert.That(editor, Does.Contain("if (IsFinite(pos))"));
+
+            // Ruler: press seeds _rulerDragOffset/_rotateStartPointerAngle;
+            // a non-finite seed would poison every subsequent move.
+            Assert.That(editor, Does.Contain("!IsFinite(local) || !IsFinite(viewport)"));
+            Assert.That(editor, Does.Contain("!IsFinite(p)"));
+
+            // Text-box placement + sticky/paste anchor: a non-finite press
+            // must not reach CreateTextBox or _lastClickedPoint.
+            Assert.That(editor, Does.Contain("!IsFinite(point)"));
+            Assert.That(editor, Does.Contain("!IsFinite(clicked)"));
         });
     }
 

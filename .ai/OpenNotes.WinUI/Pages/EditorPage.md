@@ -669,6 +669,21 @@ the Task 9 Phase A save/autosave + close/dirty protocol is live (T9-B defers set
   flow (no WPF caller).
 
 ## Change History
+- 2026-09-26 T14-A review leg: `private static bool IsFinite(Point p)`
+  helper + non-finite pointer-ingress guards on every raw-pointer→layout
+  path (same v6.0.3 stowed E_INVALIDARG vector as the ink pipeline):
+  `Ruler_PointerPressed`/`Moved` (a NaN press would poison
+  `_rulerDragOffset`/`_rotateStartPointerAngle` for the whole gesture);
+  `PageControl_TextOverlayPointerPressed` (before `CreateTextBox`'s
+  `Canvas.SetLeft`); `PageControl_BackgroundPointerPressed` (before
+  `_lastClickedPoint` — a NaN anchor would resurface at paste — and the
+  sticky-note `pos` feeding `SetStickyNotePositionQuiet`); text-resize
+  press + move (`UpdateTextResize` — `ClampToPage`'s `Math.Max(0, NaN)`
+  lets NaN through to `ApplyTextContainerBounds`); `BeginTextBoxDrag` +
+  `UpdateTextBoxDrag`. All guards swallow the degenerate event with
+  `e.Handled = true` (press/captured-move precedent) or skip the update —
+  finite input is behaviour-identical. Pinned by
+  `WinUiInkRenderingSourceTests.EditorPagePointerIngressDropsNonFinitePositions`. | Devin
 - 2026-09-26 T12-B quality-review fixes (over `d5baeb9`): (1)
   `ToolbarToggleButtonStyle` rebuilt to the stock single-group VSM
   model — WinUI `ToggleButton` emits combined `Checked*`/

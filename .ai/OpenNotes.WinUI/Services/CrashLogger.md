@@ -5,7 +5,7 @@
 Last-resort crash journal (`Caelum.Services.CrashLogger`, internal static). Born from the v6.0.3 field crash — a stowed WinRT `0xC000027B`/`E_INVALIDARG` while inking that left no managed stack. Appends one timestamped entry per event so the next crash ships the stack.
 
 ## API
-- `Log(string source, Exception exception)` — `AggregateException` is `Flatten()`ed first (UnobservedTaskException arrives aggregated); body is `exception.ToString()` (type + message + full stack + inner chain).
+- `Log(string source, Exception exception)` — `AggregateException` is `Flatten()`ed first (UnobservedTaskException arrives aggregated); body is `exception.ToString()` (type + message + full stack + inner chain). The whole format sits inside try/catch — a throwing `ToString()`/`Flatten()` falls back to logging `GetType().Name` (review fix I1: formatting must not kill the journal exactly when it matters).
 - `Log(string source, string detail)` — free-form entry for dodged faults that never threw (e.g. `StrokeRenderer` skipping a non-finite outline).
 
 ## Behaviour
