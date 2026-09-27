@@ -116,7 +116,16 @@ Also run tools/winui-editor-smoke.ps1 for the AutomationId contract.
   `Width="1".."3"` bars inside the toolbar slice; code-behind has zero
   `Width = 1` separator Borders in `EnsureInlineTextBoxToolbar`.
 - **Spacing:** `Margin="5,0,1,0"` on `PenToolButton`/`TextToolButton`/
-  `PenOnlyButton` (6-DIP group gap vs 2-DIP inner gap).
+  `PenOnlyButton` (6-DIP group gap vs 2-DIP inner gap). Review nit:
+  the code-created inline text toolbar now carries the same 6-DIP
+  leader gaps on `fontButtonGroup`/`colorButton`/`_textBoldButton`
+  (WPF's separators implied ~13-DIP gaps; flush buttons read broken).
+- **Row hit coverage (review nit):** `Background="Transparent"` on the
+  `SidebarBookmarkItemTemplate` TextBlock root and the
+  `SidebarOutlineItemTemplate` Grid root — a Hand-carrying Framework-
+  Element only hit-tests where it has a brush, so without it the hand
+  showed over glyphs but not the row padding lane. Thumbnail cards
+  already had it; buttons and ListViewItems hit-test natively.
 - **Cursor rollout:** 31 `CursorExtensions.Hand="True"` in
   EditorPage.xaml; MainWindow 8→12 (`TabCloseButton`, Min/Max/Close);
   18 `CursorExtensions.SetHand` sites in EditorPage.xaml.cs (review nit:

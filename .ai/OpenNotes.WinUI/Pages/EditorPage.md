@@ -568,7 +568,10 @@ the Task 9 Phase A save/autosave + close/dirty protocol is live (T9-B defers set
   grouping is whitespace: `PenToolButton`/`TextToolButton`/`PenOnlyButton`
   carry `Margin="5,0,1,0"` (6-DIP group gap vs 2-DIP inner gap). The
   code-created inline text toolbar (`EnsureInlineTextBoxToolbar`) lost
-  its four `Width=1` hairline Borders the same way. Kept surface
+  its four `Width=1` hairline Borders the same way; review nit restored
+  group rhythm there too — `fontButtonGroup`, `colorButton`, and
+  `_textBoldButton` carry `Margin = new Thickness(6, 0, 0, 0)` group
+  gaps (combos keep their existing 4-DIP margins). Kept surface
   boundaries: pill/page/card/search `BorderThickness="1"` outlines,
   horizontal `PopupSectionDivider` rules inside tool flyouts,
   `MenuFlyoutSeparator`s, page-insert `guideLine`,
@@ -583,7 +586,11 @@ the Task 9 Phase A save/autosave + close/dirty protocol is live (T9-B defers set
   `BuildGlyphToggleButton`/`BuildTextToggleButton`/
   `BuildSettingToggleButton`, highlighter-mode cells, width/swatch/
   recent/palette buttons, `PdfSearchResultsListBox` result `ListViewItem`s).
-  ComboBoxes, sliders, MenuFlyoutItems and
+  Row-strip hit coverage (review nit): the bookmark-row `TextBlock` root
+  and the outline-row `Grid` root carry `Background="Transparent"` so
+  the Hand cursor covers the whole clickable strip, not just the glyph
+  run (thumbnail cards already had it; buttons/ListViewItems hit-test
+  natively). ComboBoxes, sliders, MenuFlyoutItems and
   ContentDialog buttons keep platform cursors.
 - **DocumentSidebar** renders as one coherent Fluent card instead of a
   flat block: `Margin="12,70,0,12"`, outer Border =
@@ -819,4 +826,4 @@ the Task 9 Phase A save/autosave + close/dirty protocol is live (T9-B defers set
   captures a lease). | Devin
 - 2026-09-25 Task 9 Phase B: page delete chrome + insert-gap zones wired (`InsertPageAtAsync`/`DeletePageAtAsync`, template picker under the dialog gate); `VersionHistory_Click` `MenuFlyout` restore flow (reversible snapshot-first semantics); `ApplySettings(AppSettings)` overload with performance-mode re-render; `VersionHistoryButton` enabled in XAML. | Devin
 - 2026-09-24 Lifecycle hardening: unload funnels through `DeferredTeardownAsync` (sync `ReleaseCoreResources` removed); save drain before `LoadPdfAsync` reset; `RecentFilesService.UpdateMetadata` on load; async-void guards on all seven handlers; close-prep error dialog is fire-and-forget; deferred-teardown failures mark `_releaseState` failed; `Editor.SaveTimedOut` label for cancelled close/nav saves. | Devin
-- 2026-09-26 T14-C toolbar/chrome field-fix (6.0.3 "more broken than ever" + "no hover cursor" report): ALL standalone vertical separators removed — `ToolbarSeparatorStyle` + its 3 toolbar uses, the 2 `ZoomSegmentPill` + 2 `PageJumpGroup` hairline Borders, the 4 `Width=1` hairlines in code-created `EnsureInlineTextBoxToolbar`, and the MainWindow 3×16 brand rail. Group segmentation now rides 6-DIP leader margins (`PenToolButton`/`TextToolButton`/`PenOnlyButton` `Margin="5,0,1,0"`); surface outlines (pill borders, card hairlines) kept — pinned by `EditorChromeCarriesNoStandaloneVerticalSeparators`. Hand cursor rolled out: 31 XAML sites + 18 `CursorExtensions.SetHand` code sites here (incl. search-result `ListViewItem`s — T14-C review nit), `PdfPageControl` sticky `hitButton`, template-picker card/browse buttons, MainWindow `TabCloseButton` + caption buttons (8→12 shell sites) — `EditorChromeRollsOutTheHandCursor` pins counts. Verified live: env-gated `RenderTargetBitmap` seam rendered the 1824×104 toolbar PNG (seam removed after); pixel scan = zero interior hairlines, all icon glyphs uniform 18-DIP. `winui-editor-smoke` 60/61 — `zoom-in-label-110` fails identically on HEAD (documented ViewChanged race, not a regression). Cursor glyph unobservable in this session (GetCursorInfo returns the default arrow even for TextBox I-beam/window edges); `ProtectedCursor=InputSystemCursor` verified SET via in-app reflection readback. | Devin
+- 2026-09-26 T14-C toolbar/chrome field-fix (6.0.3 "more broken than ever" + "no hover cursor" report): ALL standalone vertical separators removed — `ToolbarSeparatorStyle` + its 3 toolbar uses, the 2 `ZoomSegmentPill` + 2 `PageJumpGroup` hairline Borders, the 4 `Width=1` hairlines in code-created `EnsureInlineTextBoxToolbar`, and the MainWindow 3×16 brand rail. Group segmentation now rides 6-DIP leader margins (`PenToolButton`/`TextToolButton`/`PenOnlyButton` `Margin="5,0,1,0"`); surface outlines (pill borders, card hairlines) kept — pinned by `EditorChromeCarriesNoStandaloneVerticalSeparators`. Hand cursor rolled out: 31 XAML sites + 18 `CursorExtensions.SetHand` code sites here (incl. search-result `ListViewItem`s — T14-C review nit), `PdfPageControl` sticky `hitButton`, template-picker card/browse buttons, MainWindow `TabCloseButton` + caption buttons (8→12 shell sites) — `EditorChromeRollsOutTheHandCursor` pins counts. Verified live: env-gated `RenderTargetBitmap` seam rendered the 1824×104 toolbar PNG (seam removed after); pixel scan = zero interior hairlines, all icon glyphs uniform 18-DIP. `winui-editor-smoke` 60/61 — `zoom-in-label-110` fails identically on HEAD (documented ViewChanged race, not a regression). Cursor glyph unobservable in this session (GetCursorInfo returns the default arrow even for TextBox I-beam/window edges); `ProtectedCursor=InputSystemCursor` verified SET via in-app reflection readback. Review fixups: search-result `ListViewItem` SetHand (18 code sites), inline-toolbar 6-DIP group gaps on `fontButtonGroup`/`colorButton`/`_textBoldButton`, `Background="Transparent"` on bookmark-row TextBlock + outline-row Grid so the hand covers the full row strip. | Devin

@@ -6145,6 +6145,10 @@ namespace Caelum.Pages
 
             var fontButtonGroup = new Border
             {
+                // T14-C review nit: WPF's separators carried ~13-DIP group
+                // gaps — without them the pill buttons sat flush, so group
+                // leaders get the main toolbar's 6-DIP gap instead.
+                Margin = new Thickness(6, 0, 0, 0),
                 CornerRadius = new CornerRadius(10),
                 Padding = new Thickness(2, 0, 2, 0),
                 Background = ResolveThemeBrush("ThemeSurfaceAltBrush", Color.FromArgb(0xFF, 0xF2, 0xF5, 0xF7)),
@@ -6176,7 +6180,7 @@ namespace Caelum.Pages
                 Padding = new Thickness(0),
                 Background = new SolidColorBrush(Color.FromArgb(0, 0, 0, 0)),
                 BorderThickness = new Thickness(0),
-                Margin = new Thickness(0),
+                Margin = new Thickness(6, 0, 0, 0),
             };
             string colorLabel = LocalizationService.Get("Editor.TextColorTooltip");
             if (string.IsNullOrWhiteSpace(colorLabel))
@@ -6212,6 +6216,7 @@ namespace Caelum.Pages
             _textBoldButton = new ToggleButton
             {
                 Content = "B",
+                Margin = new Thickness(6, 0, 0, 0),
                 Width = 32,
                 Height = 32,
                 MinWidth = 32,
@@ -6290,7 +6295,8 @@ namespace Caelum.Pages
             };
 
             // T14-C: no separator Borders between groups — the small pill
-            // relies on the controls' own margins for grouping.
+            // relies on 6-DIP group-leader margins (font pill, colour,
+            // bold) + the combos' own 4-DIP margins for grouping.
             panel.Children.Add(deleteButton);
             panel.Children.Add(fontButtonGroup);
             panel.Children.Add(colorButton);

@@ -485,17 +485,24 @@
         </DataTemplate>
 
         <DataTemplate x:Key="SidebarBookmarkItemTemplate" x:DataType="pages:SidebarBookmarkItem">
-            <TextBlock Text="{x:Bind Label, Mode=OneTime}"
-                       controls:CursorExtensions.Hand="True"
-                       Foreground="{ThemeResource ThemeForegroundBrush}"
-                       TextTrimming="CharacterEllipsis"
-                       VerticalAlignment="Center"/>
+            <!-- T14-C review: the TextBlock is wrapped in a Transparent
+                 Grid so the full row strip hit-tests — without it the
+                 Hand cursor only shows over the rendered glyphs, not the
+                 row's padding lane (WinUI TextBlock exposes no Background). -->
+            <Grid Background="Transparent" controls:CursorExtensions.Hand="True">
+                <TextBlock Text="{x:Bind Label, Mode=OneTime}"
+                           Foreground="{ThemeResource ThemeForegroundBrush}"
+                           TextTrimming="CharacterEllipsis"
+                           VerticalAlignment="Center"/>
+            </Grid>
         </DataTemplate>
 
         <!-- WinUI TreeView applies ItemTemplate to each node's Content; the
              hierarchy itself is built in code (TreeViewNode.Children). -->
         <DataTemplate x:Key="SidebarOutlineItemTemplate">
-            <Grid MinHeight="32" controls:CursorExtensions.Hand="True">
+            <!-- T14-C review: Transparent background so the whole 32-DIP row
+                 hit-tests for the hand cursor, not just the title glyphs. -->
+            <Grid MinHeight="32" Background="Transparent" controls:CursorExtensions.Hand="True">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
