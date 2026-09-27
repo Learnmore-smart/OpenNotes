@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using Caelum.InkGeometry;
 using Caelum.Models;
@@ -34,10 +35,9 @@ public static class StrokeRenderer
     {
         var path = new Path
         {
-            Fill = new SolidColorBrush(ToColor(stroke)),
-            Data = BuildGeometry(stroke),
             IsHitTestVisible = false, // hit-testing lives in StrokeGeometry math, not XAML
         };
+        UpdateStrokePath(path, stroke); // fills Data + Fill through the guarded rebuild
         return path;
     }
 
@@ -51,8 +51,17 @@ public static class StrokeRenderer
     {
         if (path == null)
             return;
-        path.Data = BuildGeometry(stroke);
-        path.Fill = new SolidColorBrush(ToColor(stroke));
+        try
+        {
+            path.Data = BuildGeometry(stroke);
+            path.Fill = new SolidColorBrush(ToColor(stroke));
+        }
+        catch (Exception ex)
+        {
+            // Runs inside PointerMoved — a throw here becomes a stowed
+            // 0xC000027B process crash. Keep the last good geometry.
+            LogFault($"UpdateStrokePath faulted: {ex}");
+        }
     }
 
     /// <summary>
@@ -63,7 +72,9 @@ public static class StrokeRenderer
     /// </summary>
     public static PathGeometry BuildGeometry(InkStrokeData stroke)
     {
-        var geometry = new PathGeometry();
+        // Nonzero, not the EvenOdd default: self-crossing outlines would
+        // otherwise punch holes where the stroke overlaps itself.
+        var geometry = new PathGeometry { FillRule = FillRule.Nonzero };
         if (stroke == null)
             return geometry;
 
@@ -90,6 +101,19 @@ public static class StrokeRenderer
         if (outline == null || outline.Count < 3)
             return;
 
+        // A NaN/Infinity vertex throws ArgumentException inside the XAML
+        // geometry setters — on the pointer-move path that surfaces as the
+        // stowed E_INVALIDARG field crash. One scan keeps bad packets out.
+        for (int i = 0; i < outline.Count; i++)
+        {
+            if (!double.IsFinite(outline[i].X) || !double.IsFinite(outline[i].Y))
+            {
+                LogFault($"Skipping outline with non-finite vertex "
+                    + $"({outline[i].X},{outline[i].Y}) at index {i}.");
+                return;
+            }
+        }
+
         var figure = new PathFigure
         {
             StartPoint = new Point(outline[0].X, outline[0].Y),
@@ -101,6 +125,20 @@ public static class StrokeRenderer
             segment.Points.Add(new Point(outline[i].X, outline[i].Y));
         figure.Segments.Add(segment);
         geometry.Figures.Add(figure);
+    }
+
+    // Crash-file writes are capped per process — the renderer runs per
+    // pointer-move, so an unguarded fault would spam the log directory.
+    private static int _faultsLogged;
+
+    private static void LogFault(string detail)
+    {
+        System.Diagnostics.Debug.WriteLine($"[StrokeRenderer] {detail}");
+        if (_faultsLogged < 3)
+        {
+            _faultsLogged++;
+            Caelum.Services.CrashLogger.Log("StrokeRenderer", detail);
+        }
     }
 
     /// <summary>Stroke's RGBA payload → WinUI colour.</summary>
