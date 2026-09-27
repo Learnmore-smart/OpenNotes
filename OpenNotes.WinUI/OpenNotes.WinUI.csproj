@@ -44,4 +44,26 @@
     <ProjectReference Include="..\OpenNotes.Core\OpenNotes.Core.csproj" />
   </ItemGroup>
 
+  <!-- 'dotnet publish' drops the compiled-XAML artifacts for unpackaged WinUI 3
+       apps: MarkupCompilePass2/makepri emit *.xbf and the app .pri into
+       $(OutDir), but nothing adds them to the publish item group, so the
+       published exe crashes at startup with 0xC000027B (stowed XAML resource
+       exception). Copy them into $(PublishDir) after Publish, preserving the
+       subdirectory layout (Pages/, Controls/) the XAML resource map expects.
+       Only the app's own files: Microsoft.*.pri reach the publish output via
+       WASDK's own mechanism. The $(PublishDir) guard keeps regular builds
+       unaffected. -->
+  <Target Name="CopyCompiledXamlToPublish"
+          AfterTargets="Publish"
+          Condition="'$(PublishDir)' != ''">
+    <ItemGroup>
+      <_CompiledXaml Include="$(OutDir)**\*.xbf" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_CompiledXaml)"
+          DestinationFolder="$(PublishDir)%(_CompiledXaml.RecursiveDir)" />
+    <Copy SourceFiles="$(OutDir)$(AssemblyName).pri"
+          DestinationFolder="$(PublishDir)"
+          Condition="Exists('$(OutDir)$(AssemblyName).pri')" />
+  </Target>
+
 </Project>

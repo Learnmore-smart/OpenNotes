@@ -278,6 +278,26 @@ jobs:
           -p:AssemblyVersion=${{ steps.meta.outputs.assembly_version }}
           -p:FileVersion=${{ steps.meta.outputs.assembly_version }}
 
+      - name: Verify compiled-XAML payload
+        shell: pwsh
+        run: |
+          # 'dotnet publish' drops the compiled XAML (.xbf) and app .pri for
+          # unpackaged WinUI apps; without them the exe crashes at startup
+          # with 0xC000027B. The CopyCompiledXamlToPublish target in the
+          # csproj restores them — fail here before a broken payload ships.
+          $required = @(
+            'publish-winui\OpenNotes.WinUI.pri',
+            'publish-winui\App.xbf',
+            'publish-winui\MainWindow.xbf',
+            'publish-winui\Pages\EditorPage.xbf',
+            'publish-winui\Pages\HomePage.xbf',
+            'publish-winui\Controls\PdfPageControl.xbf'
+          )
+          $missing = $required | Where-Object { -not (Test-Path $_) }
+          if ($missing) {
+            throw "Publish output is missing compiled-XAML artifacts: $($missing -join ', ')"
+          }
+
       - name: Build installer
         shell: pwsh
         run: >
